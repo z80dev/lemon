@@ -13,7 +13,7 @@ defmodule LemonCli.ContextCommandTest do
     %{root: root}
   end
 
-  test "packaged dispatch previews and resolves through LemonCore.Context", %{root: root} do
+  test "packaged dispatch previews and resolves through LemonSkills.Context", %{root: root} do
     preview =
       capture_io(fn ->
         assert CLI.run(["context", "preview", "@file:note.txt", "--root", root, "--json"]) == 0

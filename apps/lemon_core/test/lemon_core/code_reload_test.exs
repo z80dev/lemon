@@ -1,7 +1,17 @@
 defmodule LemonCore.CodeReloadTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias LemonCore.CodeReload
+
+  defmodule FailingRefresher do
+    def refresh_sessions, do: exit({:timeout, "private session data"})
+  end
+
+  defmodule MalformedRefresher do
+    def refresh_sessions, do: %{refreshed: 1}
+  end
 
   setup do
     module = :lemon_code_reload_test_fixture
@@ -59,6 +69,33 @@ defmodule LemonCore.CodeReloadTest do
   test "reports load errors without raising", %{module: module} do
     assert %{reloaded: [], in_use: [], failed: [{^module, :nofile}]} =
              CodeReload.retry_in_use([module])
+  end
+
+  test "refresh failures and malformed counts are unknown, unlike an unwired refresher" do
+    previous = Application.fetch_env(:lemon_core, CodeReload)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, config} -> Application.put_env(:lemon_core, CodeReload, config)
+        :error -> Application.delete_env(:lemon_core, CodeReload)
+      end
+    end)
+
+    Application.delete_env(:lemon_core, CodeReload)
+    assert %{refreshed: 0, busy: 0, failed: 0} = CodeReload.refresh_sessions()
+
+    Application.put_env(:lemon_core, CodeReload, session_refresher: FailingRefresher)
+
+    log =
+      capture_log(fn ->
+        assert {:error, :outcome_unknown} = CodeReload.refresh_sessions()
+      end)
+
+    assert log =~ "CodeReload session refresh callback failed"
+    refute log =~ "private session data"
+
+    Application.put_env(:lemon_core, CodeReload, session_refresher: MalformedRefresher)
+    assert {:error, :outcome_unknown} = CodeReload.refresh_sessions()
   end
 
   defp write_beam(module, dir, version) do

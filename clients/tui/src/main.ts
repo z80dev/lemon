@@ -206,6 +206,18 @@ export function hasInteractiveTerminal(env: NodeJS.ProcessEnv = process.env): bo
 	return Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY);
 }
 
+/**
+ * The TUI's single process-level failure handler. A rejection nothing awaited
+ * is reported (notice plus `/debug` entry) instead of ending the process with
+ * the terminal still in raw mode. Synchronous uncaught exceptions stay fatal.
+ * pi-utils' `installProcessHandlers` does not fit: it exits on any rejection.
+ */
+export function installRejectionHandler(report: (error: unknown) => void): () => void {
+	const listener = (reason: unknown) => report(reason);
+	process.on("unhandledRejection", listener);
+	return () => process.off("unhandledRejection", listener);
+}
+
 export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> {
 	const options = parseArgs(argv);
 
@@ -301,6 +313,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 		};
 		process.once("SIGINT", shutdown);
 		process.once("SIGTERM", shutdown);
+		installRejectionHandler((error) => app.reportStrayFailure(error));
 		void app.start().catch((error) => {
 			app.stop();
 			process.stderr.write(

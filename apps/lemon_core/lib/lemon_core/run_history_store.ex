@@ -211,6 +211,26 @@ defmodule LemonCore.RunHistoryStore do
   end
 
   @doc """
+  Count retained history rows for a session without confusing an unavailable
+  owner or a failed SQLite read with an empty session.
+  """
+  @spec fetch_count(String.t()) ::
+          {:ok, non_neg_integer()} | {:error, :history_read_failed | :unavailable}
+  def fetch_count(session_key), do: fetch_count(__MODULE__, session_key)
+
+  @spec fetch_count(server(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, :history_read_failed | :unavailable}
+  def fetch_count(server, session_key) do
+    case GenServer.call(server, {:count, session_key}, 5_000) do
+      {:ok, count} when is_integer(count) and count >= 0 -> {:ok, count}
+      {:error, :history_read_failed} -> {:error, :history_read_failed}
+      _unexpected -> {:error, :unavailable}
+    end
+  catch
+    :exit, _ -> {:error, :unavailable}
+  end
+
+  @doc """
   Delete all history for a session and confirm, at the owner, that none remains.
 
   Returns `:ok` only when the SQLite delete completed and a count of the
@@ -344,6 +364,22 @@ defmodule LemonCore.RunHistoryStore do
     # A failed step or an unfinished count keeps its transaction (and lock)
     # open until the statement is reset.
     _ = Sqlite3.reset(state.stmts.delete_by_session)
+    _ = Sqlite3.reset(state.stmts.count)
+    {:reply, result, state}
+  end
+
+  def handle_call({:count, session_key}, _from, state) do
+    result =
+      with :ok <- reset_and_bind(state.stmts.count, [session_key]),
+           {:row, [count]} when is_integer(count) and count >= 0 <-
+             Sqlite3.step(state.conn, state.stmts.count) do
+        {:ok, count}
+      else
+        err ->
+          Logger.warning("[RunHistoryStore] count failed: #{inspect(error_tag(err))}")
+          {:error, :history_read_failed}
+      end
+
     _ = Sqlite3.reset(state.stmts.count)
     {:reply, result, state}
   end
@@ -537,8 +573,6 @@ defmodule LemonCore.RunHistoryStore do
   defp normalize_run_id(ref) when is_reference(ref), do: inspect(ref)
   defp normalize_run_id(id) when is_binary(id), do: id
   defp normalize_run_id(id), do: inspect(id)
-
-  defp blob_too_big?({:sqlite_bind_failed, :blob_too_big}), do: true
 
   defp blob_too_big?(reason) when is_binary(reason),
     do: String.contains?(String.downcase(reason), "too big")

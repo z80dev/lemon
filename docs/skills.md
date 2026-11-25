@@ -17,7 +17,7 @@ Skills live one per directory at `<skills-root>/<skill-key>/SKILL.md`:
 - **Project skills**: `.lemon/skill/<skill-name>/SKILL.md`, plus `.agents/skills`, `.omp/skills`, `.claude/skills`, `.codex/skills` and `.github/skills` between the working directory and the repository root
 - **Global skills**: `~/.lemon/agent/skill/<skill-name>/SKILL.md`, plus `~/.agents/skills`, `~/.omp/agent/skills`, `~/.claude/skills` and `~/.codex/skills`
 
-Project skills override global skills with the same key. The exact precedence, the `LEMON_AGENT_DIR` / `LEMON_*_SKILLS_DIR` overrides and isolation behavior are described in the [skills user guide](user-guide/skills.md#discovery-and-precedence). Per-scope settings live in `skills.json` (global `~/.lemon/agent/skills.json`, project `<cwd>/.lemon/skills.json`): its `disabled` list is managed by `LemonSkills.enable/2` and `LemonSkills.disable/2`.
+Project skills override global skills with the same key. The exact precedence, the `LEMON_AGENT_DIR` / `LEMON_*_SKILLS_DIR` overrides and isolation behavior are described in the [skills user guide](user-guide/skills.md#discovery-and-precedence). Per-scope skill state lives in `skills.json` (global `~/.lemon/agent/skills.json`, project `<cwd>/.lemon/skills.json`): its `disabled` list is managed by `LemonSkills.enable/2` and `LemonSkills.disable/2`. The effective disabled set is the global list united with the project list, so a project can only add keys. A present file that cannot be read or decoded fails closed: every skill reads as disabled until it is repaired, and `lemon doctor` reports it. Settings (`[skills.learning_nudge]`) live in `config.toml`.
 
 ### SKILL.md Format
 
@@ -197,7 +197,7 @@ Enable or disable a skill.
 :ok = LemonSkills.disable("my-skill")
 ```
 
-**Options:** `:global` (default `true`) selects the global or project `skills.json`; `:cwd` is the project directory (needed for `global: false`). Disabled skills are listed as `disabled` and omitted from the prompt.
+**Options:** `:global` (default `true`) selects the global or project `skills.json`; `:cwd` is the project directory (needed for `global: false`). Disabled skills are listed as `disabled` and omitted from the prompt. Writes are atomic (mode 0600) under the file's lock, and `enable/2` writes nothing when the key is not in that scope's list. `enable/2` returns `{:error, :archived}` for a skill the scope's usage sidecar marks archived (restore it first) and, at project scope, `{:error, :disabled_globally}` for a skill disabled in the global list; a project writer never lifts either.
 
 ### refresh/1
 
@@ -473,7 +473,7 @@ When a skill exists in both locations, the project version takes precedence.
 
 ## MCP (Model Context Protocol) Server Integration
 
-Lemon supports discovering tools from external stdio, Streamable HTTP, and legacy HTTP+SSE MCP servers, plus listing/reading resources and listing/getting prompts from capable MCP servers. Discovered tools are exposed to models through `CodingAgent.ToolRegistry` with `mcp_<server>_<tool>` names, while the original MCP tool names remain inside the supervised client call boundary. Resource and prompt access is exposed through explicit utility tools such as `mcp_<server>_resources_list`, `mcp_<server>_resource_read`, `mcp_<server>_prompts_list`, and `mcp_<server>_prompt_get` when the server supports those MCP methods. Streamable HTTP also discovers OAuth protected-resource metadata from `WWW-Authenticate` challenges, follows declared authorization servers to their metadata documents, can use configured OAuth client credentials to fetch a bearer token from a discovered token endpoint before retrying the protected MCP request, supports `:client_secret_post` and `:client_secret_basic` token endpoint authentication, can retry with `grant_type=refresh_token` when a token response supplies a refresh token, rotates replacement refresh tokens, can reacquire a client-credentials bearer once when no refresh token is available, can use an authorization-code PKCE callback to acquire public-client bearer tokens, and can resume from persisted OAuth token cache material before making the first initialized MCP request. Configured Streamable HTTP sources can store token cache payloads in `LemonCore.Secrets` through an explicit `oauth.token_secret`; when a configured PKCE source uses a local `redirect_uri`, `LemonSkills.McpSource` reuses LemonCore's localhost OAuth listener, routes the authorization URL through a structured `mcp_*_oauth` operator approval, and then returns matching `code`/`state` to the MCP client. Stdio clients can opt into `sampling/createMessage` through a raw callback or a `LemonMCP.Sampling` policy wrapper; configured `LemonSkills.McpSource` stdio servers can bridge reviewed sampling through the existing `LemonCore.ExecApprovals` pipeline so control-plane and channel approval surfaces see only redacted sampling summaries before an operator approves or denies the delegate call. Lemon only advertises the sampling capability when one of those handlers is configured. Broader external-server compatibility remains a preview gap.
+Lemon supports discovering tools from external stdio, Streamable HTTP, and legacy HTTP+SSE MCP servers, plus listing/reading resources and listing/getting prompts from capable MCP servers. Discovered tools are exposed to models through `CodingAgent.ToolRegistry` with `mcp_<server>_<tool>` names, while the original MCP tool names remain inside the supervised client call boundary. Resource and prompt access is exposed through explicit utility tools such as `mcp_<server>_resources_list`, `mcp_<server>_resource_read`, `mcp_<server>_prompts_list`, and `mcp_<server>_prompt_get` when the server supports those MCP methods. Streamable HTTP also discovers OAuth protected-resource metadata from `WWW-Authenticate` challenges, follows declared authorization servers to their metadata documents, can use configured OAuth client credentials to fetch a bearer token from a discovered token endpoint before retrying the protected MCP request, supports `:client_secret_post` and `:client_secret_basic` token endpoint authentication, can retry with `grant_type=refresh_token` when a token response supplies a refresh token, rotates replacement refresh tokens, can reacquire a client-credentials bearer once when no refresh token is available, can use an authorization-code PKCE callback to acquire public-client bearer tokens, and can resume from persisted OAuth token cache material before making the first initialized MCP request. Configured Streamable HTTP sources can store token cache payloads in `LemonCore.Secrets` through an explicit `oauth.token_secret`; when a configured PKCE source uses a local `redirect_uri`, `LemonSkills.McpSource` reuses LemonCore's localhost OAuth listener, routes the authorization URL through a structured `mcp_*_oauth` operator approval, and then returns matching `code`/`state` to the MCP client. Server-to-client requests such as `sampling/createMessage` are not supported and receive a method-not-found error. Broader external-server compatibility remains a preview gap.
 
 The readable names above also carry a stable 16-hex identity suffix. Always use
 the name returned by discovery rather than constructing one: complete names are
@@ -844,36 +844,10 @@ skipped while still claiming its name.
 | `allow_resources` / `block_resources` | array | No | Exact MCP resource URIs or names to allow or block |
 | `allow_prompts` / `block_prompts` | array | No | Exact MCP prompt names to allow or block |
 
-Stdio clients can also be started directly with a `sampling_policy` on
-`LemonMCP.Client.start_link/1`. `LemonMCP.Sampling` summarizes requests without
-raw prompt text, enforces max-token and model allowlist limits, and can require
-a reviewer approval before calling a model-backed delegate:
-
-```elixir
-sampling_policy: [
-  mode: :reviewed_model,
-  reviewer: :ops_approval,
-  delegate: fn params, summary -> call_model(params, summary) end,
-  max_tokens: 1_024,
-  allowed_models: ["lemon"],
-  approval_context: [
-    run_id: run_id,
-    session_key: session_key,
-    agent_id: agent_id
-  ]
-]
-```
-
-When `reviewer: :ops_approval` is configured through `LemonSkills.McpSource`,
-Lemon creates a pending `mcp_<server>_sampling` approval using only the redacted
-summary fields: request hash, message count, roles, content-kind counts, text
-character count, max tokens, and requested model. Control-plane approval
-resolution, Telegram, and Discord reuse the normal execution approval flow. The raw
-sampling request only reaches the configured delegate after approval.
-
-The lower-level `sampling_handler` option is still available for integrations
-that already own review and policy checks. It receives raw `sampling/createMessage`
-params and must return either `{:ok, result_map}` or `{:error, reason}`.
+MCP sampling is not supported: no client advertises the `sampling` capability,
+and a server's `sampling/createMessage` (like any server-to-client request)
+receives a JSON-RPC method-not-found error. A `sampling` entry in a server
+configuration is ignored.
 
 #### HTTP Transport
 
@@ -912,15 +886,17 @@ Legacy HTTP+SSE entries use supervised `LemonMCP.Client.SSE` startup, open the S
 
 MCP tools are discovered through `LemonSkills.McpSource`, cached for performance, and surfaced through `CodingAgent.ToolRegistry`:
 
-- **Cache TTL**: 5 minutes (configurable via `:cache_ttl_ms`)
+- **Cache TTL**: 5 minutes (configurable via `:cache_ttl_ms`); a connected server's snapshot older than that is refreshed in the background
 - **Refresh Interval**: 1 minute (configurable via `:refresh_interval_ms`)
+- **Bounded session start**: discovery reloads the project's configuration and serves the committed snapshot. It waits at most 10 seconds (`config :lemon_skills, :mcp_discovery_wait_ms`) for servers that have no usable connection yet; one supervised worker per server keeps connecting slower servers in the background, and their tools appear in later sessions. `force_refresh: true` and `refresh/0` still wait for every server.
 - **Graceful Degradation**: If an MCP server is unavailable, tools from that server are skipped
 - **Model-facing names**: `mcp_<server>_<tool>_<identity>` names use a bounded readable prefix and a stable hash; different configurations of the same executable or URL remain distinct.
 - **Resource/prompt utilities**: capable stdio, Streamable HTTP, and legacy HTTP+SSE servers also expose `resources/list`, `resources/read`, `prompts/list`, and `prompts/get` through model-facing utility tools
 - **Exact filters**: stdio, Streamable HTTP, and legacy HTTP+SSE configs can constrain model-facing tools, resources, and prompts with exact allow/block lists before they enter the registry
-- **Project isolation**: discovery returns only the requesting project's configured inventory. Discovering another project or refreshing global configuration does not retarget previously returned tool closures.
+- **Project isolation**: discovery returns only the requesting project's configured inventory. Loading another project never invalidates this project's cached tools, and discovering another project or refreshing global configuration does not retarget previously returned tool closures.
+- **Project scopes**: a project's servers (stdio servers run in its directory) stay loaded while a session that discovered them is alive; when the last one exits, its clients close. At most 16 project scopes stay loaded (`config :lemon_skills, :mcp_max_project_scopes`); beyond that the least recently used project is unloaded and reloads on its next discovery.
 - **Live lists**: tools/resources/prompts `list_changed` notifications refresh the owning server's cached inventory through the same capability and exact-filter path. Notifications from retired connections are ignored.
-- **Recovery**: the host reconnects lost clients after 500/1000/2000/4000 ms and refreshes inventory on success. Exhausting the ladder or more than five client crashes within 30 seconds marks only that server unavailable with a fixed, redacted status reason. Discovery and periodic refresh cannot bypass the breaker; explicit `LemonSkills.McpSource.refresh/0` (or `refresh(source_pid)`) resets it. Failed startup and retired clients are closed.
+- **Recovery**: a failed startup, failed discovery or lost client retries with jittered exponential backoff (about 0.5, 1, 2 and 4 seconds) and refreshes inventory on success. Exhausting the ladder or more than five failures within 30 seconds marks only that server unavailable with a fixed, redacted status reason. Discovery and periodic refresh cannot bypass the backoff or breaker; explicit `LemonSkills.McpSource.refresh/0` (or `refresh(source_pid)`) resets it. Failed startup and retired clients are closed.
 - **Bounded calls**: tool execution does not occupy the discovery/status GenServer. Timeouts and disconnects return errors without replaying an in-flight invocation; a timed-out remote mutation may already have taken effect.
 - **External data**: MCP results remain untrusted. Stdio protocol buffering is limited to 8 MiB.
 

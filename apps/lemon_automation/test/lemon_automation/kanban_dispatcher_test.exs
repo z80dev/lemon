@@ -2,7 +2,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
   use ExUnit.Case, async: false
 
   alias LemonAutomation.{KanbanDispatcher, KanbanRunWorker}
-  alias LemonAgent.Workspace.KanbanStore
+  alias LemonAutomation.KanbanStore
 
   defmodule KanbanDispatcherPassingWorker do
     @moduledoc false
@@ -134,6 +134,17 @@ defmodule LemonAutomation.KanbanDispatcherTest do
              KanbanDispatcher.status(board.id, name: name)
 
     assert status.running_count == 0
+
+    # The batched read returns exactly what status/2 does, for every board.
+    assert {:ok, %{} = many} =
+             KanbanDispatcher.status_many([board.id, "board-not-dispatched"], name: name)
+
+    assert {:ok, many[board.id]} == KanbanDispatcher.status(board.id, name: name)
+
+    assert {:ok, many["board-not-dispatched"]} ==
+             KanbanDispatcher.status("board-not-dispatched", name: name)
+
+    assert %{running: false, dispatcher: nil} = many["board-not-dispatched"]
   end
 
   test "marks failed worker results as blocked" do
@@ -577,7 +588,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
     {:ok, board} = authorized_board("Interactive control")
 
     call = fn action, extra ->
-      LemonSkills.Tools.Kanban.execute(
+      LemonAutomation.Tools.Kanban.execute(
         "tool",
         Map.merge(
           %{
@@ -603,6 +614,54 @@ defmodule LemonAutomation.KanbanDispatcherTest do
     refute call.("dispatch_status", %{}).details.dispatch.running
   end
 
+  test "control revision is stable across lease-renewal ticks and stop binds to it" do
+    assert {:ok, board} = authorized_board("Stable revision")
+    assert {:ok, task} = KanbanStore.create_task(board.id, "Task")
+
+    name = :"kanban-dispatcher-#{System.unique_integer([:positive])}"
+    start_supervised!({KanbanDispatcher, name: name, worker_mod: KanbanDispatcherBlockingWorker})
+
+    assert {:ok, _} =
+             KanbanDispatcher.start_board(board.id,
+               name: name,
+               interval_ms: 10,
+               lease_ms: 60_000,
+               worker_id: "stable-worker"
+             )
+
+    assert_receive {:worker_ready, task_id, _worker_pid}, 5_000
+    assert task_id == task.id
+    _ = :sys.get_state(name)
+
+    assert {:ok, %{control_revision: preview}} = KanbanDispatcher.status(board.id, name: name)
+    expires = KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"]
+
+    # Several ticks renew the lease (a store write) without any task transition.
+    eventually(fn ->
+      assert KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"] > expires
+    end)
+
+    assert {:ok, %{control_revision: ^preview}} = KanbanDispatcher.status(board.id, name: name)
+
+    # A real status change between preview and confirm is still stale.
+    assert {:ok, _other} = KanbanStore.create_task(board.id, "Other", status: "review")
+
+    assert {:error, :stale} =
+             KanbanDispatcher.stop_board(board.id, name: name, expected_revision: preview)
+
+    assert {:ok, %{control_revision: fresh}} = KanbanDispatcher.status(board.id, name: name)
+    refute fresh == preview
+
+    expires = KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"]
+
+    eventually(fn ->
+      assert KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"] > expires
+    end)
+
+    assert {:ok, %{status: "stopped"}} =
+             KanbanDispatcher.stop_board(board.id, name: name, expected_revision: fresh)
+  end
+
   # Dispatch requires recorded authority; boards here are created by a trusted,
   # unrestricted session rooted at a fresh (non-Git) directory, which an
   # operator allowed workers to use in place.
@@ -612,7 +671,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
     on_exit(fn -> File.rm_rf!(dir) end)
 
     {:ok, authority} =
-      LemonAgent.Workspace.KanbanAuthority.new(
+      LemonAutomation.KanbanAuthority.new(
         %{agent_id: "default", session_key: "agent:default:main"},
         nil,
         dir
@@ -623,7 +682,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
            Keyword.merge([workspace: dir, authority: authority], opts)
          ) do
       {:ok, board} ->
-        digest = LemonAgent.Workspace.KanbanAuthority.workspace_digest(board.workspace)
+        digest = LemonAutomation.KanbanAuthority.workspace_digest(board.workspace)
         assert {:ok, _} = KanbanStore.grant_in_place(board.id, digest)
         {:ok, board}
 

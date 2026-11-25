@@ -2,6 +2,31 @@ defmodule LemonCore.A2AStoreTest do
   use ExUnit.Case, async: true
 
   alias LemonCore.{A2AStore, Store}
+  alias LemonCore.Store.EtsBackend
+
+  defmodule TaskReadFailureBackend do
+    @moduledoc false
+    @behaviour LemonCore.Store.Backend
+
+    @impl true
+    defdelegate init(opts), to: EtsBackend
+    @impl true
+    defdelegate put(state, table, key, value), to: EtsBackend
+    @impl true
+    defdelegate put_new(state, table, key, value), to: EtsBackend
+    @impl true
+    defdelegate delete(state, table, key), to: EtsBackend
+
+    @impl true
+    def get(_state, :a2a_tasks, _key), do: {:error, :disk_read_failed}
+    def get(state, table, key), do: EtsBackend.get(state, table, key)
+
+    @impl true
+    def list(_state, table) when table in [:a2a_tasks, :a2a_messages],
+      do: {:error, :disk_read_failed}
+
+    def list(state, table), do: EtsBackend.list(state, table)
+  end
 
   setup do
     name = :"a2a_store_#{System.unique_integer([:positive])}"
@@ -40,7 +65,10 @@ defmodule LemonCore.A2AStoreTest do
                opts
              )
 
-    assert Enum.map(A2AStore.history("hermes", context.id, opts), & &1.text) == ["one", "two"]
+    assert Enum.map(elem(A2AStore.history("hermes", context.id, opts), 1), & &1.text) == [
+             "one",
+             "two"
+           ]
 
     assert {:ok, %{turn_count: 1}} =
              A2AStore.increment_turn(:outbound, "hermes", context.id, opts)
@@ -96,7 +124,7 @@ defmodule LemonCore.A2AStoreTest do
         opts
       )
 
-    assert Enum.map(A2AStore.list_tasks("hermes", opts), & &1.id) == ["a"]
+    assert {:ok, [%{id: "a"}]} = A2AStore.list_tasks("hermes", opts)
   end
 
   test "outbound contexts, defaults and tasks are visible only to their owner", %{store: store} do
@@ -139,7 +167,7 @@ defmodule LemonCore.A2AStoreTest do
 
     assert A2AStore.get_task("old", opts) == nil
     assert {:error, :not_found} = A2AStore.update_task("old", & &1, opts)
-    assert A2AStore.list_tasks("hermes", opts) == []
+    assert {:ok, []} = A2AStore.list_tasks("hermes", opts)
     assert {:error, :invalid_task} = A2AStore.put_task(%{id: "x", direction: :outbound}, opts)
 
     :ok = A2AStore.put_task(%{id: "in", direction: :inbound, peer_id: "hermes"}, opts)
@@ -147,6 +175,17 @@ defmodule LemonCore.A2AStoreTest do
     assert {:ok, %{direction: :inbound}} =
              A2AStore.update_task("in", &Map.put(&1, :direction, :outbound), opts)
 
-    assert Enum.map(A2AStore.list_tasks("hermes", opts), & &1.id) == ["in"]
+    assert {:ok, [%{id: "in"}]} = A2AStore.list_tasks("hermes", opts)
+  end
+
+  test "an unreadable task table is an error, never an unknown task or empty inventory" do
+    store = :"a2a_store_failing_#{System.unique_integer([:positive])}"
+    start_supervised!({Store, name: store, backend: TaskReadFailureBackend}, id: store)
+    opts = [store: store]
+
+    assert {:error, :store_unavailable} = A2AStore.fetch_task("t1", opts)
+    assert {:error, :store_unavailable} = A2AStore.list_tasks("hermes", opts)
+    assert {:error, :store_unavailable} = A2AStore.update_task("t1", & &1, opts)
+    assert {:error, :store_unavailable} = A2AStore.history("hermes", "ctx", opts)
   end
 end

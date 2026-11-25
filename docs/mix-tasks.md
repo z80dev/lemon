@@ -64,7 +64,7 @@ Getting a fresh checkout or a fresh machine to a working agent.
 | `mix lemon.onboard.gemini` | Interactive onboarding for the Google Gemini CLI provider. |
 | `mix lemon.onboard.antigravity` | Interactive onboarding for the Google Antigravity provider. |
 | `mix lemon.providers` | Show redacted provider readiness. This contributor task remains read-only; use `lemon providers` / `./bin/lemon providers` for fallback and credential-pool reference edits. |
-| `mix lemon.workspace` | Initialize `~/.lemon/agent/workspace` bootstrap files. |
+| `mix lemon.workspace init` | Write missing `~/.lemon/agent/workspace` bootstrap templates, restoring deleted ones; existing files are kept. |
 | `mix lemon.update` | Update Lemon: config migration and bundled-skill sync. |
 | Hermes migration Mix tasks | Deleted; use `lemon migrate hermes` from a release or `./bin/lemon migrate hermes` from a source checkout. |
 

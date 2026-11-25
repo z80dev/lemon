@@ -15,6 +15,8 @@ defmodule LemonRouter.RunReceiptStore do
   on the write or subsequent read path. Failed writes remain outcome-unknown.
   """
 
+  require Logger
+
   alias LemonCore.{MapHelpers, Store}
 
   @table :run_receipts
@@ -89,6 +91,25 @@ defmodule LemonRouter.RunReceiptStore do
   defp terminal_evidence?(server, run_id, nil) do
     with {:ok, record} <- Store.fetch(server, :runs, run_id) do
       {:ok, is_map(record) and is_map(MapHelpers.get_key(record, :summary))}
+    end
+  end
+
+  # Terminal delivery paths must not lose an answer or completion to this
+  # bookkeeping: the evidence derives from the durable run summary, which boot
+  # reconciliation re-reads, so a failure is logged and returned, never raised.
+  @doc false
+  def retain_terminal_evidence_best_effort(server \\ Store, run_id) do
+    case retain_terminal_evidence(server, run_id) do
+      :ok ->
+        :ok
+
+      error ->
+        Logger.error(
+          "Terminal run evidence was not retained run_id=#{inspect(run_id)} " <>
+            "reason=#{LemonCore.StatusRedaction.inspect_reason(error)}"
+        )
+
+        error
     end
   end
 

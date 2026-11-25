@@ -87,20 +87,20 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
         record_usage(%{
           provider: "claude",
           cost: 0.05,
-          input_tokens: 500,
-          output_tokens: 200,
-          cache_read_input_tokens: 0,
-          cache_creation_input_tokens: 0
+          input: 500,
+          output: 200,
+          cache_read: 0,
+          cache_write: 0
         })
 
       :ok =
         record_usage(%{
           provider: "openai",
           cost: 0.03,
-          input_tokens: 300,
-          output_tokens: 100,
-          cache_read_input_tokens: 0,
-          cache_creation_input_tokens: 0
+          input: 300,
+          output: 100,
+          cache_read: 0,
+          cache_write: 0
         })
 
       # Get the cost report
@@ -117,10 +117,10 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
         record_usage(%{
           "provider" => "claude",
           "cost" => 0.10,
-          "input_tokens" => 1000,
-          "output_tokens" => 500,
-          "cache_read_input_tokens" => 0,
-          "cache_creation_input_tokens" => 0
+          "input" => 1000,
+          "output" => 500,
+          "cache_read" => 0,
+          "cache_write" => 0
         })
 
       # Verify it was recorded
@@ -142,10 +142,10 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
           record_usage(%{
             provider: "claude",
             cost: 0.01,
-            input_tokens: 100,
-            output_tokens: 50,
-            cache_read_input_tokens: 0,
-            cache_creation_input_tokens: 0
+            input: 100,
+            output: 50,
+            cache_read: 0,
+            cache_write: 0
           })
       end
 
@@ -161,10 +161,10 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
         record_usage(%{
           provider: "claude",
           cost: 0.05,
-          input_tokens: 500,
-          output_tokens: 200,
-          cache_read_input_tokens: 0,
-          cache_creation_input_tokens: 0
+          input: 500,
+          output: 200,
+          cache_read: 0,
+          cache_write: 0
         })
 
       # Get today's date key

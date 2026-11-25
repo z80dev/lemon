@@ -24,19 +24,21 @@ defmodule LemonControlPlane.Methods.SessionsPromptBind do
         {:error, {:invalid_request, "A live WebSocket connection is required", nil}}
 
       true ->
-        case LemonCore.AgentRuntime.call(
+        case LemonCore.AgentRuntime.mutate(
                :user_prompt_bind,
                if(html_forms and enabled,
                  do: [key, connection, enabled, [html_forms: true]],
                  else: [key, connection, enabled]
-               ),
-               {:error, :unavailable}
+               )
              ) do
           :ok ->
             {:ok, %{"sessionKey" => key, "bound" => enabled}}
 
           {:error, :mismatch} ->
             {:error, {:conflict, "Prompt surface belongs to another connection", nil}}
+
+          {:error, :outcome_unknown} ->
+            LemonControlPlane.Methods.NativeSessions.failure(:outcome_unknown)
 
           _ ->
             {:error, {:unavailable, "Session user prompts are unavailable", nil}}

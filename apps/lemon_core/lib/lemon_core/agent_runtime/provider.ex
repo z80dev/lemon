@@ -3,13 +3,18 @@ defmodule LemonCore.AgentRuntime.Provider do
   Shared contract for inspecting and operating on an agent runtime.
 
   Runtime consumers use core's registry without depending on a particular agent
-  product. An agent implements the callbacks it can support and registers itself
-  through `LemonCore.AgentRuntime`.
+  product. An agent implements this behaviour and registers itself through
+  `LemonCore.AgentRuntime.register/1`, which rejects a module that does not
+  export every callback; `@behaviour` makes the compiler warn about any that are
+  missing. The callbacks form groups a runtime must serve completely: prompts
+  and prompt surfaces, tasks and subagents, native session reads, native
+  session mutations, background runs, session maintenance, and personas/tool
+  policy. A runtime that cannot serve one operation returns a stable error atom
+  from that callback rather than leaving it out.
 
-  Every callback is optional. A provider that implements none is equivalent to
-  no provider at all: each consumer falls back to its documented response.
-
-  Return shapes preserve existing runtime and control-plane payloads.
+  Return shapes preserve existing runtime and control-plane payloads. Consumers
+  call reads through `LemonCore.AgentRuntime.query/3` and state changes through
+  `LemonCore.AgentRuntime.mutate/2`, which own the failure policy.
 
   Implementations may retain detailed failures internally, but callbacks used
   by background-command and side-query methods should prefer stable reason
@@ -56,12 +61,12 @@ defmodule LemonCore.AgentRuntime.Provider do
   @doc """
   Task-list progress for a session, including an `:actionable_count` key.
 
-  Returns `nil` when the session has no task-list state.
+  Returns `nil` when the session has no task-list state, and
+  `{:error, :introspection_unavailable}` when a stopped session's workspace
+  history could not be read (a failed read, not an empty list).
   """
-  @callback todo_progress(session_key()) :: map() | nil
-
-  @doc "Feature-requirement progress for a working directory."
-  @callback feature_progress(Path.t()) :: {:ok, map()} | term()
+  @callback todo_progress(session_key()) ::
+              map() | nil | {:error, :introspection_unavailable}
 
   @doc "Compacts a live session. `{:error, :session_not_found}` when it is not running."
   @callback compact_session(session_key(), keyword()) :: :ok | {:error, term()}
@@ -268,90 +273,10 @@ defmodule LemonCore.AgentRuntime.Provider do
   @callback side_query(pid() | session_key() | map(), String.t(), keyword()) ::
               {:ok, String.t()} | {:error, term()}
 
-  @doc "Run-graph record for a run id."
-  @callback run_graph(String.t()) :: {:ok, map()} | term()
-
-  @doc "Progress snapshot for a session id and working directory."
-  @callback progress_snapshot(String.t() | nil, Path.t() | nil) :: map()
-
-  @doc "Loads extensions: `{:ok, extensions, load_errors, validation_errors}`."
-  @callback load_extensions([Path.t()]) :: {:ok, [module()], [term()], [term()]}
-
-  @doc "Provider specs declared by loaded extensions."
-  @callback extension_providers([module()]) :: [map()]
-
-  @doc "Display info for loaded extensions."
-  @callback extension_info([module()]) :: [map()]
-
-  @doc "Tool-name conflict report for a working directory."
-  @callback tool_conflicts(Path.t(), keyword()) :: map()
-
-  @doc "Whether the WASM sidecar supervisor is running."
-  @callback wasm_sidecar_running?() :: boolean()
-
   @doc """
   Read at most 100 unresolved tool intent IDs/names from a native resume journal.
   Unknown outcomes remain unresolved; this read never executes or retries tools.
   """
   @callback interrupted_tool_calls(Path.t(), LemonCore.ResumeToken.t()) ::
               {:ok, [%{id: binary(), name: binary()}]} | {:error, term()}
-
-  @optional_callbacks list_tasks: 0,
-                      interrupted_tool_calls: 2,
-                      user_prompt_bind: 3,
-                      user_prompt_bind: 4,
-                      user_prompt_resolve: 5,
-                      get_task: 1,
-                      subagents_list: 1,
-                      subagent_transcript: 2,
-                      subagent_send: 3,
-                      subagent_cancel: 2,
-                      todo_progress: 1,
-                      feature_progress: 1,
-                      compact_session: 2,
-                      native_session_owner: 1,
-                      session_history: 2,
-                      session_steer: 4,
-                      session_withdraw_steer: 2,
-                      session_pending_steers: 1,
-                      session_todos: 2,
-                      session_recovery_snapshot: 2,
-                      session_event_replay: 3,
-                      session_addressing_context: 1,
-                      session_process_receipts: 1,
-                      session_jobs: 1,
-                      session_job: 3,
-                      session_job_cancel: 2,
-                      session_fork: 3,
-                      session_fork: 4,
-                      session_tree: 3,
-                      session_navigate: 4,
-                      session_label: 4,
-                      session_rewind: 4,
-                      session_create: 2,
-                      session_plan: 4,
-                      session_context_usage: 2,
-                      session_maintenance_plan: 1,
-                      session_maintenance_execute: 1,
-                      tool_policy: 1,
-                      resolve_subagent: 2,
-                      slash_commands: 1,
-                      prepare_prompt: 3,
-                      background_start: 2,
-                      background_list: 1,
-                      background_status: 1,
-                      background_result: 1,
-                      background_cancel: 1,
-                      background_list_scoped: 2,
-                      background_status_scoped: 2,
-                      background_result_scoped: 2,
-                      background_cancel_scoped: 2,
-                      side_query: 3,
-                      run_graph: 1,
-                      progress_snapshot: 2,
-                      load_extensions: 1,
-                      extension_providers: 1,
-                      extension_info: 1,
-                      tool_conflicts: 2,
-                      wasm_sidecar_running?: 0
 end

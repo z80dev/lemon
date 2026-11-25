@@ -35,7 +35,7 @@ defmodule LemonAgent.Loop.Streaming do
   @spec stream_assistant_response(
           LemonAgent.Types.AgentContext.t(),
           AgentLoopConfig.t(),
-          reference() | nil,
+          AbortSignal.t() | nil,
           AgentLoopConfig.stream_fn() | nil,
           EventStream.t()
         ) :: {:ok, AssistantMessage.t(), LemonAgent.Types.AgentContext.t()} | {:error, term()}
@@ -386,9 +386,6 @@ defmodule LemonAgent.Loop.Streaming do
       # still sitting undrained in the steering queue, silently delaying it a
       # full turn.
 
-      # Surface very large contexts early (telemetry warning only; no truncation here).
-      _ = LemonAgent.Context.check_size(context.messages, context.system_prompt)
-
       # The untrusted fence runs last, on the provider-bound messages that
       # `convert_to_llm` produced, so no caller transform or conversion can
       # reintroduce an unfenced tool result.
@@ -551,7 +548,9 @@ defmodule LemonAgent.Loop.Streaming do
         fn event, {partial, ctx, added, committed, raw_arguments, matcher} ->
           raw_arguments = accumulate_arguments(event, raw_arguments)
           event = validate_terminal_arguments(event, partial, ctx.tools, raw_arguments)
-          {matcher, matched_rule} = LemonAgent.StreamRules.feed(matcher, event)
+
+          {matcher, matched_rule} =
+            feed_stream_rules(matcher, event, {partial, ctx, added, committed})
 
           if matched_rule != nil and is_function(on_stream_rule, 1) do
             case on_stream_rule.(matched_rule) do
@@ -648,6 +647,41 @@ defmodule LemonAgent.Loop.Streaming do
     :throw, {:event_stream_push_failed, reason} = failure ->
       LemonAi.EventStream.cancel(response_stream, reason)
       throw(failure)
+
+    :throw, {:stream_rule_failed, error, {partial, ctx, added, committed}} ->
+      # A rule that cannot evaluate this output fails the attempt without a
+      # replay (it would fail identically); the provider call already ran, so
+      # its reported usage is still charged.
+      LemonAi.EventStream.cancel(response_stream, :stream_rule_failed)
+      message = stream_rule_failure(error, partial, config)
+      Loop.record_budget_usage(config, message, stream)
+      _ = LemonAi.PromptDiagnostics.record_llm_call(config.model, llm_context, options, message)
+      {:failed, message, ctx, added, committed}
+  end
+
+  defp feed_stream_rules(matcher, event, attempt) do
+    LemonAgent.StreamRules.feed(matcher, event)
+  rescue
+    error in LemonAgent.StreamRules.Error -> throw({:stream_rule_failed, error, attempt})
+  end
+
+  defp stream_rule_failure(error, partial, config) do
+    message = partial_snapshot(partial) || build_error_message(config, :error, nil)
+    reason = Exception.message(error)
+
+    %{
+      message
+      | stop_reason: :error,
+        error_message: reason,
+        error_details: %{
+          category: :client,
+          status: nil,
+          message: reason,
+          provider_message: nil,
+          rate_limit_info: nil,
+          retryable: false
+        }
+    }
   end
 
   defp process_stream_event({:start, partial}, _partial, context, added, _stream, _config) do
@@ -734,7 +768,7 @@ defmodule LemonAgent.Loop.Streaming do
 
   defp process_stream_event({:canceled, reason}, partial, context, added, stream, config) do
     {final_message, context} =
-      finalize_canceled_message(partial, context, added, stream, config, reason)
+      finalize_canceled_message(partial_snapshot(partial), context, added, stream, config, reason)
 
     {:done, final_message, context}
   end
@@ -762,11 +796,16 @@ defmodule LemonAgent.Loop.Streaming do
     errors = ToolCalls.argument_errors(calls, tools)
 
     errors =
-      Enum.reduce(raw, errors, fn {_index, chunks}, errors ->
-        case chunks |> Enum.reverse() |> IO.iodata_to_binary() |> Jason.decode() do
-          {:ok, value} when is_map(value) -> errors
-          {:error, error} -> [Exception.message(error) | errors]
-          _ -> ["expected JSON object" | errors]
+      Enum.reduce(raw, errors, fn {index, chunks}, errors ->
+        raw = chunks |> Enum.reverse() |> IO.iodata_to_binary()
+
+        # Providers stream a no-argument call as "" (Anthropic's first
+        # `partial_json`), which means `{}`; a parameterless tool has nothing
+        # to decode. Validation of the final arguments still applies.
+        cond do
+          String.trim(raw) == "" -> errors
+          parameterless_call?(Enum.at(message.content || [], index), tools) -> errors
+          true -> raw_argument_errors(raw, errors)
         end
       end)
 
@@ -786,6 +825,27 @@ defmodule LemonAgent.Loop.Streaming do
   end
 
   defp normalize_arguments(message, _tools, _raw), do: message
+
+  defp raw_argument_errors(raw, errors) do
+    case Jason.decode(raw) do
+      {:ok, value} when is_map(value) -> errors
+      {:error, error} -> [Exception.message(error) | errors]
+      _ -> ["expected JSON object" | errors]
+    end
+  end
+
+  defp parameterless_call?(%ToolCall{name: name}, tools) do
+    case Enum.find(tools || [], &(&1.name == name)) do
+      %{parameters: parameters} when is_map(parameters) ->
+        properties = Map.get(parameters, "properties") || Map.get(parameters, :properties)
+        properties in [nil, %{}]
+
+      _ ->
+        false
+    end
+  end
+
+  defp parameterless_call?(_block, _tools), do: false
 
   # Once an update is emitted, later empty partials/terminals cannot uncommit it.
   defp output_event?(event) do
@@ -813,8 +873,8 @@ defmodule LemonAgent.Loop.Streaming do
 
   defp committed_content?(_), do: false
 
-  defp partial_snapshot(%StreamAccumulator{} = partial), do: StreamAccumulator.snapshot(partial)
-  defp partial_snapshot(partial), do: partial
+  defp partial_snapshot(nil), do: nil
+  defp partial_snapshot(accumulator), do: StreamAccumulator.snapshot(accumulator)
 
   defp default_stream_fn(model, context, options) do
     LemonAi.stream(model, context, options)
@@ -869,12 +929,12 @@ defmodule LemonAgent.Loop.Streaming do
     cond do
       aborted?(signal) ->
         LemonAi.EventStream.cancel(stream, :aborted)
-        :gen_server.receive_response(request, 0)
+        _ = :gen_server.receive_response(request, 0)
         {:event, {:canceled, :aborted}}
 
       redirect_requested?(signal) ->
         LemonAi.EventStream.cancel(stream, :redirected)
-        :gen_server.receive_response(request, 0)
+        _ = :gen_server.receive_response(request, 0)
         {:event, {:canceled, :redirected}}
 
       true ->
@@ -909,15 +969,14 @@ defmodule LemonAgent.Loop.Streaming do
   defp terminal_ai_event?({:canceled, _reason}), do: true
   defp terminal_ai_event?(_event), do: false
 
-  defp reconcile_final_message(%AssistantMessage{content: [_ | _]} = final, %StreamAccumulator{}),
+  defp reconcile_final_message(%AssistantMessage{content: [_ | _]} = final, _partial),
     do: final
 
-  defp reconcile_final_message(final, %StreamAccumulator{} = partial),
-    do: reconcile_final_message(final, StreamAccumulator.snapshot(partial))
+  defp reconcile_final_message(%AssistantMessage{} = final, partial) do
+    snapshot = partial_snapshot(partial)
 
-  defp reconcile_final_message(%AssistantMessage{} = final, %AssistantMessage{} = partial) do
-    if empty_content?(final.content) and not empty_content?(partial.content) do
-      %{final | content: partial.content}
+    if snapshot != nil and empty_content?(final.content) and not empty_content?(snapshot.content) do
+      %{final | content: snapshot.content}
     else
       final
     end
@@ -1015,8 +1074,6 @@ defmodule LemonAgent.Loop.Streaming do
   end
 
   defp finalize_canceled_message(partial, context, added, stream, config, reason) do
-    partial = partial_snapshot(partial)
-
     stop_reason =
       case reason do
         :aborted -> :aborted

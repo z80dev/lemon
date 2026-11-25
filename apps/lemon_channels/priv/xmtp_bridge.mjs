@@ -583,16 +583,57 @@ async function listConversations(client) {
   return [];
 }
 
-async function listMessages(conversation) {
+// Nanosecond send time as a BigInt, or null when the message carries none.
+function messageSentAtNs(message) {
+  const raw = message?.sentAtNs ?? message?.sent_at_ns ?? null;
+
+  try {
+    if (typeof raw === "bigint") return raw;
+    if (typeof raw === "number" && Number.isFinite(raw)) return BigInt(Math.trunc(raw));
+    if (typeof raw === "string" && /^[0-9]+$/.test(raw.trim())) return BigInt(raw.trim());
+  } catch (_error) {
+    return null;
+  }
+
+  const sentAt = message?.sentAt;
+  if (sentAt instanceof Date && !Number.isNaN(sentAt.getTime())) {
+    return BigInt(sentAt.getTime()) * 1_000_000n;
+  }
+
+  return null;
+}
+
+function parseCursor(value) {
+  if (typeof value !== "string" || !/^[0-9]+$/.test(value)) return null;
+  return BigInt(value);
+}
+
+// Lists only messages sent after `cursor` (the persisted high-water mark) in
+// ascending send order. The SDK filter narrows the query; the local filter is
+// authoritative so an SDK that ignores `sentAfterNs` still never replays.
+async function listMessages(conversation, cursor = null) {
+  const options = cursor === null ? undefined : { sentAfterNs: cursor };
+  const messages = await listAllMessages(conversation, options);
+
+  return messages
+    .map((message) => ({ message, sentAtNs: messageSentAtNs(message) }))
+    .filter(({ sentAtNs }) => cursor === null || sentAtNs === null || sentAtNs > cursor)
+    .sort((a, b) => {
+      if (a.sentAtNs === null || b.sentAtNs === null) return 0;
+      return a.sentAtNs < b.sentAtNs ? -1 : a.sentAtNs > b.sentAtNs ? 1 : 0;
+    });
+}
+
+async function listAllMessages(conversation, options) {
   if (!conversation) return [];
 
   if (typeof conversation.messages === "function") {
-    const result = await conversation.messages();
+    const result = await conversation.messages(options);
     return Array.isArray(result) ? result : [];
   }
 
   if (typeof conversation.listMessages === "function") {
-    const result = await conversation.listMessages();
+    const result = await conversation.listMessages(options);
     return Array.isArray(result) ? result : [];
   }
 
@@ -800,7 +841,9 @@ async function handleConnect(command) {
   }
 }
 
-async function handlePoll() {
+async function handlePoll(command) {
+  const cursors = command?.cursors && typeof command.cursors === "object" ? command.cursors : {};
+
   if (!state.connected) {
     emitError("poll requested before connect", { code: "not_connected" });
     return;
@@ -818,11 +861,11 @@ async function handlePoll() {
       const cid = conversationId(conversation);
       state.conversationCache.set(cid, conversation);
 
-      const messages = await listMessages(conversation);
+      const messages = await listMessages(conversation, parseCursor(cursors[cid]));
       const isGroup = isGroupConversation(conversation);
       const groupId = conversationGroupId(conversation, cid);
 
-      for (const message of messages) {
+      for (const { message, sentAtNs } of messages) {
         if (!isApplicationMessage(message)) {
           continue;
         }
@@ -851,6 +894,7 @@ async function handlePoll() {
           bridge_dedupe_key: dedupeKey,
           conversation_id: cid,
           message_id: messageId(message),
+          sent_at_ns: sentAtNs === null ? null : sentAtNs.toString(),
           sender_address: sender.wallet_address,
           sender_inbox_id: sender.inbox_id,
           content_type: contentType,
@@ -950,7 +994,7 @@ async function handleCommand(command) {
   }
 
   if (op === "poll") {
-    await handlePoll();
+    await handlePoll(command);
     return;
   }
 
@@ -1001,13 +1045,19 @@ const rl = readline.createInterface({
   terminal: false,
 });
 
+// Commands run strictly one at a time, in arrival order: a reconnect can never
+// interleave with an in-flight poll (or a poll with an acknowledgement).
+let commandQueue = Promise.resolve();
+
 rl.on("line", (line) => {
-  handleLine(line).catch((error) => {
-    emitError("bridge runtime error", {
-      code: "runtime_error",
-      detail: error?.message || String(error),
+  commandQueue = commandQueue
+    .then(() => handleLine(line))
+    .catch((error) => {
+      emitError("bridge runtime error", {
+        code: "runtime_error",
+        detail: error?.message || String(error),
+      });
     });
-  });
 });
 
 rl.on("close", () => {

@@ -30,32 +30,41 @@ defmodule LemonControlPlane.Methods.CronAudit do
       limit: limit,
       job_id: normalize_string(params["jobId"] || params["job_id"]),
       run_id: normalize_string(params["runId"] || params["run_id"] || params["cronRunId"]),
-      action: normalize_string(params["action"])
+      action: normalize_string(params["action"]),
+      before_ts_ms: normalize_optional_integer(params["beforeMs"] || params["before_ms"])
     ]
 
-    events =
+    raw_events =
       filters
       |> LemonAutomation.CronStore.list_audit_events()
       |> maybe_filter_since(normalize_optional_integer(params["sinceMs"] || params["since_ms"]))
-      |> Enum.map(&format_event(&1, content?))
+
+    events = Enum.map(raw_events, &format_event(&1, content?))
 
     response_filters = %{
       "limit" => limit,
       "jobId" => Keyword.get(filters, :job_id),
       "runId" => Keyword.get(filters, :run_id),
       "action" => Keyword.get(filters, :action),
-      "sinceMs" => normalize_optional_integer(params["sinceMs"] || params["since_ms"])
+      "sinceMs" => normalize_optional_integer(params["sinceMs"] || params["since_ms"]),
+      "beforeMs" => Keyword.get(filters, :before_ts_ms)
     }
 
     {:ok,
      %{
        "events" => events,
        "total" => length(events),
+       "nextBeforeMs" => next_before(raw_events, limit),
        "filters" => response_filters,
        "summary" => summary(events, response_filters),
        "contentWithheld" => not content?
      }}
   end
+
+  defp next_before(events, limit) when length(events) == limit,
+    do: events |> List.last() |> Map.get(:ts_ms)
+
+  defp next_before(_events, _limit), do: nil
 
   defp format_event(event, content?) do
     %{

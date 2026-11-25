@@ -448,7 +448,6 @@ defmodule CodingAgent.ToolRegistryTest do
       assert "lsp_diagnostics" in names
       assert "bash" in names
       assert "todo" in names
-      assert "kanban" in names
       assert "peer" in names
 
       for tab_tool <- ~w(browser_tabs browser_tab_open browser_tab_activate browser_tab_close) do
@@ -470,6 +469,30 @@ defmodule CodingAgent.ToolRegistryTest do
       assert "media_analyze_image" in names
       assert "media_generate_video" in names
       assert "parent_question" in names
+    end
+
+    test "the automation runtime contributes kanban, goal and cron after the built-ins",
+         %{tmp_dir: tmp_dir} do
+      {:ok, _} = Application.ensure_all_started(:lemon_automation)
+
+      tools = ToolRegistry.get_tools(tmp_dir, include_extensions: false, include_mcp: false)
+      names = Enum.map(tools, & &1.name)
+      last_builtin = Enum.find_index(names, &(&1 == "extensions_status"))
+
+      for name <- ~w(kanban goal cron) do
+        assert Enum.find_index(names, &(&1 == name)) > last_builtin
+      end
+
+      for {name, module} <- [
+            kanban: LemonAutomation.Tools.Kanban,
+            goal: LemonAutomation.Tools.Goal
+          ] do
+        offered = Enum.find(tools, &(&1.name == Atom.to_string(name)))
+        shipped = module.tool(tmp_dir, [])
+
+        assert {offered.label, offered.description, offered.parameters} ==
+                 {shipped.label, shipped.description, shipped.parameters}
+      end
     end
 
     test "built-in tool schemas are well-formed JSON object schemas", %{tmp_dir: tmp_dir} do
@@ -498,12 +521,12 @@ defmodule CodingAgent.ToolRegistryTest do
     end
 
     test "respects disabled option", %{tmp_dir: tmp_dir} do
-      tools = ToolRegistry.get_tools(tmp_dir, disabled: ["bash", "write", "kanban"])
+      tools = ToolRegistry.get_tools(tmp_dir, disabled: ["bash", "write", "todo"])
 
       names = Enum.map(tools, & &1.name)
       refute "bash" in names
       refute "write" in names
-      refute "kanban" in names
+      refute "todo" in names
       assert "read" in names
     end
 

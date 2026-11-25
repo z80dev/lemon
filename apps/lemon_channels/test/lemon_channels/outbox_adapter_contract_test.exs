@@ -20,16 +20,12 @@ defmodule LemonChannels.OutboxAdapterContractTest do
 
   import LemonChannels.FakeSmtpRelay
 
-  alias LemonChannels.Adapters.{Discord, Email, Telegram, WhatsApp, Xmtp}
-  alias LemonChannels.Adapters.WhatsApp.Transport, as: WhatsAppTransport
+  alias LemonChannels.Adapters.{Discord, Email, Telegram, Xmtp}
   alias LemonChannels.Adapters.Xmtp.Transport, as: XmtpTransport
-  alias LemonChannels.{DeliveryError, OutboundPayload, Outbox, Registry}
-  alias LemonChannels.Outbox.{Dedupe}
-  alias LemonCore.RateLimiter
+  alias LemonChannels.{DeliveryError, OutboundPayload}
 
-  @adapters [Telegram, Discord, Email, WhatsApp, Xmtp]
+  @adapters [Telegram, Discord, Email, Xmtp]
   @gateway_config_key :"Elixir.LemonGateway.Config"
-  @jid "15551234567@s.whatsapp.net"
 
   defmodule TelegramApi do
     def send_message(_token, _chat_id, _text, _opts, _parse_mode), do: Process.get(:api_result)
@@ -60,7 +56,6 @@ defmodule LemonChannels.OutboxAdapterContractTest do
   setup do
     old_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
     old_email = Application.get_env(:lemon_channels, Email)
-    missing_bridge = Path.join(System.tmp_dir!(), "missing_whatsapp_bridge.mjs")
 
     Application.put_env(
       :lemon_gateway,
@@ -72,13 +67,11 @@ defmodule LemonChannels.OutboxAdapterContractTest do
           account_id: "acct",
           bot_token: "token",
           api_mod: TelegramApi
-        },
-        whatsapp: %{bridge_script: missing_bridge, dm_mode: :open}
+        }
       })
     )
 
     on_exit(fn ->
-      stop(WhatsAppTransport)
       stop(XmtpTransport)
       restore(:lemon_gateway, @gateway_config_key, old_gateway)
       restore(:lemon_channels, Email, old_email)
@@ -166,37 +159,6 @@ defmodule LemonChannels.OutboxAdapterContractTest do
     end
   end
 
-  describe "whatsapp" do
-    test "a bridge send exception, a lost acknowledgement and a lost transport normalize to outcome-unknown" do
-      result =
-        whatsapp_deliver(fn transport, id ->
-          send(transport, bridge_error(id, "Connection Closed", outcome_unknown: true))
-        end)
-
-      assert_unknown_outcome(result)
-
-      result = whatsapp_deliver(fn transport, id -> send(transport, {:command_timeout, id}) end)
-      assert_unknown_outcome(result)
-
-      result = whatsapp_deliver(fn transport, _id -> Process.exit(transport, :kill) end)
-      assert_unknown_outcome(result)
-    end
-
-    test "a definite bridge failure stays terminal" do
-      result =
-        whatsapp_deliver(fn transport, id ->
-          send(transport, bridge_error(id, "not connected"))
-        end)
-
-      refute_unknown_outcome(result)
-      assert {:error, "not connected"} = result
-    end
-
-    test "a transport that is not running stays terminal" do
-      refute_unknown_outcome(WhatsApp.deliver(whatsapp_payload()))
-    end
-  end
-
   describe "xmtp" do
     test "a transport lost mid-call normalizes to outcome-unknown" do
       {:ok, _pid} = CrashingXmtpTransport.start()
@@ -205,81 +167,6 @@ defmodule LemonChannels.OutboxAdapterContractTest do
 
     test "a transport that is not running stays terminal" do
       refute_unknown_outcome(Xmtp.deliver(xmtp_payload()))
-    end
-  end
-
-  describe "outbox redelivery of a WhatsApp bridge send exception" do
-    setup do
-      for module <- [Registry, RateLimiter, Dedupe, Outbox] do
-        if is_nil(
-             Process.whereis(
-               if(module == LemonCore.RateLimiter,
-                 do: LemonChannels.Outbox.RateLimiter,
-                 else: module
-               )
-             )
-           ), do: start_supervised!(module)
-      end
-
-      _ = Registry.register(WhatsApp)
-
-      on_exit(fn ->
-        Application.delete_env(:lemon_channels, Outbox)
-        if Process.whereis(Registry), do: Registry.unregister(WhatsApp.id())
-      end)
-
-      transport = start_whatsapp_transport()
-      port_server = :sys.get_state(transport).port_server
-      :erlang.trace(port_server, true, [:receive])
-
-      %{transport: transport, port_server: port_server}
-    end
-
-    test "is redelivered with the same payload and confirmed once the bridge accepts it", ctx do
-      %{transport: transport, port_server: port_server} = ctx
-      {payload, ref} = notifying_whatsapp_payload("whatsapp-unknown")
-
-      assert {:ok, _} = Outbox.enqueue(payload)
-
-      assert_receive {:trace, ^port_server, :receive,
-                      {:"$gen_cast",
-                       {:command, %{"op" => "send_text", "id" => first_id, "text" => text}}}},
-                     2_000
-
-      send(transport, bridge_error(first_id, "Connection Closed", outcome_unknown: true))
-
-      # An unknown outcome is not reported; the retry backs off for a second.
-      refute_receive {:delivery_result, ^ref, _}, 200
-
-      assert_receive {:trace, ^port_server, :receive,
-                      {:"$gen_cast",
-                       {:command, %{"op" => "send_text", "id" => second_id, "text" => ^text}}}},
-                     4_000
-
-      refute second_id == first_id
-      send(transport, {:whatsapp_bridge_event, %{"type" => "command_result", "id" => second_id}})
-
-      assert_receive {:delivery_result, ^ref, {:ok, :sent}}, 2_000
-      assert Dedupe.check(WhatsApp.id(), payload.idempotency_key) == :duplicate
-    end
-
-    test "a definite bridge failure is reported terminal and never redelivered", ctx do
-      %{transport: transport, port_server: port_server} = ctx
-      {payload, ref} = notifying_whatsapp_payload("whatsapp-definite")
-
-      assert {:ok, _} = Outbox.enqueue(payload)
-
-      assert_receive {:trace, ^port_server, :receive,
-                      {:"$gen_cast", {:command, %{"op" => "send_text", "id" => id}}}},
-                     2_000
-
-      send(transport, bridge_error(id, "ENOENT: no such file"))
-      assert_receive {:delivery_result, ^ref, {:error, "ENOENT: no such file"}}, 500
-
-      # The shortest retry backoff is one second.
-      refute_receive {:trace, ^port_server, :receive,
-                      {:"$gen_cast", {:command, %{"op" => "send_text"}}}},
-                     1_300
     end
   end
 
@@ -309,58 +196,6 @@ defmodule LemonChannels.OutboxAdapterContractTest do
     )
   end
 
-  # Delivers one WhatsApp text through the real transport and adapter, with the
-  # bridge's reply scripted by `respond`, which receives the transport and the
-  # correlation id of the command the bridge was asked to run.
-  defp whatsapp_deliver(respond) do
-    stop(WhatsAppTransport)
-    transport = start_whatsapp_transport()
-    port_server = :sys.get_state(transport).port_server
-    :erlang.trace(port_server, true, [:receive])
-
-    task = Task.async(fn -> WhatsApp.deliver(whatsapp_payload()) end)
-
-    assert_receive {:trace, ^port_server, :receive,
-                    {:"$gen_cast", {:command, %{"op" => "send_text", "id" => id}}}},
-                   2_000
-
-    respond.(transport, id)
-    Task.await(task, 5_000)
-  end
-
-  defp start_whatsapp_transport do
-    stop(WhatsAppTransport)
-    # Unlinked: a test may kill the transport mid-call.
-    {:ok, pid} = GenServer.start(WhatsAppTransport, [], name: WhatsAppTransport)
-    # The missing script deliberately avoids Node/network I/O. Under #581 both
-    # startup and the initial connect report bridge_down. Fence those failures
-    # before injecting a healthy synthetic session; durable enqueue can otherwise
-    # give a late startup failure time to invalidate the fake connection.
-    :ok = :sys.suspend(pid)
-
-    try do
-      port_server = :sys.get_state(pid).port_server
-
-      :sys.replace_state(pid, fn state ->
-        if state.reconnect_timer, do: Process.cancel_timer(elem(state.reconnect_timer, 0))
-        %{state | reconnect_timer: nil}
-      end)
-
-      _ = :sys.get_state(port_server)
-      send(pid, {:whatsapp_bridge_event, %{"type" => "connected", "jid" => "bot@s.whatsapp.net"}})
-    after
-      :sys.resume(pid)
-    end
-
-    assert %{connected?: true, reconnect_timer: nil} = :sys.get_state(pid)
-    pid
-  end
-
-  defp bridge_error(id, message, extra \\ []) do
-    event = %{"type" => "command_error", "id" => id, "error" => message}
-    {:whatsapp_bridge_event, Enum.into(extra, event, fn {k, v} -> {to_string(k), v} end)}
-  end
-
   # --- Payloads ---
 
   defp telegram_payload do
@@ -380,10 +215,6 @@ defmodule LemonChannels.OutboxAdapterContractTest do
     )
   end
 
-  defp whatsapp_payload do
-    OutboundPayload.text("whatsapp", "default", %{kind: :dm, id: @jid, thread_id: nil}, "hello")
-  end
-
   defp xmtp_payload do
     OutboundPayload.text(
       "xmtp",
@@ -391,24 +222,6 @@ defmodule LemonChannels.OutboxAdapterContractTest do
       %{kind: :dm, id: "conversation-1", thread_id: nil},
       "hello"
     )
-  end
-
-  defp notifying_whatsapp_payload(key_prefix) do
-    ref = make_ref()
-
-    payload =
-      OutboundPayload.text(
-        "whatsapp",
-        "default",
-        %{kind: :dm, id: @jid, thread_id: nil},
-        "outbox-#{System.unique_integer([:positive])}",
-        idempotency_key: "#{key_prefix}-#{System.unique_integer([:positive])}",
-        notify_pid: self(),
-        notify_ref: ref,
-        meta: %{notify_tag: :delivery_result}
-      )
-
-    {payload, ref}
   end
 
   defp stop(name) do

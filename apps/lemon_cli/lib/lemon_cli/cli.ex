@@ -207,13 +207,6 @@ defmodule LemonCli.CLI do
   defp run_command("acp", args), do: LemonCli.AcpCommand.run(args)
   defp run_command("tern", args), do: LemonCli.TernCommand.run(args)
   defp run_command("connect", args), do: LemonCli.ConnectCommand.run(args)
-  defp run_command("bot", ["https" | args]), do: LemonCli.BotHttpsCommand.cli(args)
-
-  defp run_command("bot", _args) do
-    IO.puts(:stderr, "Use lemon bot https --help")
-    @exit_usage
-  end
-
   defp run_command("run", args), do: LemonCli.PrintCommand.run(args)
   defp run_command("setup", args), do: run_setup(args)
   defp run_command("model", args), do: run_model(args)
@@ -241,6 +234,7 @@ defmodule LemonCli.CLI do
   defp run_command("runs", args), do: LemonCli.RunsCommand.run(args)
   defp run_command("cron", args), do: LemonCli.RunsCommand.run_cron(args)
   defp run_command("logs", args), do: LemonCli.LogsCommand.run(args)
+  defp run_command("browser", args), do: LemonCli.BrowserCommand.run(args)
   defp run_command("reload", args), do: LemonCli.ReloadCommand.run(args)
   defp run_command("omp", args), do: LemonCli.OmpCommand.run(args)
   defp run_command("learn", args), do: LemonCli.LearnCommand.run(args)
@@ -287,7 +281,7 @@ defmodule LemonCli.CLI do
     node_cli = execution_node_cli()
 
     if Code.ensure_loaded?(node_cli) do
-      if command == "join", do: ensure_apps_started!([:lemon_cli])
+      if command == "join", do: ensure_apps_started!([:lemon_cli], boot: :runtime)
       forwarded = if command == "join", do: args, else: [command | args]
 
       case node_cli.run(forwarded) do
@@ -442,7 +436,7 @@ defmodule LemonCli.CLI do
         )
 
       true ->
-        ensure_apps_started!([:lemon_core])
+        ensure_apps_started!([:lemon_core], store: :read_only)
 
         runtime =
           if Health.running?(Env.resolve().control_port, timeout_ms: 500),
@@ -697,7 +691,7 @@ defmodule LemonCli.CLI do
   end
 
   defp validate_config(opts) do
-    ensure_apps_started!([:lemon_core])
+    ensure_apps_started!([:lemon_core], store: :read_only)
 
     project_dir = opts[:project_dir]
     verbose? = opts[:verbose] || false
@@ -745,7 +739,7 @@ defmodule LemonCli.CLI do
   end
 
   defp show_config(opts) do
-    ensure_apps_started!([:lemon_core])
+    ensure_apps_started!([:lemon_core], store: :read_only)
 
     project_dir = opts[:project_dir]
     load_opts = if project_dir, do: [project_dir: project_dir], else: []
@@ -798,7 +792,7 @@ defmodule LemonCli.CLI do
   end
 
   defp secrets_status do
-    ensure_apps_started!([:lemon_core])
+    ensure_apps_started!([:lemon_core], store: :read_only)
 
     status = Secrets.status()
 
@@ -971,7 +965,7 @@ defmodule LemonCli.CLI do
   end
 
   defp secrets_list do
-    ensure_apps_started!([:lemon_core])
+    ensure_apps_started!([:lemon_core], store: :read_only)
 
     {:ok, entries} = Secrets.list()
 
@@ -1017,7 +1011,7 @@ defmodule LemonCli.CLI do
   end
 
   defp secrets_check do
-    ensure_apps_started!([:lemon_core])
+    ensure_apps_started!([:lemon_core], store: :read_only)
 
     max_name_len = EnvCatalog.names() |> Enum.map(&String.length/1) |> Enum.max()
 
@@ -1588,9 +1582,21 @@ defmodule LemonCli.CLI do
   # Shared helpers
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp ensure_apps_started!(apps) do
+  # One-shot commands boot :lemon_core in client mode (no approval recovery,
+  # sweeps, config reloader, run history or SIGTERM trap); `store: :read_only`
+  # also refuses Store writes. Only `node join`, which runs a worker runtime in
+  # this VM, passes `boot: :runtime`.
+  defp ensure_apps_started!(apps, opts \\ []) do
     Enum.each(apps, fn app ->
-      case Application.ensure_all_started(app) do
+      result =
+        if Keyword.get(opts, :boot) == :runtime,
+          do: Application.ensure_all_started(app),
+          else: LemonCore.CLI.start(app, Keyword.take(opts, [:store]))
+
+      case result do
+        :ok ->
+          :ok
+
         {:ok, _started} ->
           :ok
 

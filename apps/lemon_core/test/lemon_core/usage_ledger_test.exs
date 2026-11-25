@@ -9,7 +9,13 @@ defmodule LemonCore.UsageLedgerTest do
         completed: %LemonCore.Events.Completion{
           ok: true,
           answer: "secret answer",
-          usage: %{"prompt_tokens" => 40, "completion_tokens" => 8, "cost" => 0.01}
+          usage: %LemonCore.Events.Usage{
+            input: 40,
+            output: 8,
+            cache_read: 0,
+            cache_write: 0,
+            cost: 0.01
+          }
         },
         meta: %{model: "openai:gpt-5"},
         prompt: "secret prompt"
@@ -24,6 +30,20 @@ defmodule LemonCore.UsageLedgerTest do
              output: 8,
              cost: 0.01
            } = entry
+  end
+
+  test "only canonical usage fields are read" do
+    for usage <- [
+          %{"prompt_tokens" => 40, "completion_tokens" => 8, "cost" => 0.01},
+          %{input_tokens: 40, output_tokens: 8, cache_read_input_tokens: 2, cost: 0.01}
+        ] do
+      entry = UsageLedger.entry("aliases", nil, %{completed: %{usage: usage}})
+
+      assert entry.input == nil
+      assert entry.output == nil
+      assert entry.cache_read == nil
+      assert entry.cost == 0.01
+    end
   end
 
   test "an unprefixed model uses the provider from meta, else unknown" do

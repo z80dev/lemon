@@ -4,7 +4,8 @@ defmodule LemonRouter.RoutingFeedbackStore do
 
   Records one row per finalized run, keyed by task fingerprint.  Provides
   aggregate queries over outcome rates, durations, and sample sizes so the
-  router can use past performance to break model-selection ties.
+  router can suggest a model that has outperformed the configured default
+  (`best_model_for_context/2`).
 
   ## Design
 
@@ -13,7 +14,9 @@ defmodule LemonRouter.RoutingFeedbackStore do
   - Writes are async casts (fire-and-forget).  Read failures return
     `{:insufficient_data, n}` rather than raising.
   - A `min_sample_size` threshold (default `#{__MODULE__}.min_sample_size/0`)
-    guards aggregates so the router never acts on statistically weak data.
+    guards aggregates so the router never acts on statistically weak data, and a
+    `min_success_rate` floor (default `0.75`) keeps a failing model from ever
+    being suggested.
   - The write path is gated before Bus publication by `LemonMemory.Ingest`;
     router reads are gated by the caller before consulting historical data.
 
@@ -33,6 +36,7 @@ defmodule LemonRouter.RoutingFeedbackStore do
       config :lemon_router, LemonRouter.RoutingFeedbackStore,
         path: "~/.lemon/store",          # directory — routing_feedback.sqlite3 created inside
         min_sample_size: 5,              # minimum samples before returning aggregate
+        min_success_rate: 0.75,          # suggested models must succeed at least this often
         retention_ms: 30 * 24 * 3600_000,# 30 days (default)
         subscribe?: true                 # consume routing_feedback Bus events
 
@@ -48,6 +52,7 @@ defmodule LemonRouter.RoutingFeedbackStore do
   alias Exqlite.Sqlite3
 
   @default_min_sample_size 5
+  @default_min_success_rate 0.75
   @default_retention_ms 30 * 24 * 60 * 60 * 1000
   @sweep_interval_ms 60 * 60 * 1000
   @filename "routing_feedback.sqlite3"
@@ -107,12 +112,15 @@ defmodule LemonRouter.RoutingFeedbackStore do
   FROM routing_feedback
   """
 
+  # Keys under a context share the `context|` prefix. A half-open range on the
+  # indexed column selects exactly that prefix (`}` follows `|`), so the lookup
+  # is an index range scan with no LIKE metacharacters to escape.
   @best_model_sql """
   SELECT fingerprint_key,
          COUNT(*) AS total,
          SUM(CASE WHEN outcome='success' THEN 1 ELSE 0 END) AS success_count
   FROM routing_feedback
-  WHERE fingerprint_key LIKE ?1 || '|%' ESCAPE '\\'
+  WHERE fingerprint_key >= ?1 AND fingerprint_key < ?2
   GROUP BY fingerprint_key
   """
 
@@ -200,20 +208,26 @@ defmodule LemonRouter.RoutingFeedbackStore do
   end
 
   @doc """
-  Return the best-performing model for a context key (3-segment prefix).
+  Suggest a model for a context key (3-segment prefix) instead of `default_model`.
 
   Queries all fingerprint keys that share the same `family|toolset|workspace`
-  prefix, aggregates success counts per model (across providers), and returns
-  the model with the highest success rate that meets `min_sample_size`.
+  prefix and aggregates success counts per model (across providers). A model is
+  a candidate when it has at least `min_sample_size` samples and a success rate
+  of at least `min_success_rate`.
 
-  Returns `{:ok, model_string}` or `{:insufficient_data, 0}` if no model
-  reaches the threshold.
+  History is advisory: the configured default stays in charge unless it has
+  itself been measured in this context (`min_sample_size` samples) and the best
+  candidate's success rate is strictly higher. A default changed after the
+  samples were taken therefore has no samples and is kept.
+
+  Returns `{:ok, model}` for a suggestion, or `:keep_default` when there is
+  none (including when the store cannot be read).
   """
-  @spec best_model_for_context(String.t()) :: {:ok, String.t()} | {:insufficient_data, 0}
-  def best_model_for_context(context_key) when is_binary(context_key) do
-    GenServer.call(__MODULE__, {:best_model_for_context, context_key}, 5_000)
+  @spec best_model_for_context(String.t(), String.t() | nil) :: {:ok, String.t()} | :keep_default
+  def best_model_for_context(context_key, default_model) when is_binary(context_key) do
+    GenServer.call(__MODULE__, {:best_model_for_context, context_key, default_model}, 5_000)
   catch
-    :exit, _ -> {:insufficient_data, 0}
+    :exit, _ -> :keep_default
   end
 
   # ── GenServer callbacks ────────────────────────────────────────────────────────
@@ -229,6 +243,7 @@ defmodule LemonRouter.RoutingFeedbackStore do
     path = resolve_path(config)
     retention_ms = Keyword.get(config, :retention_ms, @default_retention_ms)
     min_samples = Keyword.get(config, :min_sample_size, @default_min_sample_size)
+    min_success_rate = Keyword.get(config, :min_success_rate, @default_min_success_rate)
 
     {:ok,
      %{
@@ -237,6 +252,7 @@ defmodule LemonRouter.RoutingFeedbackStore do
        path: path,
        retention_ms: retention_ms,
        min_sample_size: min_samples,
+       min_success_rate: min_success_rate,
        sweep_scheduled?: false
      }}
   end
@@ -275,13 +291,13 @@ defmodule LemonRouter.RoutingFeedbackStore do
   end
 
   @impl true
-  def handle_call({:best_model_for_context, context_key}, _from, state) do
+  def handle_call({:best_model_for_context, context_key, default_model}, _from, state) do
     case ensure_open(state) do
       {:ok, state} ->
-        {:reply, do_best_model_for_context(state, context_key), state}
+        {:reply, do_best_model_for_context(state, context_key, default_model), state}
 
       {:error, _reason, state} ->
-        {:reply, {:insufficient_data, 0}, state}
+        {:reply, :keep_default, state}
     end
   end
 
@@ -588,44 +604,83 @@ defmodule LemonRouter.RoutingFeedbackStore do
     end
   end
 
-  defp escape_like(str) do
-    str
-    |> String.replace("\\", "\\\\")
-    |> String.replace("%", "\\%")
-    |> String.replace("_", "\\_")
-  end
-
-  defp do_best_model_for_context(state, context_key) do
+  defp do_best_model_for_context(state, context_key, default_model) do
     with :ok <- Sqlite3.reset(state.stmts.best_model),
-         :ok <- Sqlite3.bind(state.stmts.best_model, [escape_like(context_key)]),
+         :ok <-
+           Sqlite3.bind(state.stmts.best_model, [context_key <> "|", context_key <> "}"]),
          {:ok, rows} <- Sqlite3.fetch_all(state.conn, state.stmts.best_model) do
-      # Aggregate by model (last segment of fingerprint_key) across providers
-      by_model =
-        Enum.reduce(rows, %{}, fn [fp_key, total, success_count], acc ->
-          model = fp_key |> String.split("|") |> List.last()
-          prev = Map.get(acc, model, %{total: 0, success_count: 0})
-
-          Map.put(acc, model, %{
-            total: prev.total + total,
-            success_count: prev.success_count + (success_count || 0)
-          })
-        end)
-
-      best =
-        by_model
-        |> Enum.filter(fn {_model, %{total: t}} -> t >= state.min_sample_size end)
-        |> Enum.max_by(fn {_model, %{total: t, success_count: s}} -> s / max(t, 1) end, fn ->
-          nil
-        end)
-
-      case best do
-        {model, _stats} when model != "-" -> {:ok, model}
-        _ -> {:insufficient_data, 0}
-      end
+      rows
+      |> models_by_stats()
+      |> suggest(state, default_model)
     else
       err ->
         Logger.warning("[RoutingFeedbackStore] best_model_for_context failed: #{inspect(err)}")
-        {:insufficient_data, 0}
+        :keep_default
+    end
+  end
+
+  # Aggregate by model (last segment of fingerprint_key) across providers.
+  defp models_by_stats(rows) do
+    Enum.reduce(rows, %{}, fn [fp_key, total, success_count], acc ->
+      model = fp_key |> String.split("|") |> List.last()
+      prev = Map.get(acc, model, %{total: 0, success_count: 0})
+
+      Map.put(acc, model, %{
+        total: prev.total + total,
+        success_count: prev.success_count + (success_count || 0)
+      })
+    end)
+  end
+
+  defp suggest(by_model, state, default_model) do
+    best =
+      by_model
+      |> Enum.filter(fn {model, %{total: total} = stats} ->
+        model != "-" and total >= state.min_sample_size and
+          success_rate(stats) >= state.min_success_rate
+      end)
+      |> Enum.max_by(fn {_model, stats} -> success_rate(stats) end, fn -> nil end)
+
+    default_stats =
+      by_model
+      |> Enum.filter(fn {model, _stats} -> default_model?(model, default_model) end)
+      |> Enum.reduce(%{total: 0, success_count: 0}, fn {_model, stats}, acc ->
+        %{total: acc.total + stats.total, success_count: acc.success_count + stats.success_count}
+      end)
+
+    cond do
+      is_nil(best) ->
+        :keep_default
+
+      not is_binary(default_model) ->
+        {:ok, elem(best, 0)}
+
+      default_model?(elem(best, 0), default_model) ->
+        :keep_default
+
+      default_stats.total >= state.min_sample_size and
+          success_rate(elem(best, 1)) > success_rate(default_stats) ->
+        {:ok, elem(best, 0)}
+
+      true ->
+        :keep_default
+    end
+  end
+
+  defp success_rate(%{total: total, success_count: success}), do: success / max(total, 1)
+
+  # Samples record the model id a run reported; the default is a configured
+  # selector that may carry a `provider:` or `provider/` prefix.
+  defp default_model?(model, default_model) when is_binary(default_model) do
+    model == default_model or model == unprefixed(default_model)
+  end
+
+  defp default_model?(_model, _default_model), do: false
+
+  defp unprefixed(selector) do
+    case String.split(selector, [":", "/"], parts: 2) do
+      [_provider, model] -> model
+      [model] -> model
     end
   end
 

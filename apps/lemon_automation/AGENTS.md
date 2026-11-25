@@ -91,6 +91,13 @@ and deliver. Suppressed runs remain in history.
 
 ## Goals and kanban
 
+This app is the single owner of goal and kanban state: `GoalStore`,
+`KanbanStore`, `GoalAuthority` and `KanbanAuthority`, the `goal`/`kanban`
+tools (registered through `LemonAgent.ToolRegistry`) and the `/goal`,
+`/kanban` and `/remind` chat commands (`ChatCommands`, the
+`LemonCore.AutomationCommands` provider). Other apps call these modules or the
+core seam; never copy authority or lease logic into a consumer.
+
 - One active goal loop per session. Stop disables persisted auto-restart before
   touching external work. Hard stop records durable abort intent before dispatch,
   sends it once, and retains reconciliation on ambiguity; graceful stop permits
@@ -99,7 +106,7 @@ and deliver. Suppressed runs remain in history.
   guard into an error state requiring explicit restart, not another automatic tick.
 - Judge failures pause by default; `continue_once` is an explicit policy choice.
 - Goal work runs only under authority recorded by a trusted setter
-  (`LemonAgent.Workspace.GoalAuthority`: session/chat principal, effective
+  (`LemonAutomation.GoalAuthority`: session/chat principal, effective
   policy, canonical root; operator surfaces record operator authority).
   `GoalStore.set/3` requires it. Session and chat starters pass their full
   starter authority (`starter:`: session, agent, policy, canonical root); it
@@ -116,7 +123,10 @@ and deliver. Suppressed runs remain in history.
   rewrite is a compare-and-swap against the goal it read (recomputed on
   conflict), so a concurrent pause, resume or loop update cannot restore a
   wider authority.
-- Kanban task terminal writes require the exact lease ID. Stale results cannot
+- Kanban task terminal writes require the exact lease ID; complete, fail and
+  reclaim only through the lease-guarded `KanbanStore` writers, and
+  `update_task/3` refuses leased or run-tracking cards. Board-scoped locking
+  serializes task read-modify-write and claim operations. Stale results cannot
   overwrite a re-leased task. Lease renewal uses only monitored live in-VM
   workers and the exact lease ID. Persisted expiry still governs orphan recovery;
   never renew recovered or ambiguous invocations merely because their durable
@@ -124,7 +134,7 @@ and deliver. Suppressed runs remain in history.
   invocations must reconcile before re-leasing. Hard stop kills owned waiters,
   aborts claimed runs once, and retains ambiguous run ownership.
 - Kanban work runs only under board authority recorded by a trusted creator
-  (`LemonAgent.Workspace.KanbanAuthority`: session principal, policy, canonical
+  (`LemonAutomation.KanbanAuthority`: session principal, policy, canonical
   root, operator publication grant). Missing authority is quarantined; only
   operator surfaces reauthorize, share, grant publication or widen it. Card
   creator/editor and dispatch starter policies only narrow it, durably. Board

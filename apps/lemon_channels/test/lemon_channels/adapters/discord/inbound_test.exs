@@ -1,7 +1,7 @@
 defmodule LemonChannels.Adapters.Discord.InboundTest do
   use ExUnit.Case, async: true
 
-  alias LemonChannels.Adapters.Discord.Inbound
+  alias LemonChannels.Adapters.Discord.{Inbound, ThreadResolver}
 
   test "marks native voice messages but not ordinary audio attachments" do
     for {flags, expected} <- [{8192, true}, {0, false}] do
@@ -22,6 +22,8 @@ defmodule LemonChannels.Adapters.Discord.InboundTest do
   end
 
   test "normalizes guild message with attachments" do
+    :ok = ThreadResolver.observe_event(:CHANNEL_CREATE, %{"id" => "12345", "type" => 0})
+
     raw = %{
       message: %{
         "id" => "9001",
@@ -67,6 +69,15 @@ defmodule LemonChannels.Adapters.Discord.InboundTest do
   end
 
   test "normalizes thread channel messages with parent channel and thread id" do
+    # A Nostrum %Message{} carries no channel object; the thread comes from
+    # the channel cache the gateway THREAD_CREATE event fed.
+    :ok =
+      ThreadResolver.observe_event(:THREAD_CREATE, %{
+        "id" => "555",
+        "type" => 11,
+        "parent_id" => "123"
+      })
+
     raw = %{
       message: %{
         "id" => "33",
@@ -75,7 +86,6 @@ defmodule LemonChannels.Adapters.Discord.InboundTest do
         "content" => "thread hello",
         "author" => %{"id" => "99", "username" => "user"}
       },
-      channel: %{"id" => "555", "type" => 11, "parent_id" => "123"},
       account_id: "default"
     }
 

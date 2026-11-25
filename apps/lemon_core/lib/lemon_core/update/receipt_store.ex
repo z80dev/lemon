@@ -5,45 +5,97 @@ defmodule LemonCore.Update.ReceiptStore do
   Update receipts deliberately contain only release identity, integrity
   digests, timestamps, and status. They never contain artifact bytes, command
   output, environment values, credentials, or absolute paths. Writes are
-  owner-only and atomic. Mutating update operations share one exclusive lock
-  under the managed Lemon state directory so separate launcher processes
-  cannot flip `versions/current` concurrently.
+  owner-only and atomic. Mutating update operations share one
+  `LemonCore.Service.Lock` under the managed Lemon state directory so separate
+  launcher processes cannot flip `versions/current` concurrently. The lock
+  records its holder's identity, so a holder that was killed or halted without
+  cleanup is recovered by the next operation; a live holder still yields
+  `{:error, :update_locked}`. Every acquisition first removes `.partial`
+  staging directories, which only a dead holder can have left behind.
   """
 
+  require Logger
+
   alias LemonCore.Paths
+  alias LemonCore.Service.Lock
+  alias LemonCore.Update.ManagedInstall
 
   @schema 1
   @max_records 100
   @id_pattern ~r/\A[0-9]{13}-[0-9a-f]{16}\z/
+  # Releases before the shared lock held an ownerless `.operation.lock` file.
+  # No operation of those releases outlives this window (bounded downloads).
+  @legacy_lock ".operation.lock"
+  @legacy_stale_seconds 3_600
 
   @type opts :: keyword()
 
   @spec with_lock(opts(), (-> term())) :: term() | {:error, term()}
   def with_lock(opts, fun) when is_function(fun, 0) do
-    lock = Path.join(root(opts), ".operation.lock")
+    root = root(opts)
 
-    with :ok <- ensure_private_dir(root(opts)),
-         {:ok, io} <- File.open(lock, [:write, :exclusive, :binary]) do
-      try do
-        with :ok <- File.chmod(lock, 0o600),
-             :ok <- IO.binwrite(io, "lemon-update-lock-v1\n"),
-             :ok <- :file.sync(io) do
-          fun.()
-        else
-          {:error, _reason} -> {:error, :update_lock_failed}
+    case ensure_private_dir(root) do
+      :ok ->
+        root
+        |> Path.join("operation.lock")
+        |> Lock.with_lock_path([], fn -> run_locked(root, opts, fun) end)
+        |> case do
+          {:locked, result} -> result
+          {:error, :lock_timeout} -> {:error, :update_locked}
+          {:error, {:lock_failed, reason}} -> {:error, {:lock_failed, reason}}
         end
-      rescue
-        _error -> {:error, :update_operation_failed}
-      catch
-        _kind, _reason -> {:error, :update_operation_failed}
-      after
-        File.close(io)
-        File.rm(lock)
-      end
-    else
-      {:error, :eexist} -> {:error, :update_locked}
-      {:error, reason} -> {:error, {:lock_failed, reason}}
+
+      {:error, reason} ->
+        {:error, {:lock_failed, reason}}
     end
+  end
+
+  defp run_locked(root, opts, fun) do
+    case clear_legacy_lock(Path.join(root, @legacy_lock)) do
+      :ok ->
+        clean_staging(opts)
+        {:locked, fun.()}
+
+      error ->
+        {:locked, error}
+    end
+  rescue
+    _error -> {:locked, {:error, :update_operation_failed}}
+  catch
+    _kind, _reason -> {:locked, {:error, :update_operation_failed}}
+  end
+
+  defp clear_legacy_lock(path) do
+    case File.lstat(path, time: :posix) do
+      {:ok, %File.Stat{type: :regular, mtime: mtime}} ->
+        if System.os_time(:second) - mtime >= @legacy_stale_seconds do
+          Logger.warning("Recovered a stale update lock left by an earlier Lemon release")
+          _ = File.rm(path)
+          :ok
+        else
+          {:error, :update_locked}
+        end
+
+      {:error, :enoent} ->
+        :ok
+
+      _ ->
+        {:error, {:lock_failed, :unsafe_update_state_path}}
+    end
+  end
+
+  # Staging directories exist only while a holder runs; under the lock any
+  # remaining one was stranded by a holder that died before its cleanup ran.
+  defp clean_staging(opts) do
+    _ =
+      for dir <- [ManagedInstall.versions_dir(opts), ManagedInstall.bot_versions_dir(opts)],
+          {:ok, entries} <- [File.ls(dir)],
+          entry <- entries,
+          String.ends_with?(entry, ".partial") do
+        _ = File.rm_rf(Path.join(dir, entry))
+      end
+
+    :ok
   end
 
   @spec put_checkpoint(map(), opts()) :: {:ok, map()} | {:error, term()}

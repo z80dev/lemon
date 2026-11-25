@@ -4,8 +4,7 @@ defmodule LemonSkills.Config do
 
   Handles:
   - Skills directory paths (global and project)
-  - Skill enable/disable state
-  - Per-skill configuration
+  - Skill enable/disable state (`skills.json`; settings live in `config.toml`)
 
   ## Directory Structure
 
@@ -19,7 +18,7 @@ defmodule LemonSkills.Config do
       │   │   └── SKILL.md
       │   └── git-workflow/
       │       └── SKILL.md
-      └── skills.json         # Global skill configuration
+      └── skills.json         # Global skill state (disabled list)
 
       ~/.agents/skills/       # Harness-compatible global skills (optional)
       ├── some-skill/
@@ -38,7 +37,7 @@ defmodule LemonSkills.Config do
       ├── skill/              # Project-specific skills
       │   └── my-custom-skill/
       │       └── SKILL.md
-      └── skills.json         # Project skill config (narrow-only; see load_config/1)
+      └── skills.json         # Project skill state (add-only; see disabled_keys/1)
 
       <project>/.agents/skills/  # Harness-compatible project skills (optional)
       └── another-skill/
@@ -68,6 +67,7 @@ defmodule LemonSkills.Config do
   """
 
   alias LemonCore.TrustedRoot
+  alias LemonSkills.{MetadataFile, SkillRoot}
 
   @skills_config_filename "skills.json"
   @skills_usage_filename "skills.usage.json"
@@ -358,109 +358,65 @@ defmodule LemonSkills.Config do
     Path.join([cwd, ".lemon", @curator_report_dirname])
   end
 
-  @doc """
-  Load the skills configuration.
+  @typedoc "A `skills.json` state file: the operator's global file or a project's."
+  @type state_scope :: :global | {:project, String.t()}
 
-  The operator's global `skills.json` is authoritative. A project
-  `<cwd>/.lemon/skills.json` arrives with the repository, so it can only
-  narrow it:
-
-    * `disabled`: string keys are added to the operator list
-    * `learning_nudge.enabled`: only `false`
-    * `learning_nudge.memory_turn_interval` and `skill_tool_threshold`: only a
-      positive integer above the effective operator value (less frequent)
-
-  Every other project key (per-skill `skills`, `learning_nudge.background_review`,
-  re-enabling an operator-disabled skill) is ignored.
-
-  ## Parameters
-
-  - `cwd` - The project working directory (optional)
+  @typedoc """
+  Why a present `skills.json` could not be used. `reason` is a bounded atom
+  (`:invalid_json`, `:not_an_object`, `:invalid_disabled`, a file error such as
+  `:eacces`, `:symlink` or `:too_large`); no path or file content.
   """
-  @spec load_config(String.t() | nil) :: map()
-  def load_config(cwd \\ nil) do
-    global_config = load_config_file(global_config_file())
-
-    if cwd do
-      project_config = load_config_file(project_config_file(cwd))
-
-      global_config
-      |> narrow_disabled(project_config["disabled"])
-      |> narrow_learning_nudge(project_config["learning_nudge"])
-    else
-      global_config
-    end
-  end
-
-  @nudge_intervals %{"memory_turn_interval" => 10, "skill_tool_threshold" => 15}
-
-  defp narrow_disabled(config, project) when is_list(project) do
-    operator = Enum.filter(List.wrap(config["disabled"]), &is_binary/1)
-    Map.put(config, "disabled", Enum.uniq(operator ++ Enum.filter(project, &is_binary/1)))
-  end
-
-  defp narrow_disabled(config, _project), do: config
-
-  defp narrow_learning_nudge(config, %{} = project) do
-    operator =
-      case config["learning_nudge"] do
-        %{} = nudge -> nudge
-        _ -> %{}
-      end
-
-    nudge =
-      Enum.reduce(@nudge_intervals, operator, fn {key, default}, acc ->
-        current =
-          case acc[key] do
-            n when is_integer(n) and n > 0 -> n
-            _ -> default
-          end
-
-        case project[key] do
-          n when is_integer(n) and n > current -> Map.put(acc, key, n)
-          _ -> acc
-        end
-      end)
-
-    nudge = if project["enabled"] == false, do: Map.put(nudge, "enabled", false), else: nudge
-
-    if nudge == operator, do: config, else: Map.put(config, "learning_nudge", nudge)
-  end
-
-  defp narrow_learning_nudge(config, _project), do: config
+  @type state_error :: {:skills_state, :global | :project, atom()}
 
   @doc """
-  Save skill configuration.
+  Read one `skills.json` state file.
 
-  ## Parameters
-
-  - `config` - The configuration map to save
-  - `global` - Whether to save to global config (default: true)
-  - `cwd` - Project directory for project config
+  `skills.json` holds skill state only: the `disabled` key list. A missing file
+  is empty state. A present file that cannot be read safely, does not decode to
+  a JSON object, or whose `disabled` value is not a list of strings is an
+  error, never empty state: an unreadable disabled list must not re-enable
+  anything. Settings live in `config.toml` (`[skills.learning_nudge]`); other
+  keys in this file are ignored.
   """
-  @spec save_config(map(), boolean(), String.t() | nil) :: :ok | {:error, term()}
-  def save_config(config, global \\ true, cwd \\ nil) do
-    path =
-      if global do
-        global_config_file()
-      else
-        project_config_file(cwd)
+  @spec read_state(state_scope()) :: {:ok, map()} | {:error, state_error()}
+  def read_state(scope) do
+    result =
+      case MetadataFile.read(read_anchor(scope), state_path(scope)) do
+        {:ok, bytes} -> decode_state(bytes)
+        {:error, :enoent} -> {:ok, %{}}
+        {:error, reason} -> {:error, reason}
       end
 
-    # Ensure directory exists
-    File.mkdir_p!(Path.dirname(path))
-
-    case Jason.encode(config, pretty: true) do
-      {:ok, json} ->
-        File.write(path, json)
-
-      {:error, reason} ->
-        {:error, reason}
+    case result do
+      {:ok, state} -> {:ok, state}
+      {:error, reason} -> {:error, {:skills_state, scope_name(scope), reason_tag(reason)}}
     end
   end
 
   @doc """
-  Check if a skill is disabled.
+  Effective disabled skill keys for `cwd`: the operator's global `disabled`
+  list united with the project `<cwd>/.lemon/skills.json` list. A project file
+  arrives with the repository, so it can only add keys; it never re-enables a
+  globally disabled or archived skill.
+
+  An unusable state file is an error; callers treat every skill as disabled.
+  """
+  @spec disabled_keys(String.t() | nil) :: {:ok, MapSet.t(String.t())} | {:error, state_error()}
+  def disabled_keys(cwd \\ nil) do
+    with {:ok, global} <- read_state(:global),
+         {:ok, project} <- read_project_state(cwd) do
+      {:ok, MapSet.new(disabled_list(global) ++ disabled_list(project))}
+    end
+  end
+
+  defp read_project_state(cwd) when is_binary(cwd) and cwd != "",
+    do: read_state({:project, Path.expand(cwd)})
+
+  defp read_project_state(_cwd), do: {:ok, %{}}
+
+  @doc """
+  Check if a skill is disabled. An unusable state file fails closed: every
+  skill reads as disabled until it is repaired (`lemon doctor` reports it).
 
   ## Parameters
 
@@ -469,13 +425,20 @@ defmodule LemonSkills.Config do
   """
   @spec skill_disabled?(String.t(), String.t() | nil) :: boolean()
   def skill_disabled?(key, cwd \\ nil) do
-    config = load_config(cwd)
-    disabled = get_in(config, ["disabled"]) || []
-    key in disabled
+    case disabled_keys(cwd) do
+      {:ok, keys} -> MapSet.member?(keys, key)
+      {:error, _} -> true
+    end
   end
 
   @doc """
-  Enable a skill.
+  Enable a skill by removing it from one scope's `disabled` list.
+
+  Nothing is written when that list does not contain the key. Enabling a
+  skill the scope's usage sidecar marks archived is `{:error, :archived}`
+  (restore it first), and enabling at project scope a skill the operator
+  disabled globally is `{:error, :disabled_globally}`: neither the global list
+  nor an archive is ever removed by a project-scope writer.
 
   ## Parameters
 
@@ -483,26 +446,20 @@ defmodule LemonSkills.Config do
 
   ## Options
 
-  - `:cwd` - Project directory (optional)
-  - `:global` - Whether to modify global config (default: true)
+  - `:cwd` - Project directory (required with `global: false`)
+  - `:global` - Whether to modify global state (default: true)
   """
   @spec enable(String.t(), keyword()) :: :ok | {:error, term()}
   def enable(key, opts \\ []) do
-    cwd = Keyword.get(opts, :cwd)
-    global = Keyword.get(opts, :global, true)
-
-    config_path = if global, do: global_config_file(), else: project_config_file(cwd)
-    config = load_config_file(config_path)
-
-    disabled = Map.get(config, "disabled", [])
-    disabled = List.delete(disabled, key)
-
-    config = Map.put(config, "disabled", disabled)
-    save_config(config, global, cwd)
+    with {:ok, scope} <- state_scope(opts),
+         :ok <- refuse_global_disable(scope, key),
+         :ok <- refuse_archived(scope, key) do
+      update_disabled(scope, &List.delete(&1, key))
+    end
   end
 
   @doc """
-  Disable a skill.
+  Disable a skill by adding it to one scope's `disabled` list.
 
   ## Parameters
 
@@ -510,40 +467,114 @@ defmodule LemonSkills.Config do
 
   ## Options
 
-  - `:cwd` - Project directory (optional)
-  - `:global` - Whether to modify global config (default: true)
+  - `:cwd` - Project directory (required with `global: false`)
+  - `:global` - Whether to modify global state (default: true)
   """
   @spec disable(String.t(), keyword()) :: :ok | {:error, term()}
   def disable(key, opts \\ []) do
-    cwd = Keyword.get(opts, :cwd)
-    global = Keyword.get(opts, :global, true)
-
-    config_path = if global, do: global_config_file(), else: project_config_file(cwd)
-    config = load_config_file(config_path)
-
-    disabled = Map.get(config, "disabled", [])
-    disabled = if key in disabled, do: disabled, else: [key | disabled]
-
-    config = Map.put(config, "disabled", disabled)
-    save_config(config, global, cwd)
+    with {:ok, scope} <- state_scope(opts) do
+      update_disabled(scope, fn disabled ->
+        if key in disabled, do: disabled, else: disabled ++ [key]
+      end)
+    end
   end
 
-  @doc """
-  Get the operator's skill-specific configuration from the global
-  `skills.json`. A project `skills.json` cannot set it.
-  """
-  @spec get_skill_config(String.t()) :: map()
-  def get_skill_config(key) do
-    get_in(load_config(), ["skills", key]) || %{}
+  defp state_scope(opts) do
+    cond do
+      Keyword.get(opts, :global, true) ->
+        {:ok, :global}
+
+      is_binary(opts[:cwd]) and opts[:cwd] != "" ->
+        {:ok, {:project, Path.expand(opts[:cwd])}}
+
+      true ->
+        {:error, :missing_cwd}
+    end
   end
 
-  @doc "Set skill-specific configuration in the operator's global `skills.json`."
-  @spec set_skill_config(String.t(), map()) :: :ok | {:error, term()}
-  def set_skill_config(key, skill_config) do
-    config = load_config_file(global_config_file())
-    skills = Map.put(Map.get(config, "skills", %{}), key, skill_config)
-    save_config(Map.put(config, "skills", skills))
+  defp refuse_global_disable(:global, _key), do: :ok
+
+  defp refuse_global_disable({:project, _cwd}, key) do
+    with {:ok, global} <- read_state(:global) do
+      if key in disabled_list(global), do: {:error, :disabled_globally}, else: :ok
+    end
   end
+
+  defp refuse_archived(scope, key) do
+    usage_opts =
+      case scope do
+        :global -> [scope: :global]
+        {:project, cwd} -> [scope: :project, cwd: cwd]
+      end
+
+    if LemonSkills.Usage.archived?(key, usage_opts), do: {:error, :archived}, else: :ok
+  end
+
+  # Read-modify-write under the file's service lock, replaced atomically.
+  # An unchanged list is not written.
+  defp update_disabled(scope, fun) do
+    path = state_path(scope)
+
+    with {:ok, anchor} <- write_anchor(scope) do
+      MetadataFile.with_lock(anchor, path, fn ->
+        with {:ok, state} <- read_state(scope) do
+          current = disabled_list(state)
+
+          case fun.(current) do
+            ^current -> :ok
+            [] -> write_state(anchor, path, Map.delete(state, "disabled"))
+            updated -> write_state(anchor, path, Map.put(state, "disabled", updated))
+          end
+        end
+      end)
+    end
+  end
+
+  defp write_state(anchor, path, state) do
+    case Jason.encode(state, pretty: true) do
+      {:ok, json} -> MetadataFile.write(anchor, path, json)
+      {:error, _} -> {:error, :json_encode}
+    end
+  end
+
+  defp decode_state(bytes) do
+    case Jason.decode(bytes) do
+      {:ok, %{} = state} ->
+        case Map.get(state, "disabled", []) do
+          list when is_list(list) ->
+            if Enum.all?(list, &is_binary/1), do: {:ok, state}, else: {:error, :invalid_disabled}
+
+          _ ->
+            {:error, :invalid_disabled}
+        end
+
+      {:ok, _} ->
+        {:error, :not_an_object}
+
+      {:error, _} ->
+        {:error, :invalid_json}
+    end
+  end
+
+  defp disabled_list(state), do: Map.get(state, "disabled", [])
+
+  defp state_path(:global), do: global_config_file()
+  defp state_path({:project, cwd}), do: project_config_file(cwd)
+
+  defp read_anchor(:global), do: Path.expand(agent_dir())
+  defp read_anchor({:project, cwd}), do: cwd
+
+  # The agent directory is validated as independently trusted before a write;
+  # the project directory is the anchor of its own `.lemon/` state.
+  defp write_anchor(:global), do: SkillRoot.trusted_dir(agent_dir())
+  defp write_anchor({:project, cwd}), do: {:ok, cwd}
+
+  defp scope_name(:global), do: :global
+  defp scope_name({:project, _cwd}), do: :project
+
+  defp reason_tag(reason) when is_atom(reason), do: reason
+  defp reason_tag({reason, _detail}) when is_atom(reason), do: reason
+  defp reason_tag(_reason), do: :unreadable
 
   @doc """
   Ensure skills directories exist.
@@ -968,23 +999,6 @@ defmodule LemonSkills.Config do
   end
 
   # ============================================================================
-  # Private Functions
-  # ============================================================================
-
-  defp load_config_file(path) do
-    case File.read(path) do
-      {:ok, content} ->
-        case Jason.decode(content) do
-          {:ok, config} when is_map(config) -> config
-          _ -> %{}
-        end
-
-      {:error, _} ->
-        %{}
-    end
-  end
-
-  # ============================================================================
   # MCP Configuration Helpers
   # ============================================================================
 
@@ -1008,8 +1022,7 @@ defmodule LemonSkills.Config do
 
     opts =
       mcp_timeout_opts(config) ++
-        mcp_env_opts(config) ++
-        mcp_filter_opts(config) ++ sampling_config_opts(config) ++ mcp_metadata_opts(config)
+        mcp_env_opts(config) ++ mcp_filter_opts(config) ++ mcp_metadata_opts(config)
 
     if opts == [] do
       [{:stdio, command, args}]
@@ -1161,34 +1174,6 @@ defmodule LemonSkills.Config do
 
   defp oauth_config_opts(_config), do: []
 
-  defp sampling_config_opts(%{"sampling" => sampling}) when is_map(sampling) do
-    opts =
-      [
-        mode: Map.get(sampling, "mode"),
-        reviewer: sampling_reviewer(sampling),
-        max_tokens: Map.get(sampling, "max_tokens") || Map.get(sampling, "maxTokens"),
-        allowed_models: string_list(sampling, "allowed_models")
-      ]
-      |> Enum.reject(fn
-        {:allowed_models, []} -> true
-        {_key, nil} -> true
-        {_key, ""} -> true
-        _ -> false
-      end)
-
-    if opts == [], do: [], else: [sampling_policy: opts]
-  end
-
-  defp sampling_config_opts(_config), do: []
-
-  defp sampling_reviewer(%{"reviewer" => reviewer})
-       when reviewer in ["ops_approval", "approval"] do
-    :ops_approval
-  end
-
-  defp sampling_reviewer(%{"require_approval" => true}), do: :ops_approval
-  defp sampling_reviewer(_sampling), do: nil
-
   defp mcp_filter_opts(config) do
     filters =
       [
@@ -1281,9 +1266,8 @@ defmodule LemonSkills.Config do
          end) do
       nil ->
         with :ok <-
-               validate_positive_timeout(Keyword.get(opts, :ready_timeout_ms), "ready_timeout_ms"),
-             :ok <- validate_positive_timeout(Keyword.get(opts, :timeout_ms), "timeout_ms") do
-          validate_sampling_policy(Keyword.get(opts, :sampling_policy))
+               validate_positive_timeout(Keyword.get(opts, :ready_timeout_ms), "ready_timeout_ms") do
+          validate_positive_timeout(Keyword.get(opts, :timeout_ms), "timeout_ms")
         end
 
       {key, _value} ->
@@ -1297,42 +1281,6 @@ defmodule LemonSkills.Config do
   defp validate_positive_timeout(_value, name) do
     {:error, "#{name} must be a positive integer"}
   end
-
-  defp validate_sampling_policy(nil), do: :ok
-
-  defp validate_sampling_policy(policy) when is_list(policy) do
-    mode = Keyword.get(policy, :mode)
-    reviewer = Keyword.get(policy, :reviewer)
-    max_tokens = Keyword.get(policy, :max_tokens)
-    allowed_models = Keyword.get(policy, :allowed_models, [])
-    approval_timeout_ms = Keyword.get(policy, :approval_timeout_ms)
-
-    cond do
-      not is_nil(mode) and
-          mode not in [:model, :reviewed_model, :deny, "model", "reviewed_model", "deny"] ->
-        {:error, "sampling_policy.mode must be model, reviewed_model, or deny"}
-
-      not is_nil(reviewer) and
-          not (is_function(reviewer, 1) or
-                   reviewer in [:ops_approval, "ops_approval", :approval, "approval", true]) ->
-        {:error, "sampling_policy.reviewer must be a function or ops_approval"}
-
-      not is_nil(max_tokens) and (not is_integer(max_tokens) or max_tokens <= 0) ->
-        {:error, "sampling_policy.max_tokens must be a positive integer"}
-
-      not string_list?(allowed_models) ->
-        {:error, "sampling_policy.allowed_models must be a list of strings"}
-
-      not is_nil(approval_timeout_ms) and
-          (not is_integer(approval_timeout_ms) or approval_timeout_ms <= 0) ->
-        {:error, "sampling_policy.approval_timeout_ms must be a positive integer"}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp validate_sampling_policy(_policy), do: {:error, "sampling_policy must be a keyword list"}
 
   defp string_list?(value), do: is_list(value) and Enum.all?(value, &is_binary/1)
 

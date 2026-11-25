@@ -23,7 +23,8 @@ defmodule LemonCore.Store do
       LemonCore.Store.put(:scratch_store, :notes, "k", "v")
 
   Configuration comes from `start_link/1` opts first (`:backend`,
-  `:backend_opts`, `:cached_tables`, `:finalize_run_hooks`), falling back to
+  `:backend_opts`, `:cached_tables`, `:finalize_run_hooks`,
+  `:runs_retention_ms`), falling back to
   `Application.get_env(:lemon_core, name)` — which for the default name is the
   historical `config :lemon_core, LemonCore.Store` block. Each instance gets its
   own `LemonCore.Store.ReadCache` tables.
@@ -46,10 +47,45 @@ defmodule LemonCore.Store do
 
   ## Expiring entries
 
-  Values in `:chat` and `:openai_compat_run_owners` that carry an integer
-  `:expires_at` (epoch milliseconds)
-  are removed by the periodic sweep once that time passes. Owners stamp the
-  field; the store only enforces it.
+  Values in `:chat` and `:exec_approvals_pending` (terminal approval receipts)
+  that carry an integer `:expires_at` (epoch milliseconds) are removed by the
+  periodic sweep once that time passes. Owners stamp the field; the store only
+  enforces it.
+
+  ## Client options
+
+  One-shot client VMs (see `LemonCore.Application` boot modes) start the store
+  with `sweep: false`, leaving sweeps to the runtime that owns the database, and
+  read-only commands add `read_only: true`: every mutation then returns
+  `{:error, :read_only}` without reaching the backend, and run/introspection
+  appends are dropped.
+
+  ## Run records and their retention
+
+  `:runs` holds summary and lifecycle metadata only. `append_run_event/3`
+  writes to a bounded per-run buffer (the first 200 and the latest events,
+  2,000 in all). Finalization freezes the buffer until the run expires and
+  passes its events to the durable history hook; late events are dropped.
+  Only `get_run_with_events/2` attaches the buffer to a run read.
+
+  Finalized runs are evicted by the periodic sweep `:runs_retention_ms`
+  (default 24 hours) after finalization. Finalization also writes a small
+  durable terminal marker to `:run_terminals` so `fetch_run/2` answers
+  `{:error, :evicted}` for a finished run whose record is gone — including after
+  a restart drops the ephemeral `:runs` table — instead of `{:ok, nil}`.
+  Durable per-session history lives in `LemonCore.RunHistoryStore`.
+
+  `:runs` is unbounded by nature, so `list/2`, `fetch_all/2`, `fetch_keys/2`
+  and `fetch_range/5` refuse it; read runs by id.
+
+  ## Reads outside the store process
+
+  `fetch_all/2`, `fetch_keys/2`, `fetch_range/5`, `list/2` and
+  `list_introspection_events/2` ask the store for a read handle (a short call
+  that also orders the read after earlier writes) and then read the backend in
+  the caller's process (`c:LemonCore.Store.Backend.reader/1`), so a large scan
+  never stalls other store callers. Backends without a reader are read inside
+  the store process.
 
   ## Read cache coherence
 
@@ -58,13 +94,15 @@ defmodule LemonCore.Store do
   writes only after the backend confirms, so the cache can never advertise a
   value the backend rejected. Consequences worth knowing:
 
+    * A table is published as cached only once its warm-up read succeeded.
+      A table whose warm-up failed stays uncached (reads reach the backend and
+      surface its error) until the next start or `register_cached_table/2`.
     * Generic writes (`put/4`, `delete/3`, `compare_and_swap/5`, ...) are
       synchronous, so a read taken after one returns cannot observe the
       previous value.
     * `append_run_event/3` stays asynchronous, because runs stream events far
-      more often than anything reads them back. Its cache entry lands with the
-      backend write, so a read taken before the cast drains can lag by a
-      message. `ping/1` is the barrier when that matters.
+      more often than anything reads them back. A read taken before the cast
+      drains can lag by a message. `ping/1` is the barrier when that matters.
     * `finalize_run/3` is synchronous: success means both the immutable final
       summary and its derived session index were written. A retry repairs a
       partial index failure without incrementing the session twice.
@@ -82,7 +120,15 @@ defmodule LemonCore.Store do
   # Sweep interval: 5 minutes in milliseconds
   @sweep_interval_ms 5 * 60 * 1000
   # Tables whose values may carry an `:expires_at` stamp for the periodic sweep.
-  @expiring_tables [:chat, :openai_compat_run_owners]
+  @expiring_tables [:chat, :exec_approvals_pending, :runs]
+  # Tables too large to read whole; their owners read by key or range.
+  @unscannable_tables [:runs]
+  @default_runs_retention_ms 24 * 60 * 60 * 1000
+  @run_terminals :run_terminals
+  # Per-run event buffer bound: the first `@run_event_head` events and the
+  # latest ones, `@run_event_limit` in all. Keep the moduledoc numbers in sync.
+  @run_event_limit 2_000
+  @run_event_head 200
   @default_introspection_retention_days 7
   @default_introspection_retention_ms @default_introspection_retention_days * 24 * 60 * 60 * 1000
   @default_introspection_query_limit 100
@@ -122,15 +168,25 @@ defmodule LemonCore.Store do
   @spec location(server()) :: {module(), Path.t() | nil}
   def location(server \\ __MODULE__), do: GenServer.call(server, :location)
 
+  @doc """
+  The backend the default store is configured with (application env plus the
+  runtime override), whether or not the store is running. Boot uses it to
+  check the `:durable_store` capability before starting the store.
+  """
+  @spec configured_backend() :: module()
+  def configured_backend do
+    Keyword.get(resolve_config(__MODULE__, []), :backend, @default_backend)
+  end
+
   # Run Events API
 
   @doc """
-  Append an event to a run's record.
+  Append an event to a live run's bounded event buffer (see "Run records and
+  their retention"). Events for a finalized or evicted run are dropped.
 
   Asynchronous, because runs stream events far more often than anything reads
-  them back. The store updates the cache after the backend write, so a read
-  taken before the cast drains can lag by a message; `ping/1` is the barrier
-  when a caller needs the write to have landed.
+  them back, so a read taken before the cast drains can lag by a message;
+  `ping/1` is the barrier when a caller needs the event to have landed.
   """
   @spec append_run_event(server(), term(), term()) :: :ok
   def append_run_event(server \\ __MODULE__, run_id, event) do
@@ -453,38 +509,45 @@ defmodule LemonCore.Store do
   @doc """
   List all key-value pairs in a named table.
 
-  Returns `[]` when the Store cannot answer, so it is for display and
-  diagnostics only; use `fetch_all/2` wherever an unreadable table must not
-  look empty.
+  Returns `[]` when the Store process is unavailable, but raises when a
+  backend read fails rather than reporting an empty table. Use `fetch_all/2`
+  to handle these failures explicitly. Raises `ArgumentError` for tables
+  that cannot be read whole (`:runs`).
   """
   @spec list(server(), table :: atom()) :: [{term(), term()}]
   def list(server \\ __MODULE__, table) do
-    if cached_table?(server, table) do
-      ReadCache.list(server, table)
+    ensure_scannable!(table)
+
+    with true <- cached_table?(server, table),
+         {:ok, entries} <- ReadCache.fetch_all(server, table) do
+      entries
     else
-      safe_store_call(server, {:generic_list, table}, [], op: :list, table: table, key: :all)
+      _uncached ->
+        case read_outside_store(server, table, :list, :list) do
+          {:ok, entries} -> entries
+          {:error, :store_unavailable} -> []
+          {:error, :backend_read_failed} -> raise "Store could not list #{inspect(table)}"
+        end
     end
   end
 
   @doc """
   List all key-value pairs without collapsing backend or process failure.
 
-  Unlike `list/2`, this always consults the owning Store process and returns an
-  error when the backend cannot confirm the complete table contents.
-  Correctness-sensitive cleanup and migration paths should use this function
-  before advancing durable sweep watermarks.
+  Unlike `list/2`, this always confirms the read with the owning Store process
+  (ordering it after every write the Store acknowledged) and returns an error
+  when the backend cannot confirm the complete table contents. The rows
+  themselves are read in the caller's process when the backend supports it
+  (see "Reads outside the store process"). Correctness-sensitive cleanup and
+  migration paths should use this function before advancing durable sweep
+  watermarks. Raises `ArgumentError` for tables that cannot be read whole
+  (`:runs`).
   """
   @spec fetch_all(server(), table :: atom()) ::
           {:ok, [{term(), term()}]} | {:error, :store_unavailable}
   def fetch_all(server \\ __MODULE__, table) do
-    safe_store_call(
-      server,
-      {:generic_fetch_all, table},
-      {:error, :store_unavailable},
-      op: :fetch_all,
-      table: table,
-      key: :all
-    )
+    ensure_scannable!(table)
+    read_outside_store(server, table, :list, :fetch_all)
   end
 
   @doc false
@@ -498,6 +561,148 @@ defmodule LemonCore.Store do
       key: :page
     )
   end
+
+  @doc """
+  Every key of a named table, strictly (like `fetch_all/2`).
+
+  A mirrored table answers from its read cache without a Store call; otherwise
+  the backend is read in the caller's process. Raises `ArgumentError` for
+  tables that cannot be read whole (`:runs`).
+  """
+  @spec fetch_keys(server(), table :: atom()) :: {:ok, [term()]} | {:error, :store_unavailable}
+  def fetch_keys(server \\ __MODULE__, table) do
+    ensure_scannable!(table)
+
+    with true <- cached_table?(server, table),
+         {:ok, keys} <- ReadCache.fetch_keys(server, table) do
+      {:ok, keys}
+    else
+      _uncached ->
+        read_outside_store(server, table, :keys, :fetch_keys)
+    end
+  end
+
+  @doc """
+  Rows timed in `[from_ms, to_ms)`, strictly (like `fetch_all/2`).
+  Most tables use the value's `:at_ms`; usage daily records use their date key.
+
+  Backends that index `:at_ms` (SQLite) read only the matching rows, so a
+  narrow window over a large table stays cheap. Pass `include_untimed: true`
+  to also get the rows without an integer `:at_ms`, which no time window can
+  exclude. Order is unspecified.
+  """
+  @spec fetch_range(server(), atom(), integer(), integer(), keyword()) ::
+          {:ok, [{term(), term()}]} | {:error, :store_unavailable}
+  def fetch_range(server, table, from_ms, to_ms, opts \\ [])
+      when is_integer(from_ms) and is_integer(to_ms) and is_list(opts) do
+    ensure_scannable!(table)
+    query = {:range, from_ms, to_ms, Keyword.get(opts, :include_untimed, false) == true}
+    read_outside_store(server, table, query, :fetch_range)
+  end
+
+  defp ensure_scannable!(table) when table in @unscannable_tables do
+    raise ArgumentError,
+          "LemonCore.Store table #{inspect(table)} cannot be read whole; read it by key"
+  end
+
+  defp ensure_scannable!(_table), do: :ok
+
+  # Asks the store for a read handle — a short call that orders this read after
+  # every write the store acknowledged — and reads the backend here, so a large
+  # scan never blocks the store's other callers. Backends without a reader are
+  # read inside the store process.
+  defp read_outside_store(server, table, query, op) do
+    case safe_store_call(server, :reader, {:error, :store_unavailable},
+           op: op,
+           table: table,
+           key: :all
+         ) do
+      {:reader, backend, reader} ->
+        read_with(backend, reader, table, query, op)
+
+      :in_process ->
+        request =
+          case query do
+            {:recent, limit} -> {:generic_list_recent, table, limit}
+            :list when op == :list -> {:generic_list, table}
+            _list_or_range -> {:generic_fetch_all, table}
+          end
+
+        with {:ok, entries} <-
+               safe_store_call(server, request, {:error, :store_unavailable},
+                 op: op,
+                 table: table,
+                 key: :all
+               ) do
+          {:ok, apply_read_query(entries, table, query)}
+        end
+
+      {:error, _reason} ->
+        {:error, :store_unavailable}
+    end
+  end
+
+  defp read_with(backend, reader, table, query, op) do
+    result =
+      try do
+        backend_read(backend, reader, table, query)
+      rescue
+        error -> {:error, {:reader_raised, error.__struct__}}
+      catch
+        kind, _reason -> {:error, {:reader_failed, kind}}
+      end
+
+    case result do
+      {:ok, entries} when is_list(entries) ->
+        {:ok, entries}
+
+      {:error, reason} ->
+        log_backend_error(op, table, :all, reason)
+        read_failure(op)
+
+      other ->
+        log_backend_unexpected(op, table, :all, other)
+        read_failure(op)
+    end
+  end
+
+  defp read_failure(:list), do: {:error, :backend_read_failed}
+  defp read_failure(_op), do: {:error, :store_unavailable}
+
+  defp backend_read(backend, reader, table, :list), do: backend.read_list(reader, table)
+
+  defp backend_read(backend, reader, table, :keys) do
+    if function_exported?(backend, :read_keys, 2) do
+      backend.read_keys(reader, table)
+    else
+      with {:ok, entries} <- backend.read_list(reader, table) do
+        {:ok, apply_read_query(entries, table, :keys)}
+      end
+    end
+  end
+
+  defp backend_read(backend, reader, table, {:range, from_ms, to_ms, untimed} = query) do
+    if function_exported?(backend, :read_range, 5) do
+      backend.read_range(reader, table, from_ms, to_ms, untimed)
+    else
+      with {:ok, entries} <- backend.read_list(reader, table) do
+        {:ok, apply_read_query(entries, table, query)}
+      end
+    end
+  end
+
+  defp backend_read(backend, reader, table, {:recent, limit}) do
+    if function_exported?(backend, :read_recent, 3),
+      do: backend.read_recent(reader, table, limit),
+      else: backend.read_list(reader, table)
+  end
+
+  defp apply_read_query(entries, table, {:range, from_ms, to_ms, untimed}),
+    do: EtsBackend.filter_range(entries, table, from_ms, to_ms, untimed)
+
+  defp apply_read_query(entries, _table, :keys), do: Enum.map(entries, &elem(&1, 0))
+
+  defp apply_read_query(entries, _table, _list_or_recent), do: entries
 
   # Whether this store mirrors `table` into the read cache. Read from the
   # store's published configuration so caller processes stay off the GenServer.
@@ -556,14 +761,19 @@ defmodule LemonCore.Store do
   end
 
   @doc """
-  Get a specific run by ID.
+  Get a specific run by ID, for display: `nil` when it is absent, evicted or
+  the Store cannot answer. Does not attach buffered events.
   """
   @spec get_run(server(), term()) :: map() | nil
   def get_run(server \\ __MODULE__, run_id) do
     # Fast path: direct ETS cache lookup
     case ReadCache.get(server, :runs, run_id) do
       nil ->
-        safe_store_call(server, {:get_run, run_id}, nil, op: :get_run, table: :runs, key: run_id)
+        safe_store_call(server, {:get_run, run_id}, nil,
+          op: :get_run,
+          table: :runs,
+          key: run_id
+        )
 
       value ->
         value
@@ -574,25 +784,82 @@ defmodule LemonCore.Store do
   Fetch a specific run by ID without collapsing storage failures into absence.
 
   Use this at correctness boundaries where a missing run permits a mutation:
-  `{:ok, nil}` proves absence, while `{:error, :store_unavailable}` preserves
-  an unknown outcome when the backend cannot answer.
+  `{:ok, nil}` means there is no run record or terminal fence,
+  `{:error, :evicted}` means it was finalized and its record has since been
+  evicted (treat it as finished), and `{:error, :store_unavailable}` preserves
+  an unknown outcome when the backend cannot answer. Does not attach buffered events.
   """
-  @spec fetch_run(server(), term()) :: {:ok, map() | nil} | {:error, :store_unavailable}
+  @spec fetch_run(server(), term()) ::
+          {:ok, map() | nil} | {:error, :evicted | :store_unavailable}
   def fetch_run(server \\ __MODULE__, run_id) do
     case ReadCache.fetch(server, :runs, run_id) do
       {:ok, value} ->
         {:ok, value}
 
       _miss_or_uncached ->
-        safe_store_call(
-          server,
-          {:fetch_run, run_id},
-          {:error, :store_unavailable},
+        safe_store_call(server, {:fetch_run, run_id}, {:error, :store_unavailable},
           op: :fetch_run,
           table: :runs,
           key: run_id
         )
     end
+  end
+
+  @doc "Display read including retained events (newest first), or nil when absent."
+  @spec get_run_with_events(server(), term()) :: map() | nil
+  def get_run_with_events(server \\ __MODULE__, run_id),
+    do: with_run_events(server, run_id, get_run(server, run_id))
+
+  defp with_run_events(server, run_id, record) when is_map(record) and is_atom(server) do
+    case Hooks.published(server, :run_events, nil) do
+      nil -> record
+      buffer -> put_buffered_events(record, buffer, run_id)
+    end
+  end
+
+  defp with_run_events(server, run_id, record) when is_map(record) and is_pid(server) do
+    case Process.info(server, :registered_name) do
+      {:registered_name, name} -> with_run_events(name, run_id, record)
+      _ -> record
+    end
+  end
+
+  defp with_run_events(_server, _run_id, record), do: record
+
+  defp put_buffered_events(record, buffer, run_id) do
+    case buffered_run_events(buffer, run_id) do
+      {[], 0} -> Map.put_new(record, :events, [])
+      {events, 0} -> Map.put(record, :events, events)
+      {events, dropped} -> Map.merge(record, %{events: events, events_dropped: dropped})
+    end
+  rescue
+    # The buffer died with a previous store process.
+    ArgumentError -> record
+  end
+
+  # Newest first, like the record's historical `:events` list.
+  defp buffered_run_events(buffer, run_id) do
+    count = abs(:ets.lookup_element(buffer, {run_id, :seq}, 2, 0))
+
+    events =
+      reduce_buffer_seqs(count, [], fn seq, acc ->
+        case :ets.lookup(buffer, {run_id, seq}) do
+          [{_key, event}] -> [event | acc]
+          [] -> acc
+        end
+      end)
+
+    {events, max(count - @run_event_limit, 0)}
+  end
+
+  defp reduce_buffer_seqs(0, acc, _fun), do: acc
+
+  defp reduce_buffer_seqs(count, acc, fun) when count <= @run_event_limit,
+    do: Enum.reduce(1..count, acc, fun)
+
+  defp reduce_buffer_seqs(count, acc, fun) do
+    tail_start = count - (@run_event_limit - @run_event_head) + 1
+    Enum.reduce(tail_start..count, Enum.reduce(1..@run_event_head, acc, fun), fun)
   end
 
   # Introspection Event API
@@ -655,11 +922,22 @@ defmodule LemonCore.Store do
   """
   @spec list_introspection_events(server(), keyword()) :: [map()] | {:error, term()}
   def list_introspection_events(server, opts) when is_list(opts) do
-    safe_store_call(server, {:list_introspection_events, opts}, {:error, :store_unavailable},
-      op: :list_introspection_events,
-      table: :introspection_log,
-      key: :all
-    )
+    limit =
+      normalize_introspection_limit(Keyword.get(opts, :limit, @default_introspection_query_limit))
+
+    # Without field filters a backend with `read_recent/3` pushes ORDER BY +
+    # LIMIT into storage; otherwise every row is filtered here, outside the
+    # store process.
+    query = if introspection_opts_have_field_filters?(opts), do: :list, else: {:recent, limit}
+
+    with {:ok, entries} <-
+           read_outside_store(server, :introspection_log, query, :list_introspection_events) do
+      entries
+      |> Enum.map(fn {_key, event} -> event end)
+      |> Enum.filter(&introspection_event_matches?(&1, opts))
+      |> Enum.sort_by(&introspection_sort_key/1, :desc)
+      |> Enum.take(limit)
+    end
   end
 
   # A mutation whose call exited after it may have reached the store (timeout or
@@ -703,29 +981,27 @@ defmodule LemonCore.Store do
   # Server-side only: called from `init/1` and the register-cached-table call,
   # both of which run in the store process. It lives below this line because
   # everything that touches the cache does.
+  #
+  # Returns the tables whose complete contents now sit in the cache. A table
+  # whose backend read failed is left out: publishing it would make readers
+  # trust an empty mirror, so it stays uncached and its reads hit the backend.
   defp warm_cached_tables(backend, backend_state, read_cache, tables) do
-    Enum.reduce(tables, backend_state, fn table, acc_state ->
+    Enum.reduce(tables, {backend_state, []}, fn table, {acc_state, warmed} ->
       case backend.list(acc_state, table) do
         {:ok, entries, next_state} ->
           Enum.each(entries, fn {key, value} ->
             ReadCache.put(read_cache, table, key, value)
           end)
 
-          next_state
+          {next_state, warmed ++ [table]}
 
         {:error, reason} ->
-          Logger.warning(
-            "Store cache warm failed table=#{inspect(table)} reason=#{inspect(reason)}"
-          )
-
-          acc_state
+          log_backend_error(:warm_cache, table, :all, reason)
+          {acc_state, warmed}
 
         other ->
-          Logger.warning(
-            "Store cache warm failed table=#{inspect(table)} reason=#{inspect(other)}"
-          )
-
-          acc_state
+          log_backend_unexpected(:warm_cache, table, :all, other)
+          {acc_state, warmed}
       end
     end)
   end
@@ -736,11 +1012,15 @@ defmodule LemonCore.Store do
     name = Keyword.get(opts, :name, __MODULE__)
     config = resolve_config(name, opts)
 
+    # A previous incarnation's list names mirrors that died with it. Until this
+    # one has warmed its own, readers must go to the backend.
+    Hooks.publish(name, :cached_tables, [])
+
     backend = Keyword.get(config, :backend, @default_backend)
     backend_opts = Keyword.get(config, :backend_opts, [])
     finalize_run_hooks = List.wrap(Keyword.get(config, :finalize_run_hooks, []))
 
-    cached_tables =
+    configured_tables =
       Enum.uniq(
         List.wrap(Keyword.get(config, :cached_tables, @default_cached_tables)) ++
           Hooks.registered(name, :cached_tables)
@@ -749,19 +1029,27 @@ defmodule LemonCore.Store do
     case backend.init(backend_opts) do
       {:ok, backend_state} ->
         # Initialize this instance's read-through cache for high-traffic domains
-        read_cache = ReadCache.init(name, cached_tables)
+        read_cache = ReadCache.init(name, configured_tables)
 
-        backend_state =
-          warm_cached_tables(backend, backend_state, read_cache, cached_tables)
+        {backend_state, cached_tables} =
+          warm_cached_tables(backend, backend_state, read_cache, configured_tables)
 
-        # Published only once the tables hold the backend's contents: callers
-        # read this to decide whether to trust the cache, and between the
-        # publish and the warm a mirrored table would look authoritative while
-        # still being empty.
+        # Only tables that warmed are published, and only once they hold the
+        # backend's contents: callers read this to decide whether to trust the
+        # cache, and an unwarmed mirror would answer every read with nothing.
         Hooks.publish(name, :cached_tables, cached_tables)
 
-        # Schedule periodic sweep for expired entries
-        schedule_sweep()
+        # Per-run event buffer: `{{run_id, seq}, event}` rows plus one
+        # `{{run_id, :seq}, count}` counter per live run. Written only here;
+        # readers resolve it from the published reference.
+        run_events = :ets.new(:lemon_store_run_events, [:set, :protected, read_concurrency: true])
+        run_events_expiry = :ets.new(:lemon_store_run_events_expiry, [:ordered_set, :private])
+        Hooks.publish(name, :run_events, run_events)
+
+        runs_retention_ms = positive_ms!(config, :runs_retention_ms, @default_runs_retention_ms)
+
+        # Client VMs leave periodic sweeps to the runtime owning the database.
+        _ = if Keyword.get(config, :sweep, true), do: schedule_sweep()
 
         {:ok,
          %{
@@ -771,7 +1059,11 @@ defmodule LemonCore.Store do
            finalize_run_hooks: finalize_run_hooks,
            backend: backend,
            backend_state: backend_state,
-           introspection_retention_ms: @default_introspection_retention_ms
+           run_events: run_events,
+           run_events_expiry: run_events_expiry,
+           runs_retention_ms: runs_retention_ms,
+           introspection_retention_ms: @default_introspection_retention_ms,
+           read_only: Keyword.get(config, :read_only, false) == true
          }}
 
       {:error, reason} ->
@@ -801,9 +1093,24 @@ defmodule LemonCore.Store do
       :backend,
       :backend_opts,
       :cached_tables,
-      :finalize_run_hooks
+      :finalize_run_hooks,
+      :sweep,
+      :read_only,
+      :runs_retention_ms
     ])
     |> then(&Keyword.merge(env_config, &1))
+  end
+
+  defp positive_ms!(config, key, default) do
+    case Keyword.get(config, key, default) do
+      ms when is_integer(ms) and ms > 0 ->
+        ms
+
+      other ->
+        raise ArgumentError,
+              "LemonCore.Store #{inspect(key)} must be a positive integer of milliseconds, " <>
+                "got: #{inspect(other)}"
+    end
   end
 
   # Deduplicated across both sources: a collaborator that is listed in config
@@ -837,7 +1144,25 @@ defmodule LemonCore.Store do
 
   defp merge_runtime_override(config, _override), do: config
 
+  # A read-only store (a one-shot client VM beside a running runtime) refuses
+  # every mutation before it reaches the backend, so it is never a second writer.
+  @read_only_refused [
+    :generic_put,
+    :generic_put_new,
+    :generic_compare_and_swap,
+    :generic_compare_and_delete,
+    :generic_compare_and_delete_many,
+    :generic_delete,
+    :generic_take,
+    :durable_write,
+    :finalize_run
+  ]
+
   @impl true
+  def handle_call(request, _from, %{read_only: true} = state)
+      when is_tuple(request) and elem(request, 0) in @read_only_refused,
+      do: {:reply, {:error, :read_only}, state}
+
   def handle_call(:location, _from, state) do
     path =
       case state.backend_state do
@@ -873,10 +1198,12 @@ defmodule LemonCore.Store do
       {:reply, :ok, state}
     else
       read_cache = ReadCache.add_table(state.name, state.read_cache, table)
-      cached_tables = state.cached_tables ++ [table]
 
-      backend_state =
+      # A failed warm leaves the table unpublished; registering it again retries.
+      {backend_state, warmed} =
         warm_cached_tables(state.backend, state.backend_state, read_cache, [table])
+
+      cached_tables = state.cached_tables ++ warmed
 
       # Publish after warming, for the reason given in `init/1`.
       Hooks.publish(state.name, :cached_tables, cached_tables)
@@ -907,20 +1234,24 @@ defmodule LemonCore.Store do
   end
 
   def handle_call({:fetch_run, run_id}, _from, state) do
-    case state.backend.get(state.backend_state, :runs, run_id) do
-      {:ok, value, backend_state} ->
-        if not is_nil(value) do
-          ReadCache.put(state.read_cache, :runs, run_id, value)
+    case backend_get(state, state.backend_state, :runs, run_id) do
+      {:ok, nil, backend_state} ->
+        case backend_get(state, backend_state, @run_terminals, run_id) do
+          {:ok, nil, backend_state} ->
+            {:reply, {:ok, nil}, %{state | backend_state: backend_state}}
+
+          {:ok, _tombstone, backend_state} ->
+            {:reply, {:error, :evicted}, %{state | backend_state: backend_state}}
+
+          {:error, _reason} ->
+            {:reply, {:error, :store_unavailable}, state}
         end
 
-        {:reply, {:ok, value}, %{state | backend_state: backend_state}}
+      {:ok, record, backend_state} ->
+        ReadCache.put(state.read_cache, :runs, run_id, record)
+        {:reply, {:ok, record}, %{state | backend_state: backend_state}}
 
-      {:error, reason} ->
-        log_backend_error(:fetch, :runs, run_id, reason)
-        {:reply, {:error, :store_unavailable}, state}
-
-      other ->
-        log_backend_unexpected(:fetch, :runs, run_id, other)
+      {:error, _reason} ->
         {:reply, {:error, :store_unavailable}, state}
     end
   end
@@ -957,51 +1288,14 @@ defmodule LemonCore.Store do
     {:reply, reply, state}
   end
 
-  def handle_call({:list_introspection_events, opts}, _from, state) do
-    limit =
-      normalize_introspection_limit(Keyword.get(opts, :limit, @default_introspection_query_limit))
-
-    has_field_filters = introspection_opts_have_field_filters?(opts)
-
-    backend_supports_list_recent =
-      function_exported?(state.backend, :list_recent, 3)
-
-    # Optimization: when no field-level filters are active AND the backend
-    # supports list_recent/3, push ORDER BY + LIMIT into SQL so we don't
-    # load all rows into memory.
-    result =
-      if backend_supports_list_recent and not has_field_filters do
-        state.backend.list_recent(state.backend_state, :introspection_log, limit)
-      else
-        state.backend.list(state.backend_state, :introspection_log)
-      end
-
-    case result do
-      {:ok, entries, backend_state} ->
-        events =
-          if backend_supports_list_recent and not has_field_filters do
-            # Already limited and ordered by recency from SQL; just extract
-            # values and sort by the canonical sort key for stable ordering.
-            entries
-            |> Enum.map(fn {_key, event} -> event end)
-            |> Enum.sort_by(&introspection_sort_key/1, :desc)
-          else
-            entries
-            |> Enum.map(fn {_key, event} -> event end)
-            |> Enum.filter(&introspection_event_matches?(&1, opts))
-            |> Enum.sort_by(&introspection_sort_key/1, :desc)
-            |> Enum.take(limit)
-          end
-
-        {:reply, events, %{state | backend_state: backend_state}}
-
-      {:error, reason} ->
-        log_backend_error(:list, :introspection_log, :all, reason)
-        {:reply, {:error, reason}, state}
-
-      other ->
-        log_backend_unexpected(:list, :introspection_log, :all, other)
-        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+  # A read handle for `read_outside_store/4`. The call itself is the ordering
+  # barrier: the handle sees every write acknowledged before it.
+  def handle_call(:reader, _from, state) do
+    if function_exported?(state.backend, :reader, 1) and
+         function_exported?(state.backend, :read_list, 2) do
+      {:reply, {:reader, state.backend, state.backend.reader(state.backend_state)}, state}
+    else
+      {:reply, :in_process, state}
     end
   end
 
@@ -1273,37 +1567,44 @@ defmodule LemonCore.Store do
     end
   end
 
-  def handle_call({:generic_list, table}, _from, state) do
-    case state.backend.list(state.backend_state, table) do
-      {:ok, entries, backend_state} ->
-        {:reply, entries, %{state | backend_state: backend_state}}
+  # The in-store reads for backends without a `reader/1`.
+  def handle_call({:generic_list, table}, _from, state),
+    do: reply_entries(state, :list, table, state.backend.list(state.backend_state, table))
 
-      {:error, reason} ->
-        log_backend_error(:list, table, :all, reason)
-        {:reply, [], state}
+  def handle_call({:generic_fetch_all, table}, _from, state),
+    do: reply_entries(state, :fetch_all, table, state.backend.list(state.backend_state, table))
 
-      other ->
-        log_backend_unexpected(:list, table, :all, other)
-        {:reply, [], state}
-    end
+  def handle_call({:generic_list_recent, table, limit}, _from, state) do
+    result =
+      if function_exported?(state.backend, :list_recent, 3),
+        do: state.backend.list_recent(state.backend_state, table, limit),
+        else: state.backend.list(state.backend_state, table)
+
+    reply_entries(state, :list_recent, table, result)
   end
 
-  def handle_call({:generic_fetch_all, table}, _from, state) do
-    case state.backend.list(state.backend_state, table) do
+  defp reply_entries(state, op, table, result) do
+    case result do
       {:ok, entries, backend_state} ->
         {:reply, {:ok, entries}, %{state | backend_state: backend_state}}
 
       {:error, reason} ->
-        log_backend_error(:fetch_all, table, :all, reason)
-        {:reply, {:error, :store_unavailable}, state}
+        log_backend_error(op, table, :all, reason)
+        {:reply, read_failure(op), state}
 
       other ->
-        log_backend_unexpected(:fetch_all, table, :all, other)
-        {:reply, {:error, :store_unavailable}, state}
+        log_backend_unexpected(op, table, :all, other)
+        {:reply, read_failure(op), state}
     end
   end
 
   @impl true
+  def handle_cast({:append_run_event, _run_id, _event}, %{read_only: true} = state),
+    do: {:noreply, state}
+
+  def handle_cast({:append_introspection_event, _event}, %{read_only: true} = state),
+    do: {:noreply, state}
+
   def handle_cast({:append_introspection_event, event}, state) do
     case normalize_introspection_event(event) do
       {:ok, event} ->
@@ -1327,35 +1628,115 @@ defmodule LemonCore.Store do
     end
   end
 
+  # Constant work per event: the event goes into the run's bounded buffer and
+  # the record itself is written once, when the run's first event arrives.
   def handle_cast({:append_run_event, run_id, event}, state) do
-    case state.backend.get(state.backend_state, :runs, run_id) do
-      {:ok, existing, backend_state} ->
-        record =
-          existing || %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
+    buffer = state.run_events
 
-        record = %{record | events: [event | record.events]}
+    case :ets.lookup_element(buffer, {run_id, :seq}, 2, 0) do
+      0 ->
+        case open_run_record(state, run_id) do
+          {:open, state} ->
+            true = :ets.insert(buffer, {{run_id, :seq}, 1})
+            buffer_run_event(buffer, run_id, 1, event)
+            {:noreply, state}
 
-        case state.backend.put(backend_state, :runs, run_id, record) do
-          {:ok, backend_state} ->
-            ReadCache.put(state.read_cache, :runs, run_id, record)
-            {:noreply, %{state | backend_state: backend_state}}
-
-          {:error, reason} ->
-            log_backend_error(:put, :runs, run_id, reason)
-            {:noreply, %{state | backend_state: backend_state}}
-
-          other ->
-            log_backend_unexpected(:put, :runs, run_id, other)
-            {:noreply, %{state | backend_state: backend_state}}
+          {:closed, state} ->
+            {:noreply, state}
         end
 
-      {:error, reason} ->
-        log_backend_error(:get, :runs, run_id, reason)
+      count when count > 0 ->
+        seq = count + 1
+        true = :ets.insert(buffer, {{run_id, :seq}, seq})
+        buffer_run_event(buffer, run_id, seq, event)
         {:noreply, state}
 
-      other ->
-        log_backend_unexpected(:get, :runs, run_id, other)
+      _frozen ->
         {:noreply, state}
+    end
+  end
+
+  defp open_run_record(state, run_id) do
+    with {:ok, nil, backend_state} <- backend_get(state, state.backend_state, :runs, run_id),
+         {:ok, nil, backend_state} <-
+           backend_get(state, backend_state, @run_terminals, run_id) do
+      record = %{summary: nil, started_at: System.system_time(:millisecond)}
+
+      case state.backend.put(backend_state, :runs, run_id, record) do
+        {:ok, backend_state} ->
+          ReadCache.put(state.read_cache, :runs, run_id, record)
+          {:open, %{state | backend_state: backend_state}}
+
+        {:error, reason} ->
+          log_backend_error(:put, :runs, run_id, reason)
+          {:closed, %{state | backend_state: backend_state}}
+
+        other ->
+          log_backend_unexpected(:put, :runs, run_id, other)
+          {:closed, %{state | backend_state: backend_state}}
+      end
+    else
+      {:ok, %{summary: nil}, backend_state} -> {:open, %{state | backend_state: backend_state}}
+      {:ok, _finalized, backend_state} -> {:closed, %{state | backend_state: backend_state}}
+      {:error, _reason} -> {:closed, state}
+    end
+  end
+
+  # Keeps the first `@run_event_head` events and the latest ones,
+  # `@run_event_limit` in all.
+  defp buffer_run_event(buffer, run_id, seq, event) do
+    true = :ets.insert(buffer, {{run_id, seq}, event})
+
+    if seq > @run_event_limit do
+      :ets.delete(buffer, {run_id, seq - (@run_event_limit - @run_event_head)})
+    end
+
+    :ok
+  end
+
+  defp drop_run_events(state, run_id) do
+    case :ets.take(state.run_events, {run_id, :seq}) do
+      [{_key, count}] ->
+        reduce_buffer_seqs(abs(count), :ok, fn seq, _acc ->
+          :ets.delete(state.run_events, {run_id, seq})
+        end)
+
+      [] ->
+        :ok
+    end
+
+    :ok
+  end
+
+  defp freeze_run_events(buffer, run_id) do
+    count = :ets.lookup_element(buffer, {run_id, :seq}, 2, 0)
+    if count > 0, do: :ets.insert(buffer, {{run_id, :seq}, -count})
+  end
+
+  defp expire_run_events(state, cutoff) do
+    case :ets.first(state.run_events_expiry) do
+      {expires_at, _ref} = key when expires_at < cutoff ->
+        [{^key, run_id}] = :ets.take(state.run_events_expiry, key)
+        drop_run_events(state, run_id)
+        expire_run_events(state, cutoff)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp backend_get(state, backend_state, table, key) do
+    case state.backend.get(backend_state, table, key) do
+      {:ok, _value, _backend_state} = ok ->
+        ok
+
+      {:error, reason} ->
+        log_backend_error(:get, table, key, reason)
+        {:error, reason}
+
+      other ->
+        log_backend_unexpected(:get, table, key, other)
+        {:error, {:unexpected_backend_response, other}}
     end
   end
 
@@ -1388,12 +1769,17 @@ defmodule LemonCore.Store do
     with {:ok, decision, backend_state} <-
            state.backend.get(state.backend_state, :run_terminals, run_id),
          :ok <- check_terminal_digest(decision, digest, run_id),
-         {:ok, existing, backend_state} <- state.backend.get(backend_state, :runs, run_id),
+         {:ok, existing, backend_state} <- backend_get(state, backend_state, :runs, run_id),
          {:ok, record, backend_state} <-
            final_record_for_commit(state, backend_state, existing, decision, run_id, summary),
          {:ok, backend_state} <-
            ensure_terminal_commit(state, backend_state, decision, run_id, digest, record) do
-      persist_final_record(state, backend_state, run_id, record)
+      if is_nil(existing) and is_map(decision) do
+        # Repair from the committed payload without repopulating the live cache.
+        {:ok, record, backend_state}
+      else
+        finalize_live_record(state, backend_state, run_id, record, decision)
+      end
     end
   end
 
@@ -1450,7 +1836,7 @@ defmodule LemonCore.Store do
     }
 
     pending = %{
-      record: record,
+      record: put_buffered_events(record, state.run_events, run_id),
       digest: digest,
       indexed: false,
       projections: :pending,
@@ -1500,7 +1886,7 @@ defmodule LemonCore.Store do
   defp terminal_status(outcome), do: outcome
 
   defp final_record(nil, _run_id, summary) do
-    {:persist, %{events: [], summary: summary, started_at: System.system_time(:millisecond)}}
+    {:persist, %{summary: summary, started_at: System.system_time(:millisecond)}}
   end
 
   defp final_record(%{summary: nil} = record, _run_id, summary) do
@@ -1518,7 +1904,28 @@ defmodule LemonCore.Store do
   defp final_record(_invalid_record, run_id, _summary),
     do: {:error, {:invalid_run_record, run_id}}
 
+  defp finalize_live_record(state, backend_state, run_id, record, decision) do
+    finalized_at =
+      (decision || %{})[:committed_at_ms] || record[:finalized_at_ms] ||
+        System.system_time(:millisecond)
+
+    expires_at = finalized_at + state.runs_retention_ms
+    live_record = Map.merge(record, %{finalized_at_ms: finalized_at, expires_at: expires_at})
+
+    with {:ok, _, backend_state} <-
+           persist_final_record(state, backend_state, run_id, live_record) do
+      if :ets.member(state.run_events, {run_id, :seq}) and not Map.has_key?(record, :expires_at) do
+        freeze_run_events(state.run_events, run_id)
+        true = :ets.insert(state.run_events_expiry, {{expires_at, make_ref()}, run_id})
+      end
+
+      {:ok, put_buffered_events(live_record, state.run_events, run_id), backend_state}
+    end
+  end
+
   defp persist_final_record(state, backend_state, run_id, record) do
+    record = Map.drop(record, [:events, :events_dropped])
+
     case state.backend.put(backend_state, :runs, run_id, record) do
       {:ok, backend_state} ->
         ReadCache.put(state.read_cache, :runs, run_id, record)
@@ -1810,8 +2217,6 @@ defmodule LemonCore.Store do
 
   # 48 hours for idempotency entries
   @idempotency_retention_ms 48 * 60 * 60 * 1000
-  # 48 hours for cron run entries
-  @cron_runs_retention_ms 48 * 60 * 60 * 1000
 
   @impl true
   def handle_info(:sweep_expired, state) do
@@ -1828,8 +2233,7 @@ defmodule LemonCore.Store do
       Enum.map(@expiring_tables, &{&1, :expires_at, now}) ++
         introspection_sweeps ++
         [
-          {:idempotency, :inserted_at_ms, now - @idempotency_retention_ms},
-          {:cron_runs, :started_at_ms, now - @cron_runs_retention_ms}
+          {:idempotency, :inserted_at_ms, now - @idempotency_retention_ms}
         ]
 
     backend_state =
@@ -1838,6 +2242,7 @@ defmodule LemonCore.Store do
           case state.backend.sweep(acc, table, {field, cutoff}) do
             {:ok, _count, next} ->
               ReadCache.sweep(state.read_cache, table, field, cutoff)
+              if table == :runs, do: expire_run_events(state, cutoff)
               next
 
             {:error, reason} ->
@@ -1855,6 +2260,10 @@ defmodule LemonCore.Store do
 
   @impl true
   def terminate(_reason, state) do
+    # The mirrors and the run-event buffer die with this process; readers must
+    # not trust them meanwhile.
+    Hooks.publish(state.name, :cached_tables, [])
+    Hooks.publish(state.name, :run_events, nil)
     if function_exported?(state.backend, :close, 1), do: state.backend.close(state.backend_state)
     :ok
   end

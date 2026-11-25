@@ -255,15 +255,17 @@ defmodule LemonCore.NativeProcessTest do
   end
 
   test "directory barrier failure prevents successful configuration", context do
-    original_path = System.fetch_env!("PATH")
-    System.put_env("PATH", context.directory)
+    # Write and search only: the ledger can be created inside, but the
+    # directory cannot be opened for the barrier that makes its entry durable.
+    File.chmod!(context.directory, 0o300)
 
     try do
       assert catch_error(NativeProcess.configure!(context.ledger))
+      assert File.regular?(context.ledger)
       refute Process.whereis(NativeProcess)
       assert :dets.info(@table) == :undefined
     after
-      System.put_env("PATH", original_path)
+      File.chmod!(context.directory, 0o700)
     end
   end
 

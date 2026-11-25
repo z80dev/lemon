@@ -18,13 +18,11 @@ defmodule LemonRouter.RestartCarryover.CrashRecovery do
   def table, do: @table
   def max_attempts, do: @max_attempts
 
-  def enabled? do
-    LemonCore.Config.Features.enabled?(LemonCore.Config.cached().features, :crash_resume)
-  end
-
   @doc false
-  def capture(%{request: %RunRequest{} = request, execution_request: command}) do
-    if enabled?(), do: capture_resumable(request, command), else: :ok
+  # `enabled?` is the `crash_resume` feature from the admission's config
+  # snapshot (`LemonRouter.SubmissionBuilder.admission_settings/0`).
+  def capture(%{request: %RunRequest{} = request, execution_request: command}, enabled?) do
+    if enabled?, do: capture_resumable(request, command), else: :ok
   end
 
   defp capture_resumable(%RunRequest{} = request, command) do
@@ -136,7 +134,7 @@ defmodule LemonRouter.RestartCarryover.CrashRecovery do
   defp unknown_calls(%RunRequest{resume: nil}), do: {:ok, []}
 
   defp unknown_calls(%RunRequest{cwd: cwd, resume: resume}) do
-    LemonCore.AgentRuntime.call(:interrupted_tool_calls, [cwd, resume], {:error, :unavailable})
+    LemonCore.AgentRuntime.query(:interrupted_tool_calls, [cwd, resume])
   end
 
   @doc false
@@ -149,8 +147,8 @@ defmodule LemonRouter.RestartCarryover.CrashRecovery do
       {run_id, admission}, acc when is_binary(run_id) and is_map(admission) ->
         result =
           if MapSet.member?(carried, run_id),
-            do: abandon.(run_id, admission, :graceful_carryover),
-            else: recover.(run_id, admission)
+            do: settle_orphan(fn -> abandon.(run_id, admission, :graceful_carryover) end),
+            else: settle_orphan(fn -> recover.(run_id, admission) end)
 
         case result do
           {:ok, disposition} when disposition in [:resumed, :abandoned, :skipped] ->
@@ -163,6 +161,15 @@ defmodule LemonRouter.RestartCarryover.CrashRecovery do
       _, acc ->
         acc
     end)
+  end
+
+  # A timed-out serialized call may still be applied for this fixed run ID. It
+  # stays pending for the next boot; one slow admission never ends the boot's
+  # recovery of the others.
+  defp settle_orphan(fun) do
+    fun.()
+  catch
+    :exit, _reason -> {:error, :outcome_unknown}
   end
 
   defp carried_sources(rows) do

@@ -9,6 +9,7 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
   import LemonControlPlane.Methods.Params, only: [get_param: 2]
 
   alias LemonControlPlane.Auth.Authorize
+  alias LemonControlPlane.Protocol.Errors
 
   @behaviour LemonControlPlane.Method
 
@@ -24,30 +25,33 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
   @impl true
   def handle(params, ctx) do
     params = params || %{}
-    session_key = get_param(params, "sessionKey")
 
-    if is_nil(session_key) or session_key == "" do
-      {:error, {:invalid_request, "sessionKey is required", nil}}
-    else
-      content? = Authorize.content?(ctx)
-      limit = normalize_limit(get_param(params, "limit"))
-      history = get_session_history(session_key, limit, content?)
+    case get_param(params, "sessionKey") do
+      session_key when is_binary(session_key) and session_key != "" ->
+        preview(session_key, normalize_limit(get_param(params, "limit")), Authorize.content?(ctx))
 
-      {:ok,
-       %{
-         "sessionKey" => session_key,
-         "preview" => history,
-         "summary" => summary(history, limit, content?),
-         "contentWithheld" => not content?
-       }}
+      _ ->
+        {:error, {:invalid_request, "sessionKey is required", nil}}
     end
   end
 
-  defp get_session_history(session_key, limit, content?) do
-    LemonCore.RunStore.history(session_key, limit: limit)
-    |> Enum.map(fn {run_id, data} -> format_history_entry(run_id, data, content?) end)
-  rescue
-    _ -> []
+  defp preview(session_key, limit, content?) do
+    case LemonCore.RunStore.fetch_history(session_key, limit: limit) do
+      {:ok, runs} ->
+        history =
+          Enum.map(runs, fn {run_id, data} -> format_history_entry(run_id, data, content?) end)
+
+        {:ok,
+         %{
+           "sessionKey" => session_key,
+           "preview" => history,
+           "summary" => summary(history, limit, content?),
+           "contentWithheld" => not content?
+         }}
+
+      {:error, _reason} ->
+        {:error, Errors.unavailable("Session history is unavailable")}
+    end
   end
 
   defp format_history_entry(run_id, data, false) do

@@ -38,6 +38,11 @@ defmodule LemonCore.ExecApprovals do
   is observed through the `LemonCore.Store` finalize-run hook and session end
   from the native session's shutdown, both routed by `LemonCore.ExecApprovalExpiry`.
   This covers requests with no time limit (`expires_in_ms: :infinity`) too.
+  Each request is indexed under its run and session before it is stored, so
+  owner end reads only that owner's approvals (see `LemonCore.ExecApprovalStore`).
+
+  Terminal receipts are retained for `LemonCore.ExecApprovalStore.receipt_retention_ms/0`
+  (24 hours) and then swept; resolving a swept ID returns `{:error, :not_found}`.
   """
 
   alias LemonCore.Events.{ApprovalPending, ApprovalRequested, ApprovalResolved}
@@ -156,7 +161,7 @@ defmodule LemonCore.ExecApprovals do
             once_only: once_only
           })
 
-        case ExecApprovalStore.put_pending_new(approval_id, pending) do
+        case index_and_put_pending(approval_id, pending) do
           :ok ->
             LemonCore.Telemetry.approval_requested(approval_id, tool, %{
               run_id: run_id,
@@ -203,6 +208,36 @@ defmodule LemonCore.ExecApprovals do
     end
   end
 
+  # The owner index is written before the pending record, so an owner that ends
+  # after the record exists always finds it. A failed index write creates no
+  # approval; an index entry whose record was never written is skipped later.
+  defp index_and_put_pending(approval_id, pending) do
+    with :ok <- index_owners(approval_id, pending) do
+      ExecApprovalStore.put_pending_new(approval_id, pending)
+    end
+  end
+
+  defp index_owners(approval_id, pending) do
+    Enum.reduce_while(owners(pending), :ok, fn owner, :ok ->
+      case ExecApprovalStore.index_owner(owner, approval_id) do
+        :ok -> {:cont, :ok}
+        {:error, _} -> {:halt, {:error, :store_unavailable}}
+      end
+    end)
+  end
+
+  defp owners(pending) do
+    for {kind, field} <- [run: :run_id, session: :session_id],
+        id = Map.get(pending, field),
+        is_binary(id) and id != "",
+        do: {kind, id}
+  end
+
+  # Best effort: a stale index entry only costs its owner's end one extra read.
+  defp forget_owners(approval_id, pending) do
+    Enum.each(owners(pending), &ExecApprovalStore.unindex_owner(&1, [approval_id]))
+  end
+
   @doc """
   Cancel a pending approval that will never be decided by a user.
 
@@ -226,6 +261,8 @@ defmodule LemonCore.ExecApprovals do
       {:ok, pending} when not is_nil(pending) ->
         case retain_terminal(approval_id, pending, :cancelled, :cancelled) do
           :ok ->
+            forget_owners(approval_id, pending)
+
             record_approval_event(:approval_cancelled, pending, %{
               approval_id: approval_id,
               tool: pending.tool,
@@ -295,6 +332,7 @@ defmodule LemonCore.ExecApprovals do
          :ok <- match_identity(pending, opts) do
       case retain_terminal(approval_id, pending, :outcome_unknown, :outcome_unknown) do
         :ok ->
+          forget_owners(approval_id, pending)
           emit_resolution(approval_id, pending, :outcome_unknown)
           :ok
 
@@ -334,8 +372,9 @@ defmodule LemonCore.ExecApprovals do
   ## Returns
 
     * `{:ok, count}` — the number of approvals this call expired (0 is normal)
-    * `{:error, :store_unavailable}` — pending requests could not be read, or an
-      expiry could not be recorded (that approval stays pending and unapproved)
+    * `{:error, :store_unavailable}` — the owner's index or one of its requests
+      could not be read, or an expiry could not be recorded (that approval stays
+      pending, indexed and unapproved)
     * `{:error, :outcome_unknown}` — an expiry write timed out and may still
       apply; its waiter wakes with `{:error, :outcome_unknown}` and nothing is
       retried
@@ -344,12 +383,17 @@ defmodule LemonCore.ExecApprovals do
   @spec expire_owner({:run | :session, binary()}) ::
           {:ok, non_neg_integer()}
           | {:error, :store_unavailable | :outcome_unknown | :invalid_owner}
-  def expire_owner({kind, id}) when kind in [:run, :session] and is_binary(id) and id != "" do
-    with {:ok, rows} <- ExecApprovalStore.fetch_pending_list() do
-      results =
-        for {approval_id, pending} <- rows, owned_by?(pending, approval_id, kind, id) do
-          expire_pending(approval_id, pending, kind)
-        end
+  def expire_owner({kind, id} = owner)
+      when kind in [:run, :session] and is_binary(id) and id != "" do
+    with {:ok, approval_ids} <- ExecApprovalStore.fetch_owner_index(owner) do
+      outcomes = Enum.map(approval_ids, &{&1, expire_indexed(&1, kind, id)})
+
+      # Failed or unconfirmed expiries stay indexed: their records may still be pending.
+      settled =
+        for {approval_id, result} <- outcomes, result in [:expired, :lost], do: approval_id
+
+      _ = ExecApprovalStore.unindex_owner(owner, settled)
+      results = Enum.map(outcomes, &elem(&1, 1))
 
       cond do
         :unknown in results -> {:error, :outcome_unknown}
@@ -361,17 +405,43 @@ defmodule LemonCore.ExecApprovals do
 
   def expire_owner(_owner), do: {:error, :invalid_owner}
 
+  defp expire_indexed(approval_id, kind, id) do
+    case ExecApprovalStore.fetch_pending(approval_id) do
+      {:ok, nil} ->
+        :lost
+
+      {:ok, pending} ->
+        if owned_by?(pending, approval_id, kind, id),
+          do: expire_pending(approval_id, pending, kind),
+          else: :lost
+
+      {:error, _} ->
+        :error
+    end
+  end
+
   @doc false
   def reconcile_runtime do
-    with {:ok, rows} <- ExecApprovalStore.fetch_pending_list() do
-      Enum.reduce_while(rows, {:ok, 0}, fn {id, pending}, {:ok, count} ->
+    with {:ok, rows} <- ExecApprovalStore.fetch_records(),
+         {pending_rows, terminal_rows} =
+           Enum.split_with(rows, fn {_id, record} -> not match?(%{resolution: _}, record) end),
+         :ok <- stamp_unretained(terminal_rows) do
+      Enum.reduce_while(pending_rows, {:ok, 0}, fn {id, pending}, {:ok, count} ->
         case recovery_owner_gone?(pending) do
           {:ok, true} ->
             case expire_pending(id, pending, owner_kind(pending)) do
-              :expired -> {:cont, {:ok, count + 1}}
-              :lost -> {:cont, {:ok, count}}
-              :unknown -> {:halt, {:error, :outcome_unknown}}
-              :error -> {:halt, {:error, :store_unavailable}}
+              :expired ->
+                forget_owners(id, pending)
+                {:cont, {:ok, count + 1}}
+
+              :lost ->
+                {:cont, {:ok, count}}
+
+              :unknown ->
+                {:halt, {:error, :outcome_unknown}}
+
+              :error ->
+                {:halt, {:error, :store_unavailable}}
             end
 
           {:ok, false} ->
@@ -384,6 +454,21 @@ defmodule LemonCore.ExecApprovals do
     end
   end
 
+  # Terminal records written before receipts carried a retention stamp would
+  # never be swept; give them one now.
+  defp stamp_unretained(rows) do
+    Enum.reduce_while(rows, :ok, fn
+      {_id, %{expires_at: stamp}}, :ok when is_integer(stamp) ->
+        {:cont, :ok}
+
+      {id, %{resolution: receipt} = record}, :ok ->
+        case ExecApprovalStore.transition(id, record, ExecApprovalStore.terminal_record(receipt)) do
+          result when result in [:ok, {:error, :mismatch}] -> {:cont, :ok}
+          {:error, _} -> {:halt, {:error, :store_unavailable}}
+        end
+    end)
+  end
+
   defp recovery_owner_gone?(pending) do
     if orphaned_runtime?(pending) or dead_session?(pending) do
       {:ok, true}
@@ -392,6 +477,7 @@ defmodule LemonCore.ExecApprovals do
         id when is_binary(id) and id != "" ->
           case LemonCore.RunStore.fetch(id) do
             {:ok, %{summary: summary}} when is_map(summary) -> {:ok, true}
+            {:error, :evicted} -> {:ok, true}
             {:ok, _} -> {:ok, false}
             {:error, _} = error -> error
           end
@@ -524,11 +610,15 @@ defmodule LemonCore.ExecApprovals do
 
           with :ok <- match_pending(pending, opts),
                :ok <- ExecApprovalExpiry.ensure_ready() do
-            claim = %{resolution: resolution_receipt(pending, decision, :resolving)}
+            claim =
+              ExecApprovalStore.terminal_record(resolution_receipt(pending, decision, :resolving))
 
             case ExecApprovalStore.transition(approval_id, pending, claim) do
               :ok ->
-                resolve_claim(approval_id, pending, decision, claim)
+                result = resolve_claim(approval_id, pending, decision, claim)
+                # Claimed records are never pending again, whatever the outcome.
+                forget_owners(approval_id, pending)
+                result
 
               {:error, :mismatch} ->
                 lost_resolution(approval_id, decision, opts)
@@ -616,9 +706,10 @@ defmodule LemonCore.ExecApprovals do
       decision == :deny ->
         result = finish_resolution(approval_id, claim, :denied, decision)
 
-        settle(result, approval_id, pending, fn ->
-          emit_resolution(approval_id, pending, :deny)
-        end)
+        _ =
+          settle(result, approval_id, pending, fn ->
+            emit_resolution(approval_id, pending, :deny)
+          end)
 
         result
 
@@ -626,8 +717,8 @@ defmodule LemonCore.ExecApprovals do
         # The completion CAS commits the approval before any grant exists, so a
         # losing or unconfirmed transition installs nothing.
         case complete(approval_id, claim, :approved, decision) do
-          {:ok, completed} ->
-            commit_approval(approval_id, pending, decision, completed)
+          {:ok, completed, record} ->
+            commit_approval(approval_id, pending, decision, completed, record)
 
           {:error, :outcome_unknown} = error ->
             emit_resolution(approval_id, pending, :outcome_unknown)
@@ -657,7 +748,7 @@ defmodule LemonCore.ExecApprovals do
   # so a run that is not finalized when read after the completion ended after the
   # approval committed. A run finalized by then may have ended first: the
   # approval is re-recorded as expired and no grant is installed.
-  defp commit_approval(approval_id, pending, decision, completed) do
+  defp commit_approval(approval_id, pending, decision, completed, record) do
     case run_finalized?(pending) do
       {:ok, false} ->
         case store_approval(pending, decision) do
@@ -682,8 +773,8 @@ defmodule LemonCore.ExecApprovals do
 
         case ExecApprovalStore.transition(
                approval_id,
-               %{resolution: completed},
-               %{resolution: expired}
+               record,
+               ExecApprovalStore.terminal_record(expired)
              ) do
           :ok ->
             emit_expiry(approval_id, pending, :run)
@@ -705,6 +796,7 @@ defmodule LemonCore.ExecApprovals do
       id when is_binary(id) and id != "" ->
         case LemonCore.RunStore.fetch(id) do
           {:ok, %{summary: summary}} when is_map(summary) -> {:ok, true}
+          {:error, :evicted} -> {:ok, true}
           {:ok, _} -> {:ok, false}
           {:error, _} = error -> error
         end
@@ -715,7 +807,7 @@ defmodule LemonCore.ExecApprovals do
   end
 
   defp finish_resolution(approval_id, claim, outcome, decision) do
-    with {:ok, completed} <- complete(approval_id, claim, outcome, decision) do
+    with {:ok, completed, _record} <- complete(approval_id, claim, outcome, decision) do
       {:ok, public_receipt(completed, false)}
     end
   end
@@ -728,8 +820,10 @@ defmodule LemonCore.ExecApprovals do
         resolved_at_ms: LemonCore.Clock.now_ms()
     }
 
-    case ExecApprovalStore.transition(approval_id, claim, %{resolution: completed}) do
-      :ok -> {:ok, completed}
+    record = ExecApprovalStore.terminal_record(completed)
+
+    case ExecApprovalStore.transition(approval_id, claim, record) do
+      :ok -> {:ok, completed, record}
       {:error, :outcome_unknown} -> {:error, :outcome_unknown}
       {:error, _} -> {:error, :store_unavailable}
     end
@@ -751,7 +845,7 @@ defmodule LemonCore.ExecApprovals do
     ExecApprovalStore.transition(
       approval_id,
       pending,
-      %{resolution: resolution_receipt(pending, decision, outcome)}
+      ExecApprovalStore.terminal_record(resolution_receipt(pending, decision, outcome))
     )
   end
 

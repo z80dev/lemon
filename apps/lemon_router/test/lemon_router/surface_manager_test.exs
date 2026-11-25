@@ -26,15 +26,25 @@ defmodule LemonRouter.SurfaceManagerTest do
 
       :ok
     end
-
-    def current_text(_session_key, _channel_id, _run_id), do: nil
   end
 
   defmodule FailingStreamCoalescerStub do
     @moduledoc false
 
-    def finalize_run(_session_key, _channel_id, _run_id, _opts), do: {:error, :timeout}
-    def current_text(_session_key, _channel_id, _run_id), do: "Recovered streamed answer"
+    def finalize_run(_session_key, _channel_id, _run_id, _opts),
+      do: {:error, {:dispatch_failed, :rejected}}
+  end
+
+  defmodule RejectingDispatcherStub do
+    @moduledoc false
+
+    def dispatch(%DeliveryIntent{} = intent) do
+      if pid = :persistent_term.get({DispatcherStub, :test_pid}, nil) do
+        send(pid, {:rejected_intent, intent})
+      end
+
+      {:error, :rejected}
+    end
   end
 
   setup do
@@ -370,7 +380,7 @@ defmodule LemonRouter.SurfaceManagerTest do
                    1_000
   end
 
-  test "finalize_answer/3 dispatches stream_finalize first when deltas already streamed" do
+  test "finalize_answer/3 finalizes streamed answers only through the coalescer" do
     session_key =
       SessionKey.channel_peer(%{
         agent_id: "test-agent",
@@ -405,61 +415,98 @@ defmodule LemonRouter.SurfaceManagerTest do
                     opts},
                    1_000
 
-    assert opts[:dispatch?] == false
+    assert Keyword.keys(opts) |> Enum.sort() == [:final_text, :meta]
+    assert opts[:final_text] == "Streamed final answer"
     assert opts[:meta][:terminal_answer] == true
+    assert opts[:meta][:inbound_voice] == true
 
-    assert_receive {:dispatched_intent,
-                    %DeliveryIntent{
-                      intent_id: "run-streamed-final:terminal-answer",
-                      kind: :stream_finalize,
-                      body: %{text: "Streamed final answer", seq: 0},
-                      meta: %{surface: :answer, inbound_voice: true, terminal_answer: true},
-                      route: %{peer_id: "primary"}
-                    }},
-                   1_000
+    # The coalescer owns the only final delivery; nothing is dispatched around it.
+    refute_receive {:dispatched_intent, _}, 100
   end
 
-  test "finalize_answer/3 uses coalescer current_text fallback for streamed runs" do
-    Application.put_env(:lemon_router, :stream_coalescer, FailingStreamCoalescerStub)
+  describe "failed answer finalization" do
+    setup do
+      original = Application.get_env(:lemon_core, :introspection, [])
 
-    session_key =
-      SessionKey.channel_peer(%{
-        agent_id: "test-agent",
-        channel_id: "telegram",
-        account_id: "default",
-        peer_kind: :dm,
-        peer_id: "primary"
-      })
-
-    state = %{
-      run_id: "run-streamed-fallback",
-      session_key: session_key,
-      saw_delta: true,
-      execution_request: %LemonCore.ExecutionCommand{
-        run_id: "run-streamed-fallback",
-        session_key: session_key,
-        prompt: "streamed fallback",
-        meta: %{user_msg_id: 42}
-      }
-    }
-
-    event =
-      Event.new(
-        :run_completed,
-        %{completed: %{ok: true, answer: ""}},
-        %{run_id: state.run_id, session_key: session_key}
+      Application.put_env(
+        :lemon_core,
+        :introspection,
+        Keyword.put(original, :enabled, true)
       )
 
-    assert :ok = SurfaceManager.finalize_answer(state, event, %{})
+      Application.put_env(:lemon_router, :stream_coalescer, FailingStreamCoalescerStub)
+      on_exit(fn -> Application.put_env(:lemon_core, :introspection, original) end)
 
-    assert_receive {:dispatched_intent,
-                    %DeliveryIntent{
-                      kind: :stream_finalize,
-                      body: %{text: "Recovered streamed answer", seq: 0},
-                      meta: %{surface: :answer, terminal_answer: true},
-                      route: %{peer_id: "primary"}
-                    }},
-                   1_000
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "default",
+          peer_kind: :dm,
+          peer_id: "primary"
+        })
+
+      run_id = "run-finalize-failed-#{System.unique_integer([:positive])}"
+
+      state = %{
+        run_id: run_id,
+        session_key: session_key,
+        saw_delta: true,
+        execution_request: %LemonCore.ExecutionCommand{
+          run_id: run_id,
+          session_key: session_key,
+          prompt: "streamed fallback",
+          meta: %{user_msg_id: 42}
+        }
+      }
+
+      {:ok, state: state}
+    end
+
+    test "without answer text the coalescer error is returned and recorded", %{state: state} do
+      event =
+        Event.new(
+          :run_completed,
+          %{completed: %{ok: true, answer: ""}},
+          %{run_id: state.run_id, session_key: state.session_key}
+        )
+
+      assert {:error, {:dispatch_failed, :rejected}} =
+               SurfaceManager.finalize_answer(state, event, %{})
+
+      refute_receive {:dispatched_intent, _}, 100
+
+      assert [%{payload: %{mode: :fallback_final_text, error: :dispatch_failed}}] =
+               finalize_events(state.run_id, :answer_finalize_dispatch)
+
+      assert [%{payload: %{error: :dispatch_failed, saw_delta: true}}] =
+               finalize_events(state.run_id, :answer_finalize_failed)
+    end
+
+    test "a rejected fallback returns the dispatch error and records it", %{state: state} do
+      Application.put_env(:lemon_router, :dispatcher, RejectingDispatcherStub)
+
+      event =
+        Event.new(
+          :run_completed,
+          %{completed: %{ok: true, answer: "Final answer"}},
+          %{run_id: state.run_id, session_key: state.session_key}
+        )
+
+      assert {:error, {:dispatch_failed, :rejected}} =
+               SurfaceManager.finalize_answer(state, event, %{})
+
+      assert_receive {:rejected_intent, %DeliveryIntent{kind: :final_text}}, 1_000
+
+      assert [%{payload: %{error: :dispatch_failed}}] =
+               finalize_events(state.run_id, :answer_finalize_failed)
+    end
+  end
+
+  defp finalize_events(run_id, event_type) do
+    [run_id: run_id, limit: 50]
+    |> LemonCore.Introspection.list()
+    |> Enum.filter(&(&1.event_type == event_type))
   end
 
   defp base_state do

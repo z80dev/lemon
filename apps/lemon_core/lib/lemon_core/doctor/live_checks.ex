@@ -30,7 +30,7 @@ defmodule LemonCore.Doctor.LiveChecks do
               Check.fail(name, "Live check could not complete.")
 
             nil ->
-              Task.shutdown(task, :brutal_kill)
+              _ = Task.shutdown(task, :brutal_kill)
               Check.fail(name, "Live check timed out.")
           end
 

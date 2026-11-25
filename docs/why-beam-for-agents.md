@@ -42,8 +42,8 @@ agent runtimes have quietly become that system.
 
 ### A conversation is a process, not a dict entry
 
-`LemonRouter.RunProcess` is a GenServer that owns exactly one run
-([`run_process.ex:42`](../apps/lemon_router/lib/lemon_router/run_process.ex)), addressed
+[`LemonRouter.RunProcess`](../apps/lemon_router/lib/lemon_router/run_process.ex) is a
+GenServer that owns exactly one run, addressed
 by `{:via, Registry, {LemonRouter.RunRegistry, run_id}}`. Abort state, the watchdog timer,
 the metadata snapshot, the Bus subscription — all of it is ordinary process state. There is
 no serialization, no lock, and no "who owns this session" question, because a process is
@@ -57,7 +57,7 @@ Three properties follow, and they are the actual reason this matters:
 - *A heap per process.* A conversation carrying a 200k-token history garbage-collects on
   its own heap. Nothing stops the world.
 - *Admission control instead of degradation.* The run `DynamicSupervisor` caps concurrent runs
-  ([`application.ex:35`](../apps/lemon_router/lib/lemon_router/application.ex),
+  ([`LemonRouter.Application.start/2`](../apps/lemon_router/lib/lemon_router/application.ex),
   default 500) and returns `{:error, :max_children}` at the limit rather than accepting
   work it will serve badly.
 
@@ -67,34 +67,35 @@ The interesting question is never "restart on crash." It is *what* to restart, a
 BEAM makes you answer it in one visible line.
 
 Run processes are started `restart: :temporary`
-([`run_process.ex:60`](../apps/lemon_router/lib/lemon_router/run_process.ex)). A
+([`LemonRouter.RunProcess.child_spec/1`](../apps/lemon_router/lib/lemon_router/run_process.ex)). A
 crashed run is deliberately *not* restarted, because replaying an LLM turn replays its
 tool calls, and those wrote files and sent messages. The supervisor still receives the
 exit, the Registry entry still disappears, monitors still fire — I get the cleanup without
 the duplication. Compare channel adapters, which run `:one_for_one` under a
-DynamicSupervisor ([`lemon_channels/application.ex:24`](../apps/lemon_channels/lib/lemon_channels/application.ex)):
+DynamicSupervisor (`LemonChannels.AdapterSupervisor` in [`LemonChannels.Application`](../apps/lemon_channels/lib/lemon_channels/application.ex)):
 a dropped Telegram connection *should* come back, because reconnecting is idempotent. The
 idempotency argument lives in the supervision strategy, where a reviewer can find it.
 
 One level down, each tool call runs as a supervised task with a monitor
-([`loop/tool_calls.ex:63,569`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex)). If
-it crashes, the `:DOWN` message is converted into a tool result the model can read —
-`"Tool task crashed: ..."` at
-[`tool_calls.ex:1027`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) — and the
+([`start_tool_tasks/9`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) in
+`LemonAgent.Loop.ToolCalls`). If it crashes, the `:DOWN` message is converted into a
+tool result the model can read — an interrupted result with
+`error_type: :tool_task_crashed`, built in
+[`collect_parallel_tool_results/16`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) — and the
 other tools in the same parallel batch keep running. That is a `receive` block, not a
 framework.
 
 ### Backpressure and at-most-once are process-shaped
 
 The outbound path is a bounded queue with an explicit rejection: 5,000 messages
-([`outbox.ex:22`](../apps/lemon_channels/lib/lemon_channels/outbox.ex)), and past that,
-`{:error, :queue_full}` plus a telemetry event carrying the depth
-([`outbox.ex:94`](../apps/lemon_channels/lib/lemon_channels/outbox.ex)). Rate limiting and
+by default ([`LemonChannels.Outbox`](../apps/lemon_channels/lib/lemon_channels/outbox.ex)),
+and past that, `{:error, :queue_full}` plus a telemetry event carrying the depth
+(`[:lemon, :channels, :outbox, :rejected]`; see [telemetry](telemetry.md)). Rate limiting and
 deduplication are separate processes, so a wedged delivery cannot take the accounting with
 it. Delivery is keyed by an idempotency key, and repeat sends return `{:error, :duplicate}`
 rather than a second message to the user.
 
-The comment at [`outbox.ex:42-53`](../apps/lemon_channels/lib/lemon_channels/outbox.ex) is
+The contract on [`LemonChannels.Outbox.enqueue/2`](../apps/lemon_channels/lib/lemon_channels/outbox.ex) is
 the part I would point at in an interview. When `enqueue` times out, the message may still
 be in the GenServer's mailbox and may still be delivered — so the caller gets
 `{:outcome_unknown, :enqueue_timeout}`, explicitly *ambiguous*, not *failed*. You can only write that
@@ -126,9 +127,9 @@ would otherwise have served OpenAI traffic.
 Because every run and every conversation is a named process, a stuck agent is a thing you
 can attach to: `:observer`, `Process.info/2`, a remote shell into production, message-queue
 depth per conversation. The idle watchdog
-([`run_process/watchdog.ex:15`](../apps/lemon_router/lib/lemon_router/run_process/watchdog.ex))
+([`LemonRouter.RunProcess.Watchdog`](../apps/lemon_router/lib/lemon_router/run_process/watchdog.ex))
 and the bounded, drop-strategy-configurable event stream
-([`event_stream.ex:64,95`](../apps/lemon_agent/lib/lemon_agent/event_stream.ex)) are cheap to
+([`LemonAi.EventStream`](../apps/lemon_ai/lib/lemon_ai/event_stream.ex)) are cheap to
 build on top of that, but the inspectability is the primitive.
 
 ## What it costs

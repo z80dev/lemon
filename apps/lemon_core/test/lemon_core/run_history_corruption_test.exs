@@ -58,6 +58,7 @@ defmodule LemonCore.RunHistoryCorruptionTest do
 
     :ok = RunHistoryStore.put(name, @session, 1_000, "run_1", %{summary: %{}})
     assert {:ok, [{"run_1", _}]} = RunHistoryStore.fetch(name, @session, [])
+    assert {:ok, 1} = RunHistoryStore.fetch_count(name, @session)
 
     %{conn: conn, stmts: stmts} = :sys.get_state(name)
     Enum.each(Map.values(stmts), &Sqlite3.release(conn, &1))
@@ -65,6 +66,8 @@ defmodule LemonCore.RunHistoryCorruptionTest do
 
     assert {:error, _reason} = GenServer.call(name, {:get, @session, 50})
     assert {:error, _reason} = RunHistoryStore.fetch(name, @session, [])
+    # A reset preview counts rows: a failed count is never an empty session.
+    assert {:error, _reason} = RunHistoryStore.fetch_count(name, @session)
   end
 
   @tag timeout: 60_000

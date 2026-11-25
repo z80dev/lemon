@@ -60,7 +60,7 @@ defmodule CodingAgent.Session.PromptJournalSessionTest do
     |> Enum.filter(&match?(%{type: :message, message: %{"role" => "assistant"}}, &1))
   end
 
-  test "every tool and final reply journals the exact request blocks in its own append", %{
+  test "every tool and final reply references the exact request blocks, journaled once", %{
     tmp_dir: dir,
     path: path
   } do
@@ -85,10 +85,51 @@ defmodule CodingAgent.Session.PromptJournalSessionTest do
     assert length(replies) == 2
 
     for entry <- replies do
-      snapshot = entry.message["system-prompt-digest"]
-      assert snapshot["digest"] == SystemPrompt.digest(first)
-      assert snapshot["prompt"] == Jason.decode!(Jason.encode!(first))
+      assert entry.message["system-prompt-digest"] == %{
+               "version" => 2,
+               "digest" => SystemPrompt.digest(first),
+               "plan_revision" => nil
+             }
     end
+
+    assert [snapshot] =
+             journal
+             |> SessionManager.get_branch()
+             |> Enum.filter(&(&1.custom_type == "lemon.prompt_snapshot"))
+
+    assert snapshot.data["prompt"] == Jason.decode!(Jason.encode!(first))
+    assert PromptJournal.latest(journal).prompt == first
+  end
+
+  test "resuming a pre-change journal keeps its inline prompt and plan overlay", %{tmp_dir: dir} do
+    path = Path.join(dir, "pre-change.jsonl")
+
+    File.write!(
+      path,
+      "../../fixtures/journals/prompt_snapshot_v1.jsonl"
+      |> Path.expand(__DIR__)
+      |> File.read!()
+      |> String.replace("__CWD__", dir)
+    )
+
+    assert {:ok, fixture} = SessionManager.load_from_file(path)
+    saved = PromptJournal.latest(fixture)
+
+    session =
+      start_session(dir, path, capture_stream(self(), [Mocks.assistant_message("resumed")]))
+
+    state = Session.get_state(session)
+    assert state.journaled_prompt.blocks == saved.prompt
+    assert state.system_prompt == SystemPrompt.text(saved.prompt)
+    assert state.base_system_prompt == saved.base_prompt
+    assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :status)
+
+    assert :ok = Session.prompt(session, "Continue the fixture plan.")
+    assert_receive {:request_prompt, request}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
+    assert SystemPrompt.digest(request) == saved.digest
+    assert {:ok, journal} = SessionManager.load_from_file(path)
+    assert PromptJournal.latest(journal).digest == saved.digest
   end
 
   test "resume accepts a matching rebuild and pins a changed rebuild through the next request", %{

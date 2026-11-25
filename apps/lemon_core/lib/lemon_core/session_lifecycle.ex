@@ -26,7 +26,8 @@ defmodule LemonCore.SessionLifecycle do
     LifecycleFenceStore,
     PolicyStore,
     RunStore,
-    SessionMetadataStore
+    SessionMetadataStore,
+    SessionResetPreview
   }
 
   @default_limit 100
@@ -43,6 +44,7 @@ defmodule LemonCore.SessionLifecycle do
   @stats_version 1
   @export_version 1
   @prune_version 1
+  @reset_digest_version 1
   # Metadata of a session without stored annotations, as `merge_metadata/1`
   # reports it (equal timestamps mean "never updated").
   @unannotated %{title: nil, pinned: false, archived: false, created_at_ms: 0, updated_at_ms: 0}
@@ -375,39 +377,126 @@ defmodule LemonCore.SessionLifecycle do
   def maintenance(opts) when is_list(opts), do: LemonCore.SessionMaintenance.maintenance(opts)
 
   @doc """
-  Reset a session's conversation: delete its run history, chat state and
-  session policy, keeping its index and lifecycle metadata.
+  Preview or execute a verified reset of a session's conversation: delete its
+  run history, chat state, session policy and transient ACP run pointers while
+  keeping its index and lifecycle metadata.
 
-  Callers must hold the router's admission fence for the session (see
-  `LemonRouter.with_session_lifecycle_fence/3`) and pass the fence's
-  `:fence_generation`; without it nothing is changed and
-  `{:error, :fence_generation_required}` is returned. This function does not
-  check for running work. The generation is checked before the first mutation
-  (`{:error, :fence_lost}`, nothing changed) and again before run history is
-  deleted. Chat state and
-  policy are deleted and verified first and are restored on failure, returning
-  a definite `{:error, reason}`. Run history cannot be restored, so it is
-  deleted last and verified by its owner. `{:error, :outcome_unknown}` means
-  the reset may have partially applied: reconcile, never retry automatically.
+  When `:dry_run` is `true` (the default when `:confirm_token` is omitted), this
+  reads the session's current state strictly, computes a digest covering run
+  history count, latest run, chat state, session policy and ACP metadata,
+  retains a single-use server-side `:confirm_token`, and mutates nothing.
+
+  When executing (`dry_run: false`, or `:confirm_token` supplied with `:dry_run`
+  omitted), callers must hold the router's admission fence for the session (see
+  `LemonRouter.with_session_lifecycle_fence/3`) and pass `:fence_generation`
+  along with the preview's `:confirm_token`. The token is matched against the
+  live state digest and consumed durably before any mutation. Chat state, policy
+  and ACP run pointers are deleted and verified first and are restored on
+  failure, returning a definite `{:error, reason}`. Run history cannot be
+  restored, so it is deleted last and verified by its owner.
+  `{:error, :outcome_unknown}` means the reset may have partially applied:
+  reconcile, never retry automatically.
   """
-  @spec reset(String.t(), keyword()) ::
-          {:ok, %{session_key: String.t(), verified: true}} | {:error, term()}
+  @spec reset(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def reset(session_key, opts \\ []) when is_binary(session_key) and is_list(opts) do
+    confirm_token = Keyword.get(opts, :confirm_token)
+    dry_run? = Keyword.get(opts, :dry_run, is_nil(confirm_token))
+
+    if dry_run? do
+      preview_reset(session_key)
+    else
+      execute_reset(session_key, confirm_token, opts)
+    end
+  end
+
+  defp preview_reset(session_key) do
+    with {:ok, state} <- strict_reset_state(session_key),
+         {:ok, token} <- SessionResetPreview.retain(session_key, state.digest) do
+      {:ok, reset_result(state, true, token, false)}
+    end
+  end
+
+  defp execute_reset(_session_key, token, _opts)
+       when not is_binary(token) or token == "",
+       do: {:error, :confirmation_required}
+
+  defp execute_reset(session_key, confirm_token, opts) do
     # Rollback restores these snapshots, so an unreadable row stops the reset
-    # before any mutation rather than being recorded as absent and lost.
+    # before consuming the token or applying any mutation.
     with :ok <- fence_held(session_key, opts),
-         {:ok, chat} <- strict_fetch(ChatStateStore.fetch(session_key)),
-         {:ok, policy} <- strict_fetch(PolicyStore.fetch_session(session_key)),
-         snapshots = %{chat: chat, policy: policy, metadata: nil},
+         {:ok, state} <- strict_reset_state(session_key),
+         :ok <- SessionResetPreview.consume(session_key, confirm_token, state.digest),
+         snapshots = %{
+           chat: state.chat,
+           policy: state.policy,
+           metadata: if(state.has_acp_run_state, do: state.metadata, else: nil)
+         },
          :ok <- reset_ancillary(session_key, snapshots),
          :ok <- fence_still_held(session_key, opts),
          :ok <- reset_history(session_key) do
-      {:ok, %{session_key: session_key, verified: true}}
+      {:ok, reset_result(state, false, nil, true)}
     else
       {:error, :fence_lost_mid_operation} -> {:error, :outcome_unknown}
       error -> error
     end
   end
+
+  defp strict_reset_state(session_key) do
+    with {:ok, history_count} <- strict_fetch(RunStore.fetch_history_count(session_key)),
+         {:ok, latest_history} <- strict_fetch(RunStore.fetch_history(session_key, limit: 1)),
+         {:ok, chat} <- strict_fetch(ChatStateStore.fetch(session_key)),
+         {:ok, policy} <- strict_fetch(PolicyStore.fetch_session(session_key)),
+         {:ok, metadata} <- strict_fetch(SessionMetadataStore.fetch(session_key)) do
+      acp = if is_map(metadata), do: Map.get(metadata, :acp), else: nil
+
+      latest_run_id =
+        case latest_history do
+          [{run_id, _data} | _] -> run_id
+          _ -> nil
+        end
+
+      digest =
+        {@reset_digest_version, session_key, history_count, latest_run_id, chat, policy, acp}
+        |> :erlang.term_to_binary()
+        |> sha256()
+
+      {:ok,
+       %{
+         session_key: session_key,
+         digest: digest,
+         run_history_count: history_count,
+         chat: chat,
+         policy: policy,
+         metadata: metadata,
+         acp: acp,
+         has_chat_state: chat != nil,
+         has_session_policy: policy != nil,
+         has_acp_metadata: is_map(acp),
+         has_acp_run_state: acp_has_run_state?(acp)
+       }}
+    end
+  end
+
+  defp reset_result(state, dry_run?, confirm_token, verified?) do
+    base = %{
+      session_key: state.session_key,
+      dry_run: dry_run?,
+      digest: state.digest,
+      run_history_count: state.run_history_count,
+      has_chat_state: state.has_chat_state,
+      has_session_policy: state.has_session_policy,
+      has_acp_metadata: state.has_acp_metadata,
+      has_acp_run_state: state.has_acp_run_state,
+      verified: verified?
+    }
+
+    if is_binary(confirm_token), do: Map.put(base, :confirm_token, confirm_token), else: base
+  end
+
+  defp acp_has_run_state?(%{} = acp),
+    do: Map.get(acp, :last_run_id) != nil or Map.get(acp, :cancelled_run_id) != nil
+
+  defp acp_has_run_state?(_), do: false
 
   defp strict_fetch({:ok, _} = ok), do: ok
   defp strict_fetch(_unreadable), do: {:error, :session_store_unavailable}
@@ -442,9 +531,12 @@ defmodule LemonCore.SessionLifecycle do
   defp reset_ancillary(session_key, snapshots) do
     result =
       with :ok <- normalize_delete_result(ChatStateStore.delete(session_key)),
-           :ok <- normalize_delete_result(PolicyStore.delete_session(session_key)) do
+           :ok <- normalize_delete_result(PolicyStore.delete_session(session_key)),
+           :ok <- normalize_delete_result(SessionMetadataStore.clear_acp_run_state(session_key)) do
         with {:ok, nil} <- ChatStateStore.fetch(session_key),
-             {:ok, nil} <- PolicyStore.fetch_session(session_key) do
+             {:ok, nil} <- PolicyStore.fetch_session(session_key),
+             {:ok, acp} <- SessionMetadataStore.fetch_acp(session_key),
+             false <- acp_has_run_state?(acp) do
           :ok
         else
           _remaining_or_unreadable -> {:error, :ancillary_deletion_not_verified}

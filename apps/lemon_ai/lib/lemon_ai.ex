@@ -97,9 +97,6 @@ defmodule LemonAi do
         api: model.api,
         call_kind: call_kind
       })
-      |> Keyword.put(:hedge_input_tokens, fn ->
-        LemonAi.PromptDiagnostics.stats(context).approx_input_tokens
-      end)
 
     opts = normalize_options(opts)
 

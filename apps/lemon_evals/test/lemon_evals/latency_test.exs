@@ -55,6 +55,26 @@ defmodule LemonEvals.LatencyBudgetContractTest do
     """)
   end
 
+  test "a failed probe VM is named by its fixed probe message or exception module only" do
+    python!("""
+    import tempfile
+    from pathlib import Path
+    from latency_benchmark import PROBE_FAILURES, failure_reason
+    assert 'latency trial timed out (missing lifecycle or delta event)' in PROBE_FAILURES
+    assert not any('#' in message for message in PROBE_FAILURES)
+    with tempfile.TemporaryDirectory() as temporary:
+        log = Path(temporary) / 'runtime.log'
+        assert failure_reason(log) == 'no exception reported'
+        log.write_text('booting\\n** (RuntimeError) latency gateway boundary missing\\n')
+        assert failure_reason(log) == 'RuntimeError: latency gateway boundary missing'
+        log.write_text('** (File.Error) could not read file "/private/secret/session.jsonl"\\n'
+                       '    (elixir) lib/file.ex:1: File.read!/1\\n')
+        assert failure_reason(log) == 'File.Error'
+        log.write_text('** (RuntimeError) prompt text from the user\\n')
+        assert failure_reason(log) == 'RuntimeError'
+    """)
+  end
+
   @tag :integration
   @tag timeout: 240_000
   @tag :tmp_dir

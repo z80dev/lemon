@@ -20,6 +20,7 @@
 import { Emitter } from "../store/events.ts";
 import {
 	AuthenticationError,
+	ConnectionLostError,
 	ControlPlaneError,
 	HandshakeError,
 	NotConnectedError,
@@ -196,6 +197,11 @@ export class ControlPlaneClient {
 		return this.#frameLog.slice(this.#frameLog.length - limit);
 	}
 
+	/** Record a client-side incident in the `/debug` log alongside the frames. */
+	note(line: string): void {
+		this.#log(`-- ${line}`);
+	}
+
 	/** True when the connected daemon advertises `method` (or before handshake). */
 	supports(method: string): boolean {
 		if (!this.#helloOk) return true;
@@ -231,7 +237,8 @@ export class ControlPlaneClient {
 
 	/**
 	 * Drop the socket and dial again immediately (`/reconnect`). In-flight
-	 * requests fail with NotConnectedError as they would on any disconnect.
+	 * requests fail with ConnectionLostError (outcome unknown) as they would on
+	 * any disconnect.
 	 */
 	async reconnect(reason = "user requested"): Promise<void> {
 		if (this.#closed) throw new NotConnectedError(undefined, "client is closed");
@@ -240,26 +247,28 @@ export class ControlPlaneClient {
 		this.#helloOk = undefined;
 		this.#handshakeId = undefined;
 		this.#connectionError = undefined;
+		this.#failPending("reconnect");
 		const error = new NotConnectedError();
-		this.#failPending(error);
 		const waiters = this.#handshakeWaiters.splice(0);
 		for (const waiter of waiters) waiter.reject(error);
 		this.#setState("reconnecting");
 		await this.connect();
 	}
 
-	/** Close permanently. Pending and queued requests reject. */
+	/** Close permanently. Pending requests fail as outcome unknown; queued ones as never sent. */
 	close(): void {
 		this.#closed = true;
 		if (this.#ownsSocket) this.#socket.close();
-		this.#failAll(new NotConnectedError(undefined, "client closed"));
+		this.#failAll(new NotConnectedError(undefined, "client closed"), "client closed");
 		this.#setState("offline");
 	}
 
 	/**
 	 * Issue a request. Rejects with {@link ControlPlaneError} when the server
-	 * answers `ok: false`, {@link RequestTimeoutError} on deadline, and
-	 * {@link NotConnectedError} when offline and the method is not queueable.
+	 * answers `ok: false`, {@link RequestTimeoutError} on deadline,
+	 * {@link NotConnectedError} when offline and the method is not queueable
+	 * (nothing was sent), and {@link ConnectionLostError} when the connection
+	 * drops after the request was written (outcome unknown).
 	 */
 	request<T = unknown>(method: string, params?: unknown, options: RequestOptions = {}): Promise<T> {
 		if (this.#closed) return Promise.reject(new NotConnectedError(method, "client is closed"));
@@ -297,12 +306,7 @@ export class ControlPlaneClient {
 			const wasOnline = this.#state === "online";
 			this.#helloOk = undefined;
 			this.#handshakeId = undefined;
-			this.#failPending(
-				new NotConnectedError(
-					undefined,
-					`connection closed (${info.code}${info.reason ? `: ${info.reason}` : ""})`,
-				),
-			);
+			this.#failPending(`connection closed (${info.code}${info.reason ? `: ${info.reason}` : ""})`);
 			if (!this.#closed)
 				this.#setState(wasOnline || this.#handshakeCount > 0 ? "reconnecting" : "connecting");
 		});
@@ -431,7 +435,7 @@ export class ControlPlaneClient {
 				this.#helloOk = undefined;
 				this.#socket.close();
 				this.#setState(error instanceof AuthenticationError ? "auth-rejected" : "offline");
-				this.#failAll(error);
+				this.#failAll(error, "connection refused");
 				this.events.emit("client-error", { error, context: "handshake" });
 				return;
 			}
@@ -529,17 +533,19 @@ export class ControlPlaneClient {
 		}
 	}
 
-	#failPending(error: unknown): void {
+	/** Everything in `#pending` was written to the socket: its outcome is unknown. */
+	#failPending(reason: string): void {
 		const pending = [...this.#pending.values()];
 		this.#pending.clear();
 		for (const entry of pending) {
 			if (entry.timer) clearTimeout(entry.timer);
-			entry.reject(error);
+			entry.reject(new ConnectionLostError(entry.method, reason));
 		}
 	}
 
-	#failAll(error: unknown): void {
-		this.#failPending(error);
+	/** Fail dispatched requests as lost, and parked requests and handshake waiters with `error`. */
+	#failAll(error: unknown, reason: string): void {
+		this.#failPending(reason);
 		const queued = this.#queue.splice(0, this.#queue.length);
 		for (const entry of queued) entry.reject(error);
 		const waiters = this.#handshakeWaiters;

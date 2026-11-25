@@ -1,16 +1,18 @@
 #!/usr/bin/env node
+import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 
 import { asBool, asInt, asString, parseCliArgs, type CliArgs } from './cli-args.js';
-import { ChromeSession, redactUrlCredentials } from './chrome.js';
-import { dispatchBrowserRequest } from './driver-dispatch.js';
-import { resolveOpenClawUserDataDir } from './openclaw-profile.js';
+import { ChromeSession, OutcomeUnknownError, defaultUserDataDir, redactUrlCredentials } from './chrome.js';
+import { dispatchBrowserRequest, isReadOnlyBrowserMethod } from './driver-dispatch.js';
 
 export type RequestMsg = {
   id: string;
   method: string;
   args?: unknown;
   timeoutMs?: number;
+  /** Absolute caller deadline (Unix epoch milliseconds, same host clock). */
+  deadlineAtMs?: number;
 };
 
 export type LocalDriverConfig = {
@@ -21,17 +23,38 @@ export type LocalDriverConfig = {
   attachOnly: boolean;
   allowUnenforcedEgress: boolean;
   executablePath: string | null;
-  openclawProfile: string;
+  browserProfile: string;
   userDataDir: string;
   profileDirectory?: string;
-  userProvidedProfile: boolean;
 };
+
+/**
+ * `not_started`: the request was never run and may be retried.
+ * `timeout`: a read-only request ran out of time.
+ * `outcome_unknown`: a side-effecting request may have taken effect; never retry it.
+ */
+export type LocalDriverErrorCode = 'not_started' | 'timeout' | 'outcome_unknown';
 
 export type LocalDriverResponse = {
   id: string;
   ok: boolean;
   result?: unknown;
   error?: string;
+  code?: LocalDriverErrorCode;
+};
+
+/**
+ * Runs one request. `begin` must be called immediately before the first
+ * browser side effect: it throws once the request was answered as timed out,
+ * so work that was still preparing (starting Chrome, say) never acts late.
+ */
+export type DriverInvoke = (method: string, args: unknown, begin: () => void) => Promise<unknown>;
+
+export type DriverRequestQueue = {
+  /** Accepts one stdin line; its deadline is stamped now. */
+  submit(line: string): void;
+  /** Resolves once every submitted request has settled. */
+  drained(): Promise<void>;
 };
 
 export function resolveLocalDriverConfig(params: {
@@ -53,11 +76,11 @@ export function resolveLocalDriverConfig(params: {
   const executablePath =
     asString(params.args['executable-path']) ?? asString(env.LEMON_BROWSER_EXECUTABLE);
 
-  const openclawProfile = asString(params.args['openclaw-profile']) ?? 'openclaw';
+  const browserProfile = asString(params.args['browser-profile']) ?? 'default';
   const userDataDir =
     asString(params.args['user-data-dir']) ??
     asString(env.LEMON_BROWSER_USER_DATA_DIR) ??
-    resolveOpenClawUserDataDir(openclawProfile);
+    defaultUserDataDir(browserProfile, env.HOME || os.homedir());
 
   return {
     cdpPort,
@@ -67,64 +90,167 @@ export function resolveLocalDriverConfig(params: {
     attachOnly,
     allowUnenforcedEgress,
     executablePath,
-    openclawProfile,
+    browserProfile,
     userDataDir,
     profileDirectory: asString(params.args['profile-directory']) ?? asString(env.LEMON_BROWSER_PROFILE_DIRECTORY) ?? undefined,
-    userProvidedProfile: !!(asString(params.args['user-data-dir']) ?? asString(env.LEMON_BROWSER_USER_DATA_DIR)),
   };
 }
 
-export async function executeLocalDriverRequest(params: {
-  line: string;
-  invoke: (method: string, args: unknown) => Promise<unknown>;
+class NotStartedError extends Error {}
+
+/**
+ * Serializes requests: one runs at a time, and the next starts only after the
+ * previous invocation has actually settled, never merely timed out. Each
+ * request's deadline is the earlier of `timeoutMs` after the line was read
+ * and the caller's absolute `deadlineAtMs`. A request still queued at its
+ * deadline is answered `not_started` and never invoked. A side-effecting
+ * request still running at its deadline is answered `outcome_unknown`; a
+ * read-only one `timeout`. An invocation that has not settled `settleGraceMs`
+ * after its deadline is wedged: `onWedged` runs and later requests stay queued.
+ */
+export function createDriverRequestQueue(params: {
+  invoke: DriverInvoke;
+  reply: (response: LocalDriverResponse) => void;
+  isReadOnly: (method: string, args: unknown) => boolean;
+  onWedged: () => void;
   defaultTimeoutMs?: number;
-}): Promise<LocalDriverResponse> {
+  settleGraceMs?: number;
+  now?: () => number;
+}): DriverRequestQueue {
+  const now = params.now ?? Date.now;
   const defaultTimeoutMs = params.defaultTimeoutMs ?? 30_000;
+  const settleGraceMs = params.settleGraceMs ?? 10_000;
+  let tail: Promise<void> = Promise.resolve();
 
-  let msg: RequestMsg;
-  try {
-    msg = JSON.parse(params.line) as RequestMsg;
-  } catch (err) {
-    return {
-      id: 'unknown',
-      ok: false,
-      error: `invalid json: ${String(err)}`,
+  const submit = (line: string) => {
+    const receivedAt = now();
+    let msg: RequestMsg;
+    try {
+      msg = JSON.parse(line) as RequestMsg;
+    } catch (err) {
+      params.reply({ id: 'unknown', ok: false, error: `invalid json: ${String(err)}` });
+      return;
+    }
+
+    const id = asString(msg.id) ?? 'unknown';
+    const method = asString(msg.method) ?? '';
+    const args = msg.args ?? {};
+    const timeoutMs =
+      typeof msg.timeoutMs === 'number' && msg.timeoutMs > 0 ? msg.timeoutMs : defaultTimeoutMs;
+    const deadline =
+      typeof msg.deadlineAtMs === 'number' && Number.isFinite(msg.deadlineAtMs)
+        ? Math.min(receivedAt + timeoutMs, msg.deadlineAtMs)
+        : receivedAt + timeoutMs;
+
+    let answered = false;
+    const answer = (response: LocalDriverResponse) => {
+      if (answered) return;
+      answered = true;
+      params.reply(response);
     };
-  }
+    const notStarted = () =>
+      answer({
+        id,
+        ok: false,
+        code: 'not_started',
+        error: 'request deadline passed before it started; it was not run',
+      });
 
-  const id = asString(msg.id) ?? 'unknown';
-  const method = asString(msg.method) ?? '';
-  const args = msg.args ?? {};
-  const timeoutMs =
-    typeof msg.timeoutMs === 'number' && msg.timeoutMs > 0
-      ? msg.timeoutMs
-      : defaultTimeoutMs;
+    // A queued request is answered at its deadline, not when the queue reaches it.
+    let running = false;
+    const queuedTimer = setTimeout(() => {
+      if (!running) notStarted();
+    }, Math.max(0, deadline - now()));
 
-  try {
-    const result = await withTimeout(() => params.invoke(method, args), timeoutMs);
-    return { id, ok: true, result };
-  } catch (err) {
-    return {
-      id,
-      ok: false,
-      // Errors can echo a CDP or page URL; never serialize its credentials.
-      error: redactUrlCredentials(err instanceof Error ? err.message : String(err)),
+    const run = async () => {
+      clearTimeout(queuedTimer);
+      if (answered || now() >= deadline) {
+        notStarted();
+        return;
+      }
+      running = true;
+
+      let begun = false;
+      const begin = () => {
+        if (answered) throw new NotStartedError('request deadline passed before it started');
+        begun = true;
+      };
+      const execution = Promise.resolve()
+        .then(() => params.invoke(method, args, begin))
+        .then(
+          (result) => ({ ok: true as const, result }),
+          (err: unknown) => ({ ok: false as const, err }),
+        );
+
+      const expiry = timer(Math.max(0, deadline - now()));
+      const outcome = await Promise.race([execution, expiry.promise.then(() => 'expired' as const)]);
+      expiry.cancel();
+
+      if (outcome !== 'expired') {
+        answer(outcome.ok ? { id, ok: true, result: outcome.result } : errorResponse(id, outcome.err));
+        return;
+      }
+
+      if (!begun) {
+        notStarted();
+      } else if (params.isReadOnly(method, args)) {
+        answer({ id, ok: false, code: 'timeout', error: `timeout after ${timeoutMs}ms` });
+      } else {
+        answer({
+          id,
+          ok: false,
+          code: 'outcome_unknown',
+          error: `${method} did not finish before its deadline; it may have taken effect`,
+        });
+      }
+
+      // The abandoned invocation holds the queue until it settles, so it never
+      // overlaps the next request.
+      const grace = timer(settleGraceMs);
+      const wedged = await Promise.race([execution.then(() => false), grace.promise.then(() => true)]);
+      grace.cancel();
+      if (wedged) {
+        params.onWedged();
+        await execution;
+      }
     };
-  }
+
+    tail = tail.then(run, run);
+  };
+
+  return { submit, drained: () => tail };
 }
 
-async function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
-  let t: NodeJS.Timeout | null = null;
-  try {
-    return await Promise.race([
-      fn(),
-      new Promise<T>((_, reject) => {
-        t = setTimeout(() => reject(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (t) clearTimeout(t);
-  }
+function timer(ms: number): { promise: Promise<void>; cancel: () => void } {
+  let handle: NodeJS.Timeout | undefined;
+  // lib is ES2022, which has no Promise.withResolvers.
+  const promise = new Promise<void>((resolve) => {
+    handle = setTimeout(resolve, ms);
+  });
+  return { promise, cancel: () => clearTimeout(handle) };
+}
+
+function errorResponse(id: string, err: unknown): LocalDriverResponse {
+  // Errors can echo a CDP or page URL; never serialize its credentials.
+  const error = redactUrlCredentials(err instanceof Error ? err.message : String(err));
+  if (err instanceof NotStartedError) return { id, ok: false, code: 'not_started', error };
+  if (err instanceof OutcomeUnknownError) return { id, ok: false, code: 'outcome_unknown', error };
+  return { id, ok: false, error };
+}
+
+/**
+ * Shares one in-flight or successful start between requests. A failed start
+ * is forgotten, so the next request tries again instead of failing forever.
+ */
+export function startOnceRetryingFailures(start: () => Promise<void>): () => Promise<void> {
+  let started: Promise<void> | undefined;
+  return () => {
+    started ??= start().catch((err: unknown) => {
+      started = undefined;
+      throw err;
+    });
+    return started;
+  };
 }
 
 function writeLine(obj: unknown) {
@@ -140,18 +266,37 @@ async function main() {
     cdpEndpoint: config.cdpEndpoint ?? undefined,
     userDataDir: config.userDataDir,
     profileDirectory: config.profileDirectory,
-    userProvidedProfile: config.userProvidedProfile,
     executablePath: config.executablePath ?? undefined,
     headless: config.headless,
     noSandbox: config.noSandbox,
     attachOnly: config.attachOnly,
     allowUnenforcedEgress: config.allowUnenforcedEgress,
   });
-  let started: Promise<void> | undefined;
+  const shutdown = bindDriverLifecycle({
+    stdin: process.stdin,
+    stdout: process.stdout,
+    process,
+    chrome,
+    exit: (code) => process.exit(code),
+  });
+  const ensureStarted = startOnceRetryingFailures(() => chrome.start());
+
+  const queue = createDriverRequestQueue({
+    invoke: async (method, methodArgs, begin) => {
+      await ensureStarted();
+      begin();
+      return dispatchBrowserRequest(chrome, method, methodArgs);
+    },
+    reply: writeLine,
+    isReadOnly: isReadOnlyBrowserMethod,
+    onWedged: () => {
+      process.stderr.write('browser request did not settle after its deadline; stopping the driver\n');
+      void shutdown(1);
+    },
+  });
 
   process.stdin.setEncoding('utf8');
   let buf = '';
-  let queue = Promise.resolve();
 
   process.stdin.on('data', (chunk) => {
     buf += chunk;
@@ -161,38 +306,39 @@ async function main() {
       const line = buf.slice(0, idx).trim();
       buf = buf.slice(idx + 1);
       if (!line) continue;
-
-      const response = queue.then(() =>
-        executeLocalDriverRequest({
-          line,
-          invoke: async (method, methodArgs) => {
-            started ??= chrome.start();
-            await started;
-            return dispatchBrowserRequest(chrome, method, methodArgs);
-          },
-        }),
-      );
-
-      queue = response.then(
-        () => undefined,
-        () => undefined,
-      );
-
-      void response.then((response) => {
-        writeLine(response);
-      });
+      queue.submit(line);
     }
   });
+}
 
-  const shutdown = async () => {
-    try {
-      await chrome.stop();
-    } finally {
-      process.exit(0);
-    }
+/**
+ * Ties the driver's lifetime, and the Chrome it launched, to its owner. EOF
+ * on stdin (the owner exited, even by SIGKILL), an error on stdout (EPIPE to
+ * a gone owner), SIGINT and SIGTERM all stop Chrome and exit once. Process
+ * exit signals a still-running Chrome as a last resort. Returns the shutdown.
+ */
+export function bindDriverLifecycle(params: {
+  stdin: NodeJS.EventEmitter;
+  stdout: NodeJS.EventEmitter;
+  process: NodeJS.EventEmitter;
+  chrome: Pick<ChromeSession, 'stop' | 'killChrome'>;
+  exit: (code: number) => void;
+}): (code: number) => Promise<void> {
+  let stopping: Promise<void> | undefined;
+  const shutdown = (code: number) => {
+    stopping ??= params.chrome
+      .stop()
+      .catch(() => undefined)
+      .then(() => params.exit(code));
+    return stopping;
   };
-  process.on('SIGINT', () => void shutdown());
-  process.on('SIGTERM', () => void shutdown());
+
+  params.stdin.on('end', () => void shutdown(0));
+  params.stdout.on('error', () => void shutdown(0));
+  params.process.on('SIGINT', () => void shutdown(0));
+  params.process.on('SIGTERM', () => void shutdown(0));
+  params.process.on('exit', () => params.chrome.killChrome());
+  return shutdown;
 }
 
 function isMainModule(): boolean {

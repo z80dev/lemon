@@ -14,6 +14,7 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.EventProjection
   alias LemonControlPlane.Methods.NativeSessions
+  alias LemonControlPlane.Protocol.Errors
   alias LemonCore.AgentRuntime
 
   @metadata_fields ~w(id role timestampMs ok toolCallId toolName phase cancelled durationMs)
@@ -58,26 +59,23 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   defp history(params, session_key, limit, before_id, full_text) do
     if Map.has_key?(params, "cwd") do
       with {:ok, _key, cwd} <- NativeSessions.target(params) do
-        case AgentRuntime.call(:session_history, [session_key, cwd], {:error, :unavailable}) do
+        case AgentRuntime.query(:session_history, [session_key, cwd]) do
           {:ok, entries} when is_list(entries) ->
-            entries =
-              LemonControlPlane.ACP.History.reconcile_answers(
-                entries,
-                LemonCore.RunStore.history(session_key, limit: 200)
-              )
+            with {:ok, runs} <- run_history(session_key, 200) do
+              entries = LemonControlPlane.ACP.History.reconcile_answers(entries, runs)
+              messages = native_messages(entries, full_text)
 
-            messages = native_messages(entries, full_text)
+              page =
+                if before_id in [nil, ""],
+                  do: Enum.take(messages, -limit),
+                  else: messages |> apply_before_id(before_id) |> Enum.take(limit)
 
-            page =
-              if before_id in [nil, ""],
-                do: Enum.take(messages, -limit),
-                else: messages |> apply_before_id(before_id) |> Enum.take(limit)
-
-            {:ok, page}
+              {:ok, page}
+            end
 
           {:error, reason}
           when reason in [:session_not_found, :unsupported_session, :unavailable] ->
-            {:ok, get_chat_history(session_key, limit, before_id, full_text)}
+            get_chat_history(session_key, limit, before_id, full_text)
 
           {:error, reason} ->
             NativeSessions.failure(reason)
@@ -87,7 +85,14 @@ defmodule LemonControlPlane.Methods.ChatHistory do
         end
       end
     else
-      {:ok, get_chat_history(session_key, limit, before_id, full_text)}
+      get_chat_history(session_key, limit, before_id, full_text)
+    end
+  end
+
+  defp run_history(session_key, limit) do
+    case LemonCore.RunStore.fetch_history(session_key, limit: limit) do
+      {:ok, runs} -> {:ok, runs}
+      {:error, _reason} -> {:error, Errors.unavailable("Session history is unavailable")}
     end
   end
 
@@ -273,16 +278,15 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   defp native_text(_), do: ""
 
   defp get_chat_history(session_key, limit, before_id, include_full_text) do
-    runs = LemonCore.RunStore.history(session_key, limit: limit * 2)
-
-    runs
-    |> Enum.flat_map(fn {run_id, data} ->
-      extract_messages(run_id, data, include_full_text)
-    end)
-    |> apply_before_id(before_id)
-    |> Enum.take(limit)
-  rescue
-    _ -> []
+    with {:ok, runs} <- run_history(session_key, limit * 2) do
+      {:ok,
+       runs
+       |> Enum.flat_map(fn {run_id, data} ->
+         extract_messages(run_id, data, include_full_text)
+       end)
+       |> apply_before_id(before_id)
+       |> Enum.take(limit)}
+    end
   end
 
   defp extract_messages(run_id, data, include_full_text) do

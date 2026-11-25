@@ -1,51 +1,83 @@
 defmodule CodingAgent.AbortWaitersTest do
   use ExUnit.Case, async: false
 
-  alias CodingAgent.{JoinAwait, TaskStore}
-  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.{JoinAwait, TaskRuntime, TaskRuntimeHelpers, TaskStore}
   alias LemonAgent.AbortSignal
 
-  test "idle control does not schedule a signal sweep" do
-    parent = self()
+  test "an idle task owner schedules no timer" do
+    id = TaskStore.new_task(%{prompt: "idle owner"})
+    :ok = TaskRuntimeHelpers.register(id, nil)
 
-    pid =
-      spawn(fn ->
-        assert {:ok, :ready, %{}} = Control.init([])
-        send(parent, {:initialized, self()})
+    on_exit(fn ->
+      TaskRuntimeHelpers.stop(id)
+      TaskStore.delete_task(id)
+    end)
 
-        receive do
-          message -> send(parent, {:unexpected_control_timer, message})
-        after
-          120 -> send(parent, :idle_without_timer)
-        end
-      end)
-
-    assert_receive {:initialized, ^pid}
-    assert_receive :idle_without_timer, 500
-    refute_received {:unexpected_control_timer, _}
+    {:status, _, _, [_, _, _, _, status]} = :sys.get_status(TaskRuntime.whereis(id))
+    assert [{0, []}] = for({:data, fields} <- status, {~c"Time-outs", value} <- fields, do: value)
   end
 
-  test "parent abort is delivered to control without a sweep" do
-    {:ok, server} = :gen_statem.start_link(Control, [], [])
+  test "parent abort is delivered to the child's owner without a sweep" do
     signal = AbortSignal.new()
     parent_signal = AbortSignal.new()
     id = TaskStore.new_task(%{prompt: "abort regression"})
 
     on_exit(fn ->
-      if Process.alive?(server), do: GenServer.stop(server)
+      TaskRuntimeHelpers.stop(id)
       TaskStore.delete_task(id)
     end)
 
     assert :ok =
-             GenServer.call(
-               server,
-               {:register, id, signal, parent_signal, nil, fn _ -> :ok end, nil}
-             )
+             TaskRuntimeHelpers.register(id, nil, signal: signal, parent_signal: parent_signal)
 
-    assert [{^server, _}] = Registry.lookup(LemonAgent.AbortSignal.Registry, parent_signal)
+    owner = TaskRuntime.whereis(id)
+    assert [{^owner, _}] = Registry.lookup(LemonAgent.AbortSignal.Registry, parent_signal)
     AbortSignal.abort(parent_signal)
-    assert {:ready, %{^id => %{phase: :cancelling}}} = :sys.get_state(server)
+    # With no worker to wait for, the cancellation terminalizes at once.
+    CodingAgent.AsyncHelpers.assert_eventually(fn ->
+      match?({:killed, %{phase: :killed}}, :sys.get_state(owner))
+    end)
+
     assert AbortSignal.aborted?(signal)
+  end
+
+  test "a parent redirect leaves running children and their joins alone; abort still cancels" do
+    signal = AbortSignal.new()
+    parent_signal = AbortSignal.new()
+    run_id = CodingAgent.RunGraph.new_run()
+    id = TaskStore.new_task(%{prompt: "redirect regression", run_id: run_id})
+
+    on_exit(fn ->
+      TaskRuntimeHelpers.stop(id)
+      TaskStore.delete_task(id)
+    end)
+
+    :ok = TaskRuntimeHelpers.register(id, nil, signal: signal, parent_signal: parent_signal)
+    :ok = TaskRuntimeHelpers.launch(id)
+    owner = TaskRuntime.whereis(id)
+    join = Task.async(fn -> JoinAwait.await([run_id], [id], :wait_all, parent_signal) end)
+
+    CodingAgent.AsyncHelpers.assert_eventually(fn ->
+      Enum.any?(
+        Registry.lookup(LemonAgent.AbortSignal.Registry, parent_signal),
+        fn {pid, _} -> pid == join.pid end
+      )
+    end)
+
+    AbortSignal.request_redirect(parent_signal)
+    assert {:running, %{phase: :running, worker: worker}} = :sys.get_state(owner)
+    assert is_pid(worker) and Process.alive?(worker)
+    refute AbortSignal.aborted?(signal)
+    assert {:ok, %{status: status}} = TaskStore.get_record(id)
+    assert status in [:queued, :running]
+    refute Task.yield(join, 100)
+
+    AbortSignal.abort(parent_signal)
+    assert {:error, :aborted} = Task.await(join)
+    assert {:cancelling, _data} = :sys.get_state(owner)
+    assert AbortSignal.aborted?(signal)
+    assert {:ok, %{status: :cancelled}} = TaskStore.get_record(id)
+    CodingAgent.RunGraph.finish(run_id, :test_finished)
   end
 
   test "join subscribes before checking an already aborted signal and unregisters" do

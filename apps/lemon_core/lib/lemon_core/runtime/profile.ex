@@ -2,95 +2,135 @@ defmodule LemonCore.Runtime.Profile do
   @moduledoc """
   Runtime profiles for Lemon.
 
-  A profile is a named set of OTP applications that should be started together.
-  Profiles replace the ad-hoc app lists that were hard-coded in `bin/lemon`.
+  A profile is the named, ordered set of OTP applications one Lemon runtime
+  starts. The profiles are compiled from `priv/runtime_profiles.exs`, the same
+  file the umbrella's `mix.exs` builds the `lemon_runtime_min` and
+  `lemon_runtime_full` releases from, so the source launcher
+  (`LemonCore.Runtime.Boot`), the releases, `/healthz` and `lemon doctor` start
+  or expect exactly the same applications.
 
   ## Available profiles
 
-  | Profile | Apps | Use case |
+  | Profile | Release | Apps |
   |---|---|---|
-  | `:runtime_min` | gateway, router, channels, control_plane, coding_agent | CI, headless, embedded |
-  | `:runtime_full` | all of the above + automation, skills, web | Local development |
+  | `:runtime_min` | `lemon_runtime_min` | the headless runtime: everything except the web UI |
+  | `:runtime_full` | `lemon_runtime_full` | `:runtime_min` plus `:lemon_web` |
+
+  Each application has a start type: `:permanent` applications are started
+  permanently (the runtime stops when one exits), `:load` applications are
+  only loaded.
 
   ## Usage
 
-      profile = LemonCore.Runtime.Profile.get(:runtime_full)
-      profile.apps
-      # => [:lemon_gateway, :lemon_router, ...]
-
       LemonCore.Runtime.Profile.app_list(:runtime_min)
-      # => [:lemon_gateway, :lemon_router, :lemon_channels, :lemon_control_plane]
+      # => [:exqlite, :sentry, :finch, :lemon_browser, ...]
+
+      LemonCore.Runtime.Profile.current()
+      # => {:ok, :runtime_full} | :none | {:error, :unknown_profile}
   """
 
-  @enforce_keys [:name, :apps, :description]
-  defstruct [:name, :apps, :description]
+  @source Path.expand("../../../priv/runtime_profiles.exs", __DIR__)
+  @external_resource @source
 
+  @enforce_keys [:name, :apps, :applications, :description]
+  defstruct [:name, :apps, :applications, :description]
+
+  @type start_type :: :permanent | :load
   @type t :: %__MODULE__{
           name: atom(),
           apps: [atom()],
+          applications: [{atom(), start_type()}],
           description: String.t()
         }
 
-  @profiles_data %{
-    runtime_min: {
-      "Minimal runtime: gateway, router, channels, control plane, and coding agent.",
-      [
-        :lemon_cli,
-        :coding_agent,
-        :lemon_gateway,
-        :lemon_router,
-        :lemon_channels,
-        :lemon_control_plane
-      ]
-    },
-    runtime_full: {
-      "Full runtime: all core apps including automation, skills, and web UI.",
-      [
-        :lemon_cli,
-        :coding_agent,
-        :lemon_gateway,
-        :lemon_router,
-        :lemon_channels,
-        :lemon_control_plane,
-        :lemon_automation,
-        :lemon_skills,
-        :lemon_web
-      ]
-    }
-  }
+  {profiles, _binding} = Code.eval_file(@source)
+  @profiles profiles
 
   @doc """
   Returns the profile struct for the given name.
 
   Raises `ArgumentError` for an unknown profile name.
-
-  ## Examples
-
-      iex> LemonCore.Runtime.Profile.get(:runtime_full)
-      %LemonCore.Runtime.Profile{name: :runtime_full, ...}
   """
   @spec get(atom()) :: t()
   def get(name) when is_atom(name) do
-    case Map.get(@profiles_data, name) do
-      nil ->
-        raise ArgumentError, "Unknown runtime profile: #{inspect(name)}"
+    case Keyword.fetch(@profiles, name) do
+      {:ok, spec} ->
+        applications = Keyword.fetch!(spec, :applications)
 
-      {description, apps} ->
-        %__MODULE__{name: name, description: description, apps: apps}
+        %__MODULE__{
+          name: name,
+          description: Keyword.fetch!(spec, :description),
+          applications: applications,
+          apps: Keyword.keys(applications)
+        }
+
+      :error ->
+        raise ArgumentError, "Unknown runtime profile: #{inspect(name)}"
     end
   end
 
   @doc """
-  Returns the list of OTP application names for the given profile.
+  Returns the list of OTP application names for the given profile, in start
+  order, including the `:load`-only ones.
   """
   @spec app_list(atom()) :: [atom()]
   def app_list(name), do: get(name).apps
 
   @doc """
+  Returns the applications of `name` that a healthy runtime has running: every
+  `:permanent` application of the profile.
+  """
+  @spec running_apps(atom()) :: [atom()]
+  def running_apps(name) do
+    for {app, :permanent} <- get(name).applications, do: app
+  end
+
+  @doc """
   Returns all available profile names.
   """
   @spec names() :: [atom()]
-  def names, do: Map.keys(@profiles_data)
+  def names, do: Keyword.keys(@profiles)
+
+  @doc """
+  Returns the release name that ships `name` (for example `"lemon_runtime_min"`).
+  """
+  @spec release_name(atom()) :: String.t()
+  def release_name(name), do: "lemon_#{get(name).name}"
+
+  @doc """
+  Returns the profile this node runs.
+
+  In order: the profile `LemonCore.Runtime.Boot` started, the profile of the
+  running release (`RELEASE_NAME`), then `LEMON_RUNTIME_PROFILE`. Returns
+  `:none` when the node is not a Lemon runtime (for example a test VM or a
+  one-shot command) and `{:error, :unknown_profile}` when the configured value
+  names no profile.
+  """
+  @spec current() :: {:ok, atom()} | :none | {:error, :unknown_profile}
+  def current do
+    release = System.get_env("RELEASE_NAME")
+
+    cond do
+      booted = Application.get_env(:lemon_core, :runtime_profile) ->
+        parse(to_string(booted))
+
+      is_binary(release) and String.starts_with?(release, "lemon_runtime_") ->
+        parse(String.replace_prefix(release, "lemon_", ""))
+
+      env = System.get_env("LEMON_RUNTIME_PROFILE") ->
+        parse(env)
+
+      true ->
+        :none
+    end
+  end
+
+  defp parse(value) do
+    case Enum.find(names(), &(Atom.to_string(&1) == value)) do
+      nil -> {:error, :unknown_profile}
+      name -> {:ok, name}
+    end
+  end
 
   @doc """
   Returns the default profile name for the current Mix environment.

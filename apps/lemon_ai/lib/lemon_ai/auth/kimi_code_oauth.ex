@@ -257,10 +257,8 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
   end
 
   defp hostname do
-    case :inet.gethostname() do
-      {:ok, name} -> to_string(name)
-      _ -> "unknown"
-    end
+    {:ok, name} = :inet.gethostname()
+    to_string(name)
   end
 
   defp device_model do
@@ -285,8 +283,7 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
   defp os_version do
     case :os.version() do
       {major, minor, patch} -> "#{major}.#{minor}.#{patch}"
-      other when is_list(other) -> to_string(other)
-      _ -> "unknown"
+      other -> to_string(other)
     end
   end
 

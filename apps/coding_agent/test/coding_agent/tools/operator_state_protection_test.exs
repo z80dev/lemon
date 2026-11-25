@@ -145,12 +145,12 @@ defmodule CodingAgent.Tools.OperatorStateProtectionTest do
       refute File.exists?(target)
     end
 
-    test "archive writes refuse kanban controller repos", ctx do
-      archive = Path.join([ctx.state, "kanban", "repos", "board.zip"])
+    test "write refuses kanban controller repos", ctx do
+      target = Path.join([ctx.state, "kanban", "repos", "board", "HEAD"])
 
-      assert {:error, message} = write(ctx.workspace, archive <> ":HEAD", "evil")
+      assert {:error, message} = write(ctx.workspace, target, "evil")
       assert message =~ "operator state"
-      refute File.exists?(archive)
+      refute File.exists?(target)
     end
 
     test "ACP client writes are refused before the client is asked", ctx do
@@ -501,7 +501,7 @@ defmodule CodingAgent.Tools.OperatorStateProtectionTest do
       File.ln_s!(config, Path.join(out, "soft.png"))
 
       for name <- ["hard.png", "soft.png"] do
-        assert :ok = MediaCommon.write_artifact(Path.join(out, name), "png")
+        assert :ok = LemonMedia.Artifact.write(Path.join(out, name), "png")
         assert File.read!(Path.join(out, name)) == "png"
       end
 

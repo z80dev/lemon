@@ -33,10 +33,16 @@ defmodule LemonRouter.Application do
         LemonRouter.RoutingFeedbackStore,
         # Owners of session lifecycle operations and their fence reconcile checks.
         LemonCore.TaskSupervisor.child_spec(name: LemonRouter.LifecycleTaskSupervisor),
+        # Admission work kept off the orchestrator mailbox: native follow-up
+        # issuer callbacks and durable receipt compaction.
+        LemonCore.TaskSupervisor.child_spec(name: LemonRouter.AdmissionTaskSupervisor),
         LemonCore.Supervision.subtree(LemonRouter.ConversationSupervisor, [
           {Registry, keys: :unique, name: LemonRouter.RunRegistry},
           {Registry, keys: :unique, name: LemonRouter.SessionRegistry},
-          {Registry, keys: :unique, name: LemonRouter.ConversationRegistry},
+          {Registry,
+           keys: :unique,
+           name: LemonRouter.ConversationRegistry,
+           meta: [admission_epoch: :crypto.strong_rand_bytes(16)]},
           {DynamicSupervisor,
            strategy: :one_for_one,
            name: LemonRouter.RunSupervisor,

@@ -263,6 +263,10 @@ defmodule CodingAgent.Tools.Lsp.Client do
           {:error, :session_lost, state} ->
             {:stop, :normal, {:error, :session_lost}, state}
 
+          # The session may still hold this client's lease: stopping releases it.
+          {:error, {:session_crashed, _class} = reason, state} ->
+            {:stop, :normal, {:error, reason}, state}
+
           {:error, reason, state} ->
             {:reply, {:error, reason}, state}
         end
@@ -416,6 +420,9 @@ defmodule CodingAgent.Tools.Lsp.Client do
 
       {:error, :unknown_lsp_session} ->
         {:error, :session_lost, state}
+
+      {:error, {:session_crashed, _class} = reason} ->
+        {:error, reason, state}
 
       {:error, reason} when is_atom(reason) ->
         {:error, {:file, reason, path}, state}

@@ -56,6 +56,10 @@ defmodule LemonControlPlane.Methods.SkillsSupport do
     end
   end
 
+  @doc "Error for an unusable `skills.json` state file (the doctor names it)."
+  def state_unavailable,
+    do: Errors.unavailable("Skill state is unreadable; run `lemon doctor`")
+
   @doc "Projects one registry entry plus its activation status."
   def project(entry, view) do
     manifest = entry.manifest || %{}
@@ -137,40 +141,36 @@ defmodule LemonControlPlane.Methods.SkillsList do
 
     with {:ok, cwd} <- SkillsSupport.cwd(params) do
       SkillsSupport.with_registry(fn ->
-        entries = LemonSkills.Registry.list(cwd: cwd)
-        disabled = disabled_keys(cwd)
-
-        skills =
-          entries
-          |> Enum.sort_by(& &1.key)
-          |> Enum.take(SkillsSupport.max_skills())
-          |> Enum.map(fn entry ->
-            view = LemonSkills.SkillView.from_entry(entry, cwd: cwd, disabled_keys: disabled)
-            SkillsSupport.project(entry, view)
-          end)
-
-        {:ok,
-         %{
-           "skills" => skills,
-           "summary" => %{
-             "count" => length(entries),
-             "returned" => length(skills),
-             "truncated" => length(entries) > length(skills),
-             "enabled" => Enum.count(skills, & &1["enabled"]),
-             "projectScoped" => is_binary(cwd)
-           }
-         }}
+        case LemonSkills.Config.disabled_keys(cwd) do
+          {:ok, disabled} -> {:ok, list(cwd, disabled)}
+          {:error, _} -> {:error, SkillsSupport.state_unavailable()}
+        end
       end)
     end
   end
 
-  defp disabled_keys(cwd) do
-    cwd
-    |> LemonSkills.Config.load_config()
-    |> Map.get("disabled", [])
-    |> List.wrap()
-    |> Enum.filter(&is_binary/1)
-    |> MapSet.new()
+  defp list(cwd, disabled) do
+    entries = LemonSkills.Registry.list(cwd: cwd)
+
+    skills =
+      entries
+      |> Enum.sort_by(& &1.key)
+      |> Enum.take(SkillsSupport.max_skills())
+      |> Enum.map(fn entry ->
+        view = LemonSkills.SkillView.from_entry(entry, cwd: cwd, disabled_keys: disabled)
+        SkillsSupport.project(entry, view)
+      end)
+
+    %{
+      "skills" => skills,
+      "summary" => %{
+        "count" => length(entries),
+        "returned" => length(skills),
+        "truncated" => length(entries) > length(skills),
+        "enabled" => Enum.count(skills, & &1["enabled"]),
+        "projectScoped" => is_binary(cwd)
+      }
+    }
   end
 end
 
@@ -178,8 +178,9 @@ defmodule LemonControlPlane.Methods.SkillsToggle do
   @moduledoc false
 
   # Shared implementation of `skills.enable` / `skills.disable`: writes the
-  # owning scope's skills config through `LemonSkills.Config` (global config
-  # for global skills, the project's config for project skills).
+  # owning scope's skills state through `LemonSkills.Config` (global state
+  # for global skills, the project's state for project skills). A project
+  # enable never lifts a global disable or an archive.
 
   alias LemonControlPlane.Methods.SkillsSupport
   alias LemonControlPlane.Protocol.Errors
@@ -220,6 +221,15 @@ defmodule LemonControlPlane.Methods.SkillsToggle do
              "cleanup" => %{"includesPath" => false, "includesSource" => false}
            }
          }}
+
+      {:error, :disabled_globally} ->
+        {:error, Errors.conflict("Skill is disabled globally; enable it globally first")}
+
+      {:error, :archived} ->
+        {:error, Errors.conflict("Skill is archived; restore it before enabling")}
+
+      {:error, {:skills_state, _scope, _reason}} ->
+        {:error, SkillsSupport.state_unavailable()}
 
       {:error, _reason} ->
         {:error, Errors.internal_error("Unable to update skill configuration")}

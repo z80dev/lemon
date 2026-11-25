@@ -9,7 +9,6 @@ defmodule LemonMCP.Client do
   - Request/response correlation and deadlines through `LemonCore.Rpc.Client`
   - Tool listing and invocation
   - Resource listing/reading and prompt listing/getting
-  - Optional server-to-client sampling callbacks
   - Async message handling
 
   ## Usage
@@ -64,7 +63,6 @@ defmodule LemonMCP.Client do
           client_name: String.t(),
           client_version: String.t(),
           capabilities: map(),
-          sampling_handler: (map() -> {:ok, map()} | {:error, term()}) | nil,
           timeout_ms: timeout()
         }
 
@@ -96,10 +94,8 @@ defmodule LemonMCP.Client do
     `&Port.open/2`. Invalid callbacks and host refusals fail startup without fallback.
   - `:client_name` - Client name for handshake (default: "lemon-mcp")
   - `:client_version` - Client version for handshake (default: "0.1.0")
-  - `:capabilities` - Client capabilities map (default: %{})
-  - `:sampling_handler` - Optional callback for `sampling/createMessage` server requests
-  - `:sampling_policy` - Optional `LemonMCP.Sampling` policy opts used when no
-    raw `:sampling_handler` is provided
+  - `:capabilities` - Client capabilities map (default: %{}). Lemon answers no
+    server-to-client requests, so a `sampling` entry is never advertised.
   - `:timeout_ms` - Request timeout in milliseconds (default: 30000)
   - `:name` - GenServer name registration
 
@@ -240,7 +236,6 @@ defmodule LemonMCP.Client do
       client_version: Keyword.get(opts, :client_version, "0.1.0"),
       capabilities: Keyword.get(opts, :capabilities, %{}),
       notification_handler: Protocol.notification_handler(opts),
-      sampling_handler: sampling_handler(opts),
       timeout_ms: Keyword.get(opts, :timeout_ms, 30_000)
     }
 
@@ -261,7 +256,7 @@ defmodule LemonMCP.Client do
       {:ok, transport} ->
         {:ok, task_supervisor} = Task.Supervisor.start_link()
         owner = self()
-        handlers = Map.take(config, [:sampling_handler, :notification_handler])
+        handlers = Map.take(config, [:notification_handler])
 
         {:ok, rpc} =
           RpcClient.start_link(
@@ -290,7 +285,7 @@ defmodule LemonMCP.Client do
             {:ok, state}
 
           {:error, reason} ->
-            do_close(state)
+            _ = do_close(state)
             {:stop, reason}
         end
 
@@ -422,7 +417,7 @@ defmodule LemonMCP.Client do
       Protocol.initialize_request(
         client_name: state.config.client_name,
         client_version: state.config.client_version,
-        capabilities: client_capabilities(state.config)
+        capabilities: Protocol.client_capabilities(state.config.capabilities)
       )
 
     case RpcClient.send_message(state.rpc, request) do
@@ -535,27 +530,6 @@ defmodule LemonMCP.Client do
   end
 
   defp process_message(_message, state), do: {:noreply, state}
-
-  defp client_capabilities(config) do
-    if is_function(config.sampling_handler, 1) do
-      Map.put(config.capabilities, "sampling", %{})
-    else
-      config.capabilities
-    end
-  end
-
-  defp sampling_handler(opts) do
-    case Keyword.fetch(opts, :sampling_handler) do
-      {:ok, handler} ->
-        handler
-
-      :error ->
-        case Keyword.fetch(opts, :sampling_policy) do
-          {:ok, policy} -> LemonMCP.Sampling.handler(policy)
-          :error -> nil
-        end
-    end
-  end
 
   defp reply_pending(id, response, state) do
     RpcClient.complete(state.rpc, id, response)

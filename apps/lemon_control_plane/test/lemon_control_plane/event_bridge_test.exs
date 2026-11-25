@@ -1129,10 +1129,11 @@ defmodule LemonControlPlane.EventBridgeTest do
               ok: true,
               answer: "done",
               usage: %{
-                input_tokens: 1_000,
-                output_tokens: 50,
-                cache_read_input_tokens: 4_000,
-                cache_creation_input_tokens: 0
+                input: 1_000,
+                output: 50,
+                cache_read: 4_000,
+                cache_write: 0,
+                context_tokens: 5_000
               }
             },
             duration_ms: 12
@@ -1166,9 +1167,9 @@ defmodule LemonControlPlane.EventBridgeTest do
             completed: %{
               ok: true,
               usage: %{
-                input_tokens: 1_000,
-                output_tokens: 50,
-                cache_read_input_tokens: 4_000,
+                input: 1_000,
+                output: 50,
+                cache_read: 4_000,
                 cost: 0.25
               }
             }

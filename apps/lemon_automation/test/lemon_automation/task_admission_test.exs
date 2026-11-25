@@ -1,15 +1,9 @@
 defmodule LemonAutomation.TaskAdmissionTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Workspace.{GoalStore, KanbanStore}
+  alias LemonAutomation.{GoalStore, KanbanStore}
 
-  alias LemonAutomation.{
-    GoalContinuationManager,
-    GoalLoopManager,
-    IntervalRunner,
-    KanbanDispatcher,
-    KanbanGitWorkflow
-  }
+  alias LemonAutomation.{GoalLoopManager, IntervalRunner, KanbanDispatcher, KanbanGitWorkflow}
 
   @supervisor LemonAutomation.TaskSupervisor
 
@@ -41,7 +35,7 @@ defmodule LemonAutomation.TaskAdmissionTest do
 
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Do not start rejected work",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     on_exit(fn -> GoalStore.clear(session_key) end)
@@ -55,7 +49,7 @@ defmodule LemonAutomation.TaskAdmissionTest do
     on_exit(fn -> File.rm_rf!(workspace) end)
 
     {:ok, authority} =
-      LemonAgent.Workspace.KanbanAuthority.new(
+      LemonAutomation.KanbanAuthority.new(
         %{agent_id: "default", session_key: "agent:default:main"},
         nil,
         workspace
@@ -89,14 +83,6 @@ defmodule LemonAutomation.TaskAdmissionTest do
       }
 
       assert {:noreply, ^interval_state} = IntervalRunner.handle_cast(:tick, interval_state)
-      continuation_state = %{calls: %{}}
-
-      assert {:reply, {:error, ^reason}, ^continuation_state} =
-               GoalContinuationManager.handle_call(
-                 {:continue_once, session_key, []},
-                 {self(), make_ref()},
-                 continuation_state
-               )
 
       assert {:error, :goal_loop_unavailable} =
                GoalLoopManager.start_loop(session_key, name: manager, auto: true)

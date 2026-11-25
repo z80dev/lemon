@@ -5,6 +5,14 @@ defmodule LemonLsp.ServerManager do
   Each pooled server/root/configuration owns an isolated supervised process and
   shared RPC client. Session processes own document state, request deadlines and
   native process-group cleanup; this facade never waits for protocol responses.
+
+  At most eight sessions are live at once (`max_active_count` in `status/0`).
+  Acquiring a new pool beyond that asks
+  the least-recently-used session with no in-flight request to stop (its owners
+  receive `{LemonLsp.ServerManager, :server_stopped, session_id}` and reconnect
+  on next use); when every live session is busy, or no slot frees within the
+  admission deadline (4 s, inside `start_session/2`'s 5 s call), the acquire
+  fails with `{:error, :lsp_session_limit}`.
   """
 
   use GenServer
@@ -22,9 +30,34 @@ defmodule LemonLsp.ServerManager do
 
   @name __MODULE__
 
+  # Live language servers per manager. One server process per workspace root
+  # costs from 55 MiB peak RSS (clangd after opening a one-file C project) to
+  # ~350 MiB for BEAM-hosted servers: a BEAM with every module of this umbrella
+  # and its deps loaded peaks at 353 MiB RSS, a floor for ElixirLS, which also
+  # compiles the project in its VM (measured 2026-11-24 on darwin/arm64, see
+  # docs/tools/lsp.md). Eight covers one root per language of a polyglot
+  # session; outermost-root detection keeps a monorepo at one root.
+  @max_live_sessions 8
+  # A session answers eviction from its own loop; one that cannot within this
+  # window (suspended or stuck) is skipped for the next candidate. The probe
+  # carries its expiry, so a late-read probe never evicts.
+  @eviction_timeout_ms 1_000
+  # The manager waits this long past a probe's expiry for an answer sent before it.
+  @eviction_reply_margin_ms 100
+  # Admission never outlives `start_session/2`'s 5 s call: a request still
+  # unplaced at its deadline fails instead of starting or joining a session for
+  # a caller that may have given up (an orphan lease).
+  @admission_timeout_ms 4_000
+
   @type server :: GenServer.server()
-  @type request_result :: {:ok, map()} | {:error, atom()}
-  @type document_result :: {:ok, map()} | {:error, atom()}
+  @typedoc """
+  Session call failure. `{:session_crashed, class}` reports a session that
+  exited abnormally or did not answer in time; the call's outcome is unknown and
+  callers must not retry it automatically.
+  """
+  @type error_reason :: atom() | {:session_crashed, :timeout | :abnormal_exit}
+  @type request_result :: {:ok, map()} | {:error, error_reason()}
+  @type document_result :: {:ok, map()} | {:error, error_reason()}
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, @name)
@@ -69,7 +102,7 @@ defmodule LemonLsp.ServerManager do
     GenServer.call(@name, {:start_session, server_id, opts}, 5_000)
   end
 
-  @spec stop_session(String.t()) :: {:ok, map()} | {:error, :unknown_lsp_session}
+  @spec stop_session(String.t()) :: {:ok, map()} | {:error, error_reason()}
   def stop_session(session_id) when is_binary(session_id) do
     call_session(session_id, {:stop_session, session_id}, 5_000)
   end
@@ -225,7 +258,7 @@ defmodule LemonLsp.ServerManager do
   `{:lsp_diagnostics, session_id, uri}` whenever a batch is published.
   """
   @spec document_diagnostics(String.t(), String.t()) ::
-          {:ok, %{seq: non_neg_integer(), entry: map() | nil}} | {:error, atom()}
+          {:ok, %{seq: non_neg_integer(), entry: map() | nil}} | {:error, error_reason()}
   def document_diagnostics(session_id, uri) when is_binary(session_id) and is_binary(uri) do
     call_session(session_id, {:document_diagnostics, session_id, uri}, 5_000)
   end
@@ -256,7 +289,8 @@ defmodule LemonLsp.ServerManager do
     call_session(session_id, {:sync_file, session_id, path, language_id}, 5_000)
   end
 
-  @spec notify_session(String.t(), String.t(), map() | list() | nil) :: :ok | {:error, atom()}
+  @spec notify_session(String.t(), String.t(), map() | list() | nil) ::
+          :ok | {:error, error_reason()}
   def notify_session(session_id, method, params \\ %{})
       when is_binary(session_id) and is_binary(method) do
     call_session(session_id, {:notify_session, session_id, method, params}, 5_000)
@@ -294,8 +328,12 @@ defmodule LemonLsp.ServerManager do
     {:ok,
      %{
        sessions: %{},
+       last_used: %{},
        refs: %{},
        recent: [],
+       evictions: %{},
+       evicting: MapSet.new(),
+       parked: %{},
        started_at: DateTime.to_iso8601(DateTime.utc_now()),
        refresh_count: 1
      }}
@@ -312,16 +350,24 @@ defmodule LemonLsp.ServerManager do
   def handle_call({:start_session, server_id, opts}, {caller, _} = from, state) do
     root = Keyword.get(opts, :config_root, opts[:cwd])
 
-    result =
-      with {:ok, cwd} <- validate_cwd(Keyword.get(opts, :cwd)),
-           {:ok, command} <- LemonLsp.Servers.resolve_command(server_id, root) do
-        key = {command.server.id, cwd, command.server.config_hash}
-        acquire_session(server_id, opts, key, caller, from, state)
-      end
+    with {:ok, cwd} <- validate_cwd(Keyword.get(opts, :cwd)),
+         {:ok, command} <- LemonLsp.Servers.resolve_command(server_id, root) do
+      key = {command.server.id, cwd, command.server.config_hash}
+      opts = Keyword.put(opts, :owner, opts[:owner] || caller)
 
-    case result do
+      request = %{
+        id: make_ref(),
+        server_id: server_id,
+        opts: opts,
+        key: key,
+        from: from,
+        tried: MapSet.new(),
+        deadline: System.monotonic_time(:millisecond) + @admission_timeout_ms
+      }
+
+      {:noreply, admit(request, state)}
+    else
       {:error, reason} -> {:reply, {:error, reason}, state}
-      reply -> reply
     end
   end
 
@@ -339,8 +385,13 @@ defmodule LemonLsp.ServerManager do
   end
 
   @impl true
-  def handle_info({:session_status, pid, status}, state) do
-    {:noreply, %{state | sessions: Map.put(state.sessions, pid, status)}}
+  def handle_info({:session_status, pid, status, last_used}, state) do
+    {:noreply,
+     %{
+       state
+       | sessions: Map.put(state.sessions, pid, status),
+         last_used: Map.put(state.last_used, pid, last_used)
+     }}
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
@@ -349,7 +400,77 @@ defmodule LemonLsp.ServerManager do
     recent =
       if status, do: Enum.take(status.recent_sessions ++ state.recent, 5), else: state.recent
 
-    {:noreply, %{state | sessions: sessions, refs: Map.delete(state.refs, ref), recent: recent}}
+    {parked, waiting} = Map.pop(state.parked, pid, [])
+
+    {targeted, evictions} =
+      Enum.split_with(state.evictions, fn {_ref, request} -> request.pid == pid end)
+
+    state = %{
+      state
+      | sessions: sessions,
+        last_used: Map.delete(state.last_used, pid),
+        refs: Map.delete(state.refs, ref),
+        recent: recent,
+        evicting: MapSet.delete(state.evicting, pid),
+        evictions: Map.new(evictions),
+        parked: waiting
+    }
+
+    # The slot this session held is free: admit whoever waited on it.
+    requests =
+      Enum.reverse(parked) ++
+        Enum.map(targeted, fn {_ref, request} ->
+          _ = Process.cancel_timer(request.timer)
+          request
+        end)
+
+    {:noreply, Enum.reduce(requests, state, &admit/2)}
+  end
+
+  def handle_info({:eviction_timeout, ref}, state) do
+    case Map.pop(state.evictions, ref) do
+      {nil, _evictions} ->
+        {:noreply, state}
+
+      {request, evictions} ->
+        request = %{request | tried: MapSet.put(request.tried, request.pid)}
+        {:noreply, admit(request, %{state | evictions: evictions})}
+    end
+  end
+
+  # A request parked behind an evicting session fails at its deadline if that
+  # session has not exited by then.
+  def handle_info({:admission_timeout, pid, id}, state) do
+    {timed_out, waiting} =
+      Enum.split_with(Map.get(state.parked, pid, []), &(&1.id == id))
+
+    Enum.each(timed_out, &GenServer.reply(&1.from, {:error, :lsp_session_limit}))
+
+    parked =
+      if waiting == [], do: Map.delete(state.parked, pid), else: %{state.parked | pid => waiting}
+
+    {:noreply, %{state | parked: parked}}
+  end
+
+  def handle_info({ref, reply}, state) when is_reference(ref) do
+    case Map.pop(state.evictions, ref) do
+      {nil, _evictions} ->
+        {:noreply, state}
+
+      {request, evictions} ->
+        _ = Process.cancel_timer(request.timer)
+        state = %{state | evictions: evictions}
+
+        case reply do
+          :ok ->
+            {:noreply,
+             admit(request, %{state | evicting: MapSet.put(state.evicting, request.pid)})}
+
+          _busy ->
+            request = %{request | tried: MapSet.put(request.tried, request.pid)}
+            {:noreply, admit(request, state)}
+        end
+    end
   end
 
   def handle_info(_message, state), do: {:noreply, state}
@@ -363,40 +484,99 @@ defmodule LemonLsp.ServerManager do
     :ok
   end
 
-  defp acquire_session(server_id, opts, key, caller, from, state) do
-    case Registry.lookup(LemonLsp.SessionRegistry, {:pool, self(), key}) do
-      [{pid, _}] ->
-        forward(
-          pid,
-          {:start_session, server_id, Keyword.put(opts, :owner, opts[:owner] || caller)},
-          from
-        )
-
-        {:noreply, state}
-
-      [] ->
-        start_session_child(server_id, opts, key, caller, from, state)
+  # Joins the pooled session for the key, else starts one when a live slot is
+  # free, else asks the least-recently-used session without in-flight requests to
+  # stop. A request for a pool whose session is being evicted waits for its exit.
+  # Past its deadline a request is refused rather than placed.
+  defp admit(request, state) do
+    if System.monotonic_time(:millisecond) >= request.deadline do
+      GenServer.reply(request.from, {:error, :lsp_session_limit})
+      state
+    else
+      place(request, state)
     end
   end
 
-  defp start_session_child(server_id, opts, key, caller, from, state) do
-    id = opts[:session_id] || "#{server_id}:#{System.unique_integer([:positive])}"
+  defp place(request, state) do
+    case Registry.lookup(LemonLsp.SessionRegistry, {:pool, self(), request.key}) do
+      [{pid, _}] ->
+        if MapSet.member?(state.evicting, pid) do
+          Process.send_after(self(), {:admission_timeout, pid, request.id}, request.deadline,
+            abs: true
+          )
+
+          update_in(state.parked[pid], &[request | &1 || []])
+        else
+          forward(pid, {:start_session, request.server_id, request.opts}, request.from)
+          state
+        end
+
+      [] ->
+        if live_count(state) < @max_live_sessions,
+          do: start_session_child(request, state),
+          else: evict_for(request, state)
+    end
+  end
+
+  defp live_count(state), do: map_size(state.refs) - MapSet.size(state.evicting)
+
+  defp evict_for(request, state) do
+    targeted = MapSet.new(state.evictions, fn {_ref, eviction} -> eviction.pid end)
+
+    candidate =
+      state.sessions
+      |> Enum.reject(fn {pid, status} ->
+        MapSet.member?(state.evicting, pid) or MapSet.member?(targeted, pid) or
+          MapSet.member?(request.tried, pid) or status.pending_request_count > 0
+      end)
+      |> Enum.min_by(fn {pid, _status} -> Map.get(state.last_used, pid, 0) end, fn -> nil end)
+
+    case candidate do
+      nil ->
+        GenServer.reply(request.from, {:error, :lsp_session_limit})
+        state
+
+      {pid, _status} ->
+        # The session decides atomically: it stops only while nothing is in
+        # flight and before `expires_at`, and answers an error otherwise.
+        ref = make_ref()
+
+        expires_at =
+          min(System.monotonic_time(:millisecond) + @eviction_timeout_ms, request.deadline)
+
+        forward(pid, {:evict_if_idle, expires_at}, {self(), ref})
+
+        timer =
+          Process.send_after(
+            self(),
+            {:eviction_timeout, ref},
+            expires_at + @eviction_reply_margin_ms,
+            abs: true
+          )
+
+        eviction = Map.merge(request, %{pid: pid, timer: timer})
+        %{state | evictions: Map.put(state.evictions, ref, eviction)}
+    end
+  end
+
+  defp start_session_child(request, state) do
+    id = request.opts[:session_id] || "#{request.server_id}:#{System.unique_integer([:positive])}"
 
     case Registry.lookup(LemonLsp.SessionRegistry, {:id, self(), id}) do
       [] ->
         opts =
-          Keyword.merge(opts,
+          Keyword.merge(request.opts,
             manager: self(),
-            pool_key: key,
+            pool_key: request.key,
             session_id: id,
-            server_id: server_id,
-            owner: opts[:owner] || caller
+            server_id: request.server_id
           )
 
-        launch_session_child(opts, from, state)
+        launch_session_child(opts, request.from, state)
 
       _ ->
-        {:reply, {:error, :duplicate_lsp_session}, state}
+        GenServer.reply(request.from, {:error, :duplicate_lsp_session})
+        state
     end
   end
 
@@ -405,10 +585,11 @@ defmodule LemonLsp.ServerManager do
       {:ok, pid} ->
         ref = Process.monitor(pid)
         forward(pid, :acquired_info, from)
-        {:noreply, %{state | refs: Map.put(state.refs, ref, pid)}}
+        %{state | refs: Map.put(state.refs, ref, pid)}
 
       {:error, _} ->
-        {:reply, {:error, :session_start_failed}, state}
+        GenServer.reply(from, {:error, :session_start_failed})
+        state
     end
   end
 
@@ -430,13 +611,17 @@ defmodule LemonLsp.ServerManager do
     end
   end
 
+  # Every exit becomes an error reply: a session failure must not take its
+  # callers down. Crash reasons can embed protocol payloads, so only their
+  # class is reported.
   defp call_session(session_id, message, timeout \\ 5_000) do
     GenServer.call(session_target(session_id), message, timeout)
   catch
-    :exit, {:normal, _call} -> {:error, :unknown_lsp_session}
-    :exit, {:noproc, _call} -> {:error, :unknown_lsp_session}
-    :exit, {:shutdown, _call} -> {:error, :session_exited}
-    :exit, {:killed, _call} -> {:error, :session_exited}
+    :exit, {reason, _call} when reason in [:normal, :noproc] -> {:error, :unknown_lsp_session}
+    :exit, {reason, _call} when reason in [:shutdown, :killed] -> {:error, :session_exited}
+    :exit, {{:shutdown, _}, _call} -> {:error, :session_exited}
+    :exit, {:timeout, _call} -> {:error, {:session_crashed, :timeout}}
+    :exit, _reason -> {:error, {:session_crashed, :abnormal_exit}}
   end
 
   defp forward(pid, message, from), do: send(pid, {:forward, message, from})
@@ -460,11 +645,12 @@ defmodule LemonLsp.ServerManager do
           :launcher_child_cleanup,
           :server_request_responses,
           :owner_scoped_sessions,
-          :redacted_health_status
+          :redacted_health_status,
+          :workspace_root_detection,
+          :live_session_cap
         ],
         planned_capabilities: [
           :json_rpc_diagnostics,
-          :workspace_root_detection,
           :restart_policy,
           :semantic_diagnostic_streaming
         ]
@@ -479,6 +665,7 @@ defmodule LemonLsp.ServerManager do
       refresh_count: state.refresh_count,
       active_servers: Enum.sort_by(active, & &1.session_hash),
       active_count: length(active),
+      max_active_count: @max_live_sessions,
       pending_request_count: Enum.sum(Enum.map(active, & &1.pending_request_count)),
       recent_sessions: Enum.take(Enum.flat_map(statuses, & &1.recent_sessions) ++ state.recent, 5)
     })
@@ -500,6 +687,7 @@ defmodule LemonLsp.ServerManager do
       refreshed_at: nil,
       refresh_count: 0,
       registry: LemonLsp.Servers.diagnostics(),
+      max_active_count: @max_live_sessions,
       active_servers: [],
       active_count: 0,
       pending_request_count: 0,

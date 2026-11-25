@@ -284,7 +284,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
       send: fn -> state.api_mod.send_chat_action(state.token, chat_id, thread_id, "typing") end
     ]
 
-    case LemonChannels.Runtime.submit_inbound(inbound, typing: typing) do
+    opts = [typing: typing] ++ update_run_identity(state, inbound, chat_id, thread_id)
+
+    case LemonChannels.Runtime.submit_inbound(inbound, opts) do
       :ok ->
         :ok
 
@@ -294,6 +296,25 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
         )
 
         error
+    end
+  end
+
+  # A Telegram update id is stable across re-polls, so a replayed update maps
+  # to the same run and the router admits it at most once.
+  defp update_run_identity(state, inbound, chat_id, thread_id) do
+    case (inbound.meta || %{})[:update_id] do
+      update_id when is_integer(update_id) ->
+        digest =
+          {:telegram, state.account_id, chat_id, thread_id, update_id}
+          |> :erlang.term_to_binary()
+          |> then(&:crypto.hash(:sha256, &1))
+          |> Base.encode16(case: :lower)
+          |> binary_part(0, 32)
+
+        [run_id: "run_telegram_" <> digest, replay_identity: "telegram:" <> digest]
+
+      _ ->
+        []
     end
   end
 

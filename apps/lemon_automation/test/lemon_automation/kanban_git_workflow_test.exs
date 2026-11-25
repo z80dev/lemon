@@ -37,7 +37,7 @@ defmodule LemonAutomation.KanbanGitWorkflowTest do
   # board id (derived from the root) names its controller repository.
   defp board(root) do
     {:ok, authority} =
-      LemonAgent.Workspace.KanbanAuthority.new(
+      LemonAutomation.KanbanAuthority.new(
         %{agent_id: "default", session_key: "agent:default:main"},
         nil,
         root
@@ -806,7 +806,7 @@ defmodule LemonAutomation.KanbanGitWorkflowTest do
   end
 
   test "in-place execution needs an operator grant for exactly the workspace", context do
-    alias LemonAgent.Workspace.KanbanAuthority
+    alias LemonAutomation.KanbanAuthority
 
     plain = Path.join(System.tmp_dir!(), "plain-#{System.unique_integer([:positive])}")
     File.mkdir_p!(plain)
@@ -935,7 +935,7 @@ defmodule LemonAutomation.KanbanGitWorkflowTest do
 
   defp deny_text(fragment) do
     fn command ->
-      if LemonAgent.Workspace.KanbanAuthority.command_text(command) =~ fragment,
+      if LemonAutomation.KanbanAuthority.command_text(command) =~ fragment,
         do: {:error, :denied},
         else: :ok
     end

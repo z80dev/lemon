@@ -35,10 +35,12 @@ or passes through a `Job` adapter.
   5. config default model (`LemonCore.Config.cached().agent.default_model`,
      backed by `[defaults]`)
 
-`SubmissionBuilder` also stores the resolved `history_model` in submission
-metadata for routing-feedback history when that feature is enabled. Runtime
-modules do not read `Application.get_env(:lemon_router, :default_model)`;
-model defaults come from Lemon config or policy stores.
+With the opt-in `routing_feedback` feature enabled, an un-pinned run may use a
+routing-history model between 4 and 5, but only when the config default has
+been measured in that task context and did worse; `SubmissionBuilder` records
+it as `routing_feedback_model` in submission metadata. Runtime modules do not
+read `Application.get_env(:lemon_router, :default_model)`; model defaults come
+from Lemon config or policy stores.
 
 ### 3) Fixed execution provenance
 
@@ -99,10 +101,10 @@ is now the single owner of "what can be picked from right now":
   surface, with its own unit tests
   (`apps/lemon_agent/test/lemon_agent/model_runtime/model_catalog_test.exs`).
 
-It lives in `agent_core` rather than `ai` because `agent_core` is the
-narrowest app that both depends on `ai` directly and is itself a permitted
+It lives in `lemon_agent` rather than `lemon_ai` because `lemon_agent` is the
+narrowest app that both depends on `lemon_ai` directly and is itself a permitted
 dependency for apps (like `lemon_channels`) that are not allowed to depend on
-`ai` per `docs/architecture_boundaries.md`.
+`lemon_ai` per `docs/architecture_boundaries.md`.
 
 Migrated consumers: `LemonChannels.Adapters.Telegram.Transport.ModelPicker`
 and `.CallbackHandler` each carried a ~150-line pasted copy of catalog

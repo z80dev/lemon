@@ -4,7 +4,7 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
   """
 
   alias LemonChannels.Adapters.Discord.StatusRenderer
-  alias LemonChannels.GatewayConfig
+  alias LemonCore.GatewayConfig
   alias LemonChannels.{OutboundPayload, Outbox, PresentationState}
   alias LemonChannels.Outbox.Chunker
   alias LemonCore.{DeliveryIntent, DeliveryRoute}

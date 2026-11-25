@@ -1,50 +1,34 @@
 defmodule LemonCore.UsageRecords do
   @moduledoc """
-  Canonical usage pages over the usage and native run owners. Costs are recorded
-  response prices, never estimates. Missing historical attribution/time/price is
+  Canonical usage pages over the usage ledger's occurrences, the only source of
+  per-call usage (run records are not consulted). Costs are recorded response
+  prices, never estimates. Missing historical attribution/time/price is
   explicit; aggregate-only history makes the result incomplete even for a scoped
   query because it cannot be assigned to a run or session safely.
+
+  A page reads the occurrences and daily aggregates for the days the window
+  touches (plus untimed rows), rather than reading both tables whole.
   """
-  alias LemonCore.{UsageLedger, UsageStore}
+  alias LemonCore.UsageStore
+
+  @day_ms 86_400_000
 
   def query(params, opts \\ []) do
     store = Keyword.get(opts, :store, LemonCore.Store)
 
     with {:ok, filters, limit} <- filters(params),
          {:ok, after_key} <- decode_cursor(Map.get(params, "cursor"), filters),
-         {:ok, stored} <- UsageStore.fetch_occurrences(store),
-         {:ok, runs} <- UsageStore.fetch_runs(store),
-         {:ok, daily} <- UsageStore.fetch_daily_records(store) do
-      native = Map.new(stored)
-
-      records =
-        Enum.reduce(runs, native, fn {run_id, run}, acc ->
-          case field(run, :summary) do
-            summary when is_map(summary) ->
-              UsageLedger.entries(run_id, field(summary, :session_key), summary)
-              |> Enum.reduce(acc, fn entry, records ->
-                record = UsageLedger.occurrence_record(entry)
-                usage = summary |> field(:completed) |> field(:usage)
-
-                record =
-                  if is_list(field(usage, :occurrences)),
-                    do: record,
-                    else: Map.put(record, :incomplete, true)
-
-                Map.put_new(records, record.id, record)
-              end)
-
-            _ ->
-              acc
-          end
-        end)
-        |> Map.values()
-
+         # Whole days, so each touched day's coverage can be compared with its
+         # aggregate.
+         from = day_start(filters.from),
+         to = day_start(filters.to - 1) + @day_ms,
+         {:ok, stored} <- UsageStore.fetch_occurrences_between(store, from, to),
+         {:ok, daily} <- UsageStore.fetch_daily_records_between(store, from, to) do
+      records = Enum.map(stored, &elem(&1, 1))
       matching = records |> Enum.filter(&matches?(&1, filters)) |> Enum.sort_by(&key/1)
 
       incomplete =
-        Enum.any?(matching, &incomplete?/1) or historical_gap?(daily, records, filters) or
-          missing_history?(runs, filters)
+        Enum.any?(matching, &incomplete?/1) or historical_gap?(daily, records)
 
       page =
         matching
@@ -59,6 +43,8 @@ defmodule LemonCore.UsageRecords do
       {:ok, %{records: returned, next_cursor: cursor, incomplete: incomplete}}
     end
   end
+
+  defp day_start(ms), do: Integer.floor_div(ms, @day_ms) * @day_ms
 
   defp filters(params) when is_map(params) do
     from = params["fromMs"]
@@ -95,42 +81,22 @@ defmodule LemonCore.UsageRecords do
 
   defp key(record), do: {record.at_ms || -1, record.id}
 
-  defp missing_history?(runs, filters) do
-    Enum.any?(runs, fn {run_id, run} ->
-      summary = field(run, :summary)
-      completed = field(summary, :completed)
-      usage = field(completed, :usage)
-      at = field(summary, :completed_at_ms)
-      session = field(summary, :session_key)
-
-      is_map(completed) and field(usage, :occurrences) != [] and
-        UsageLedger.entries(run_id, session, summary) == [] and
-        (is_nil(at) or (at >= filters.from and at < filters.to)) and
-        (is_nil(filters.run) or run_id == filters.run) and
-        (is_nil(filters.session) or session == filters.session)
-    end)
-  end
-
-  defp historical_gap?(daily, records, filters) do
+  defp historical_gap?(daily, records) do
     coverage =
-      records |> Enum.filter(&is_integer(&1.at_ms)) |> Enum.group_by(&div(&1.at_ms, 86_400_000))
+      Enum.reduce(records, %{}, fn
+        %{at_ms: ms}, acc when is_integer(ms) -> Map.update(acc, day_start(ms), 1, &(&1 + 1))
+        _untimed, acc -> acc
+      end)
 
     Enum.any?(daily, fn {date, record} ->
-      case Date.from_iso8601(date) do
-        {:ok, date} ->
-          start = Date.diff(date, ~D[1970-01-01]) * 86_400_000
-
-          if start < filters.to and start + 86_400_000 > filters.from do
-            requests = field(record, :requests) || %{}
-            count = requests |> Map.values() |> Enum.filter(&is_integer/1) |> Enum.sum()
-            known_calls = length(Map.get(coverage, div(start, 86_400_000), []))
-            count > known_calls
-          else
-            false
-          end
-
-        _ ->
+      case LemonCore.Store.Backend.range_timestamp(:usage_records, date, record) do
+        nil ->
           true
+
+        start ->
+          requests = field(record, :requests) || %{}
+          count = requests |> Map.values() |> Enum.filter(&is_integer/1) |> Enum.sum()
+          count > Map.get(coverage, start, 0)
       end
     end)
   end

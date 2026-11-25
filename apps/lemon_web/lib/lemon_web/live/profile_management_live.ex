@@ -113,9 +113,6 @@ defmodule LemonWeb.ProfileManagementLive do
       {:ok, _profile} ->
         {:noreply, reject_preview(socket, "That profile ID already exists.")}
 
-      {:error, :not_found} ->
-        {:noreply, reject_preview(socket, "Profile service is unavailable.")}
-
       {:error, message} when is_binary(message) ->
         {:noreply, reject_preview(socket, message)}
 

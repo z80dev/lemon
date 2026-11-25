@@ -995,7 +995,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     resolved =
       :bedrock_converse_stream
       |> ProviderConfigResolver.resolve_for_provider(
-        stream_provider_input(provider_cfg, %{}, opts, :bedrock_converse_stream)
+        bedrock_stream_provider_input(provider_cfg, opts)
       )
 
     headers = Map.get(resolved, :headers, %{})
@@ -1005,42 +1005,31 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       present_value?(resolve_secret_env("AWS_PROFILE"))
   end
 
-  defp stream_provider_input(provider_cfg, base_opts, opts, provider_id) do
-    cwd = Keyword.get(opts, :cwd)
+  defp bedrock_stream_provider_input(provider_cfg, opts) do
+    headers =
+      %{}
+      |> maybe_put("aws_region", provider_config_value(provider_cfg, :region))
+      |> maybe_put(
+        "aws_access_key_id",
+        resolve_secret_api_key(provider_config_value(provider_cfg, :access_key_id_secret),
+          env_fallback: true
+        )
+      )
+      |> maybe_put(
+        "aws_secret_access_key",
+        resolve_secret_api_key(
+          provider_config_value(provider_cfg, :secret_access_key_secret),
+          env_fallback: true
+        )
+      )
+      |> maybe_put(
+        "aws_session_token",
+        resolve_secret_api_key(provider_config_value(provider_cfg, :session_token_secret),
+          env_fallback: true
+        )
+      )
 
-    case provider_id do
-      :bedrock_converse_stream ->
-        headers =
-          base_opts
-          |> Map.get(:headers, %{})
-          |> maybe_put("aws_region", provider_config_value(provider_cfg, :region))
-          |> maybe_put(
-            "aws_access_key_id",
-            resolve_secret_api_key(provider_config_value(provider_cfg, :access_key_id_secret),
-              env_fallback: true
-            )
-          )
-          |> maybe_put(
-            "aws_secret_access_key",
-            resolve_secret_api_key(
-              provider_config_value(provider_cfg, :secret_access_key_secret),
-              env_fallback: true
-            )
-          )
-          |> maybe_put(
-            "aws_session_token",
-            resolve_secret_api_key(provider_config_value(provider_cfg, :session_token_secret),
-              env_fallback: true
-            )
-          )
-
-        base_opts
-        |> Map.put(:cwd, cwd)
-        |> Map.put(:headers, headers)
-
-      _ ->
-        base_opts
-    end
+    %{cwd: Keyword.get(opts, :cwd), headers: headers}
   end
 
   # `Secrets.resolve/2` owns store, external-source and environment order and

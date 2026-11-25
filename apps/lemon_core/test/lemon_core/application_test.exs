@@ -68,6 +68,7 @@ defmodule LemonCore.ApplicationTest do
         LemonCore.NodeRegistry,
         LemonCore.ConfigCache,
         LemonCore.Store,
+        LemonCore.RuntimeOwner,
         LemonCore.SessionActivity,
         LemonCore.Secrets.Usage,
         LemonCore.UsageLedger,

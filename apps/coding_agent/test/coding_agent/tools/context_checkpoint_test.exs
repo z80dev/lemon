@@ -320,7 +320,10 @@ defmodule CodingAgent.Tools.ContextCheckpointTest do
     branch = SessionManager.get_branch(rewound)
     refute Enum.any?(branch, &(&1.message == exploration or &1.message == rewind))
     assert Enum.any?(branch, &(&1.type == :branch_summary and &1.summary =~ "useful findings"))
-    assert List.last(branch).message == sibling
+    # Retained sibling work is journaled like every message: serialized.
+    assert List.last(branch).message ==
+             CodingAgent.Session.MessageSerialization.serialize_message(sibling)
+
     assert List.last(branch).parent_id == Enum.at(branch, -2).id
 
     projected =

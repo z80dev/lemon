@@ -13,7 +13,7 @@ import {
   describeEndpoint,
   redactUrlCredentials,
 } from './chrome.js';
-import { executeLocalDriverRequest } from './local-driver.js';
+import { createDriverRequestQueue, type LocalDriverResponse } from './local-driver.js';
 
 const ENDPOINT =
   'wss://alice:userinfo-secret@cdp.test:9222/session/path-secret?apiKey=query-secret&other=second-secret#frag-secret';
@@ -107,12 +107,19 @@ describe('CDP credential redaction', () => {
   });
 
   it('serializes driver errors without URL credentials', async () => {
-    const response = await executeLocalDriverRequest({
-      line: JSON.stringify({ id: 'r1', method: 'browser.tabs' }),
-      invoke: async () => {
+    const replies: LocalDriverResponse[] = [];
+    const queue = createDriverRequestQueue({
+      invoke: async (_method, _args, begin) => {
+        begin();
         throw new Error(`navigation failed at ${ENDPOINT}`);
       },
+      reply: (reply) => replies.push(reply),
+      isReadOnly: () => true,
+      onWedged: () => undefined,
     });
+    queue.submit(JSON.stringify({ id: 'r1', method: 'browser.tabs' }));
+    await queue.drained();
+    const response = replies[0]!;
     expect(response.ok).toBe(false);
     expect(response.error).toContain('wss://cdp.test:9222/session/path-secret?apiKey=redacted');
     for (const secret of ['alice', 'userinfo-secret', 'query-secret', 'second-secret', 'frag-secret']) {

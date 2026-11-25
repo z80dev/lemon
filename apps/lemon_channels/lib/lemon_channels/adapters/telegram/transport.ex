@@ -20,6 +20,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonChannels.Adapters.Telegram.Transport.FileOperations
   alias LemonChannels.Adapters.Telegram.Transport.InboundActions
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
+  alias LemonChannels.Adapters.Telegram.Transport.Owner
+
+  # Fields the shell owns while a worker runs on a snapshot of the rest.
+  @shell_keys [:allowed_chat_ids, :drain_paused?, :poll_task, :event_queue, :event_task]
   alias LemonChannels.Adapters.Telegram.Transport.MessageBuffer
   alias LemonChannels.Adapters.Telegram.Transport.ModelPicker
   alias LemonChannels.Adapters.Telegram.Transport.Normalize
@@ -38,13 +42,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonChannels.Telegram.Delivery
   alias LemonChannels.Telegram.{OffsetStore, PollerLock}
   alias LemonChannels.Telegram.TransportShared
-  alias LemonCore.ChatScope
+  alias LemonCore.{AutomationCommands, ChatScope}
   alias LemonCore.Config
   alias LemonCore.MapHelpers
 
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
   @default_debounce_ms 1_000
+  @default_poller_lock_retry_ms 5_000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -56,8 +61,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   @impl true
-  def handle_continue(:start, opts) do
-    base = LemonChannels.GatewayConfig.get(:telegram, %{})
+  def handle_continue(:start, opts), do: start_transport(opts, 0)
+
+  defp start_transport(opts, lock_attempt) do
+    base = LemonCore.GatewayConfig.get(:telegram, %{})
 
     config =
       base
@@ -69,126 +76,159 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     if is_binary(token) and token != "" do
       account_id = cfg_get(config, :account_id, "default")
 
+      retry_ms = cfg_get(config, :poller_lock_retry_ms, @default_poller_lock_retry_ms)
+
       case PollerLock.acquire(account_id, token) do
         :ok ->
-          :ok = TransportShared.init_dedupe()
+          # Offset store, provider config and getMe run in a supervised task;
+          # the shell keeps answering calls and finishes start-up when the
+          # task reports.
+          case LemonCore.TaskSupervisor.async_nolink(async_supervisor_name(), fn ->
+                 build_runtime_state(config, account_id, token)
+               end) do
+            {:ok, task} ->
+              {:noreply,
+               %{
+                 starting: task,
+                 account_id: account_id,
+                 token: token,
+                 drain_paused?: false,
+                 allowlist_ops: [],
+                 pending: []
+               }}
 
-          config_offset = cfg_get(config, :offset)
-          stored_offset = OffsetStore.get(account_id, token)
-
-          drop_pending_updates = cfg_get(config, :drop_pending_updates, false)
-
-          # If enabled, drop any pending Telegram updates on every boot unless an explicit offset is set.
-          # This prevents the bot from replying to historical messages after downtime.
-          drop_pending_updates = drop_pending_updates && is_nil(config_offset)
-
-          {openai_api_key, openai_base_url} = resolve_openai_provider()
-
-          api_mod = resolve_api_mod(config)
-
-          {bot_id, bot_username} =
-            resolve_bot_identity(
-              cfg_get(config, :bot_id),
-              cfg_get(config, :bot_username),
-              api_mod,
-              token
-            )
-
-          state =
-            RuntimeState.new(%{
-              token: token,
-              api_mod: api_mod,
-              poll_interval_ms: config[:poll_interval_ms] || @default_poll_interval,
-              dedupe_ttl_ms: config[:dedupe_ttl_ms] || @default_dedupe_ttl,
-              debounce_ms: cfg_get(config, :debounce_ms, @default_debounce_ms),
-              # When true, emit debug logs for inbound decisions (drops, routing, etc).
-              debug_inbound: cfg_get(config, :debug_inbound, false),
-              # When true, log drop/ignore reasons even if debug_inbound is false.
-              log_drops: cfg_get(config, :log_drops, false),
-              allow_queue_override: cfg_get(config, :allow_queue_override, false),
-              allowed_chat_ids:
-                RuntimeState.parse_allowed_chat_ids(cfg_get(config, :allowed_chat_ids)),
-              allow_all_chats: cfg_get(config, :allow_all_chats, false) == true,
-              unauthorized_dm_behavior: cfg_get(config, :unauthorized_dm_behavior, "ignore"),
-              deny_unbound_chats: cfg_get(config, :deny_unbound_chats, false),
-              account_id: account_id,
-              voice_transcription: cfg_get(config, :voice_transcription, false),
-              voice_transcription_provider:
-                cfg_get(config, :voice_transcription_provider, "openai_transcribe"),
-              voice_transcription_model:
-                cfg_get(config, :voice_transcription_model, "gpt-4o-mini-transcribe"),
-              voice_transcription_base_url:
-                normalize_blank(cfg_get(config, :voice_transcription_base_url)) || openai_base_url,
-              voice_transcription_api_key:
-                normalize_blank(cfg_get(config, :voice_transcription_api_key)) || openai_api_key,
-              voice_max_bytes: cfg_get(config, :voice_max_bytes, 10 * 1024 * 1024),
-              voice_transcriber: config[:voice_transcriber] || LemonChannels.VoiceTranscriber,
-              offset:
-                RuntimeState.initial_offset(
-                  config_offset,
-                  stored_offset,
-                  drop_pending_updates
-                ),
-              drop_pending_updates?: drop_pending_updates,
-              drop_pending_done?: false,
-              bot_id: bot_id,
-              bot_username: bot_username,
-              files: cfg_get(config, :files, %{})
-            })
-
-          log_authorization_mode(state)
-          maybe_subscribe_exec_approvals()
-
-          _ =
-            start_async_task(state, fn ->
-              try do
-                case api_mod.set_my_commands(token, LemonChannels.CommandCatalog.telegram_menu()) do
-                  {:ok, _} -> :ok
-                  _ -> Logger.warning("Telegram command menu registration failed")
-                end
-              rescue
-                _ -> Logger.warning("Telegram command menu registration failed")
-              catch
-                _, _ -> Logger.warning("Telegram command menu registration failed")
-              end
-            end)
-
-          send(self(), :poll)
-          {:noreply, state}
+            {:error, _reason} ->
+              PollerLock.release(account_id, token)
+              LemonChannels.Registry.record_status("telegram", {:error, :start_unavailable})
+              Logger.warning("telegram start task admission failed; retrying in background")
+              retry_start(opts, retry_ms, lock_attempt)
+          end
 
         {:error, :locked} ->
-          Logger.warning(
-            "Telegram poller already running for account_id=#{inspect(account_id)}; refusing to start lemon_channels transport"
-          )
-
-          {:stop, :poller_locked, %{account_id: account_id, token: token}}
+          await_poller_lock(opts, account_id, retry_ms, lock_attempt)
       end
     else
       {:stop, :telegram_not_configured, %{}}
     end
   end
 
+  defp build_runtime_state(config, account_id, token) do
+    :ok = TransportShared.init_dedupe()
+
+    config_offset = cfg_get(config, :offset)
+    stored_offset = OffsetStore.get(account_id, token)
+
+    drop_pending_updates = cfg_get(config, :drop_pending_updates, false)
+
+    # If enabled, drop any pending Telegram updates on every boot unless an explicit offset is set.
+    # This prevents the bot from replying to historical messages after downtime.
+    drop_pending_updates = drop_pending_updates && is_nil(config_offset)
+
+    {openai_api_key, openai_base_url} = resolve_openai_provider()
+
+    api_mod = resolve_api_mod(config)
+
+    {bot_id, bot_username} =
+      resolve_bot_identity(
+        cfg_get(config, :bot_id),
+        cfg_get(config, :bot_username),
+        api_mod,
+        token
+      )
+
+    RuntimeState.new(%{
+      token: token,
+      api_mod: api_mod,
+      poll_interval_ms: config[:poll_interval_ms] || @default_poll_interval,
+      dedupe_ttl_ms: config[:dedupe_ttl_ms] || @default_dedupe_ttl,
+      debounce_ms: cfg_get(config, :debounce_ms, @default_debounce_ms),
+      # When true, emit debug logs for inbound decisions (drops, routing, etc).
+      debug_inbound: cfg_get(config, :debug_inbound, false),
+      # When true, log drop/ignore reasons even if debug_inbound is false.
+      log_drops: cfg_get(config, :log_drops, false),
+      allow_queue_override: cfg_get(config, :allow_queue_override, false),
+      allowed_chat_ids: RuntimeState.parse_allowed_chat_ids(cfg_get(config, :allowed_chat_ids)),
+      allow_all_chats: cfg_get(config, :allow_all_chats, false) == true,
+      unauthorized_dm_behavior: cfg_get(config, :unauthorized_dm_behavior, "ignore"),
+      deny_unbound_chats: cfg_get(config, :deny_unbound_chats, false),
+      account_id: account_id,
+      voice_transcription: cfg_get(config, :voice_transcription, false),
+      voice_transcription_provider:
+        cfg_get(config, :voice_transcription_provider, "openai_transcribe"),
+      voice_transcription_model:
+        cfg_get(config, :voice_transcription_model, "gpt-4o-mini-transcribe"),
+      voice_transcription_base_url:
+        normalize_blank(cfg_get(config, :voice_transcription_base_url)) || openai_base_url,
+      voice_transcription_api_key:
+        normalize_blank(cfg_get(config, :voice_transcription_api_key)) || openai_api_key,
+      voice_max_bytes: cfg_get(config, :voice_max_bytes, 10 * 1024 * 1024),
+      voice_transcriber: config[:voice_transcriber] || LemonChannels.VoiceTranscriber,
+      offset: RuntimeState.initial_offset(config_offset, stored_offset, drop_pending_updates),
+      drop_pending_updates?: drop_pending_updates,
+      drop_pending_done?: false,
+      bot_id: bot_id,
+      bot_username: bot_username,
+      files: cfg_get(config, :files, %{})
+    })
+  end
+
+  defp finish_start(state, drain_paused?) do
+    log_authorization_mode(state)
+    maybe_subscribe_exec_approvals()
+    api_mod = state.api_mod
+    token = state.token
+
+    _ =
+      start_async_task(state, fn ->
+        try do
+          case api_mod.set_my_commands(token, LemonChannels.CommandCatalog.telegram_menu()) do
+            {:ok, _} -> :ok
+            _ -> Logger.warning("Telegram command menu registration failed")
+          end
+        rescue
+          _ -> Logger.warning("Telegram command menu registration failed")
+        catch
+          _, _ -> Logger.warning("Telegram command menu registration failed")
+        end
+      end)
+
+    # A drain that arrived during start-up keeps the transport from polling.
+    unless drain_paused?, do: send(self(), :poll)
+    Map.put(state, :drain_paused?, drain_paused?)
+  end
+
   @impl true
+  # The start task is building runtime state. Allowlist changes are applied to
+  # that state when it arrives; a drain keeps the transport from polling.
+  def handle_call({:update_allowlist, op, chat_id}, _from, %{starting: %Task{}} = st)
+      when op in [:add, :remove] and is_integer(chat_id),
+      do: {:reply, :ok, %{st | allowlist_ops: [{op, chat_id} | st.allowlist_ops]}}
+
+  def handle_call(:drain_pause, _from, %{starting: %Task{}} = st),
+    do: {:reply, :ok, %{st | drain_paused?: true}}
+
+  # The transport has not started polling: it has no runtime state to update.
+  # The persisted allowlist is read when it acquires the lock and starts.
+  def handle_call({:update_allowlist, _op, _chat_id}, _from, %{awaiting_poller_lock: true} = st),
+    do: {:reply, :not_running, st}
+
+  def handle_call(:drain_pause, _from, %{awaiting_poller_lock: true} = st) do
+    if st.timer, do: Process.cancel_timer(st.timer)
+    {:reply, :ok, %{st | timer: nil, drain_paused?: true}}
+  end
+
   def handle_call({:update_allowlist, op, chat_id}, _from, state)
       when op in [:add, :remove] and is_integer(chat_id) do
     {:reply, :ok, LemonChannels.Pairing.put_allowlist("telegram", state, chat_id, op)}
   end
 
-  # Runtime drain: hand every debounced message and media group to the router
-  # now, then stop fetching. Updates not yet fetched stay unconfirmed at
-  # Telegram, so the next runtime receives them from the persisted offset.
-  def handle_call(:drain_pause, _from, state) do
-    state =
-      Enum.reduce(state.buffers, state, fn {key, buffer}, acc ->
-        dispatch_transport_event({:debounce_flush, key, buffer.debounce_ref}, acc)
-      end)
-
-    state =
-      Enum.reduce(state.media_groups, state, fn {key, group}, acc ->
-        dispatch_transport_event({:media_group_flush, key, group.debounce_ref}, acc)
-      end)
-
-    {:reply, :ok, Map.put(state, :drain_paused?, true)}
+  # Runtime drain: stop fetching, then hand every debounced message and media
+  # group to the router. The flush runs in the event worker, after whatever it
+  # is doing now; the caller is answered when the flush has run. Updates not
+  # yet fetched stay unconfirmed at Telegram, so the next runtime receives
+  # them from the persisted offset.
+  def handle_call(:drain_pause, from, state) do
+    {:noreply, state |> Map.put(:drain_paused?, true) |> enqueue({:drain_flush, from})}
   end
 
   # Polling is an ongoing subscription, not an outbound delivery retry budget.
@@ -206,13 +246,51 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   @impl true
+  def handle_info({ref, %{} = runtime}, %{starting: %Task{ref: ref}} = st) do
+    Process.demonitor(ref, [:flush])
+
+    runtime =
+      st.allowlist_ops
+      |> Enum.reverse()
+      |> Enum.reduce(runtime, fn {op, chat_id}, acc ->
+        LemonChannels.Pairing.put_allowlist("telegram", acc, chat_id, op)
+      end)
+
+    state = finish_start(runtime, st.drain_paused?)
+
+    # Messages that arrived during start-up are handled now, in arrival order.
+    state =
+      st.pending
+      |> Enum.reverse()
+      |> Enum.reduce(state, fn msg, acc ->
+        {:noreply, acc} = handle_info(msg, acc)
+        acc
+      end)
+
+    {:noreply, state}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{starting: %Task{ref: ref}} = st),
+    do: {:stop, {:telegram_start_failed, reason}, Map.delete(st, :starting)}
+
+  def handle_info(msg, %{starting: %Task{}} = st),
+    do: {:noreply, %{st | pending: [msg | st.pending]}}
+
+  def handle_info(:retry_poller_lock, %{awaiting_poller_lock: true, drain_paused?: true} = st),
+    do: {:noreply, st}
+
+  def handle_info(:retry_poller_lock, %{awaiting_poller_lock: true} = st),
+    do: start_transport(st.opts, st.attempt + 1)
+
+  def handle_info(_msg, %{awaiting_poller_lock: true} = st), do: {:noreply, st}
+
   def handle_info(:poll, %{drain_paused?: true} = state), do: {:noreply, state}
 
   def handle_info(:poll, %{poll_task: %Task{}} = state), do: {:noreply, state}
 
   def handle_info(:poll, state) do
     case LemonCore.TaskSupervisor.async_nolink(async_supervisor_name(), fn ->
-           Poller.fetch(state)
+           Poller.fetch_and_prepare(state, pipeline_callbacks())
          end) do
       {:ok, task} ->
         {:noreply, Map.put(state, :poll_task, task)}
@@ -220,22 +298,26 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       {:error, _reason} ->
         LemonChannels.Registry.record_status("telegram", {:error, :poll_unavailable})
         Logger.warning("telegram poll task admission failed")
-        Process.send_after(self(), :poll, state.poll_interval_ms)
+
+        Process.send_after(
+          LemonChannels.Adapters.Telegram.Transport.Owner.pid(),
+          :poll,
+          state.poll_interval_ms
+        )
+
         {:noreply, state}
     end
   end
 
-  def handle_info({ref, result}, %{poll_task: %Task{ref: ref}} = state) do
+  # The poll task fetched and prepared (transcribed, downloaded) the batch;
+  # applying it runs in the event worker.
+  def handle_info({ref, {result, prepared}}, %{poll_task: %Task{ref: ref}} = state) do
     Process.demonitor(ref, [:flush])
     state = Map.delete(state, :poll_task)
 
-    state =
-      if state[:drain_paused?],
-        do: state,
-        else: Poller.apply_result(state, result, pipeline_callbacks())
-
-    Process.send_after(self(), :poll, poll_delay(state))
-    {:noreply, state}
+    if state[:drain_paused?],
+      do: {:noreply, state},
+      else: {:noreply, enqueue(state, {:poll_result, result, prepared})}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{poll_task: %Task{ref: ref}} = state) do
@@ -243,33 +325,142 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     {:noreply, Map.delete(state, :poll_task)}
   end
 
-  def handle_info({:debounce_flush, scope_key, debounce_ref}, state) do
-    {:noreply, dispatch_transport_event({:debounce_flush, scope_key, debounce_ref}, state)}
+  def handle_info(
+        {ref, {:event_done, new_state}},
+        %{event_task: {%Task{ref: ref}, event}} = state
+      ) do
+    Process.demonitor(ref, [:flush])
+    # Shell-owned fields may have changed while the worker ran; keep them.
+    state = Map.merge(new_state, Map.take(state, @shell_keys)) |> Map.put(:event_task, nil)
+    after_event(event, state)
+    {:noreply, dispatch_next(state)}
   end
 
-  def handle_info({:media_group_flush, group_key, debounce_ref}, state) do
-    {:noreply, dispatch_transport_event({:media_group_flush, group_key, debounce_ref}, state)}
+  def handle_info(
+        {:DOWN, ref, :process, _pid, _reason},
+        %{event_task: {%Task{ref: ref}, event}} = state
+      ) do
+    LemonChannels.Registry.record_status("telegram", {:error, :event_failed})
+    Logger.warning("telegram event task failed; event will not be replayed")
+    state = Map.put(state, :event_task, nil)
+
+    case event do
+      {:drain_flush, from} -> GenServer.reply(from, {:error, :drain_failed})
+      _ -> after_event(event, state)
+    end
+
+    {:noreply, dispatch_next(state)}
   end
 
-  def handle_info(%LemonCore.Event{type: :approval_requested, payload: payload}, state) do
-    {:noreply, dispatch_transport_event({:approval_requested, payload}, state)}
+  def handle_info({:telegram_bus, action, topic}, state) do
+    _ = apply(LemonCore.Bus, action, [topic])
+    {:noreply, state}
   end
 
   def handle_info(%LemonCore.Event{type: :approval_resolved}, state), do: {:noreply, state}
 
+  def handle_info(event, state) do
+    if worker_event?(event),
+      do: {:noreply, enqueue(state, event)},
+      else: {:noreply, state}
+  end
+
+  defp worker_event?({:debounce_flush, _scope_key, _ref}), do: true
+  defp worker_event?({:media_group_flush, _group_key, _ref}), do: true
+  defp worker_event?({:new_session_cleanup, _sk, _chat_id, _thread_id}), do: true
+  defp worker_event?({:model_picker_expired, _key, _token}), do: true
+
+  defp worker_event?(%LemonCore.Event{type: type}),
+    do: type in [:approval_requested, :run_completed]
+
+  defp worker_event?(_event), do: false
+
+  defp enqueue(state, event) do
+    queue = :queue.in(event, Map.get(state, :event_queue, :queue.new()))
+    dispatch_next(Map.put(state, :event_queue, queue))
+  end
+
+  # One event at a time, in arrival order, in a supervised worker: the shell
+  # itself never performs HTTP, file or provider work.
+  defp dispatch_next(state) do
+    with nil <- Map.get(state, :event_task),
+         {{:value, event}, queue} <- :queue.out(Map.get(state, :event_queue, :queue.new())) do
+      owner = self()
+      snapshot = Map.drop(state, @shell_keys -- [:allowed_chat_ids, :drain_paused?])
+
+      case LemonCore.TaskSupervisor.async_nolink(async_supervisor_name(), fn ->
+             :ok = Owner.put(owner)
+             {:event_done, run_event(event, snapshot)}
+           end) do
+        {:ok, task} ->
+          %{state | event_queue: queue} |> Map.put(:event_task, {task, event})
+
+        {:error, _reason} ->
+          LemonChannels.Registry.record_status("telegram", {:error, :event_failed})
+          Logger.warning("telegram event task admission failed; event will not be replayed")
+          state = Map.put(state, :event_queue, queue)
+
+          case event do
+            {:drain_flush, from} -> GenServer.reply(from, {:error, :drain_failed})
+            _ -> after_event(event, state)
+          end
+
+          dispatch_next(state)
+      end
+    else
+      _busy_or_empty -> state
+    end
+  end
+
+  # The next fetch starts only after a batch was applied (it advances offset).
+  defp after_event({:poll_result, _result, _prepared}, state),
+    do: Process.send_after(self(), :poll, poll_delay(state))
+
+  defp after_event(_event, _state), do: :ok
+
+  defp run_event({:poll_result, result, prepared}, state) do
+    if state[:drain_paused?],
+      do: state,
+      else: Poller.apply_result(state, result, pipeline_callbacks(), prepared)
+  end
+
+  defp run_event({:drain_flush, from}, state) do
+    state =
+      Enum.reduce(state.buffers, state, fn {key, buffer}, acc ->
+        dispatch_transport_event({:debounce_flush, key, buffer.debounce_ref}, acc)
+      end)
+
+    state =
+      Enum.reduce(state.media_groups, state, fn {key, group}, acc ->
+        dispatch_transport_event({:media_group_flush, key, group.debounce_ref}, acc)
+      end)
+
+    GenServer.reply(from, :ok)
+    state
+  end
+
+  defp run_event({:debounce_flush, _scope_key, _ref} = event, state),
+    do: dispatch_transport_event(event, state)
+
+  defp run_event({:media_group_flush, _group_key, _ref} = event, state),
+    do: dispatch_transport_event(event, state)
+
+  defp run_event(%LemonCore.Event{type: :approval_requested, payload: payload}, state),
+    do: dispatch_transport_event({:approval_requested, payload}, state)
+
+  defp run_event({:model_picker_expired, key, token}, state),
+    do: ModelPicker.expire_model_picker(state, key, token)
+
   # Best-effort second pass to clear chat state in case a late write races with the first delete.
-  def handle_info(
-        {:new_session_cleanup, session_key, chat_id, thread_id},
-        state
-      ) do
+  defp run_event({:new_session_cleanup, session_key, chat_id, thread_id}, state) do
     _ = safe_delete_chat_state(session_key)
     _ = safe_delete_selected_resume(state, chat_id, thread_id)
     _ = safe_sweep_thread_message_indices(state, chat_id, thread_id, :all)
-    {:noreply, state}
+    state
   end
 
   # /new triggers an internal "memory reflection" run; only clear auto-resume after it completes.
-  def handle_info(%LemonCore.Event{type: :run_completed, meta: meta} = event, state) do
+  defp run_event(%LemonCore.Event{type: :run_completed, meta: meta} = event, state) do
     run_id = (meta || %{})[:run_id] || (meta || %{})["run_id"]
     session_key = (meta || %{})[:session_key] || (meta || %{})["session_key"]
 
@@ -288,13 +479,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
           # Store writes are async; do a second delete shortly after to win races.
           Process.send_after(
-            self(),
+            LemonChannels.Adapters.Telegram.Transport.Owner.pid(),
             {:new_session_cleanup, sk, chat_id, thread_id},
             50
           )
 
           topic = LemonCore.Bus.run_topic(run_id)
-          _ = LemonCore.Bus.unsubscribe(topic)
+          _ = LemonChannels.Adapters.Telegram.Transport.Owner.bus(:unsubscribe, topic)
 
           ok? =
             case event.payload do
@@ -352,7 +543,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
           # Unsubscribe from session topic and remove from tracking
           topic = LemonCore.Bus.session_topic(session_key)
-          _ = LemonCore.Bus.unsubscribe(topic)
+          _ = LemonChannels.Adapters.Telegram.Transport.Owner.bus(:unsubscribe, topic)
 
           %{state | reaction_runs: Map.delete(state.reaction_runs, session_key)}
 
@@ -360,21 +551,47 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           state
       end
 
-    {:noreply, state}
+    state
   end
-
-  def handle_info({:model_picker_expired, key, token}, state) do
-    {:noreply, ModelPicker.expire_model_picker(state, key, token)}
-  end
-
-  def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do
+    if task = state[:starting], do: Task.shutdown(task, :brutal_kill)
     if task = state[:poll_task], do: Task.shutdown(task, :brutal_kill)
+    with {%Task{} = task, _event} <- state[:event_task], do: Task.shutdown(task, :brutal_kill)
     if state[:token], do: PollerLock.release(state.account_id, state.token)
     :ok
   end
+
+  # Another runtime owns this bot token. Crashing would escalate through the
+  # adapter supervisors, so wait alive and retry with capped backoff instead.
+  defp await_poller_lock(opts, account_id, retry_ms, attempt) do
+    Logger.warning(
+      "Telegram poller already running for account_id=#{inspect(account_id)}; retrying lock in #{retry_delay(retry_ms, attempt)}ms"
+    )
+
+    LemonChannels.Registry.record_status("telegram", {:error, :poller_locked})
+    retry_start(opts, retry_ms, attempt)
+  end
+
+  defp retry_start(opts, retry_ms, attempt) do
+    {:noreply,
+     %{
+       awaiting_poller_lock: true,
+       opts: opts,
+       attempt: attempt,
+       drain_paused?: false,
+       timer:
+         Process.send_after(
+           LemonChannels.Adapters.Telegram.Transport.Owner.pid(),
+           :retry_poller_lock,
+           retry_delay(retry_ms, attempt)
+         )
+     }}
+  end
+
+  defp retry_delay(retry_ms, attempt),
+    do: min(LemonCore.Retry.exponential_backoff(retry_ms, min(attempt, 5)), retry_ms * 30)
 
   defp dispatch_transport_event(event, state) do
     case Normalize.event(state, event) do
@@ -847,12 +1064,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp maybe_subscribe_to_session(session_key) when is_binary(session_key) do
     topic = LemonCore.Bus.session_topic(session_key)
-    _ = LemonCore.Bus.subscribe(topic)
+    _ = LemonChannels.Adapters.Telegram.Transport.Owner.bus(:subscribe, topic)
   end
 
   defp maybe_subscribe_to_run(run_id) do
     topic = LemonCore.Bus.run_topic(run_id)
-    _ = LemonCore.Bus.subscribe(topic)
+    _ = LemonChannels.Adapters.Telegram.Transport.Owner.bus(:subscribe, topic)
   end
 
   defp started_new_session_message(
@@ -1297,14 +1514,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       session_key = build_session_key(state, inbound, scope)
       args = Commands.telegram_command_args(inbound.message.text || "", "goal")
       agent_id = BindingResolver.resolve_agent_id(scope)
+      reply = &send_system_message(state, chat_id, thread_id, user_msg_id, &1)
 
       _ =
-        send_system_message(
-          state,
-          chat_id,
-          thread_id,
-          user_msg_id,
-          LemonChannels.GoalStatusMessage.handle(session_key, args,
+        reply.(
+          AutomationCommands.handle(:goal, args,
+            session_key: session_key,
             agent_id: agent_id,
             workspace: BindingResolver.resolve_cwd(scope),
             # Goal work runs later under this chat's channel-run authority.
@@ -1315,7 +1530,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
               peer_id: inbound.peer.id,
               thread_id: inbound.peer.thread_id
             },
-            meta: %{transport: "telegram"}
+            meta: %{transport: "telegram"},
+            # Judge ticks and continuations run off this process; their
+            # result is posted to the chat when ready.
+            start_task: &start_async_task(state, &1),
+            deliver: reply
           )
         )
     end
@@ -1323,6 +1542,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     state
   rescue
     _ -> state
+  catch
+    :exit, _ -> state
   end
 
   defp handle_kanban_command(state, inbound) do
@@ -1339,7 +1560,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           chat_id,
           thread_id,
           user_msg_id,
-          LemonChannels.KanbanStatusMessage.handle(args,
+          AutomationCommands.handle(:kanban, args,
             agent_id: BindingResolver.resolve_agent_id(scope),
             session_key: session_key,
             workspace: BindingResolver.resolve_cwd(scope),
@@ -1361,31 +1582,22 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     state
   end
 
-  defp handle_remind_command(state, inbound) do
-    handle_reminder_command(state, inbound, "remind", fn args, opts ->
-      LemonChannels.Reminders.create(args, opts)
-    end)
-  end
+  defp handle_remind_command(state, inbound),
+    do: handle_reminder_command(state, inbound, :remind)
 
-  defp handle_reminders_command(state, inbound) do
-    handle_reminder_command(state, inbound, "reminders", fn _args, opts ->
-      LemonChannels.Reminders.list(opts)
-    end)
-  end
+  defp handle_reminders_command(state, inbound),
+    do: handle_reminder_command(state, inbound, :reminders)
 
-  defp handle_unremind_command(state, inbound) do
-    handle_reminder_command(state, inbound, "unremind", fn args, opts ->
-      LemonChannels.Reminders.cancel(args, opts)
-    end)
-  end
+  defp handle_unremind_command(state, inbound),
+    do: handle_reminder_command(state, inbound, :unremind)
 
-  defp handle_reminder_command(state, inbound, command, reply_fun) do
+  defp handle_reminder_command(state, inbound, command) do
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
 
     if is_integer(chat_id) do
       scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
       session_key = build_session_key(state, inbound, scope)
-      args = Commands.telegram_command_args(inbound.message.text || "", command)
+      args = Commands.telegram_command_args(inbound.message.text || "", Atom.to_string(command))
       agent_id = BindingResolver.resolve_agent_id(scope)
 
       _ =
@@ -1394,7 +1606,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           chat_id,
           thread_id,
           user_msg_id,
-          reply_fun.(args,
+          AutomationCommands.handle(command, args,
             session_key: session_key,
             agent_id: agent_id,
             created_via: "telegram"

@@ -6,6 +6,8 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Added
 
+- `lemon browser stop` stops the runtime's local browser driver and the
+  Chrome it launched through the admin `browser.stop` method (#660).
 - `lemon setup omp [status|disconnect]` connects Lemon providers to omp's auth
   broker (`auth_source = "omp_broker"`), installing the `omp-broker` service
   when the local broker is not running; the full setup wizard offers it when
@@ -101,6 +103,14 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Changed
 
+- **Breaking:** `lemon bot https` and the setup wizard's Lemon Bot HTTPS step are
+  removed; Bot HTTPS is `lemon-bot https enable|status|disable` in the Lemon Bot
+  CLI. `LemonCli.Doctor.BotAdmission` stays read-only: it checks the explicit
+  origin, `LEMON_BOT_PUBLIC_URL` or the origin published in
+  `~/.lemon/bot-https.json`, and reads the effective allowlists from
+  `LemonRouter.NativeFollowupAdmission.allowed_origins/0` and
+  `LemonAutomation.CronAdmission.allowed_origins/0` through `:doctor_runtime`
+  instead of their application configuration (#723).
 - Consolidate onboarding prompt handling, runtime port resolution, and setup/doctor
   provider recovery text. Doctor providers now register live checks without an
   empty offline adapter.
@@ -156,6 +166,14 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Fixed
 
+- One-shot commands boot `:lemon_core` in client mode through
+  `LemonCore.CLI.start/2` (context, learn, learning, mcp, update, migrate,
+  providers and onboarding included), so they no longer expire a running
+  daemon's approvals or run its sweeps, reloader, run history or SIGTERM trap;
+  `doctor`, `config show`/`validate` and `secrets status`/`list`/`check` open the
+  store read-only. `node join` keeps the full runtime. Hermes session import
+  confirms each memory write and reports unconfirmed ones as `outcome_unknown`
+  (#667).
 - Source and packaged launchers discover systemd user units under an absolute
   `XDG_CONFIG_HOME`, while invalid relative values fall back to `$HOME/.config`
   as required by the XDG base-directory specification.

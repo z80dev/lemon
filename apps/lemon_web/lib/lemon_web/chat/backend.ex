@@ -20,19 +20,19 @@ defmodule LemonWeb.Chat.Backend do
 
   @type error :: %{code: atom(), message: String.t(), details: map() | nil}
 
-  @doc "Raw RPC call honoring the test stub."
-  @spec call(String.t(), map()) :: {:ok, term()} | {:error, error()}
-  def call(method, params) do
+  @doc "Raw RPC call honoring the test stub. `opts` are passed to `LemonWeb.Rpc.call/3`."
+  @spec call(String.t(), map(), keyword()) :: {:ok, term()} | {:error, error()}
+  def call(method, params, opts \\ []) do
     case Application.get_env(:lemon_web, :chat_rpc_stub) do
       stub when is_function(stub, 2) ->
         case stub.(method, params) do
-          :passthrough -> Rpc.call(method, params)
+          :passthrough -> Rpc.call(method, params, opts)
           {:ok, _} = ok -> ok
           {:error, error} -> {:error, Rpc.normalize_error(error)}
         end
 
       _ ->
-        Rpc.call(method, params)
+        Rpc.call(method, params, opts)
     end
   rescue
     error ->
@@ -66,13 +66,15 @@ defmodule LemonWeb.Chat.Backend do
   end
 
   @doc """
-  The shared bounded recovery authority. `:retry` is a raced owner read, not
-  an empty session; callers retain their last known state and reconcile again.
+  Session state from the shared recovery authority: identity, phase, approvals,
+  owned todos/processes/children and `consistency.eventCursor`. The chat pane
+  never takes transcript text from it (`chat.history` and sequenced session
+  events carry the text). `:retry` is a raced owner read, not an empty session.
   """
   @spec snapshot(String.t(), String.t() | nil) ::
           {:ok, map()} | :retry | {:error, error()}
   def snapshot(session_key, cwd) do
-    params = put_present(%{"sessionKey" => session_key, "limit" => 100}, "cwd", cwd)
+    params = put_present(%{"sessionKey" => session_key, "limit" => 1}, "cwd", cwd)
 
     case call("sessions.snapshot", params) do
       {:ok,
@@ -87,6 +89,41 @@ defmodule LemonWeb.Chat.Backend do
 
       {:ok, %{"status" => "retry"}} ->
         :retry
+
+      {:error, error} ->
+        {:error, error}
+
+      _ ->
+        {:error, unavailable()}
+    end
+  end
+
+  @doc """
+  Sequenced session events after `cursor` (`sessions.events`), one page.
+  `:expired` means the owner no longer retains that cursor's stream position:
+  the caller must reload history and state instead of guessing what it missed.
+  """
+  @spec events(String.t(), map()) ::
+          {:ok, %{entries: [map()], cursor: map(), more?: boolean()}}
+          | :expired
+          | {:error, error()}
+  def events(session_key, cursor) do
+    params = %{"sessionKey" => session_key, "cursor" => cursor, "limit" => 100}
+
+    case call("sessions.events", params, connection: false) do
+      {:ok,
+       %{
+         "status" => "ok",
+         "sessionKey" => ^session_key,
+         "entries" => entries,
+         "cursor" => next,
+         "hasMore" => more
+       }}
+      when is_list(entries) and is_map(next) and is_boolean(more) ->
+        {:ok, %{entries: entries, cursor: next, more?: more}}
+
+      {:ok, %{"status" => "cursor_expired", "sessionKey" => ^session_key}} ->
+        :expired
 
       {:error, error} ->
         {:error, error}
@@ -273,7 +310,7 @@ defmodule LemonWeb.Chat.Backend do
   """
   @spec session_meta(String.t()) :: {:ok, map()} | {:error, error()}
   def session_meta(session_key) do
-    case call("session.detail", %{"sessionKey" => session_key, "limit" => 1, "historyLimit" => 1}) do
+    case call("session.detail", %{"sessionKey" => session_key}) do
       {:ok, %{"session" => session}} when is_map(session) ->
         {:ok,
          %{

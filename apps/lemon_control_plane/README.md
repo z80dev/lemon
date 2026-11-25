@@ -22,19 +22,10 @@ Listeners default to `127.0.0.1`: control plane **4040**, node gateway **4044**,
 and LemonWeb **4080**. Use `LEMON_CONTROL_PLANE_BIND_IP` to opt into a different
 main bind; a non-loopback main bind requires an operator token, rejects tokenless
 compatibility, and serves only `GET /ws` and `GET /healthz` to remote peers.
-OpenAI/ACP HTTP APIs require bearer authentication even locally (their dedicated
-token, or the operator token when unset). Remote HTTP additionally requires
-`LEMON_CONTROL_PLANE_REMOTE_HTTP=openai,acp` and each enabled API's dedicated token.
-Dedicated tokens are resolved through `LemonCore.Env`: `LEMON_OPENAI_COMPAT_API_TOKEN`
-(with `LEMON_OPENAI_COMPAT_TOKEN` as an alias) and `LEMON_ACP_API_TOKEN`.
-Each dedicated token is its own principal with read/write scopes only
-(`Authorize.authenticate_api/3`): no admin, approvals or pairing. The OpenAI
-token sees only its own runs, session namespace and workspace (see
-`docs/tools/openai-compatible-api.md`). The ACP token's `POST /acp` sessions are
-recorded with their owner: it can only load, resume, fork, prompt, configure,
-list or close sessions it created, `session/new` `cwd` must resolve inside the
-API workspace (`LemonControlPlane.APIWorkspace`), and it cannot set
-`approval=auto` (`/acp/ws` requires the operator approvals scope).
+The loopback-only `GET /acp/ws` serves `lemon acp` and requires the operator
+token (or explicit tokenless loopback compatibility) with the read, write,
+approvals and content scopes. There is no OpenAI-compatible `/v1` API and no
+single-shot `POST /acp` endpoint.
 RPC image arrays are validated directly by `LemonAi.ImageInputs`; usage records
 and summaries are owned by `LemonCore.UsageStore`.
 
@@ -627,9 +618,18 @@ outcome-unknown classification, never confirmed launch admission. Todo and
 process projections require the corresponding domain-owner read APIs; their
 absence is explicit `unavailable`.
 
+Each pending approval carries its `exec.approvals.get` identity, `rationale`
+and an `action` reduced to display fields (`title`, `plan`, `command`/`cmd`,
+`path`/`file_path` and the review hashes), an `argumentsPreview` of the other
+arguments (2,048 bytes; private keys such as `cwd` dropped), `truncated` when any
+of these was clipped and `planTruncated` when the plan was. A client must not
+offer approval of a truncated item; it reads the full record from
+`exec.approvals.get` first.
+
 The encoded response is capped at 131,072 bytes. Message rows use a 40,960-byte
-collection budget, actions 16,384, answer text 16,384, each other collection
-8,192, and plan text 8,192. Nested values and item counts have additional caps.
+collection budget, actions 16,384, answer text 16,384, approvals 16,384, each
+other collection 8,192, and plan text 8,192. Nested values and item counts have
+additional caps.
 These are credential-redacted recovery previews, not private full exports.
 Clients must display omission/unavailability rather than treating a bounded
 preview as a complete answer or proof that a process stopped.
@@ -649,8 +649,12 @@ whether human or asynchronous; before it produces text, it is empty rather than
 the previous answer. Earlier turns' tools and messages are not reassigned to the
 current run.
 
-The server compares two complete owner-read collections. If they differ, it
-returns `status: "retry", reason: "snapshot_raced"` with no snapshot. Optional
+The server compares two complete owner-read collections. If they differ in
+anything but `consistency.eventCursor`, it returns `status: "retry", reason:
+"snapshot_raced"` with no snapshot. The cursor is read with the native
+projection in one owner call, so a live event between the collections only
+advances it: the second collection and its cursor are returned, and clients
+replay batches past it. `eventCursor` appears only under `consistency`. Optional
 `expectedIdentity` must contain the complete prior identity; mismatch returns
 `identity_changed`, also without a snapshot. There is no atomic cross-owner
 transaction or global durable cursor.
@@ -783,9 +787,14 @@ Unknown keys return `not_found`; these methods do not invent an empty session or
 read a separate client-local store. Keys are non-empty and bounded to 1,024 bytes.
 
 This management history is distinct from native branch messages returned by
-`chat.history` with `cwd`. `session.detail` remains the richer routing/run
-inspection surface and includes durable title/pin/archive metadata when present,
-so reopening a named session restores its display name.
+`chat.history` with `cwd`. `session.detail` is the routing projection: it
+answers what the session's next run resolves to (`model`, `provider`,
+`contextWindow`, `maxOutput`, `thinkingLevel`, `modelSource`, `modelOverride`)
+plus its durable `agentId`, title/pin/archive metadata, `runCount` and
+timestamps, so reopening a named session restores its display name. It reads
+no run history; unlike `sessions.get` it answers an unknown key with routing
+only. Run and event content come from `chat.history`, `sessions.history` and
+`runs.timeline.get`.
 
 ## Native session navigation
 
@@ -1099,11 +1108,16 @@ as profile memory, but destination repository-specific recall cannot infer a
 new repository mapping.
 
 Private worker methods are `memory.transfer.prepare`, `.snapshot`, `.validate`,
-`.preview`, `.apply`, `.status`, and `.inspect` over the authenticated invocation
+`.release`, `.preview`, `.apply`, `.status`, and `.inspect` over the authenticated invocation
 channel. Each method requires this connection's fresh
 `{version: 1, contextVersion: 1}` advertisement and exact ID/PID dispatch binding,
 before a source snapshot read or destination apply. Old provenance-unaware
 workers cannot strip actor ownership into a legacy copy or attest such a receipt.
+Once the destination receipt is recorded, the controller calls the source node's
+`memory.transfer.release` to delete its frozen snapshot. That call is best effort
+and bounded to five seconds; a source that does not advertise it, or a failed
+call, leaves the snapshot to the source Store's `transfer_ttl_ms`, scope erasure
+and retention, and never changes the returned receipt.
 Full snapshot content is never included in management responses,
 broadcast events, controller operation journals, or logs. Only after `copied`
 is durably acknowledged should the caller perform persona sync and explicitly
@@ -1176,11 +1190,17 @@ without republishing; a gap is rejected. Supported envelopes:
 | `checkpoint_created`, `checkpoint_restored`, `checkpoint_deleted` | `checkpointId,checkpointKind,tool,action,pathCount,paths,restoredCount` |
 | `approval_requested` | `approvalId,tool,action,rationale,expiresAtMs` |
 
-Events are limited to 64 KiB JSON with the normal depth/item limits. Workers send
-one frame awaiting acknowledgement and retain at most 64 queued frames. An
-oversized event, exhausted queue, rejected frame or acknowledgement timeout cancels
-destination execution and returns a failed terminal result rather than dropping
-events. The terminal result waits for all live-frame acknowledgements. Disconnect,
+Events are limited to 64 KiB JSON (less when the controller's `maxPayload` is
+smaller) with the normal depth/item limits. Size never fails a run: workers split
+long deltas into several `delta` events at UTF-8 boundaries, and elide oversized
+display data (action titles, messages and `detail` such as tool args,
+`result_full` and `details`; checkpoint paths) with an omitted-bytes marker,
+keeping action identity. Approval requests are never elided; one that does not
+fit is refused. Workers send one frame awaiting acknowledgement; while it is
+outstanding, adjacent deltas coalesce into one queued entry (at most 4 MiB of
+pending delta text) and at most 64 other events queue. An exhausted queue,
+rejected frame or acknowledgement timeout cancels destination execution and
+returns a failed terminal result rather than dropping events. The terminal result waits for all live-frame acknowledgements. Disconnect,
 node replacement, invocation timeout or cancellation ends the invocation; reconnect
 does not resume/replay cancelled work, and old-session frames cannot revive it.
 Completed native runners may already have stopped while their final events await
@@ -1528,8 +1548,9 @@ and actual version-1 descriptors for all three process methods before delivery;
 caller-supplied options cannot bypass this boundary.
 The broker supplies authenticated `nodeGeneration`, never a caller generation.
 
-The frozen seven-field receipt has state `running|completed|cancelled|outcome_unknown`
-(get additionally `not_found`). `exitCode` is an integer only for an observed
+The frozen seven-field receipt has state `running|completed|cancelled|failed|outcome_unknown`
+(get additionally `not_found`). `failed` means the destination proved the program
+never started (spawn or pre-exec validation failure); it has null exit/outputs. `exitCode` is an integer only for an observed
 OS exit, otherwise null. A `completed` receipt requires that observed integer
 exit, even when captured output is unavailable; null exit is not completion
 evidence. Output strings represent captured bytes; `""` means actually measured
@@ -1550,12 +1571,18 @@ a replacement worker cannot cancel its predecessor's job, although get can
 read its receipt. Timeout/overflow/cancellation clean up the process group and
 descendants where supported, without inventing an exit code.
 
-The narrow worker owner admits at most 16 active processes and retains at most
-1,000 durable fixed-ID fences across its destination service. Spent IDs and cancel
-tombstones do **not** expire: exhaustion returns `process_receipt_limit` before
-new execution, never deletes a fence to make an old ID runnable. Automated
-inspection/probe intents consume this capacity too; operators must provision a
-destination with available admission capacity rather than clear/reuse spent IDs.
+The narrow worker owner admits at most 16 active processes. Unresolved
+(`running`/`outcome_unknown`) fixed-ID fences never expire and at most 1,000 of
+them admit new work: exhaustion returns `process_receipt_limit` before new
+execution and never deletes an uncertain fence. Terminal (`completed`,
+`cancelled`, `failed`) fences hold their ID for 24 hours after they finish and
+are then retired, after which `get` returns `not_found`: reconcile within that
+window. `failed` receipts do not count toward the 1,000. At most 20,000 receipts
+are retained in total. A durable per-node generation floor keeps superseded
+generations refused after their receipts retire. Operators remove unresolved or
+terminal receipts only through the destination's preview-first
+`CodingAgent.ExecutionNode.ProcessService.prune/2` (dry run returns the affected
+IDs and a single-use ten-minute token; deletion requires that token).
 Captured output is volatile, limited to 16 completed receipts and a 24-hour cache
 lifetime; cache loss never erases original status/exit or allows redispatch.
 
@@ -1591,14 +1618,10 @@ See [attaching a bot machine](../../docs/user-guide/attaching-a-bot-machine.md).
 ## Other HTTP surfaces
 
 - `/healthz`: local service health; it does not prove a provider-backed turn.
-- `/v1/*`: [OpenAI-compatible preview](../../docs/tools/openai-compatible-api.md),
-  including model metadata, chat/responses, retrieval and cancellation. Configure
-  `LEMON_OPENAI_COMPAT_API_TOKEN` (or `LEMON_OPENAI_COMPAT_TOKEN`) for bearer/
-  `x-api-key` auth. Generation reuses the router; queued/wait/SSE modes and safe
-  image input limits are described in the linked guide.
-- `/acp`: [ACP editor adapter](../../docs/tools/acp.md); configure
-  `LEMON_ACP_API_TOKEN` for HTTP bearer/`x-api-key` auth. The guide also describes
-  the line-oriented stdio bridge and client filesystem/permission callbacks.
+- `/acp/ws`: loopback-only duplex transport for the
+  [ACP editor adapter](../../docs/tools/acp.md) (`lemon acp`), authenticated with
+  the operator token. The guide describes the stdio bridge and client
+  filesystem/permission callbacks.
 - Optional [A2A](../../docs/user-guide/a2a-peers.md) uses a separate listener
   (default 9901) enabled by `[gateway] enable_a2a = true`. Peers are independent
   principals. Task access is peer-scoped and message IDs durably replay the

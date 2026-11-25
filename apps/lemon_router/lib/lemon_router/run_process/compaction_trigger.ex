@@ -3,14 +3,20 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   Context-window overflow detection and preemptive compaction triggering.
 
   Handles extraction of completion event fields (answer, error, usage, resume),
-  context-overflow detection, and marking sessions for compaction when usage
-  approaches the model's context window limit.
+  context-overflow detection, and marking sessions for compaction when the model
+  context approaches its window limit.
+
+  The threshold compares the context after the run's latest provider call
+  (`LemonCore.Events.Usage.context_tokens/1`), never the run's cumulative usage:
+  a run of N provider calls reports roughly N times its context in cumulative
+  counters.
   """
 
   require Logger
 
   alias LemonAi.Tokens
   alias LemonCore.{ExecutionCommand, ResumeToken}
+  alias LemonCore.Events.Usage
   alias LemonRouter.{ChannelContext, ResumeResolver}
 
   @default_compaction_reserve_tokens 16_384
@@ -80,29 +86,13 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     end
   end
 
-  @spec extract_completed_usage(LemonCore.Event.t() | term()) :: map() | nil
+  @spec extract_completed_usage(LemonCore.Event.t() | term()) :: Usage.t() | nil
   def extract_completed_usage(event) do
     case extract_from_completed_or_payload(event, :usage) do
-      usage when is_map(usage) -> usage
+      usage when is_map(usage) -> Usage.from_map(usage)
       _ -> nil
     end
   end
-
-  @spec usage_input_tokens(map() | term()) :: non_neg_integer() | nil
-  def usage_input_tokens(usage) when is_map(usage) do
-    if Enum.any?([:cache_read, :cache_write], fn key ->
-         Map.has_key?(usage, key) or Map.has_key?(usage, Atom.to_string(key))
-       end) do
-      counts = Enum.map([:input, :cache_read, :cache_write], &fetch(usage, &1))
-      if Enum.all?(counts, &(is_integer(&1) and &1 >= 0)), do: Enum.sum(counts)
-    else
-      {primary_key, primary_tokens} = find_primary_token_count(usage)
-      cached_tokens = sum_cached_tokens(usage)
-      compute_total_input_tokens(primary_key, primary_tokens, cached_tokens)
-    end
-  end
-
-  def usage_input_tokens(_), do: nil
 
   # Produce a safe, bounded label for introspection error payloads.
   # Avoids leaking raw term dumps, stacktraces, or secrets.
@@ -239,13 +229,13 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
              cfg.reserve_tokens,
              cfg.trigger_ratio
            ) do
-      # Try precise usage first; fall back to char-based estimate.
-      usage = extract_completed_usage(event)
-      input_tokens = if is_map(usage), do: usage_input_tokens(usage), else: nil
+      # The latest call's context, never the run's cumulative usage; without it, a
+      # char-based estimate of the prompt.
+      context_tokens = Usage.context_tokens(extract_completed_usage(event))
 
       {effective_tokens, source} =
-        if is_integer(input_tokens) and input_tokens > 0 do
-          {input_tokens, :usage}
+        if is_integer(context_tokens) and context_tokens > 0 do
+          {context_tokens, :usage}
         else
           estimate = estimate_input_tokens_from_prompt(state)
 
@@ -284,50 +274,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   def maybe_mark_pending_compaction_near_limit(_state, _event), do: :ok
 
   # ---- Private helpers ----
-
-  @primary_token_keys [:input_tokens, :input, :prompt_tokens]
-  @cached_token_keys [
-    :cached_input_tokens,
-    :cache_read_input_tokens,
-    :cache_creation_input_tokens
-  ]
-
-  defp find_primary_token_count(usage) do
-    Enum.find_value(@primary_token_keys, {nil, nil}, fn key ->
-      case maybe_parse_positive_int(fetch(usage, key)) do
-        value when is_integer(value) -> {key, value}
-        _ -> nil
-      end
-    end)
-  end
-
-  defp sum_cached_tokens(usage) do
-    Enum.reduce(@cached_token_keys, 0, fn key, acc ->
-      case maybe_parse_positive_int(fetch(usage, key)) do
-        value when is_integer(value) -> acc + value
-        _ -> acc
-      end
-    end)
-  end
-
-  defp compute_total_input_tokens(key, tokens, cached)
-       when is_integer(tokens) and key in [:input_tokens, :input],
-       do: tokens + cached
-
-  defp compute_total_input_tokens(_key, tokens, _cached) when is_integer(tokens), do: tokens
-  defp compute_total_input_tokens(_key, _tokens, cached) when cached > 0, do: cached
-  defp compute_total_input_tokens(_key, _tokens, _cached), do: nil
-
-  defp maybe_parse_positive_int(value) when is_integer(value) and value > 0, do: value
-
-  defp maybe_parse_positive_int(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {parsed, _} when parsed > 0 -> parsed
-      _ -> nil
-    end
-  end
-
-  defp maybe_parse_positive_int(_), do: nil
 
   defp explicit_completed_ok_true?(%LemonCore.Event{} = event) do
     completed =

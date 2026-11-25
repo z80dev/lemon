@@ -27,6 +27,8 @@ defmodule LemonCore.PersistentTermHygieneTest do
     # Rare one-shot fail-stop write: at most once per VM, never cleared, so the
     # trip survives a restart of the latch's own process.
     "apps/lemon_core/lib/lemon_core/runtime_latch.ex" => [:record_trip],
+    # This OS process's identity and uid, published once at application boot.
+    "apps/lemon_core/lib/lemon_core/service/identity.ex" => [:boot_check],
     "apps/lemon_skills/lib/lemon_skills/curator_references.ex" => [:register],
     "apps/lemon_skills/lib/lemon_skills/skill_root.ex" => [:init_uid]
   }

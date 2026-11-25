@@ -95,19 +95,6 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
-      name: "bot",
-      summary: "Manage Lemon Bot's HTTPS callback address",
-      usage:
-        "lemon bot https enable [--tailscale | --url HTTPS_ORIGIN]\nlemon bot https status\nlemon bot https disable",
-      subcommands: [
-        %{name: "https", summary: "Enable, inspect, or disable the managed HTTPS address"}
-      ],
-      options: [
-        option("--tailscale", ["--tailscale"], "Create a private Tailscale Serve HTTPS route"),
-        option("--url HTTPS_ORIGIN", ["--url"], "Use an existing HTTPS reverse proxy")
-      ]
-    },
-    %{
       name: "connect",
       summary: "Pair an iPhone with an already-running Lemon Bot backend",
       usage: "lemon connect iphone --backend ORIGIN [--origin HTTPS_ORIGIN]",
@@ -626,6 +613,18 @@ defmodule LemonCli.CommandRegistry do
       ],
       details: [
         "Reads logs.tail while online, otherwise the launcher log. File reads are bounded to the last 1 MiB; unknown-level file lines are excluded with --level."
+      ]
+    },
+    %{
+      name: "browser",
+      summary: "Stop the local browser driver and the Chrome it launched",
+      usage: "lemon browser stop [--json]",
+      subcommands: [
+        %{name: "stop", summary: "Stop the local browser driver and the Chrome it launched"}
+      ],
+      options: [option("--json", ["--json"], "Emit the result as JSON")],
+      details: [
+        "Stops the driver behind the local, relay and cdp providers. A browser it only attached to keeps running. In-flight browser actions report an unknown outcome; the next browser request starts a fresh driver."
       ]
     },
     %{

@@ -4,7 +4,7 @@ defmodule LemonAi.CallDispatcher.Slots do
 
   @default_cap 10
 
-  # The root supervisor owns this table: authority/dispatcher restarts must not
+  # The root supervisor owns this table: authority restarts must not
   # erase leases for callbacks or streams that are still running.
   def init_table do
     :ets.new(__MODULE__, [:named_table, :public, :set, read_concurrency: true])
@@ -122,7 +122,7 @@ defmodule LemonAi.CallDispatcher.Slots do
         {cancelled, remaining} =
           Enum.split_with(:queue.to_list(state.waiters), &match?({_, _, _, _, ^lease}, &1))
 
-        for {_, _, _, timer, _} <- cancelled, do: Process.cancel_timer(timer)
+        Enum.each(cancelled, fn {_, _, _, timer, _} -> Process.cancel_timer(timer) end)
         {:reply, :ok, %{state | waiters: :queue.from_list(remaining)}}
 
       {monitor, _} ->
@@ -179,7 +179,7 @@ defmodule LemonAi.CallDispatcher.Slots do
   defp grant_waiters(state) do
     with true <- map_size(state.monitors) < state.cap,
          {{:value, {_, from, owner, timer, lease}}, remaining} <- :queue.out(state.waiters) do
-      Process.cancel_timer(timer)
+      _ = Process.cancel_timer(timer)
       state = grant(%{state | waiters: remaining}, owner, lease)
       GenServer.reply(from, {:ok, {state.provider, lease}})
       grant_waiters(state)

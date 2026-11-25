@@ -421,11 +421,8 @@ defmodule LemonGateway.WebhookTransportTest do
                updated_at_ms: 1
              })
 
-    config_pid = ensure_config_started()
-    original_config_state = :sys.get_state(config_pid)
-
-    :sys.replace_state(config_pid, fn state ->
-      Map.put(state, :webhook, %{
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      webhook: %{
         integrations: %{
           integration_id => %{
             agent_id: "webhook-test",
@@ -433,14 +430,8 @@ defmodule LemonGateway.WebhookTransportTest do
             token: "endpoint-test-token"
           }
         }
-      })
-    end)
-
-    on_exit(fn ->
-      if Process.alive?(config_pid) do
-        :sys.replace_state(config_pid, fn _state -> original_config_state end)
-      end
-    end)
+      }
+    })
 
     conn =
       Test.conn(
@@ -1338,8 +1329,4 @@ defmodule LemonGateway.WebhookTransportTest do
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
-
-  defp ensure_config_started do
-    Process.whereis(LemonGateway.Config) || start_supervised!(LemonGateway.Config)
-  end
 end

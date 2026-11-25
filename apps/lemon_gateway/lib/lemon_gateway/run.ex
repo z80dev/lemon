@@ -48,7 +48,8 @@ defmodule LemonGateway.Run do
   }
 
   alias LemonCore.Events
-  alias LemonGateway.{Cwd, Event, ExecutionRequest, Executor, ProgressStore}
+  alias LemonCore.Cwd
+  alias LemonGateway.{Event, ExecutionRequest, Executor, ProgressStore}
   alias LemonCore.ResumeToken
 
   @engine_provenance "lemon"
@@ -84,10 +85,21 @@ defmodule LemonGateway.Run do
     session_key = request.session_key || "default"
     request = %{request | run_id: run_id, session_key: session_key}
 
-    case admit_session(args, session_key, run_id) do
-      :ok -> init_state(submitted_request, request, run_id, session_key)
+    # The engine-session claim is taken before start returns, so contention is a
+    # synchronous `{:error, :session_in_use}` the caller can retry, not a run
+    # that terminalizes; no permit or terminal record exists for the refusal.
+    with :ok <- admit_session(args, session_key, run_id),
+         {:ok, claim_key} <- claim_session(request) do
+      init_state(submitted_request, request, run_id, session_key, claim_key)
+    else
       {:error, reason} -> {:stop, reason}
     end
+  end
+
+  defp claim_session(request) do
+    key = claim_key_for(request)
+
+    with :ok <- LemonGateway.EngineSessionClaim.claim(key), do: {:ok, key}
   end
 
   # A run no router admission covered registers as its session's activity for
@@ -101,7 +113,7 @@ defmodule LemonGateway.Run do
 
   defp admit_session(_args, _session_key, _run_id), do: :ok
 
-  defp init_state(submitted_request, request, run_id, session_key) do
+  defp init_state(submitted_request, request, run_id, session_key, claim_key) do
     state = %{
       submitted_execution_request: submitted_request,
       execution_request: request,
@@ -117,7 +129,7 @@ defmodule LemonGateway.Run do
       renderer: LemonGateway.Renderers.Basic,
       renderer_state: nil,
       completed: false,
-      claim_key: nil,
+      claim_key: claim_key,
       last_resume: request.resume,
       current_phase: nil,
       cancelled: false,
@@ -193,33 +205,23 @@ defmodule LemonGateway.Run do
 
   @impl true
   def handle_continue(:admit, state) do
-    key = claim_key_for(state.execution_request)
+    case terminal_fence(state) do
+      :open ->
+        case Process.whereis(LemonGateway.Slots) do
+          pid when is_pid(pid) ->
+            ref = Process.monitor(pid)
+            LemonGateway.Slots.acquire(state.run_id)
+            {:noreply, %{state | slots_monitor_ref: ref}}
 
-    case LemonGateway.EngineSessionClaim.claim(key) do
-      :ok ->
-        state = %{state | claim_key: key}
-
-        case terminal_fence(state) do
-          :open ->
-            case Process.whereis(LemonGateway.Slots) do
-              pid when is_pid(pid) ->
-                ref = Process.monitor(pid)
-                LemonGateway.Slots.acquire(state.run_id)
-                {:noreply, %{state | slots_monitor_ref: ref}}
-
-              nil ->
-                finalize_start_failure(state, :runtime_unavailable)
-            end
-
-          :terminal ->
-            {:stop, :normal, %{state | completed: true}}
-
-          :unavailable ->
-            {:stop, :run_state_unavailable, state}
+          nil ->
+            finalize_start_failure(state, :runtime_unavailable)
         end
 
-      {:error, :session_in_use} ->
-        finalize_start_failure(state, :session_in_use)
+      :terminal ->
+        {:stop, :normal, %{state | completed: true}}
+
+      :unavailable ->
+        finalize_start_failure(state, :run_state_unavailable)
     end
   end
 
@@ -234,6 +236,8 @@ defmodule LemonGateway.Run do
   defp legacy_terminal_fence(state) do
     case RunStore.fetch(state.run_id) do
       {:ok, %{summary: %{completed: completed}}} when is_map(completed) -> :terminal
+      # Finalized, then evicted by `:runs` retention: never reopen it.
+      {:error, :evicted} -> :terminal
       {:ok, nil} -> :open
       {:ok, %{summary: nil}} -> :open
       _ -> :unavailable
@@ -322,7 +326,7 @@ defmodule LemonGateway.Run do
 
   defp finalize_start_failure(state, reason) do
     Logger.warning(
-      "Gateway run executor start failed run_id=#{inspect(state.run_id)} reason=#{inspect(reason)}"
+      "Gateway run start failed run_id=#{inspect(state.run_id)} reason=#{inspect(reason)}"
     )
 
     renderer_state = state.renderer_state || state.renderer.init(%{engine: @engine_provenance})
@@ -340,8 +344,7 @@ defmodule LemonGateway.Run do
     {renderer_state, _render_action} = state.renderer.apply_event(renderer_state, completed)
     state = %{state | renderer_state: renderer_state}
 
-    finalize(state, completed)
-    {:stop, :normal, %{state | completed: true}}
+    {:stop, :normal, finalize(state, completed)}
   end
 
   defp safe_start_executor_run(executor, %ExecutionRequest{} = request, opts, sink_pid) do
@@ -388,17 +391,26 @@ defmodule LemonGateway.Run do
         case terminal_fence(state) do
           :open -> start_executor(resolve_configured_executor(), state)
           :terminal -> {:stop, :normal, %{state | completed: true}}
-          :unavailable -> {:stop, :run_state_unavailable, state}
+          :unavailable -> finalize_start_failure(state, :run_state_unavailable)
         end
     end
   end
 
+  # The permit authority is gone with its FIFO: a waiting Run can never be
+  # granted, and a running one has lost its permit. Report the run instead of
+  # exiting silently, so its owner never waits for a completion that cannot come.
   def handle_info(
         {:DOWN, ref, :process, _pid, _reason},
         %{slots_monitor_ref: ref} = state
       )
       when is_reference(ref) do
-    {:stop, :runtime_unavailable, state}
+    state = %{state | slots_monitor_ref: nil, slot_ref: nil}
+
+    cond do
+      state.cancelled -> {:noreply, state}
+      state.executor -> begin_cancel(state, :runtime_unavailable)
+      true -> finalize_start_failure(state, :runtime_unavailable)
+    end
   end
 
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
@@ -408,7 +420,8 @@ defmodule LemonGateway.Run do
           event
           | ok: false,
             error: state.cancel_reason,
-            meta: Map.put(event.meta || %{}, :cancelled, true)
+            meta:
+              Map.merge(event.meta || %{}, %{cancelled: true, cancel_reason: state.cancel_reason})
         },
         else: event
 
@@ -460,8 +473,7 @@ defmodule LemonGateway.Run do
       is_completed(event) ->
         resume = event.resume
         state = %{state | last_resume: resume || state.last_resume}
-        finalize(state, event)
-        {:stop, :normal, %{state | completed: true}}
+        {:stop, :normal, finalize(state, event)}
 
       true ->
         {:noreply, state}
@@ -554,8 +566,7 @@ defmodule LemonGateway.Run do
         session_key: state.session_key
       })
 
-    finalize(state, completed)
-    {:stop, :normal, %{state | completed: true}}
+    {:stop, :normal, finalize(state, completed)}
   end
 
   defp executor_exit_class(reason) when reason in [:normal, :killed, :shutdown], do: reason
@@ -593,16 +604,23 @@ defmodule LemonGateway.Run do
     if state.completed or state.cancelled do
       {:noreply, state}
     else
-      state = %{state | cancelled: true, cancel_reason: reason || :user_requested}
+      begin_cancel(state, reason || :user_requested)
+    end
+  end
 
-      if state.executor &&
-           safe_executor_control(state.executor, :cancel, state.control_ctx) == :ok &&
-           is_pid(state.executor_pid) do
-        timer = Process.send_after(self(), :cancel_timeout, @cancel_drain_timeout_ms)
-        {:noreply, %{state | cancel_timeout_ref: timer}}
-      else
-        finalize_cancel(state)
-      end
+  # The cancel request is asynchronous and its result is advisory: while the
+  # executor process lives, the permit and engine-session claim are held until
+  # it exits or the drain deadline passes, so a next run of the same session can
+  # never overlap tools still finishing here.
+  defp begin_cancel(state, reason) do
+    state = %{state | cancelled: true, cancel_reason: reason}
+    if state.executor, do: _ = safe_executor_control(state.executor, :cancel, state.control_ctx)
+
+    if is_pid(state.executor_pid) do
+      timer = Process.send_after(self(), :cancel_timeout, @cancel_drain_timeout_ms)
+      {:noreply, %{state | cancel_timeout_ref: timer}}
+    else
+      finalize_cancel(state)
     end
   end
 
@@ -612,15 +630,14 @@ defmodule LemonGateway.Run do
         engine: @engine_provenance,
         resume: state.last_resume || state.execution_request.resume,
         ok: false,
-        meta: %{cancelled: true},
+        meta: %{cancelled: true, cancel_reason: state.cancel_reason},
         error: state.cancel_reason,
         answer: state.accumulated_text,
         run_id: state.run_id,
         session_key: state.session_key
       })
 
-    finalize(state, completed)
-    {:stop, :normal, %{state | completed: true}}
+    {:stop, :normal, finalize(state, completed)}
   end
 
   defp handle_steer(kind, submission_run_id, prompt, worker_pid, state) do
@@ -725,7 +742,7 @@ defmodule LemonGateway.Run do
       _ = safe_executor_control(state.executor, :cancel, state.control_ctx)
     end
 
-    release_admission(state)
+    _ = release_admission(state)
 
     if state.progress_mapping_registered?,
       do: unregister_progress_mapping(state.execution_request)
@@ -733,12 +750,16 @@ defmodule LemonGateway.Run do
     :ok
   end
 
+  # Releases each held admission once and clears it, so a later terminate sees
+  # nothing left to release.
   defp release_admission(state) do
     if state.slot_ref, do: LemonGateway.Slots.release(state.slot_ref)
     if state.claim_key, do: LemonGateway.EngineSessionClaim.release(state.claim_key)
-    :ok
+    %{state | slot_ref: nil, claim_key: nil}
   end
 
+  # Persist, then release the permit and engine-session claim, then publish:
+  # an observer that sees the completion can start the session's next run.
   defp finalize(state, %{__event__: :completed} = completed) do
     state = %{state | completed: true}
     terminal_phase = terminal_phase_for_completion(state, completed)
@@ -748,8 +769,6 @@ defmodule LemonGateway.Run do
         :completed -> maybe_track_phase(state, :finalizing)
         _ -> state
       end
-
-    release_admission(state)
 
     # Add run_id, session_key, and accumulated answer to completed event
     answer = Map.get(completed, :answer)
@@ -794,6 +813,8 @@ defmodule LemonGateway.Run do
         {:error, _reason} -> exit(:terminal_persistence_failed)
       end
 
+    state = release_admission(state)
+
     if published? do
       emit_telemetry_stop(
         state.run_id,
@@ -828,8 +849,8 @@ defmodule LemonGateway.Run do
       unregister_progress_mapping(state.execution_request)
     end
 
-    if published?, do: maybe_track_phase(state, terminal_phase)
-    :ok
+    state = %{state | progress_mapping_registered?: false}
+    if published?, do: maybe_track_phase(state, terminal_phase), else: state
   end
 
   defp log_run_failure(_state, %{__event__: :completed} = completed) do

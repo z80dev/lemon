@@ -551,7 +551,14 @@ defmodule LemonRouter.NativeFollowupAdmission do
     end
   end
 
-  defp allowed_origins do
+  @doc """
+  The effective callback-origin allowlist, exactly as admission enforces it.
+
+  Diagnostics read it through `:doctor_runtime` (`:native_followup_admission`)
+  instead of reimplementing the environment and configuration fallback.
+  """
+  @spec allowed_origins() :: [String.t()]
+  def allowed_origins do
     case Env.get(:lemon_native_followup_allowed_origins) do
       nil ->
         case System.get_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS") do

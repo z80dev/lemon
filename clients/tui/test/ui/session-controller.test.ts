@@ -15,6 +15,7 @@ import { synthesizeHistory } from "../../src/ui/controllers/session-controller.t
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "../helpers/memory-terminal.ts";
+import { runText } from "../helpers/transcript.ts";
 import { waitFor } from "../helpers/wait.ts";
 
 const teardown: Array<() => void> = [];
@@ -760,7 +761,7 @@ describe("SessionController owner recovery", () => {
 			release.resolve(recoverySnapshot("tui-a", "run-a"));
 			await recovering;
 			expect(reads).toBe(2);
-			expect(app.store.focused.bufferFor("current-run")).toBe("whole latest text");
+			expect(runText(app.store.focused, "current-run")).toBe("whole latest text");
 			expect(app.store.focused.assistantFor("run-a")).toBeUndefined();
 			expect(app.store.focused.byActionId.has("obsolete-call")).toBe(false);
 			expect(app.store.approvals.has("obsolete-approval")).toBe(false);
@@ -869,7 +870,7 @@ describe("SessionController owner recovery", () => {
 		await received;
 		await app.sessions.resync();
 		expect(app.store.focused.byActionId.has("stale-action")).toBe(false);
-		expect(app.store.focused.bufferFor("current-run")).toBe("current answer");
+		expect(runText(app.store.focused, "current-run")).toBe("current answer");
 	});
 
 	test("a late nonterminal snapshot cannot reopen a finished attempt", async () => {
@@ -902,7 +903,7 @@ describe("SessionController owner recovery", () => {
 			await app.sessions.resync();
 			expect(app.store.focused.snapshotIdentity?.[boundary]).toBe(`current-${boundary}`);
 			expect(app.store.focused.busy).toBe(true);
-			expect(app.store.focused.bufferFor("run-a")).toBe("current active answer");
+			expect(runText(app.store.focused, "run-a")).toBe("current active answer");
 		});
 	}
 });
@@ -992,12 +993,13 @@ describe("synthesizeHistory", () => {
 });
 
 describe("SessionController routing hydration", () => {
-	test("a switch learns the target session's resolved model", async () => {
+	test("a switch learns the target session's resolved model and title", async () => {
 		const { app, server } = await bootApp("tui-a");
 		server.respondWith("session.detail", {
 			sessionKey: "tui-b",
 			session: {
 				sessionKey: "tui-b",
+				title: "Release prep",
 				model: "claude-sonnet-4",
 				provider: "anthropic",
 				contextWindow: 200_000,
@@ -1012,11 +1014,13 @@ describe("SessionController routing hydration", () => {
 		});
 
 		const session = app.store.session("tui-b");
+		expect(session.title).toBe("Release prep");
 		expect(session.model).toBe("claude-sonnet-4");
 		expect(session.provider).toBe("anthropic");
 		expect(session.contextWindow).toBe(200_000);
 		expect(session.thinkingLevel).toBe("high");
 		expect(session.modelSource).toBe("detail");
+		expect(server.requestsFor("session.detail").at(-1)?.params).toEqual({ sessionKey: "tui-b" });
 	});
 
 	test("hydration does not undo a model the session already ran on", async () => {

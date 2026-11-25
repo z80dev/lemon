@@ -138,7 +138,7 @@ defmodule LemonBrowser.CloudSession do
   @impl true
   def terminate(_reason, state) do
     if is_pid(state.driver), do: LocalServer.stop(state.driver)
-    close_provider_session(state)
+    _ = close_provider_session(state)
     :ok
   end
 

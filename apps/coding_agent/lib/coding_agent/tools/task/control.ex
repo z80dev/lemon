@@ -1,63 +1,37 @@
 defmodule CodingAgent.Tools.Task.Control do
   @moduledoc """
-  Invocation-bound control of native task workers. Tracks the owning parent,
-  cancellation signal and live child session without publishing process handles.
-  Worker and parent death cancel descendants and terminalize abandoned work.
+  Invocation-bound control of native task children.
+
+  Each child is owned by its own supervised `CodingAgent.TaskRuntime.Child`;
+  this module is the authenticated API over those owners. It never publishes
+  process handles. Worker and parent death cancel descendants and terminalize
+  abandoned work.
 
   Family messaging authenticates callers from captured session options, never
-  message parameters. It exposes only immediate relatives and public identities.
-  Running peers receive non-preempting input at the next turn boundary. Completed
-  children remain idle until their configured TTL parks the live session; a
-  direct message starts a new turn, restoring the persisted session when parked.
-  Each child owns its pre-attachment mailbox and admission counters through
-  `ChildInbox` (64 messages / 256 KiB including envelopes). The 32 KiB UTF-8
-  body limit remains caller policy here. Session, worker, inbox and parent
-  liveness comes from monitors, not process-status probes.
-  Live deliveries are emitted in order by the inbox, but acknowledgements are
-  awaited by callers outside both owners. A missing acknowledgement is
-  `:outcome_unknown` and never automatically redelivered.
+  message parameters, and exposes only immediate relatives and public
+  identities. Family resolution reads the owners' published projections, so a
+  busy child never blocks another child's roster, message or cancellation.
+  Running peers receive non-preempting input at the next turn boundary.
+  Completed children remain idle until their configured TTL parks the live
+  session; a direct message starts a new turn, restoring the persisted session
+  when parked. The 32 KiB UTF-8 body limit is caller policy here; each owner
+  enforces its own pending-message admission.
 
-  The coordinator remains node-local: a child may address its parent, siblings
-  and its own children in one broadcast, crossing immediate-parent partitions.
-  Splitting this registry would require a cross-owner identity index and an
-  admission protocol to preserve all-recipient preflight and authenticated
-  family traversal. That topology change is not needed to move message content
-  and admission into child owners; retained identities still use their captured
-  owner/session scope, including foreign-ID not-found behavior.
+  A broadcast reserves capacity on every recipient before delivering to any, so
+  a failed preflight consumes nothing. Acknowledgements are awaited by callers
+  outside the owners. A missing acknowledgement is `:outcome_unknown` and never
+  automatically redelivered.
 
-  ## Per-child transitions
-
-  The coordinator's `:ready` state owns independent child lifecycles. Named
-  `:gen_statem` timeouts are keyed by task ID, so traffic for another child
-  cannot reset a park or force-cancel deadline. Entry phases are the single
-  lifecycle authority; there are no cancellation flags or timer tokens.
-
-  | Child phase | Event | Next phase / timeout |
-  | --- | --- | --- |
-  | running | completed with retained session | idle / park TTL (zero disables) |
-  | running | completed without live session | parked |
-  | idle | park timeout or session DOWN | parked / park timeout cancelled |
-  | idle or parked | message accepted | running / park timeout cancelled |
-  | live | cancel, parent abort or owner DOWN | cancelling / force-cancel grace |
-  | cancelling | complete or worker DOWN | killed / force timeout cancelled |
-  | cancelling | force timeout | killed / worker and session stopped |
-  | running | worker or inbox DOWN | aborted |
-  | any | parent DOWN | removed / all child timeouts cancelled |
-  | unchanged | query, repeated cancel, unrelated child event | deadlines unchanged |
+  Cancellation aborts the child's signal before asking its owner to record it,
+  so a busy owner cannot delay a worker's cooperative stop.
   """
-  @behaviour :gen_statem
 
-  alias CodingAgent.{Session, TaskStore}
-  alias CodingAgent.Tools.Task.{Async, ChildInbox}
+  alias CodingAgent.{Session, TaskRuntime, TaskStore}
   alias LemonAgent.AbortSignal
 
   @max_message_bytes 32 * 1024
-
-  def start_link(opts), do: :gen_statem.start_link({:local, __MODULE__}, __MODULE__, opts, [])
-
-  def child_spec(opts) do
-    %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
-  end
+  # Preserve the public API's former call deadline.
+  @call_timeout 5_000
 
   def owner(opts) do
     {Keyword.get(opts, :parent_session) || Keyword.get(opts, :session_key) ||
@@ -77,22 +51,46 @@ defmodule CodingAgent.Tools.Task.Control do
     end
   end
 
-  def register(task_id, signal, parent_signal, parent, on_failure, owner_pid \\ nil) do
-    call({:register, task_id, signal, parent_signal, parent, on_failure, owner_pid})
-  end
+  @doc """
+  Start the owner of a task child. `spec` holds the child's `:signal`, optional
+  `:parent_signal`, `:parent` (native session process) and `:owner_pid`
+  (scheduler), and the turn's `:claim` and `:finalize` callback.
+  """
+  @spec register(String.t(), map()) :: :ok | {:error, term()}
+  def register(task_id, spec),
+    do: TaskRuntime.start(task_id, Map.put(spec, :incarnation, make_ref()))
 
-  def attach_worker(task_id), do: call({:worker, task_id, self()})
+  @doc """
+  Start the registered child's worker under `supervisor`. A child cancelled
+  before launch is already terminal and starts nothing; neither does one whose
+  owner already exited because its parent session died.
+  """
+  @spec launch(String.t(), GenServer.server(), (-> term())) :: :ok | {:error, term()}
+  def launch(task_id, supervisor, fun) do
+    case TaskRuntime.whereis(task_id) do
+      nil -> :ok
+      owner -> :gen_statem.call(owner, {:launch, supervisor, fun}, :infinity)
+    end
+  catch
+    :exit, {reason, _} when reason in [:noproc, :normal] -> :ok
+    :exit, _ -> {:error, :task_start_failed}
+  end
 
   @doc false
   def worker_pids(task_ids) do
-    call({:worker_pids, task_ids})
-  catch
-    :exit, _ -> []
+    task_ids
+    |> Enum.flat_map(fn id ->
+      case TaskRuntime.lookup(id) do
+        {_owner, %{worker: worker}} when is_pid(worker) -> [worker]
+        _ -> []
+      end
+    end)
+    |> Enum.uniq()
   end
 
   def attach_session(task_id, session, session_id \\ nil) do
     with_delivery_reply(fn reply_to ->
-      case call({:session, task_id, session, session_id, reply_to}) do
+      case call(task_id, {:session, session, session_id, reply_to}) do
         {:deliver_pending, deliveries} ->
           Enum.reduce_while(deliveries, :ok, fn delivery, :ok ->
             case resolve_delivery(delivery) do
@@ -101,71 +99,116 @@ defmodule CodingAgent.Tools.Task.Control do
             end
           end)
 
+        {:error, :unavailable} ->
+          Session.abort(session)
+          {:error, "Task aborted"}
+
         reply ->
           reply
       end
     end)
   end
 
-  def configure(task_id, context),
-    do: call({:configure, task_id, context})
+  def configure(task_id, context), do: task_call(task_id, {:configure, context})
 
   def retain_session(task_id, session, resume),
-    do: call({:retain_session, task_id, session, resume})
+    do: task_call(task_id, {:retain_session, session, resume})
 
   @doc "Send peer content to a task ID, unique name, parent, or all immediate relatives."
   def send_message(target, text, opts) do
-    with :ok <- validate_message(text) do
+    with :ok <- validate_message(text),
+         {:ok, caller, family} <- family(opts),
+         {:ok, recipients} <- resolve_target(target, family),
+         envelope = peer_envelope(caller, text),
+         {:ok, reserved} <- reserve(recipients, envelope, broadcast?(target)) do
       with_delivery_reply(fn reply_to ->
-        case call({:send_message, target, text, opts, reply_to}) do
-          {:ok, reply} ->
-            recipients =
-              Enum.map(reply.recipients, fn recipient ->
-                %{recipient | delivery: resolve_delivery(recipient.delivery)}
-              end)
+        receipts =
+          reserved
+          |> Enum.map(fn {recipient, reservation} ->
+            {recipient, commit(recipient, reservation, envelope, reply_to)}
+          end)
+          |> Enum.map(fn {recipient, delivery} ->
+            Map.put(public_identity(recipient), :delivery, resolve_delivery(delivery))
+          end)
 
-            {:ok, %{reply | recipients: recipients}}
-
-          error ->
-            error
-        end
+        {:ok, %{sender: address(caller), recipients: receipts}}
       end)
     end
   end
 
   @doc "Return public identities for the authenticated caller and its immediate family."
-  def roster(opts), do: call({:roster, opts})
+  def roster(opts) do
+    with {:ok, _caller, family} <- family(opts) do
+      {:ok, Enum.map(family, &public_identity/1)}
+    end
+  end
 
-  def complete(task_id), do: call({:complete, task_id})
-  def cancel_parent(parent), do: :gen_statem.cast(__MODULE__, {:cancel_parent, parent})
+  @doc "Cancel every child launched by the native session `parent`."
+  def cancel_parent(parent) when is_pid(parent) do
+    for owner <- TaskRuntime.owners_of_parent(parent), do: :gen_statem.cast(owner, :cancel)
+    :ok
+  end
+
+  def cancel_parent(_parent), do: :ok
 
   @doc false
-  def cancel_owned(task_id \\ :all),
-    do: call({:cancel_owned, task_id})
+  def cancel_owned(task_id \\ :all) do
+    caller = self()
+
+    for {id, _owner, projection} <- TaskRuntime.entries(),
+        projection.owner_pid == caller and task_id in [:all, id],
+        do: cancel_task(id)
+
+    :ok
+  end
 
   def command(task_id, action, text, opts) do
     with :ok <- authorize(task_id, opts) do
-      with_delivery_reply(fn reply_to ->
-        case call({:command, task_id, action, text, reply_to}) do
-          {:delivery, pending} ->
-            case resolve_delivery(pending) do
-              :injected -> :ok
-              outcome -> {:error, outcome}
-            end
+      cond do
+        action == "cancel" ->
+          cancel_task(task_id)
 
-          reply ->
-            reply
-        end
-      end)
+        is_nil(TaskRuntime.whereis(task_id)) ->
+          {:error, "Task is no longer running"}
+
+        true ->
+          with :ok <- validate_message(text) do
+            with_delivery_reply(fn reply_to ->
+              case call(task_id, {:enqueue, text, reply_to}) do
+                {:delivery, pending} ->
+                  case resolve_delivery(pending) do
+                    :injected -> :ok
+                    outcome -> {:error, outcome}
+                  end
+
+                {:error, :unavailable} ->
+                  {:error, "Task is no longer running"}
+
+                reply ->
+                  reply
+              end
+            end)
+          end
+      end
     end
   end
 
   @doc """
   Live phase, child session and retained model of the given tasks, for the
-  operator Agent Hub. Tasks without a control entry are omitted.
+  operator Agent Hub. Tasks without a live owner are omitted.
   """
-  def hub_state(task_ids) when is_list(task_ids),
-    do: call({:hub_state, task_ids})
+  def hub_state(task_ids) when is_list(task_ids) do
+    for id <- task_ids, {_owner, projection} <- [TaskRuntime.lookup(id)], into: %{} do
+      {id,
+       %{
+         status: TaskRuntime.status(projection, id),
+         session: projection.session,
+         session_id: projection.session_id,
+         model: projection.model,
+         messaging: projection.metadata[:orchestration_worker] != true
+       }}
+    end
+  end
 
   @doc """
   Deliver a human operator's message to one task, using the family delivery
@@ -178,8 +221,9 @@ defmodule CodingAgent.Tools.Task.Control do
   def operator_send(task_id, text) do
     with :ok <- validate_message(text) do
       with_delivery_reply(fn reply_to ->
-        case call({:operator_send, task_id, text, reply_to}) do
+        case call(task_id, {:deliver, text, reply_to}) do
           {:ok, delivery} -> {:ok, resolve_delivery(delivery)}
+          {:error, :unavailable} -> {:error, "Unknown or unavailable agent target: #{task_id}"}
           error -> error
         end
       end)
@@ -187,417 +231,123 @@ defmodule CodingAgent.Tools.Task.Control do
   end
 
   @doc "Cancel a task the operator Agent Hub has already proven it owns."
-  def operator_cancel(task_id),
-    do: call({:command, task_id, "cancel", nil, nil})
+  def operator_cancel(task_id), do: cancel_task(task_id)
 
-  # Preserve the public API's former GenServer.call/2 deadline.
-  defp call(request), do: :gen_statem.call(__MODULE__, request, 5_000)
+  # -- owners -------------------------------------------------------------------
 
-  @impl true
-  def callback_mode, do: :handle_event_function
-
-  @impl true
-  def format_status(status) do
-    status
-    |> Map.put(:data, %{module: __MODULE__, task_count: map_size(status.data)})
-    |> Map.put(:queue, [])
-    |> Map.put(:postponed, [])
-    |> Map.put(:reason, :redacted)
-    |> Map.put(:log, [])
-  end
-
-  @impl true
-  def init(_opts), do: {:ok, :ready, %{}}
-
-  @impl true
-  def handle_event(
-        {:call, from},
-        {:register, id, signal, parent_signal, parent, on_failure, owner_pid},
-        :ready,
-        state
-      ) do
-    AbortSignal.subscribe(parent_signal)
-
-    metadata =
-      case TaskStore.get_record(id) do
-        {:ok, record} ->
-          Map.take(record, [
-            :owner,
-            :name,
-            :run_id,
-            :parent_run_id,
-            :parent_session_id,
-            :orchestration_worker
-          ])
-
-        _ ->
-          %{}
-      end
-
-    {inbox, inbox_ref} = ChildInbox.start()
-
-    entry = %{
-      signal: signal,
-      parent_signal: parent_signal,
-      parent: parent,
-      parent_ref: if(is_pid(parent), do: Process.monitor(parent)),
-      owner_ref: if(is_pid(owner_pid), do: Process.monitor(owner_pid)),
-      owner_pid: owner_pid,
-      worker: nil,
-      worker_ref: nil,
-      session: nil,
-      session_ref: nil,
-      session_id: nil,
-      phase: :running,
-      resume: nil,
-      continuation: nil,
-      metadata: metadata,
-      inbox: inbox,
-      inbox_ref: inbox_ref,
-      on_failure: on_failure
-    }
-
-    entry = if AbortSignal.aborted?(parent_signal), do: cancel(id, entry), else: entry
-    reply(from, :ok, state, id, entry)
-  end
-
-  def handle_event({:call, from}, {:worker, id, worker}, :ready, state) do
-    case state[id] do
-      %{phase: :running} = entry ->
-        entry = %{detach_worker(entry) | worker: worker, worker_ref: Process.monitor(worker)}
-        notify_worker(entry)
-        reply(from, :ok, state, id, entry)
-
-      _ ->
-        reply(from, {:error, "Task aborted"}, state)
-    end
-  end
-
-  def handle_event({:call, from}, {:worker_pids, ids}, :ready, state) do
-    workers = for id <- ids, entry = state[id], entry && is_pid(entry.worker), do: entry.worker
-    reply(from, Enum.uniq(workers), state)
-  end
-
-  def handle_event({:call, from}, {:session, id, session, session_id, reply_to}, :ready, state) do
-    case state[id] do
+  defp cancel_task(task_id) do
+    case TaskRuntime.lookup(task_id) do
       nil ->
-        Session.abort(session)
-        reply(from, {:error, "Task aborted"}, state)
+        {:error, "Task is no longer running"}
 
-      entry ->
-        if unavailable(entry, id) do
-          Session.abort(session)
-          reply(from, {:error, "Task aborted"}, state)
-        else
-          case ChildInbox.attach(entry.inbox, session, reply_to) do
-            {:deliver_pending, deliveries} ->
-              demonitor(entry.session_ref)
+      {owner, projection} ->
+        # The worker observes the abort even while its owner is busy; the owner
+        # records the cancellation when it next runs.
+        if projection.signal, do: AbortSignal.abort(projection.signal)
+        :gen_statem.call(owner, :cancel, @call_timeout)
+    end
+  catch
+    :exit, {:noproc, _} -> {:error, "Task is no longer running"}
+    :exit, _ -> :ok
+  end
 
-              entry = %{
-                entry
-                | session: session,
-                  session_ref: Process.monitor(session),
-                  session_id: session_id
-              }
-
-              reply(from, {:deliver_pending, deliveries}, state, id, entry)
-
-            {:error, _} = error ->
-              Session.abort(session)
-              reply(from, error, state)
-          end
-        end
+  defp task_call(task_id, request) do
+    case call(task_id, request) do
+      {:error, :unavailable} -> {:error, "Task aborted"}
+      reply -> reply
     end
   end
 
-  def handle_event({:call, from}, {:configure, id, context}, :ready, state) do
-    case state[id] do
-      nil -> reply(from, {:error, "Task aborted"}, state)
-      entry -> reply(from, :ok, state, id, %{entry | continuation: context})
+  defp call(task_id, request) do
+    case TaskRuntime.whereis(task_id) do
+      nil -> {:error, :unavailable}
+      owner -> :gen_statem.call(owner, request, @call_timeout)
     end
+  catch
+    :exit, {:noproc, _} -> {:error, :unavailable}
+    :exit, {:normal, _} -> {:error, :unavailable}
+    :exit, {:timeout, _} -> {:error, :outcome_unknown}
   end
 
-  def handle_event({:call, from}, {:retain_session, id, session, resume}, :ready, state) do
-    case state[id] do
-      %{session: ^session, phase: :running} = entry ->
-        TaskStore.set_agent_state(id, :running, %{
-          session_id: entry.session_id,
-          session_file: resume.start_opts[:session_file],
-          cwd: resume.start_opts[:cwd]
-        })
+  # A broadcast skips relatives that stopped being live since the family was
+  # read; an addressed message reports them.
+  defp reserve(recipients, text, broadcast?) do
+    caller = self()
 
-        reply(from, :ok, state, id, %{entry | resume: resume})
-
-      _ ->
-        reply(from, {:error, "Task aborted"}, state)
-    end
-  end
-
-  def handle_event({:call, from}, {:complete, id}, :ready, state) do
-    case state[id] do
-      nil ->
-        reply(from, :ok, state)
-
-      entry ->
-        entry = detach_worker(entry)
-
-        if (status(entry, id) == :completed and entry.resume) &&
-             entry.phase not in [:cancelling, :killed] do
-          phase = if is_pid(entry.session), do: :idle, else: :parked
-          TaskStore.set_agent_state(id, phase)
-          reply(from, :ok, state, id, %{entry | phase: phase})
-        else
-          stop_child(entry)
-          phase = if entry.phase in [:cancelling, :killed], do: :killed, else: :aborted
-          TaskStore.set_agent_state(id, phase)
-          entry = entry |> detach_session() |> close_inbox()
-          reply(from, :ok, state, id, %{entry | phase: phase, resume: nil})
-        end
-    end
-  end
-
-  def handle_event({:call, {owner, _} = from}, {:cancel_owned, target}, :ready, state) do
-    changes =
-      Enum.reduce(state, {state, []}, fn {id, entry}, acc ->
-        if entry.owner_pid == owner and (target == :all or target == id),
-          do: put_entry(acc, id, cancel(id, entry)),
-          else: acc
-      end)
-
-    reply_changes(from, :ok, changes)
-  end
-
-  def handle_event({:call, from}, {:command, id, action, text, reply_to}, :ready, state) do
-    case state[id] do
-      nil ->
-        reply(from, {:error, "Task is no longer running"}, state)
-
-      entry when action == "cancel" ->
-        reply(from, :ok, state, id, cancel(id, entry))
-
-      %{phase: phase} when phase in [:cancelling, :killed] ->
-        reply(from, {:error, "Task is being cancelled"}, state)
-
-      entry ->
-        case enqueue(entry, id, text, reply_to) do
-          {:ok, entry} -> reply(from, :ok, state, id, entry)
-          {:delivery, pending} -> reply(from, {:delivery, pending}, state)
-          {:error, reason} -> reply(from, {:error, reason}, state)
-        end
-    end
-  end
-
-  def handle_event({:call, from}, {:roster, opts}, :ready, state) do
-    reply =
-      with {:ok, _caller, family} <- family(state, opts) do
-        {:ok, Enum.map(family, &public_identity/1)}
-      end
-
-    reply(from, reply, state)
-  end
-
-  def handle_event({:call, from}, {:hub_state, ids}, :ready, state) do
-    reply =
-      for id <- ids, Map.has_key?(state, id), into: %{} do
-        entry = state[id]
-
-        {id,
-         %{
-           status: status(entry, id),
-           session: entry.session,
-           session_id: entry.session_id,
-           model: entry.resume && entry.resume.start_opts[:model],
-           messaging: entry.metadata[:orchestration_worker] != true
-         }}
-      end
-
-    reply(from, reply, state)
-  end
-
-  def handle_event({:call, from}, {:operator_send, id, text, reply_to}, :ready, state) do
-    with entry when not is_nil(entry) <- state[id],
-         recipient = member(id, entry, :child),
-         :ok <- prepare_delivery([recipient], text) do
-      {entry, delivery} = deliver_recipient(recipient, text, reply_to)
-      reply(from, {:ok, delivery}, state, id, entry)
-    else
-      nil -> reply(from, {:error, "Unknown or unavailable agent target: #{id}"}, state)
-      {:error, reason} -> reply(from, {:error, reason}, state)
-    end
-  end
-
-  def handle_event({:call, from}, {:send_message, target, text, opts, reply_to}, :ready, state) do
-    with {:ok, caller, family} <- family(state, opts),
-         {:ok, recipients} <- resolve_target(target, family),
-         envelope = peer_envelope(caller, text),
-         :ok <- prepare_delivery(recipients, envelope) do
-      {changes, deliveries} =
-        Enum.reduce(recipients, {{state, []}, []}, fn recipient, {acc, receipts} ->
-          {entry, delivery} = deliver_recipient(recipient, envelope, reply_to)
-          acc = if recipient.id, do: put_entry(acc, recipient.id, entry), else: acc
-          receipt = Map.put(public_identity(recipient), :delivery, delivery)
-          {acc, [receipt | receipts]}
-        end)
-
-      result = {:ok, %{sender: address(caller), recipients: Enum.reverse(deliveries)}}
-      reply_changes(from, result, changes)
-    else
-      {:error, reason} -> reply(from, {:error, reason}, state)
-    end
-  end
-
-  def handle_event(:cast, {:cancel_parent, parent}, :ready, state) do
-    {state, actions} =
-      Enum.reduce(state, {state, []}, fn {id, entry}, acc ->
-        if entry.parent == parent, do: put_entry(acc, id, cancel(id, entry)), else: acc
-      end)
-
-    {:keep_state, state, actions}
-  end
-
-  def handle_event(:info, {:lemon_abort, signal, _kind}, :ready, state) do
-    {state, actions} =
-      Enum.reduce(state, {state, []}, fn {id, entry}, acc ->
-        if entry.parent_signal == signal, do: put_entry(acc, id, cancel(id, entry)), else: acc
-      end)
-
-    {:keep_state, state, actions}
-  end
-
-  def handle_event({:timeout, {:park, id}}, :park, :ready, state) do
-    case state[id] do
-      %{phase: :idle} = entry ->
-        stop_child(entry)
-        TaskStore.set_agent_state(id, :parked)
-        entry = %{detach_session(entry) | phase: :parked}
-        {state, actions} = put_entry({state, []}, id, entry)
-        {:keep_state, state, actions}
-
-      _ ->
-        :keep_state_and_data
-    end
-  end
-
-  def handle_event(:info, {:DOWN, ref, :process, _pid, reason}, :ready, state) do
-    {state, actions} =
-      Enum.reduce(state, {state, []}, fn {id, entry}, acc ->
+    Enum.reduce_while(recipients, {:ok, []}, fn recipient, {:ok, reserved} ->
+      result =
         cond do
-          entry.owner_ref == ref ->
-            put_entry(acc, id, cancel(id, entry))
+          is_nil(recipient.id) ->
+            {:ok, nil}
 
-          entry.parent_ref == ref ->
-            entry = cancel(id, entry)
-            stop_child(entry)
-            if is_pid(entry.worker), do: Process.exit(entry.worker, :kill)
-            if is_pid(entry.worker), do: entry.on_failure.("Task aborted")
-            remove_entry(acc, id)
-
-          entry.worker_ref == ref ->
-            stop_child(entry)
-
-            failure =
-              if entry.phase in [:cancelling, :killed],
-                do: "Task aborted",
-                else: "Task worker exited: #{inspect(reason)}"
-
-            entry.on_failure.(failure)
-            phase = if entry.phase in [:cancelling, :killed], do: :killed, else: :aborted
-            TaskStore.set_agent_state(id, phase)
-            entry = entry |> detach_worker() |> detach_session() |> close_inbox()
-            put_entry(acc, id, %{entry | phase: phase, resume: nil})
-
-          entry.session_ref == ref ->
-            phase =
-              case entry.phase do
-                :cancelling -> :cancelling
-                phase when phase in [:idle, :parked] -> :parked
-                _ -> :dead
-              end
-
-            if phase == :parked, do: TaskStore.set_agent_state(id, :parked)
-            put_entry(acc, id, %{detach_session(entry) | phase: phase})
-
-          entry.inbox_ref == ref ->
-            entry = cancel(id, entry)
-            stop_child(entry)
-            if is_pid(entry.worker), do: Process.exit(entry.worker, :kill)
-            entry.on_failure.("Task inbox exited")
-            entry = entry |> detach_worker() |> detach_session()
-            put_entry(acc, id, %{entry | phase: :aborted, resume: nil})
+          recipient.status not in [:queued, :running, :idle, :parked] ->
+            {:error,
+             {:unavailable,
+              "Agent #{address(recipient)} is #{recipient.status}; read history://#{recipient.id}"}}
 
           true ->
-            acc
+            case call(recipient.id, {:reserve, text, caller}) do
+              {:ok, ref} ->
+                {:ok, ref}
+
+              {:error, {:unavailable, reason}} ->
+                {:error, {:unavailable, reason}}
+
+              {:error, reason} when is_binary(reason) ->
+                {:error, reason}
+
+              {:error, _} ->
+                {:error, {:unavailable, "Unknown or unavailable agent target: #{recipient.id}"}}
+            end
         end
-      end)
 
-    {:keep_state, state, actions}
-  end
+      case result do
+        {:ok, reservation} ->
+          {:cont, {:ok, [{recipient, reservation} | reserved]}}
 
-  def handle_event({:timeout, {:force_cancel, id}}, :force_cancel, :ready, state) do
-    case state[id] do
-      %{phase: :cancelling} = entry ->
-        stop_child(entry)
-        if is_pid(entry.worker), do: Process.exit(entry.worker, :kill)
-        if is_pid(entry.worker), do: entry.on_failure.("Task aborted")
-        TaskStore.set_agent_state(id, :killed)
+        {:error, {:unavailable, _reason}} when broadcast? ->
+          {:cont, {:ok, reserved}}
 
-        entry = entry |> detach_worker() |> detach_session() |> close_inbox()
-        {state, actions} = put_entry({state, []}, id, %{entry | phase: :killed, resume: nil})
-        {:keep_state, state, actions}
+        {:error, {:unavailable, reason}} ->
+          release(reserved)
+          {:halt, {:error, reason}}
 
-      _ ->
-        :keep_state_and_data
+        error ->
+          release(reserved)
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, reserved} -> {:ok, Enum.reverse(reserved)}
+      error -> error
     end
   end
 
-  def handle_event(:info, _message, :ready, _state), do: :keep_state_and_data
+  defp broadcast?(target), do: String.replace_prefix(target, "agent://", "") == "all"
 
-  defp reply(from, result, state), do: {:keep_state, state, [{:reply, from, result}]}
-
-  defp reply(from, result, state, id, entry) do
-    reply_changes(from, result, put_entry({state, []}, id, entry))
+  defp release(reserved) do
+    for {recipient, ref} <- reserved,
+        is_reference(ref),
+        owner = TaskRuntime.whereis(recipient.id),
+        do: :gen_statem.cast(owner, {:release, ref})
   end
 
-  defp reply_changes(from, result, {state, actions}) do
-    {:keep_state, state, [{:reply, from, result} | actions]}
+  # The root parent has no owner; its session receives the delivery directly.
+  defp commit(%{id: nil, entry: entry}, nil, text, reply_to),
+    do: Session.request_steering(entry.session, text, reply_to)
+
+  defp commit(recipient, ref, text, reply_to) do
+    case call(recipient.id, {:commit, ref, text, reply_to}) do
+      {:ok, delivery} -> delivery
+      {:error, :outcome_unknown} -> :outcome_unknown
+      {:error, _} -> :failed
+    end
   end
 
-  defp put_entry({state, actions}, id, entry) do
-    actions = transition_timeouts(id, state[id], entry) ++ actions
-    {Map.put(state, id, entry), actions}
-  end
+  # -- family -------------------------------------------------------------------
 
-  defp remove_entry({state, actions}, id) do
-    {remove(state, id), transition_timeouts(id, state[id], nil) ++ actions}
-  end
-
-  defp transition_timeouts(_id, %{phase: phase}, %{phase: phase}), do: []
-
-  defp transition_timeouts(id, previous, entry) do
-    cancelled =
-      case previous do
-        %{phase: :idle} -> [{{:timeout, {:park, id}}, :cancel}]
-        %{phase: :cancelling} -> [{{:timeout, {:force_cancel, id}}, :cancel}]
-        _ -> []
-      end
-
-    scheduled =
-      case entry do
-        %{phase: :idle, resume: resume} ->
-          ttl = Keyword.get(resume.opts, :idle_ttl_ms, 300_000)
-          if ttl > 0, do: [{{:timeout, {:park, id}}, ttl, :park}], else: []
-
-        %{phase: :cancelling} ->
-          [{{:timeout, {:force_cancel, id}}, 2_000, :force_cancel}]
-
-        _ ->
-          []
-      end
-
-    cancelled ++ scheduled
-  end
-
-  defp family(state, opts) do
+  defp family(opts) do
+    state = Map.new(TaskRuntime.entries(), fn {id, _owner, projection} -> {id, projection} end)
     session = Keyword.get(opts, :session_pid)
     session_id = Keyword.get(opts, :session_id)
 
@@ -610,9 +360,7 @@ defmodule CodingAgent.Tools.Task.Control do
 
     case callers do
       [{id, entry}] ->
-        if unavailable(entry, id) do
-          {:error, "Caller task is no longer running"}
-        else
+        if TaskRuntime.status(entry, id) in [:queued, :running] do
           caller = member(id, entry, :self)
           parent = parent_member(state, entry)
           parent_owner = entry.metadata[:owner]
@@ -626,16 +374,16 @@ defmodule CodingAgent.Tools.Task.Control do
 
           children = children(state, opts, entry.session)
           {:ok, caller, Enum.uniq_by([caller] ++ parent ++ siblings ++ children, &member_key/1)}
+        else
+          {:error, "Caller task is no longer running"}
         end
 
       [] ->
-        children = children(state, opts, session)
-
-        case children do
+        case children(state, opts, session) do
           [] ->
             {:error, "No native task family for this session"}
 
-          [child | _] ->
+          [child | _] = children ->
             caller = root_member(child.entry, :self)
             {:ok, caller, [caller | children]}
         end
@@ -680,7 +428,7 @@ defmodule CodingAgent.Tools.Task.Control do
   end
 
   defp member(id, entry, relation) do
-    %{id: id, entry: entry, relation: relation, status: status(entry, id)}
+    %{id: id, entry: entry, relation: relation, status: TaskRuntime.status(entry, id)}
   end
 
   defp member_key(%{id: nil, entry: entry}), do: {:session, entry.session}
@@ -739,31 +487,6 @@ defmodule CodingAgent.Tools.Task.Control do
 
   defp resolve_target(_, _), do: {:error, "Agent target must be a string"}
 
-  defp prepare_delivery(recipients, text) do
-    Enum.reduce_while(recipients, :ok, fn recipient, :ok ->
-      result =
-        cond do
-          recipient.status not in [:queued, :running, :idle, :parked] ->
-            {:error,
-             "Agent #{address(recipient)} is #{recipient.status}; read history://#{recipient.id}"}
-
-          recipient.status in [:idle, :parked] ->
-            resumable(recipient)
-
-          recipient.id ->
-            queue_capacity(recipient.entry, text)
-
-          true ->
-            :ok
-        end
-
-      case result do
-        :ok -> {:cont, :ok}
-        error -> {:halt, error}
-      end
-    end)
-  end
-
   defp validate_message(text) when is_binary(text) do
     cond do
       byte_size(text) > @max_message_bytes -> {:error, "Message exceeds 32 KiB"}
@@ -775,95 +498,6 @@ defmodule CodingAgent.Tools.Task.Control do
 
   defp validate_message(_), do: {:error, "Message must be a string"}
 
-  defp enqueue(entry, id, text, reply_to) do
-    with :ok <- validate_message(text),
-         nil <- unavailable(entry, id),
-         :ok <- queue_capacity(entry, text) do
-      deliver(entry, text, reply_to)
-    else
-      {:error, _} = error -> error
-      reason -> {:error, "Task is #{reason}"}
-    end
-  end
-
-  defp queue_capacity(%{metadata: %{orchestration_worker: true}}, _text),
-    do: {:error, "Swarm coordinator has no model session; message a launched child instead"}
-
-  defp queue_capacity(entry, text), do: ChildInbox.capacity(entry.inbox, text)
-
-  defp resumable(%{id: id, entry: entry}) do
-    cond do
-      is_nil(entry.resume) or is_nil(entry.continuation) ->
-        {:error, "Agent cannot resume; read history://#{id}"}
-
-      not File.dir?(entry.resume.start_opts[:cwd]) ->
-        {:error, "Agent workspace/worktree was removed; read history://#{id}"}
-
-      not File.regular?(entry.resume.start_opts[:session_file]) ->
-        {:error, "Agent transcript is unavailable; read history://#{id}"}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp deliver_recipient(%{id: id, entry: entry, status: phase}, text, _reply_to)
-       when phase in [:idle, :parked] do
-    case TaskStore.begin_agent_turn(id) do
-      :ok ->
-        entry = %{entry | phase: :running}
-
-        case Async.resume(id, entry, text) do
-          {:ok, worker} ->
-            failure = fn reason ->
-              Async.finish_continuation(
-                id,
-                entry.continuation,
-                {:error, reason}
-              )
-            end
-
-            entry = %{
-              entry
-              | worker: worker,
-                worker_ref: Process.monitor(worker),
-                on_failure: failure
-            }
-
-            {entry, if(phase == :parked, do: :revived, else: :woken)}
-
-          {:error, _reason} ->
-            TaskStore.fail(id, "Failed to start child message turn")
-            TaskStore.set_agent_state(id, :aborted)
-            stop_child(entry)
-            entry = entry |> detach_session() |> close_inbox()
-            {%{entry | phase: :aborted, resume: nil}, :failed}
-        end
-
-      {:error, _reason} ->
-        {entry, :failed}
-    end
-  end
-
-  defp deliver_recipient(%{entry: entry}, text, reply_to) do
-    case deliver(entry, text, reply_to) do
-      {:ok, entry} -> {entry, :injected}
-      {:delivery, pending} -> {entry, pending}
-      {:error, _reason} -> {entry, :failed}
-    end
-  end
-
-  defp deliver(%{inbox: inbox} = entry, text, reply_to) do
-    case ChildInbox.deliver(inbox, text, reply_to) do
-      :ok -> {:ok, entry}
-      reply -> reply
-    end
-  end
-
-  defp deliver(%{session: session}, text, reply_to) when is_pid(session) do
-    {:delivery, Session.request_steering(session, text, reply_to)}
-  end
-
   defp resolve_delivery({:pending, _, _, _} = pending), do: Session.await_steering(pending)
   defp resolve_delivery(delivery), do: delivery
 
@@ -874,120 +508,6 @@ defmodule CodingAgent.Tools.Task.Control do
       fun.(reply_to)
     after
       :erlang.unalias(reply_to)
-    end
-  end
-
-  defp unavailable(entry, id) do
-    case status(entry, id) do
-      status when status in [:queued, :running] -> nil
-      status -> status
-    end
-  end
-
-  defp status(entry, id) do
-    stored =
-      if id do
-        case TaskStore.get_record(id) do
-          {:ok, record} -> record[:status]
-          _ -> :missing
-        end
-      end
-
-    cond do
-      entry.phase in [:cancelling, :killed] or AbortSignal.aborted?(entry.signal) or
-          AbortSignal.aborted?(entry.parent_signal) ->
-        :cancelled
-
-      stored in [:error, :cancelled, :killed, :aborted, :lost, :missing] ->
-        stored
-
-      entry[:phase] in [:idle, :parked, :aborted, :killed] ->
-        entry.phase
-
-      stored == :completed ->
-        stored
-
-      entry[:phase] == :dead ->
-        :dead
-
-      is_pid(entry.session) ->
-        :running
-
-      is_nil(id) ->
-        :dead
-
-      true ->
-        :queued
-    end
-  end
-
-  defp cancel(_id, %{phase: phase} = entry) when phase in [:cancelling, :killed], do: entry
-
-  defp cancel(id, entry) do
-    TaskStore.cancel(id, "Task aborted")
-    TaskStore.set_agent_state(id, :killed)
-    AbortSignal.abort(entry.signal)
-    if is_pid(entry.session), do: Session.abort(entry.session)
-    %{close_inbox(entry) | phase: :cancelling}
-  end
-
-  defp stop_child(%{session: session}) when is_pid(session) do
-    Session.abort(session)
-    # Also cancel any descendants before stopping their parent session.
-    cancel_parent(session)
-    CodingAgent.SessionSupervisor.stop_session(session)
-  catch
-    :exit, _ -> :ok
-  end
-
-  defp stop_child(_), do: :ok
-
-  defp detach_session(entry) do
-    demonitor(entry.session_ref)
-    ChildInbox.detach(entry.inbox)
-    %{entry | session: nil, session_ref: nil}
-  end
-
-  defp close_inbox(entry) do
-    ChildInbox.stop(entry.inbox)
-    demonitor(entry.inbox_ref)
-    %{entry | inbox: nil, inbox_ref: nil}
-  end
-
-  defp demonitor(ref) when is_reference(ref), do: Process.demonitor(ref, [:flush])
-  defp demonitor(_), do: :ok
-
-  defp notify_worker(entry) do
-    if is_binary(entry.metadata[:run_id]) do
-      run_id = entry.metadata.run_id
-      LemonCore.Bus.broadcast("run_graph:#{run_id}", {:run_graph, :state_changed, run_id})
-    end
-  end
-
-  defp detach_worker(entry) do
-    if is_reference(entry.worker_ref), do: Process.demonitor(entry.worker_ref, [:flush])
-    %{entry | worker: nil, worker_ref: nil}
-  end
-
-  defp remove(state, id) do
-    case Map.pop(state, id) do
-      {nil, state} ->
-        state
-
-      {entry, state} ->
-        entry = entry |> detach_session() |> close_inbox()
-
-        for ref <- [entry.parent_ref, entry.worker_ref, entry.owner_ref],
-            is_reference(ref),
-            do: Process.demonitor(ref, [:flush])
-
-        unless Enum.any?(state, fn {_id, other} ->
-                 other.parent_signal == entry.parent_signal
-               end) do
-          AbortSignal.unsubscribe(entry.parent_signal)
-        end
-
-        state
     end
   end
 end

@@ -8,7 +8,11 @@ import { validateManagedProfile } from './profile-safety.js';
 import { resolveLocalDriverConfig } from './local-driver.js';
 import { parseCliArgs } from './cli-args.js';
 
-vi.mock('node:child_process', () => ({ spawn: vi.fn(() => ({ kill: vi.fn() })) }));
+vi.mock('node:child_process', async () => {
+  // vi.mock factories are hoisted above static imports, so import inside.
+  const { EventEmitter } = await import('node:events');
+  return { spawn: vi.fn(() => Object.assign(new EventEmitter(), { kill: vi.fn() })) };
+});
 
 let home: string;
 let profile: string;
@@ -41,29 +45,27 @@ function session(profileDirectory?: string) {
 }
 
 describe('managed user profiles', () => {
-  it('keeps default configuration and accepts env and argument overrides', () => {
-    const defaults = resolveLocalDriverConfig({ args: {}, env: { HOME: home, OPENCLAW_STATE_DIR: home } });
+  it('defaults to the Lemon-owned profile and accepts env and argument overrides', () => {
+    const defaults = resolveLocalDriverConfig({ args: {}, env: { HOME: home, OPENCLAW_STATE_DIR: '/elsewhere' } });
+    expect(defaults.userDataDir).toBe(path.join(home, '.lemon', 'browser', 'default', 'user-data'));
     expect(defaults.profileDirectory).toBeUndefined();
-    expect(defaults.userProvidedProfile).toBe(false);
+    expect(resolveLocalDriverConfig({ args: parseCliArgs(['--browser-profile', 'work']), env: { HOME: home } }).userDataDir)
+      .toBe(path.join(home, '.lemon', 'browser', 'work', 'user-data'));
+    expect(() => resolveLocalDriverConfig({ args: parseCliArgs(['--browser-profile', '../x']), env: { HOME: home } }))
+      .toThrow('browser profile name');
     const env = { LEMON_BROWSER_USER_DATA_DIR: profile, LEMON_BROWSER_PROFILE_DIRECTORY: 'Profile 1' };
-    expect(resolveLocalDriverConfig({ args: {}, env })).toMatchObject({ userDataDir: profile, profileDirectory: 'Profile 1', userProvidedProfile: true });
+    expect(resolveLocalDriverConfig({ args: {}, env })).toMatchObject({ userDataDir: profile, profileDirectory: 'Profile 1' });
     expect(resolveLocalDriverConfig({ args: parseCliArgs(['--profile-directory', 'Default']), env }).profileDirectory).toBe('Default');
-  });
-
-  it('refuses an occupied managed CDP port instead of silently attaching another profile', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
-    const chrome = new ChromeSession({
-      cdpPort: 19999, userDataDir: profile, userProvidedProfile: true,
-      headless: false, noSandbox: false, attachOnly: false,
-    });
-    await expect(chrome.start()).rejects.toThrow('cannot verify the requested browser profile');
-    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('preserves launch arguments when unset and adds the selected profile flag', async () => {
     await session().launchChrome();
     const defaultArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
     expect(defaultArgs).toContain(`--user-data-dir=${profile}`);
+    // Managed Chrome gets a free DevTools port, never the configured one.
+    expect(defaultArgs).toContain('--remote-debugging-port=0');
+    expect(defaultArgs).not.toContain('--remote-debugging-port=19999');
+    expect(vi.mocked(spawn).mock.calls[0][2]).toMatchObject({ stdio: 'ignore' });
     expect(defaultArgs.some((arg) => arg.startsWith('--profile-directory'))).toBe(false);
     await session('Profile 1').launchChrome();
     const selectedArgs = vi.mocked(spawn).mock.calls[1][1] as string[];

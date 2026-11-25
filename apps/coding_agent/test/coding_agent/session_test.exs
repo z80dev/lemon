@@ -625,6 +625,14 @@ defmodule CodingAgent.SessionTest do
       assert "edit" in tool_names
       assert "bash" in tool_names
     end
+
+    test "rejects the retired advisor option instead of silently dropping it (#705)" do
+      assert {:error, {:unsupported_option, :advisor}} =
+               Session.start_link(default_opts(advisor: [max_notes: 1]))
+
+      assert {:error, {:unsupported_option, :advisor}} =
+               Session.validate_execution_options(cwd: session_cwd(), advisor: [])
+    end
   end
 
   describe "start_link/1 loading from session file" do

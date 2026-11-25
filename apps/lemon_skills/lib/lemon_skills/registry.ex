@@ -89,11 +89,10 @@ defmodule LemonSkills.Registry do
   @spec list_views(keyword()) :: [LemonSkills.SkillView.t()]
   def list_views(opts \\ []) do
     cwd = Keyword.get(opts, :cwd)
-    disabled = disabled_keys(cwd)
+    entries = list(opts)
+    disabled = disabled_keys(cwd, entries)
 
-    opts
-    |> list()
-    |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: cwd, disabled_keys: disabled))
+    Enum.map(entries, &LemonSkills.SkillView.from_entry(&1, cwd: cwd, disabled_keys: disabled))
   end
 
   @doc """
@@ -154,7 +153,8 @@ defmodule LemonSkills.Registry do
     end
 
     documents = GenServer.call(__MODULE__, {:search_snapshot, cwd})
-    score_documents(documents, context, max_results, disabled_keys(cwd))
+    disabled = disabled_keys(cwd, Enum.map(documents, & &1.entry))
+    score_documents(documents, context, max_results, disabled)
   end
 
   @doc """
@@ -171,10 +171,8 @@ defmodule LemonSkills.Registry do
     skills = list(cwd: cwd)
     installed = length(skills)
 
-    enabled =
-      Enum.count(skills, fn entry ->
-        entry.enabled and not Config.skill_disabled?(entry.key, cwd)
-      end)
+    disabled = disabled_keys(cwd, skills)
+    enabled = Enum.count(skills, &(&1.enabled and not MapSet.member?(disabled, &1.key)))
 
     %{installed: installed, enabled: enabled}
   rescue
@@ -966,11 +964,12 @@ defmodule LemonSkills.Registry do
     end)
   end
 
-  defp disabled_keys(cwd) do
-    Config.load_config(cwd)
-    |> Map.get("disabled", [])
-    |> Enum.filter(&is_binary/1)
-    |> MapSet.new()
+  # An unusable skills.json fails closed: every listed skill reads as disabled.
+  defp disabled_keys(cwd, entries) do
+    case Config.disabled_keys(cwd) do
+      {:ok, keys} -> keys
+      {:error, _} -> MapSet.new(entries, & &1.key)
+    end
   end
 
   # File discovery/status consumers call this outside the Registry process.

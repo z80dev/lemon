@@ -132,9 +132,10 @@ defmodule LemonCore.BrowserProvider.Command do
   defp output(chunks), do: chunks |> Enum.reverse() |> IO.iodata_to_binary()
 
   defp terminate(port) do
-    with {:os_pid, pid} when pid > 1 <- Port.info(port, :os_pid) do
-      ProcessGroup.terminate(pid, signal: :sigkill)
-    end
+    _ =
+      with {:os_pid, pid} when pid > 1 <- Port.info(port, :os_pid) do
+        ProcessGroup.terminate(pid, signal: :sigkill)
+      end
 
     close(port)
   rescue

@@ -381,7 +381,7 @@ defmodule Lemon.Reload do
         previous_opts = Code.compiler_options()
 
         try do
-          Code.compiler_options(ignore_module_conflict: true)
+          _ = Code.compiler_options(ignore_module_conflict: true)
           # Compilation runs arbitrary top-level extension code, even if it fails.
           LemonCore.NativeProcess.unsupported!()
 
@@ -452,7 +452,7 @@ defmodule Lemon.Reload do
           true ->
             try do
               case :sys.change_code(server, module, old_vsn, extra) do
-                {:ok, _} = ok ->
+                :ok = ok ->
                   {:ok,
                    %{
                      kind: :code_change,
@@ -694,7 +694,7 @@ defmodule Lemon.Reload do
   defp maybe_put_compile_metadata(result_or_metadata, nil), do: result_or_metadata
 
   defp maybe_put_compile_metadata(%{metadata: metadata} = result, compile_meta) do
-    %{result | metadata: Map.put(metadata || %{}, :compile, compile_meta)}
+    %{result | metadata: Map.put(metadata, :compile, compile_meta)}
   end
 
   defp maybe_put_compile_metadata(metadata, compile_meta) when is_map(metadata) do

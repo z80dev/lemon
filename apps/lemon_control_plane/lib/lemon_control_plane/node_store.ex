@@ -145,6 +145,10 @@ defmodule LemonControlPlane.NodeStore do
   @spec get_node(binary()) :: map() | nil
   def get_node(node_id) when is_binary(node_id), do: Store.get(@registry_table, node_id)
 
+  @doc "Reads a durable node; `{:ok, nil}` only when the registry confirms it is absent."
+  @spec fetch_node(binary()) :: {:ok, map() | nil} | {:error, :store_unavailable}
+  def fetch_node(node_id) when is_binary(node_id), do: Store.fetch(@registry_table, node_id)
+
   @spec list_nodes() :: list()
   def list_nodes, do: Store.list(@registry_table)
   @spec fetch_nodes() :: {:ok, list()} | {:error, :store_unavailable}

@@ -97,10 +97,11 @@ operator sockets. See [A2A](../user-guide/a2a-peers.md).
 The Bun TUI and browser automation node live under `clients/`. The assistant Web
 interface is Phoenix; it is not a separate React workspace.
 
-Five packages are in the publish set: ai, core, agent, memory and platform-test.
-They are published on Hex at 0.2.0; the old 0.1.0 tarballs are retired as
-uninstallable. Everything else ships as the in-repository reference runtime
-and products. See [platform status](../platform-split.md).
+Five packages are in the publish set: ai, core, agent, memory and platform-test
+(generated from `mix.exs` in the [package map](../architecture_boundaries.md#package-map)).
+On Hex, `lemon_ai` is at 0.2.1 and the other four at 0.2.0; the old 0.1.0
+tarballs are retired as uninstallable. Everything else ships as the
+in-repository reference runtime and products. See [package status](../platform-split.md).
 
 ## Persistent state and configuration
 
@@ -141,6 +142,6 @@ LemonSim, the simulation and benchmark arena, is a separate application in
 ## Further reading
 
 - [Exact dependency policy](../architecture_boundaries.md), derived from `mix.exs`
-- [Config reference](../config.md), [context](../context.md) and [bootstrap](../assistant_bootstrap_contract.md)
+- [Config reference](../config.md) and [bootstrap](../assistant_bootstrap_contract.md)
 - [Contributor/app guide index](../../AGENTS.md#ownership-and-app-guides)
 - [Testing](../testing.md), [safety](../security/safety.md) and [backups](../user-guide/backups.md)

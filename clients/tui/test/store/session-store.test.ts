@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { SessionStore } from "../../src/store/session-store.ts";
+import {
+	MAX_TRANSCRIPT_BLOCKS,
+	RETAINED_SEALED_RUNS,
+	SessionStore,
+} from "../../src/store/session-store.ts";
 import { resetBlockIds } from "../../src/store/transcript-model.ts";
+import { runText } from "../helpers/transcript.ts";
 
 beforeEach(() => {
 	resetBlockIds();
@@ -63,7 +68,7 @@ describe("SessionStore deltas", () => {
 		const stale = session.appendDelta("run-1", 1, "a");
 		expect(replay.accepted).toBe(false);
 		expect(stale.accepted).toBe(false);
-		expect(session.bufferFor("run-1")).toBe("ab");
+		expect(runText(session, "run-1")).toBe("ab");
 	});
 
 	test("keeps per-run sequence state separate", () => {
@@ -71,13 +76,13 @@ describe("SessionStore deltas", () => {
 		session.appendDelta("run-1", 5, "one");
 		const other = session.appendDelta("run-2", 1, "two");
 		expect(other.accepted).toBe(true);
-		expect(session.bufferFor("run-2")).toBe("two");
+		expect(runText(session, "run-2")).toBe("two");
 	});
 
 	test("a delta with a non-numeric seq is still accepted", () => {
 		const session = new SessionStore("s");
 		session.appendDelta("run-1", Number.NaN, "x");
-		expect(session.bufferFor("run-1")).toBe("x");
+		expect(runText(session, "run-1")).toBe("x");
 	});
 
 	test("text after a tool starts a new segment below the tool without duplicating prior text", () => {
@@ -98,7 +103,7 @@ describe("SessionStore deltas", () => {
 		expect(first.status).toBe("done");
 		expect(last.text).toBe("The answer.");
 		expect(last.status).toBe("done");
-		expect(session.bufferFor("run")).toBe("I will inspect.The answer.");
+		expect(runText(session, "run")).toBe("I will inspect.The answer.");
 	});
 
 	test("completion before a late post-tool delta preserves chronological segments", () => {
@@ -183,7 +188,7 @@ describe("SessionStore finalize", () => {
 		expect(late.amended).toBe(true);
 		expect(late.block.text).toBe("the answer is 42");
 		expect(late.block.status).toBe("done");
-		expect(session.bufferFor("run-1")).toBe("the answer is 42");
+		expect(runText(session, "run-1")).toBe("the answer is 42");
 	});
 
 	test("a late delta supersedes an answer-only body instead of appending to it", () => {
@@ -196,7 +201,7 @@ describe("SessionStore finalize", () => {
 		expect(late.block.text).toBe("the real streamed text");
 		// Only the first late delta replaces; the rest accumulate normally.
 		session.appendDelta("run-1", 2, " continues");
-		expect(session.bufferFor("run-1")).toBe("the real streamed text continues");
+		expect(runText(session, "run-1")).toBe("the real streamed text continues");
 	});
 
 	test("completed arriving before started keeps the answer", () => {
@@ -685,5 +690,46 @@ describe("SessionStore cumulative cost", () => {
 		counted.addRunCost("r1", { costUsd: 0.25 });
 		counted.seedPriorCost(1.5, true);
 		expect(counted.sessionCostUsd).toBeCloseTo(0.25);
+	});
+});
+
+describe("SessionStore bounds", () => {
+	test("the transcript keeps the newest blocks and drops the oldest deterministically", () => {
+		const session = new SessionStore("s");
+		const total = MAX_TRANSCRIPT_BLOCKS + 25;
+		for (let index = 0; index < total; index++) {
+			if (index % 2 === 0) session.addNotice(`notice ${index}`, "info");
+			else
+				session.upsertTool(
+					{ id: `tool-${index}`, kind: "tool", title: `t${index}`, detail: {} },
+					"completed",
+				);
+		}
+		expect(session.blocks).toHaveLength(MAX_TRANSCRIPT_BLOCKS);
+		const texts = session.blocks.map((block) =>
+			block.kind === "notice" ? block.text : block.kind === "tool" ? block.title : "",
+		);
+		expect(texts[0]).toBe("t25");
+		expect(texts.at(-1)).toBe(`notice ${total - 1}`);
+		// Indexes never point at a dropped block.
+		expect(session.byActionId.has("tool-1")).toBe(false);
+		expect(session.byActionId.has("tool-25")).toBe(true);
+	});
+
+	test("a sealed run releases its delta maps once newer runs have sealed", () => {
+		const session = new SessionStore("s");
+		const seal = (runId: string) => {
+			session.activeRunId = runId;
+			session.appendDelta(runId, 1, `${runId} text`);
+			session.finalizeRun(runId, { ok: true });
+		};
+		seal("first");
+		expect(session.isRunTerminal("first")).toBe(true);
+		expect(session.appendDelta("first", 1, "redelivered").accepted).toBe(false);
+		for (let index = 0; index < RETAINED_SEALED_RUNS; index++) seal(`run-${index}`);
+		expect(session.isRunTerminal("first")).toBe(false);
+		expect(session.assistantFor("first")).toBeUndefined();
+		expect(session.isRunTerminal(`run-${RETAINED_SEALED_RUNS - 1}`)).toBe(true);
+		expect(runText(session, "first")).toBe("first text");
 	});
 });

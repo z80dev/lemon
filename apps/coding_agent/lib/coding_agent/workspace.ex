@@ -18,12 +18,15 @@ defmodule CodingAgent.Workspace do
   recall, not the static prefix; missing proof/store availability never falls back.
   """
 
+  require Logger
+
   alias CodingAgent.Config
   alias LemonMemory.{ContextScope, Preferences}
 
   @default_max_chars 20_000
   @head_ratio 0.7
   @tail_ratio 0.2
+  @seed_marker ".lemon-workspace-seeded"
 
   @required_files [
     "AGENTS.md",
@@ -109,7 +112,10 @@ defmodule CodingAgent.Workspace do
   defp scope_opt(_, _), do: nil
 
   @doc """
-  Initialize the workspace directory by writing missing template files.
+  Write every missing template file into the workspace, then record it as
+  seeded. This is the explicit initialization (`mix lemon.workspace init`): it
+  restores templates the user deleted, never overwrites an existing file, and
+  raises when a template cannot be written.
 
   Options:
     - :workspace_dir (override default workspace)
@@ -118,33 +124,107 @@ defmodule CodingAgent.Workspace do
   @spec ensure_workspace(keyword()) :: :ok
   def ensure_workspace(opts \\ []) do
     dir = Keyword.get(opts, :workspace_dir, workspace_dir())
+
+    templates =
+      opts |> Keyword.get(:template_dir, workspace_template_dir()) |> list_template_files()
+
+    with :ok <- write_templates(dir, templates),
+         :ok <- mark_seeded(dir) do
+      :ok
+    else
+      {:error, path, reason} -> raise "Failed to write #{path}: #{inspect(reason)}"
+    end
+  end
+
+  @doc """
+  Seed a workspace with the templates once, when no session has seeded it.
+
+  A seeded workspace carries a `#{@seed_marker}` marker and is left alone, so
+  a template the model or user deleted (`BOOTSTRAP.md` asks to be deleted when
+  done) is never re-created. A workspace without the marker that already holds
+  any template predates the marker and is only marked. Templates are copied
+  through a temporary file and renamed into place, so a failed copy leaves no
+  partial file. Takes the options of `ensure_workspace/1`. It does not raise
+  when the workspace cannot be written: it logs and returns the reason.
+  """
+  @spec seed_workspace(keyword()) :: :ok | {:error, File.posix() | atom()}
+  def seed_workspace(opts \\ []) do
+    dir = Keyword.get(opts, :workspace_dir, workspace_dir())
     template_dir = Keyword.get(opts, :template_dir, workspace_template_dir())
 
-    File.mkdir_p!(dir)
+    if File.exists?(Path.join(dir, @seed_marker)) do
+      :ok
+    else
+      templates = list_template_files(template_dir)
 
-    templates = list_template_files(template_dir)
+      result =
+        if Enum.any?(templates, fn {relative, _} -> present?(Path.join(dir, relative)) end),
+          do: :ok,
+          else: write_templates(dir, templates)
 
-    Enum.each(templates, fn {relative_path, template_path} ->
-      target = Path.join(dir, relative_path)
-      File.mkdir_p!(Path.dirname(target))
-
-      case File.open(target, [:write, :exclusive]) do
-        {:ok, io} ->
-          File.stream!(template_path)
-          |> Enum.each(&IO.write(io, &1))
-
-          File.close(io)
-
-        {:error, :eexist} ->
-          :ok
-
-        {:error, reason} ->
-          raise "Failed to write #{target}: #{inspect(reason)}"
+      with :ok <- result, :ok <- mark_seeded(dir) do
+        :ok
+      else
+        {:error, _path, reason} ->
+          Logger.warning("Assistant workspace was not seeded: #{inspect(reason)}")
+          {:error, reason}
       end
-    end)
-
-    :ok
+    end
   end
+
+  defp write_templates(dir, templates) do
+    with :ok <- mkdir(dir) do
+      Enum.reduce_while(templates, :ok, fn {relative_path, template_path}, :ok ->
+        target = Path.join(dir, relative_path)
+
+        case write_template(template_path, target) do
+          :ok -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, target, reason}}
+        end
+      end)
+    end
+  end
+
+  defp mkdir(dir) do
+    case File.mkdir_p(dir) do
+      :ok -> :ok
+      {:error, reason} -> {:error, dir, reason}
+    end
+  end
+
+  defp mark_seeded(dir) do
+    marker = Path.join(dir, @seed_marker)
+
+    case File.write(marker, "") do
+      :ok -> :ok
+      {:error, reason} -> {:error, marker, reason}
+    end
+  end
+
+  # Copy into a temporary sibling and rename it into place, so a failure never
+  # leaves a partial template at `target`; an existing file is never replaced.
+  defp write_template(template_path, target) do
+    if present?(target) do
+      :ok
+    else
+      tmp =
+        Path.join(
+          Path.dirname(target),
+          ".#{Path.basename(target)}.#{System.unique_integer([:positive])}.tmp"
+        )
+
+      try do
+        with :ok <- File.mkdir_p(Path.dirname(target)),
+             {:ok, _bytes} <- File.copy(template_path, tmp) do
+          if present?(target), do: :ok, else: File.rename(tmp, target)
+        end
+      after
+        File.rm(tmp)
+      end
+    end
+  end
+
+  defp present?(path), do: match?({:ok, _}, File.lstat(path))
 
   @spec workspace_template_dir() :: String.t()
   def workspace_template_dir do

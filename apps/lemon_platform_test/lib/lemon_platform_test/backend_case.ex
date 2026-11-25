@@ -66,14 +66,17 @@ defmodule LemonPlatformTest.BackendCase do
   ### Optional callbacks degrade predictably
 
   `compare_and_delete_many/2`, `compare_and_swap/5`, `confirm_durable/1`,
-  `list_recent/3`, `ping/1`, `sync/1` and `with_durability/2` are optional.
+  `list_recent/3`, `ping/1`, `reader/1` (with `read_keys/2`, `read_list/2`, `read_range/5`
+  and `read_recent/3`), `sync/1` and `with_durability/2` are optional.
   Multi-delete validates every exact snapshot before deleting in caller-provided
   order; compare-and-swap writes only over an exact match (a missing key matching
-  `nil`); `list_recent/3` returns at most `limit` real entries of that table.
-  `ping/1`, `sync/1` and `confirm_durable/1` answer without disturbing data.
-  Without these callbacks Store falls back to serialized validate/delete or
-  compare/write, falls back to `list/2`, reports the backend as unpingable, or
-  answers `sync/1` with `:sync_unsupported`, respectively.
+  `nil`); `list_recent/3` returns at most `limit` real entries of that table;
+  `read_list/2` through a `reader/1` handle returns, from any process, what
+  `list/2` has. `ping/1`, `sync/1` and `confirm_durable/1` answer without
+  disturbing data. Without these callbacks Store falls back to serialized
+  validate/delete or compare/write, falls back to `list/2`, reads inside the
+  Store process, reports the backend as unpingable, or answers `sync/1` with
+  `:sync_unsupported`, respectively.
 
   `with_durability(state, operation)` runs the zero-arity mutation synchronously
   exactly once, returns its result unchanged, and restores ordinary write mode
@@ -452,6 +455,42 @@ defmodule LemonPlatformTest.BackendCase do
             end
 
             assert {:ok, [], _state} = apply(@backend, :list_recent, [state, @spare_table, 3])
+          end
+        end
+
+        test "reader/1, when exported, reads committed rows from another process", %{
+          state: state
+        } do
+          if function_exported?(@backend, :reader, 1) do
+            rows = [{"early", %{at_ms: 5}}, {"inside", %{at_ms: 10}}, {"untimed", %{at_ms: nil}}]
+
+            state =
+              Enum.reduce(rows, state, fn {key, value}, acc ->
+                {:ok, acc} = @backend.put(acc, @alpha, key, value)
+                acc
+              end)
+
+            reader = apply(@backend, :reader, [state])
+            {:ok, all, _state} = @backend.list(state, @alpha)
+
+            read = fn fun, args ->
+              Task.async(fn -> apply(@backend, fun, [reader | args]) end) |> Task.await()
+            end
+
+            assert {:ok, listed} = read.(:read_list, [@alpha])
+            assert Enum.sort(listed) == Enum.sort(all)
+            assert {:ok, []} = read.(:read_list, [@spare_table])
+
+            if function_exported?(@backend, :read_keys, 2) do
+              assert {:ok, keys} = read.(:read_keys, [@alpha])
+              assert Enum.sort(keys) == ["early", "inside", "untimed"]
+            end
+
+            if function_exported?(@backend, :read_range, 5) do
+              assert {:ok, [{"inside", _}]} = read.(:read_range, [@alpha, 10, 11, false])
+              assert {:ok, ranged} = read.(:read_range, [@alpha, 10, 11, true])
+              assert ranged |> Enum.map(&elem(&1, 0)) |> Enum.sort() == ["inside", "untimed"]
+            end
           end
         end
 

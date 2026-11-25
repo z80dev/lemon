@@ -110,7 +110,7 @@ defmodule LemonAgent.Loop do
           [LemonAgent.Types.agent_message()],
           AgentContext.t(),
           AgentLoopConfig.t(),
-          reference() | nil,
+          AbortSignal.t() | nil,
           AgentLoopConfig.stream_fn() | nil
         ) :: EventStream.t()
   def agent_loop(prompts, context, config, signal, stream_fn) do
@@ -121,52 +121,14 @@ defmodule LemonAgent.Loop do
           [LemonAgent.Types.agent_message()],
           AgentContext.t(),
           AgentLoopConfig.t(),
-          reference() | nil,
+          AbortSignal.t() | nil,
           AgentLoopConfig.stream_fn() | nil,
           pid() | nil
         ) :: EventStream.t()
   def agent_loop(prompts, context, config, signal, stream_fn, owner) do
-    {:ok, stream} =
-      if owner do
-        EventStream.start_link(
-          owner: owner,
-          timeout: :infinity,
-          idle_timeout: :infinity,
-          abort_signal: signal
-        )
-      else
-        EventStream.start_link(
-          timeout: :infinity,
-          idle_timeout: :infinity,
-          abort_signal: signal
-        )
-      end
-
-    # Run the loop in a supervised task
-    case LemonCore.TaskSupervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
-           try do
-             run_agent_loop(prompts, context, config, signal, stream_fn, stream)
-           rescue
-             e ->
-               EventStream.error(stream, {:exception, Exception.message(e)}, nil)
-           catch
-             :throw, {:event_stream_push_failed, _reason} ->
-               if signal, do: AbortSignal.abort(signal)
-
-             kind, value ->
-               EventStream.error(stream, {kind, value}, nil)
-           after
-             ToolStream.settle()
-           end
-         end) do
-      {:ok, pid} ->
-        EventStream.attach_task(stream, pid)
-
-      {:error, reason} ->
-        EventStream.error(stream, {:task_start_failed, reason}, nil)
-    end
-
-    stream
+    start_loop_task(signal, owner, fn signal, stream ->
+      run_agent_loop(prompts, context, config, signal, stream_fn, stream)
+    end)
   end
 
   @doc """
@@ -224,7 +186,7 @@ defmodule LemonAgent.Loop do
   @spec agent_loop_continue(
           AgentContext.t(),
           AgentLoopConfig.t(),
-          reference() | nil,
+          AbortSignal.t() | nil,
           AgentLoopConfig.stream_fn() | nil
         ) :: EventStream.t()
   def agent_loop_continue(context, config, signal, stream_fn) do
@@ -234,7 +196,7 @@ defmodule LemonAgent.Loop do
   @spec agent_loop_continue(
           AgentContext.t(),
           AgentLoopConfig.t(),
-          reference() | nil,
+          AbortSignal.t() | nil,
           AgentLoopConfig.stream_fn() | nil,
           pid() | nil
         ) :: EventStream.t()
@@ -251,33 +213,38 @@ defmodule LemonAgent.Loop do
       end
     end
 
+    start_loop_task(signal, owner, fn signal, stream ->
+      run_continue_loop(context, config, signal, stream_fn, stream)
+    end)
+  end
+
+  # Every run gets a real abort signal, even when the caller passes nil, so
+  # cancellation (stream cancel, owner death, loop failure) reaches pending
+  # tools. Every abnormal exit aborts it before the failure is reported.
+  defp start_loop_task(signal, owner, run) do
+    signal = signal || AbortSignal.new()
+
     {:ok, stream} =
-      if owner do
-        EventStream.start_link(
-          owner: owner,
-          timeout: :infinity,
-          idle_timeout: :infinity,
-          abort_signal: signal
-        )
-      else
-        EventStream.start_link(
-          timeout: :infinity,
-          idle_timeout: :infinity,
-          abort_signal: signal
-        )
-      end
+      EventStream.start_link(
+        owner: owner || self(),
+        timeout: :infinity,
+        idle_timeout: :infinity,
+        abort_signal: signal
+      )
 
     case LemonCore.TaskSupervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
            try do
-             run_continue_loop(context, config, signal, stream_fn, stream)
+             run.(signal, stream)
            rescue
              e ->
+               AbortSignal.abort(signal)
                EventStream.error(stream, {:exception, Exception.message(e)}, nil)
            catch
              :throw, {:event_stream_push_failed, _reason} ->
-               if signal, do: AbortSignal.abort(signal)
+               AbortSignal.abort(signal)
 
              kind, value ->
+               AbortSignal.abort(signal)
                EventStream.error(stream, {kind, value}, nil)
            after
              ToolStream.settle()
@@ -287,6 +254,7 @@ defmodule LemonAgent.Loop do
         EventStream.attach_task(stream, pid)
 
       {:error, reason} ->
+        AbortSignal.abort(signal)
         EventStream.error(stream, {:task_start_failed, reason}, nil)
     end
 
@@ -649,7 +617,7 @@ defmodule LemonAgent.Loop do
                 "api=#{inspect(message.api)} " <>
                 "model=#{inspect(message.model)} " <>
                 "error_message=#{inspect(message.error_message)} " <>
-                "content_blocks=#{length(message.content || [])}"
+                "content_blocks=#{length(List.wrap(message.content))}"
             )
 
             reason =

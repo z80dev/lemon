@@ -15,7 +15,12 @@ defmodule LemonSkills.Tools.MediaGenerateImageTest do
              result =
              tool.execute.(
                "call-1",
-               %{"prompt" => prompt, "filename" => "launch-card", "sendToChannel" => true},
+               %{
+                 "provider" => "local_svg",
+                 "prompt" => prompt,
+                 "filename" => "launch-card",
+                 "sendToChannel" => true
+               },
                nil,
                nil
              )
@@ -145,6 +150,50 @@ defmodule LemonSkills.Tools.MediaGenerateImageTest do
     assert job.model == "gpt-image-test"
     assert job.artifact.mime_type == "image/png"
     refute inspect(job) =~ prompt
+  end
+
+  test "requires an explicit provider instead of fabricating a local preview", %{
+    tmp_dir: tmp_dir
+  } do
+    tool = MediaGenerateImage.tool(tmp_dir, output_guard: :none)
+
+    assert {:error, "provider is required"} =
+             tool.execute.("call-1", %{"prompt" => "draw this"}, nil, nil)
+
+    assert "provider" in tool.parameters["required"]
+    assert MediaJobs.recent(project_dir: tmp_dir) == []
+  end
+
+  test "a timed-out provider request is cancelled and its job id returned", %{tmp_dir: tmp_dir} do
+    parent = self()
+
+    http_post = fn _url, _request_opts ->
+      send(parent, {:provider_request, self()})
+      Process.sleep(:infinity)
+    end
+
+    tool =
+      MediaGenerateImage.tool(tmp_dir,
+        output_guard: :none,
+        openai_image_api_key: "sk-test-image-key",
+        media_image_http_post: http_post
+      )
+
+    assert {:error, message} =
+             tool.execute.(
+               "call-1",
+               %{"prompt" => "slow", "provider" => "openai_image", "timeoutMs" => 300},
+               nil,
+               nil
+             )
+
+    assert_received {:provider_request, request_pid}
+    refute Process.alive?(request_pid)
+    refute_received {:provider_request, _}
+
+    [job] = MediaJobs.recent(project_dir: tmp_dir, limit: 1)
+    assert job.status == :cancelled
+    assert message =~ "media job #{job.job_id} timed out after 300ms and was cancelled"
   end
 
   test "redacts OpenAI provider errors from failed jobs", %{tmp_dir: tmp_dir} do

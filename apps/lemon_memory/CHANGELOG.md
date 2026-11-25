@@ -8,6 +8,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- `LemonMemory.Ingest` publishes routing feedback only when `[features] routing_feedback`
+  is enabled, which is now off by default (#647).
+- **Breaking:** `LemonMemory.Provider` is write-only: the `search/2` callback, `Providers.search/2` and `SessionSearch.search/2` are removed. `Project.search_history/4` also serves legacy contexts (no ownership claim), filtering owner, home, history kind and repository in SQL before the limit; unproven or partial claims stay `{:error, :unproven_context}` (#656).
 - Remove unused `ContextScope.private_metadata/1` and atom-key provider specifications' unused label field.
 - Consolidate byte-budget text clipping while preserving session-search grapheme boundaries.
 
@@ -17,9 +20,20 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   so retained installation facts remain readable, editable and deletable.
 - The memory doctor check reads `runtime:` instead of `external_runtime?` and
   skips, rather than warns, when a standalone CLI runs with no runtime at all.
+- `Store.transfer_import` returns definite pre-commit failures unchanged and
+  deletes exactly the operation's pending intent after a verified rollback or a
+  boundary that never ran, so the mutation id can be retried; unverified
+  rollback or cleanup stays `:transfer_pending`. Frozen transfer snapshots are
+  deleted with the documents they captured (single deletes, scope erasure,
+  retention and per-scope pruning, agent erasure) and expire after
+  `transfer_ttl_ms` (#623).
 
 ### Added
 
+- `Store.transfer_release/2`, a `:release` option for `Store.transfer_import`
+  (journal entries deleted in the receipt transaction), and the
+  `transfer_ttl_ms` Store setting (default 24 hours, capped at `retention_ms`);
+  the journal gains a `created_at_ms` column, backfilled on first start (#623).
 - Exact-first, unique-substring note/project patching and deletion, with atomic
   ambiguity rejection and normal safety/capacity checks on patched results.
 - Persistent backdoor and credential-exfiltration instruction screening, using

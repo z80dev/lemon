@@ -7,10 +7,12 @@ defmodule LemonRouter.ModelSelection do
   request model -> meta model -> session model -> profile model ->
   routing-feedback history model -> router default model
 
-  The `history_model` slot is populated by the router when the `routing_feedback`
-  feature flag is enabled and sufficient historical performance data exists for the
-  task context. It acts as a soft tie-breaker between the profile default and the
-  router fallback — it never overrides explicit user intent.
+  The `history_model` slot is populated only when the opt-in `routing_feedback`
+  feature flag is enabled, no request, meta, session or profile model applies,
+  and `LemonRouter.RoutingFeedbackStore.best_model_for_context/2` finds a model
+  that cleared its success-rate floor and outperformed the router default in
+  this task context. A default with no samples there (for example one changed
+  after the samples were taken) is never replaced.
 
   A supplied request model is explicit unless `model_explicit` is `false`.
   This lets automatic child defaults retain request precedence without treating

@@ -4,11 +4,6 @@
 
 Foundational shared library for the Lemon umbrella project. All other apps depend on `lemon_core` -- it provides configuration management, configured-implementation contract validation, encrypted secrets, pluggable storage, an event bus, live named-node invocation routing, session routing primitives, idempotency, execution approvals, telemetry, and quality tooling.
 
-`LemonCore.Context` is the shared versioned preview/resolve boundary for
-root-confined file and folder references, shell-free git diffs, SSRF-guarded
-public URLs, redacted session exports, and format-sniffed document text. See
-[`docs/user-guide/context-references.md`](../../docs/user-guide/context-references.md).
-
 This app has **zero dependencies on other umbrella apps** and must remain that way.
 
 `LemonCore.Rpc.Client` is the shared `gen_statem` for RPC request ownership:
@@ -78,7 +73,7 @@ admission reply does not prove that a task's side effects never began.
 
 | # | Child | Purpose |
 |---|-------|---------|
-| 1 | `LemonCore.RuntimeCache` | ETS owner for runtime registrations, cache metadata, warning flags and loopback UID |
+| 1 | `LemonCore.RuntimeCache` | ETS owner for runtime registrations, cache metadata and warning flags |
 | 2 | `LemonCore.Dedupe.Supervisor` | Dynamic supervisor for each named deduplication table's owner |
 | 3 | `Phoenix.PubSub` (name: `LemonCore.PubSub`), or a `Registry` | Backbone for the Bus; see `LemonCore.Bus` for which one is used |
 | 4 | `LemonCore.Drain` | Coordinated shutdown and directly readable phase ETS table |
@@ -86,13 +81,36 @@ admission reply does not prove that a task's side effects never began.
 | 6 | `LemonCore.NodeRegistry` | Socket-owned unique Registry, retained generation floors and temporary per-invocation processes |
 | 7 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
 | 8 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends and owned read-cache tables |
-| 9 | `LemonCore.UsageLedger` | Finished-run usage aggregation |
-| 10 | `LemonCore.ExecApprovalExpiry` | Expiry for approvals whose run or session ended |
-| 11 | `LemonCore.Secrets.SourceTaskSupervisor` | Owns bounded external-source tasks |
-| 12 | `LemonCore.Secrets.SourceCache` | Bounded optional process-local source cache |
-| 13 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
-| 14 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
-| 15 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
+| 9 | `LemonCore.RuntimeOwner` | Cross-VM ownership lock of a file-backed store; only its holder reconciles other runtimes' records |
+| 10 | `LemonCore.UsageLedger` | Finished-run usage aggregation |
+| 11 | `LemonCore.ExecApprovalExpiry` | Expiry for approvals whose run or session ended |
+| 12 | `LemonCore.Secrets.SourceTaskSupervisor` | Owns bounded external-source tasks |
+| 13 | `LemonCore.Secrets.SourceCache` | Bounded optional process-local source cache |
+| 14 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
+| 15 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
+| 16 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
+
+One-shot commands boot a client tree instead (`config :lemon_core, :boot_mode`,
+set by `LemonCore.CLI.start/2`): no `RuntimeOwner`, `RunHistoryStore`,
+`ConfigReloader`, `Watcher` or `Drain` (no SIGTERM trap), Store sweeps off, and
+`ExecApprovalExpiry` with `recover: false`; see `LemonCore.Application`.
+
+`config :lemon_core, :services` selects service groups: `:core` (always:
+`RuntimeCache`, `RuntimeLatch`, dedupe, the Bus, `ConfigCache`, `Store` and the
+secrets helpers), `:runtime_control` (`Drain`, `ACPClientBridge`,
+`NodeRegistry`, `RuntimeOwner`, `SessionActivity`, `UsageLedger`,
+`ExecApprovalExpiry`, the config reloader) and `:run_history`
+(`RunHistoryStore`). Unset starts every group. A library consumer that only uses
+the agent and store APIs can start just the core:
+
+```elixir
+config :lemon_core, :services, [:core]
+```
+
+A product that cannot run without durability or a group lists it in
+`config :lemon_core, :required_capabilities` (`:durable_store`, `:run_history`,
+`:runtime_control`); lemon_core then refuses to start, logging the fix, when one
+is unavailable. See `LemonCore.Capabilities`.
 
 Named-node sockets register themselves, so Registry removes dead connections
 without node-monitor bookkeeping. Each temporary `LemonCore.NodeInvocation` owns
@@ -102,7 +120,7 @@ GenServer. Disconnect, replacement, timeout and caller death remain terminal;
 the authenticated connection generation and retained generation floor prevent
 stale frames or controls from crossing a reconnect. WebSocket/JSON is unchanged.
 
-Durable memory moved to `lemon_memory`, the workspace stores to `agent_core`,
+Durable memory moved to `lemon_memory`, the workspace stores to `lemon_agent`,
 and provider credential-pool rotation to `lemon_agent`
 (`LemonAgent.ModelRuntime.ProviderPoolRotator`); each supervises its own
 processes.
@@ -238,6 +256,7 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 
 | Module | Purpose |
 |--------|---------|
+| `LemonCore.Capabilities` | Capabilities a product requires at boot (`:durable_store`, `:run_history`, `:runtime_control`); checked before the tree starts |
 | `LemonCore.Idempotency` | At-most-once execution backed by Store; done results expire after 24h, unresolved claims never expire |
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
 | `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events; interactive restores need a random single-use preview token held server-side (`:checkpoint_restore_confirmations`), bound to caller, checkpoint revision, roots and tree fingerprint, with a five-minute TTL |
@@ -260,7 +279,6 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore.ConfinedFS` | Descriptor-bound file operations below a trusted root (port helper `priv/lemon_confined_fs`, built from `c_src/` during `mix compile`): no-follow directory walks (`openat2` `RESOLVE_BENEATH` on Linux), reads, exclusive creates, private-staging atomic replaces, appends, in-place overwrites, rename, unlink, tree removal and chmod relative to walked handles. Inside the Lemon umbrella (and therefore every release) the helper is required and `mix compile` fails without a C compiler and `make`. As a Hex dependency it is built when they are present; otherwise `ConfinedFS.available?/0` is `false` and every operation returns `{:error, :helper_unavailable}`, so confined callers (FileAccess, Checkpoint filesystem restore) fail closed instead of using path-based I/O |
 | `Lemon.Reload` | Published low-level BEAM/extension reload API; see its moduledoc for retained contracts |
 | `LemonCore.CodeReload` | Soft-loads changed BEAM files and invokes the configured session refresher for source-development reload |
-| `LemonCore.Testing` | Test harness builder (Harness, Case, Helpers) |
 | `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
 
 ### Quality
@@ -526,6 +544,8 @@ widget = MyApp.WidgetStore.get(id)
 
 Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and ordinary read/list APIs return `nil`/`[]`. `get/3` and `list/2` are for genuinely optional or display data only and are never an admission, policy, idempotency or verification check. Correctness-sensitive callers use `fetch/3` and `fetch_all/2` to distinguish confirmed absence or an empty table from an unavailable backend.
 
+Whole-table and range reads (`fetch_all/2`, `fetch_keys/2`, `fetch_range/5`, `list/2`, introspection listing) take a read handle from the Store in one short call and then read the backend in the caller's process — SQLite through a private read-only WAL connection — so a large scan never stalls other Store callers. `fetch_range/5` returns rows whose map value has an integer `:at_ms` in `[from, to)` (optionally plus untimed rows); SQLite indexes `:at_ms`. `:runs` cannot be read whole: read runs by id.
+
 For power-loss-sensitive writes, pass `durable: true` to the explicit-server
 mutation arity, for example
 `LemonCore.Store.put(LemonCore.Store, :receipts, id, receipt, durable: true)`.
@@ -587,7 +607,18 @@ expires; hooks are not automatically retried. Successful persistence still
 returns `:ok` even when a hook fails or times out. Explicit finalization retries
 can redeliver hooks, so implementations must be idempotent by run id.
 
-Agent workspace coordination — goals and kanban boards — is built on this Store but lives in `lemon_agent` as `LemonAgent.Workspace.{GoalStore, KanbanStore}`. Heartbeats use automation cron jobs and cron history.
+The `:runs` table contains summaries and lifecycle metadata only. The Store
+keeps events in a separate bounded per-run buffer (first 200 plus latest, 2,000
+in all), so ordinary run reads do not copy it. The summary and frozen buffer
+are swept `:runs_retention_ms` (default 24 hours) after finalization. A durable
+marker in `:run_terminals` makes `RunStore.fetch/1` return `{:error, :evicted}`
+for finished runs without a retained summary, including after a restart.
+Durable per-session history is in `LemonCore.RunHistoryStore`. Usage pages read
+only ledger occurrences, not `:runs`.
+
+Goal and kanban coordination uses this Store but belongs to
+`LemonAutomation.{GoalStore, KanbanStore}`. Heartbeats use automation cron jobs
+and cron history.
 
 ### ReadCache
 
@@ -805,7 +836,12 @@ including runs without a session-history key, and monitors native session
 processes independently of `terminate/2`, including forced shutdown. Store hooks
 only cast asynchronously, avoiding recursive Store calls. Retained SQLite
 requests from an earlier daemon incarnation expire during recovery before they
-can be resolved. Restarting only the expiry worker preserves live owners and
+can be resolved, but only in the VM that owns the store (`LemonCore.RuntimeOwner`):
+a second runtime on the same database leaves them alone, and one-shot client VMs
+never recover. Recovery runs in `handle_continue/2` and retries with backoff when
+the store is unavailable. Run and session end read only that owner's approvals
+through `ExecApprovalStore`'s owner index, and terminal receipts are swept after
+24 hours. Restarting only the expiry worker preserves live owners and
 restores session monitors; it does not start a new daemon incarnation.
 
 ## Idempotency
@@ -982,6 +1018,9 @@ mix test --cover apps/lemon_core
 
 ### Test Harness
 
+The harness (`LemonCore.Testing*`) serves this repository's own test suites
+and is not part of the published Hex package.
+
 ```elixir
 defmodule MyTest do
   use LemonCore.Testing.Case, async: true
@@ -993,7 +1032,7 @@ defmodule MyTest do
 end
 ```
 
-Available helpers: `unique_token/0`, `unique_scope/0`, `unique_session_key/0`, `unique_run_id/0`, `temp_file!/3`, `temp_dir!/2`, `clear_store_table/1`, `mock_home!/1`, `random_master_key/0`.
+Available helpers: `unique_token/0`, `unique_scope/0`, `unique_session_key/0`, `unique_run_id/0`, `temp_file!/3`, `temp_dir!/2`, `clear_store_table/1`, `mock_home!/1`, `random_master_key/0`. `use LemonCore.Testing.Case, with_store: true` (or `@tag with_store: true`) starts `LemonCore.Store` for the module (or test).
 
 ## Important Notes
 

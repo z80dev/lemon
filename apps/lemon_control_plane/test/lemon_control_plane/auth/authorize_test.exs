@@ -161,6 +161,19 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       assert message =~ "Operator authentication is required"
       assert message =~ "LEMON_CONTROL_PLANE_OPERATOR_TOKEN"
     end
+
+    test "requested scopes never exceed what the operator token grants" do
+      Application.put_env(:lemon_control_plane, :operator_token, "scoped-operator-token")
+
+      assert {:ok, %{role: :operator, scopes: [:read]}} =
+               Authorize.from_params(
+                 %{
+                   "auth" => %{"token" => "scoped-operator-token"},
+                   "scopes" => ["operator.read"]
+                 },
+                 local?: false
+               )
+    end
   end
 
   describe "operator credential helpers" do
@@ -209,6 +222,17 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       assert Authorize.tokenless_loopback_allowed?({127, 0, 0, 1})
       refute Authorize.tokenless_loopback_allowed?({192, 168, 1, 2})
       refute Authorize.tokenless_loopback_allowed?(nil)
+    end
+
+    # #711: the OpenAI-compatible and POST /acp token principals are retired.
+    test "retired API-principal and stale helpers are gone" do
+      Code.ensure_loaded!(Authorize)
+      refute function_exported?(Authorize, :authenticate_api, 3)
+      refute function_exported?(Authorize, :principal_id, 1)
+      refute function_exported?(Authorize, :required_scopes, 1)
+      refute function_exported?(Authorize, :node_context, 1)
+      refute function_exported?(Authorize, :from_params, 1)
+      assert Authorize.node_only_method?("node.shell.event")
     end
   end
 

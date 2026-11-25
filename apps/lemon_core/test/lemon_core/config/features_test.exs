@@ -29,12 +29,15 @@ defmodule LemonCore.Config.FeaturesTest do
       assert Features.enabled?(features, :session_search)
     end
 
-    test "learning-loop flags default to default-on" do
+    test "skill synthesis drafts default on and routing feedback defaults off" do
       features = Features.resolve(%{})
-      assert features.routing_feedback == :"default-on"
+      assert features.routing_feedback == :off
       assert features.skill_synthesis_drafts == :"default-on"
-      assert Features.enabled?(features, :routing_feedback)
+      refute Features.enabled?(features, :routing_feedback)
       assert Features.enabled?(features, :skill_synthesis_drafts)
+
+      enabled = Features.resolve(%{"features" => %{"routing_feedback" => "on"}})
+      assert Features.enabled?(enabled, :routing_feedback)
     end
 
     test "crash resume is default off and explicitly configurable" do
@@ -74,9 +77,20 @@ defmodule LemonCore.Config.FeaturesTest do
       assert features.session_search == :"default-on"
     end
 
-    test "unknown values parse to off (fail-closed)" do
+    # #617: a typo is a validation error, not a silent kill switch.
+    test "unknown values are kept and fail validation" do
       features = Features.resolve(%{"features" => %{"session_search" => "banana"}})
-      assert features.session_search == :off
+      assert features.session_search == "banana"
+      refute Features.enabled?(features, :session_search)
+      assert {:error, [error]} = Features.validate(features)
+      assert error =~ "features.session_search"
+
+      assert {:error, errors} =
+               LemonCore.Config.Modular.validate_settings(%{
+                 "features" => %{"crash_resume" => "yes"}
+               })
+
+      assert Enum.any?(errors, &String.starts_with?(&1, "features.crash_resume:"))
     end
 
     test "environment variable kill switch wins over TOML" do

@@ -6,10 +6,13 @@ defmodule LemonChannels.Telegram.APIDownloadTest do
   @public {149, 154, 167, 220}
   @unguarded [LemonCore.Httpc, :httpc, Req, LemonChannels.ImageDownload]
 
-  # Remote calls made by `name/arity`, read from the compiled module.
+  # Remote calls made by `name/arity`, read from the module's compiled beam on
+  # the code path (`:code.which/1` is `:cover_compiled` under `--cover`).
   defp remote_calls(module, name, arity) do
+    {^module, beam, _path} = :code.get_object_code(module)
+
     {:ok, {^module, [debug_info: {:debug_info_v1, backend, data}]}} =
-      :beam_lib.chunks(:code.which(module), [:debug_info])
+      :beam_lib.chunks(beam, [:debug_info])
 
     {:ok, forms} = backend.debug_info(:erlang_v1, module, data, [])
 

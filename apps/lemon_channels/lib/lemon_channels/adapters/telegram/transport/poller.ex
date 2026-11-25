@@ -33,7 +33,52 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
 
   def fetch(state), do: safe_get_updates(state)
 
-  def apply_result(state, result, callbacks) do
+  @doc """
+  Fetch updates and do their slow preparation (voice transcription, image
+  downloads) in the calling poll task, never in the transport shell.
+  Returns `{result, prepared}`; `prepared` maps update ids to their
+  normalized, transcribed message (`{:ok, ctx}`) or `:skip`.
+  """
+  def fetch_and_prepare(state, callbacks) do
+    result = fetch(state)
+
+    prepared =
+      case result do
+        {:ok, %{"ok" => true, "result" => updates}} when is_list(updates) ->
+          if state[:drop_pending_updates?] == true and state[:drop_pending_done?] != true,
+            do: %{},
+            else: Map.new(updates, &prepare_update(state, &1, callbacks))
+
+        _ ->
+          %{}
+      end
+
+    {result, prepared}
+  end
+
+  defp prepare_update(state, update, callbacks) do
+    id = update["update_id"]
+
+    prepared =
+      case Normalize.event(state, update, id) do
+        {:ok, normalized} ->
+          case maybe_transcribe_event(state, normalized, callbacks) do
+            {:ok, normalized} -> {:ok, normalized}
+            _skip_or_error -> :skip
+          end
+
+        {:error, _reason} ->
+          :skip
+      end
+
+    {id, prepared}
+  rescue
+    error ->
+      Logger.error("Telegram update preparation failed: #{inspect(error.__struct__)}")
+      {update["update_id"], :skip}
+  end
+
+  def apply_result(state, result, callbacks, prepared \\ %{}) do
     case result do
       {:ok, %{"ok" => true, "result" => updates}} ->
         LemonChannels.Registry.record_status("telegram", :connected)
@@ -48,10 +93,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
             %{state | offset: new_offset, drop_pending_done?: false}
           end
         else
-          {state, max_id} = handle_updates(state, updates, callbacks)
-          new_offset = max(state.offset, max_id + 1)
-          callbacks.persist_offset.(state, new_offset)
-          %{state | offset: new_offset}
+          {state, offset} = handle_updates(state, updates, callbacks, prepared)
+          %{state | offset: offset}
         end
 
       {:error, reason} ->
@@ -62,30 +105,31 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
     end
   end
 
-  defp handle_updates(state, updates, callbacks) do
-    Enum.reduce(updates, {state, state.offset - 1}, fn update, {acc_state, max_id} ->
-      id = update["update_id"] || max_id
-      acc_state = process_single_update(acc_state, update, id, callbacks)
-      {acc_state, max(max_id, id)}
+  # Each update's offset is confirmed as soon as that update is handled, so a
+  # crash mid-batch re-polls only the updates that were never handled.
+  defp handle_updates(state, updates, callbacks, prepared) do
+    Enum.reduce(updates, {state, state.offset}, fn update, {acc_state, offset} ->
+      id = update["update_id"] || offset - 1
+      acc_state = process_single_update(acc_state, update, id, callbacks, prepared)
+
+      if id + 1 > offset do
+        callbacks.persist_offset.(acc_state, id + 1)
+        {acc_state, id + 1}
+      else
+        {acc_state, offset}
+      end
     end)
   end
 
-  defp process_single_update(state, update, id, callbacks) do
-    case Normalize.event(state, update, id) do
-      {:ok, normalized} ->
-        case maybe_transcribe_event(state, normalized, callbacks) do
-          {:ok, normalized} ->
-            Pipeline.run(normalized, state, callbacks)
+  defp process_single_update(state, update, id, callbacks, prepared) do
+    prepared_update =
+      Map.get_lazy(prepared, id, fn ->
+        update |> then(&prepare_update(state, &1, callbacks)) |> elem(1)
+      end)
 
-          {:skip, new_state} ->
-            new_state
-
-          {:error, _reason} ->
-            state
-        end
-
-      {:error, _reason} ->
-        state
+    case prepared_update do
+      {:ok, normalized} -> Pipeline.run(normalized, state, callbacks)
+      :skip -> state
     end
   rescue
     error ->

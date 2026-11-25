@@ -14,11 +14,13 @@ defmodule LemonCore.Service.Lock do
   the lock path. A contender cannot replace a populated directory. Death before
   publication may leave staging files, but never an ownerless held lock.
 
-  Owners record the OS PID/start time and the BEAM PID/node. Only a matching
-  current OS identity permits local BEAM liveness checks: a killed holder can
-  be reclaimed without waiting for its VM to exit. Other VMs (including reused
-  OS PIDs) are checked through `LemonCore.Service.Identity`; unreadable records
-  and failed identity probes never prove death.
+  Owners record the OS PID/start time and the BEAM PID/node. The own OS
+  identity is captured once per VM (`Identity.self_identity/0`), so an
+  uncontended acquisition forks no `ps`/`id`. Only a matching current OS
+  identity permits local BEAM liveness checks: a killed holder can be
+  reclaimed without waiting for its VM to exit. Other VMs (including reused OS
+  PIDs) are checked through `LemonCore.Service.Identity`; unreadable records
+  and failed identity probes never prove death. Every reclaim is logged.
 
   Owner filenames contain a unique acquisition token. Release and stale
   recovery remove only that file, then attempt to remove the empty directory.
@@ -28,6 +30,8 @@ defmodule LemonCore.Service.Lock do
   after stopping all writers. Do not delete a live lock or share these paths
   across hosts. Callbacks run once and are never retried.
   """
+
+  require Logger
 
   alias LemonCore.Service.{Identity, Role, Unit}
 
@@ -88,7 +92,7 @@ defmodule LemonCore.Service.Lock do
     owner = "owner.#{token}.json"
     staging = path <> ".tmp." <> token
 
-    with {:ok, identity} <- Identity.capture(String.to_integer(System.pid()), opts),
+    with {:ok, identity} <- Identity.self_identity(),
          :ok <- File.mkdir(staging) do
       try do
         record =
@@ -154,6 +158,7 @@ defmodule LemonCore.Service.Lock do
          true <- owner == "owner.json" or String.match?(owner, ~r/^owner\.[0-9a-f]{32}\.json$/),
          {:ok, record} <- Identity.read_json(Path.join(path, owner)),
          true <- dead_owner?(record, identity, opts) do
+      Logger.warning("Recovered a stale lock left by a dead holder: #{Path.basename(path)}")
       release(path, owner)
     else
       _ -> :locked
@@ -180,8 +185,8 @@ defmodule LemonCore.Service.Lock do
   end
 
   defp release(path, owner) do
-    File.rm(Path.join(path, owner))
-    File.rmdir(path)
+    _ = File.rm(Path.join(path, owner))
+    _ = File.rmdir(path)
     :ok
   end
 end

@@ -15,6 +15,21 @@ defmodule LemonCore.ConfigCache do
   - Avoid hot-path TOML disk reads/parsing.
   - Provide consistent semantics: cached reads by default + explicit reload.
   - Detect on-disk changes via periodic (TTL) file fingerprint checks (mtime/size).
+  - Serve the last good config when an implicit reload fails.
+
+  ## Failed implicit reloads
+
+  When a TTL check finds changed files and the reload fails (invalid TOML or a
+  validation error), `get/2` keeps serving the previously cached config. The
+  failure is recorded on the entry as `%{error_class, fingerprint, failed_at}`
+  (see `last_error/1`), logged once and reported through the
+  `[:lemon, :config_cache, :reload_failed]` telemetry event. No further load is
+  attempted until the files' fingerprint changes again. Only a first load with no
+  previous entry raises: there is no last good config to serve.
+
+  `reload/2` is the explicit path and still raises.
+
+  Every disk load emits `[:lemon, :config_cache, :load]`.
 
   The cache is registered as `LemonCore.ConfigCache`.
   Options come from `start_link/1` first, falling back to
@@ -30,8 +45,17 @@ defmodule LemonCore.ConfigCache do
   @default_mtime_check_interval_ms 1_000
   @default_call_timeout_ms 5_000
 
-  # Row format: {key, base_config, fingerprint, loaded_at_ms, checked_at_ms}
+  # Row format: {key, base_config, fingerprint, loaded_at_ms, checked_at_ms, failure}
   # Fingerprint is a list of {path, {mtime, size} | :missing}.
+  # Failure is nil or the last failed implicit reload (see `last_error/1`).
+
+  require Logger
+
+  @type failure :: %{
+          error_class: module(),
+          fingerprint: [{String.t(), term()}],
+          failed_at: integer()
+        }
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -70,21 +94,40 @@ defmodule LemonCore.ConfigCache do
         |> GenServer.call({:load, cwd}, call_timeout(opts))
         |> reply_or_raise()
 
-      [{^key, base, fingerprint, _loaded_at, checked_at}] ->
+      [{^key, base, fingerprint, _loaded_at, checked_at, failure}] ->
         if now - checked_at < interval do
           base
         else
           new_fp = fingerprint(paths)
 
-          if new_fp == fingerprint do
+          if new_fp == fingerprint or failed_fingerprint?(failure, new_fp) do
             _ = :ets.update_element(@table, key, {5, now})
             base
           else
             __MODULE__
-            |> GenServer.call({:reload, cwd}, call_timeout(opts))
+            |> GenServer.call({:refresh, cwd}, call_timeout(opts))
             |> reply_or_raise()
           end
         end
+    end
+  end
+
+  @doc """
+  The last failed implicit reload for `cwd`, or `nil` when the cached entry is
+  current (or nothing is cached).
+
+  The failure carries the exception module (`error_class`), the file
+  fingerprint that failed and the monotonic `failed_at` time in milliseconds.
+  """
+  @spec last_error(String.t() | nil) :: failure() | nil
+  def last_error(cwd \\ nil) do
+    if available?() do
+      key = cache_key(config_paths(cwd))
+
+      case :ets.lookup(@table, key) do
+        [{^key, _base, _fp, _loaded_at, _checked_at, failure}] -> failure
+        [] -> nil
+      end
     end
   end
 
@@ -194,13 +237,13 @@ defmodule LemonCore.ConfigCache do
     now = now_ms()
 
     case :ets.lookup(state.table, key) do
-      [{^key, base, _fp, _loaded_at, _checked_at}] ->
+      [{^key, base, _fp, _loaded_at, _checked_at, _failure}] ->
         {:reply, base, state}
 
       [] ->
         case safe_load_base(cwd, paths) do
           {:ok, base, fp} ->
-            _ = :ets.insert(state.table, {key, base, fp, now, now})
+            _ = :ets.insert(state.table, {key, base, fp, now, now, nil})
             {:reply, base, state}
 
           {:error, exception, stacktrace} ->
@@ -221,7 +264,7 @@ defmodule LemonCore.ConfigCache do
 
     case safe_load_base(cwd, paths) do
       {:ok, base, fp} ->
-        _ = :ets.insert(state.table, {key, base, fp, now, now})
+        _ = :ets.insert(state.table, {key, base, fp, now, now, nil})
 
         {:reply, base, state}
 
@@ -230,11 +273,79 @@ defmodule LemonCore.ConfigCache do
     end
   end
 
+  # Implicit reload from `get/2`. Callers queued behind one refresh re-check the
+  # fingerprint here, so a burst of reads after an edit loads the files once.
+  def handle_call({:refresh, cwd}, _from, state) do
+    paths = config_paths(cwd)
+    key = cache_key(paths)
+    now = now_ms()
+
+    case :ets.lookup(state.table, key) do
+      # The entry was dropped (invalidate/clear) meanwhile: no last good config
+      # to serve, so this is a first load and a failure raises in the caller.
+      [] ->
+        case safe_load_base(cwd, paths) do
+          {:ok, base, fp} ->
+            _ = :ets.insert(state.table, {key, base, fp, now, now, nil})
+            {:reply, base, state}
+
+          error ->
+            {:reply, error, state}
+        end
+
+      [{^key, base, fingerprint, _loaded_at, _checked_at, failure}] ->
+        current_fp = fingerprint(paths)
+
+        if current_fp == fingerprint or failed_fingerprint?(failure, current_fp) do
+          _ = :ets.update_element(state.table, key, {5, now})
+          {:reply, base, state}
+        else
+          {:reply, refresh_entry(state, cwd, paths, key, base, now), state}
+        end
+    end
+  end
+
+  defp refresh_entry(state, cwd, paths, key, last_good, now) do
+    case safe_load_base(cwd, paths) do
+      {:ok, base, fp} ->
+        _ = :ets.insert(state.table, {key, base, fp, now, now, nil})
+        base
+
+      {:error, exception, _stacktrace} ->
+        failure = %{
+          error_class: exception.__struct__,
+          fingerprint: fingerprint(paths),
+          failed_at: now
+        }
+
+        _ = :ets.update_element(state.table, key, [{5, now}, {6, failure}])
+        report_failure(failure)
+        last_good
+    end
+  end
+
+  # Reported once per failing fingerprint: later reads short-circuit on it.
+  # Only the exception class is logged; its message may quote config values.
+  defp report_failure(failure) do
+    Logger.error(
+      "Config reload failed (#{inspect(failure.error_class)}); serving the last good config. " <>
+        "Run `lemon config validate` for details."
+    )
+
+    :telemetry.execute([:lemon, :config_cache, :reload_failed], %{count: 1}, %{
+      error_class: failure.error_class
+    })
+  end
+
+  defp failed_fingerprint?(%{fingerprint: fp}, fp), do: true
+  defp failed_fingerprint?(_failure, _fp), do: false
+
   defp load_base(cwd, paths) do
     # Stat before parsing: a file written during the load then fails the next
     # fingerprint check and is re-read, instead of its new fingerprint being
     # cached beside content parsed from the previous (or a partial) file.
     fp = fingerprint(paths)
+    :telemetry.execute([:lemon, :config_cache, :load], %{count: 1}, %{})
     base = LemonCore.Config.load_base_from_disk(cwd)
     {base, fp}
   end

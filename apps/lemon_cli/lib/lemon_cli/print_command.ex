@@ -56,7 +56,7 @@ defmodule LemonCli.PrintCommand do
 
         params = %{
           "prompt" => prompt,
-          "session_key" => session,
+          "sessionKey" => session,
           "cwd" => cwd,
           "session_mode" => "coding",
           "persona" => opts[:persona],
@@ -67,7 +67,7 @@ defmodule LemonCli.PrintCommand do
         params = if opts[:model], do: Map.put(params, "model", opts[:model]), else: params
 
         case client().call(conn, "agent", params) do
-          {:ok, %{"run_id" => run_id}} when is_binary(run_id) and run_id != "" ->
+          {:ok, %{"runId" => run_id}} when is_binary(run_id) and run_id != "" ->
             emit(output, %{"type" => "init", "run_id" => run_id, "session_key" => session})
 
             result =

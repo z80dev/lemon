@@ -168,6 +168,15 @@ defmodule LemonCore.StoreTest do
   defp run_id(token, name), do: "run_#{token}_#{name}"
   defp session_key(token), do: "agent:store_test_#{token}:main"
 
+  # Runs finalized with fixed early timestamps make their session the oldest in
+  # the shared Store; leaving it behind changes every later global session
+  # query (for example a prune preview's candidate set).
+  defp cleanup_session(session_key) do
+    on_exit(fn ->
+      assert {:ok, _} = LemonCore.TestSupport.SessionCleanup.delete(session_key)
+    end)
+  end
+
   defp introspection_event(token, name, ts_ms, attrs \\ %{}) do
     Map.merge(
       %{
@@ -219,6 +228,7 @@ defmodule LemonCore.StoreTest do
     test "RunHistoryStore orders finalized runs by newest started_at first" do
       token = unique_token()
       session_key = session_key(token)
+      cleanup_session(session_key)
 
       oldest = run_id(token, :oldest)
       middle = run_id(token, :middle)
@@ -245,6 +255,7 @@ defmodule LemonCore.StoreTest do
     test "applies ordering/limit consistently via RunHistoryStore" do
       token = unique_token()
       session_key = "agent:rhs_ordering_#{token}:main"
+      cleanup_session(session_key)
 
       older_run = run_id(token, :older)
       newer_run = run_id(token, :newer)
@@ -289,7 +300,7 @@ defmodule LemonCore.StoreTest do
       end
     end
 
-    test "listing and counting preserve backend errors through both query paths" do
+    test "listing and counting surface backend errors through both query paths" do
       original_state = :sys.get_state(Store)
       on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
 
@@ -297,9 +308,10 @@ defmodule LemonCore.StoreTest do
           opts <- [[], [run_id: "introspection-backend-failure"]] do
         swap_store_backend(backend, %{list_response: {:error, :sqlite_busy}})
 
-        assert Store.list_introspection_events(opts) == {:error, :sqlite_busy}
-        assert LemonCore.Introspection.list(opts) == {:error, :sqlite_busy}
-        assert LemonCore.IntrospectionStore.count(opts) == {:error, :sqlite_busy}
+        # The backend reason is logged; callers get the bounded store error.
+        assert Store.list_introspection_events(opts) == {:error, :store_unavailable}
+        assert LemonCore.Introspection.list(opts) == {:error, :store_unavailable}
+        assert LemonCore.IntrospectionStore.count(opts) == {:error, :store_unavailable}
       end
     end
 
@@ -311,8 +323,7 @@ defmodule LemonCore.StoreTest do
           opts <- [[], [event_type: :run_completed]] do
         swap_store_backend(backend, %{list_response: :unexpected})
 
-        assert Store.list_introspection_events(opts) ==
-                 {:error, {:unexpected_backend_response, :unexpected}}
+        assert Store.list_introspection_events(opts) == {:error, :store_unavailable}
       end
     end
 
@@ -609,7 +620,10 @@ defmodule LemonCore.StoreTest do
       original_state = swap_store_backend(BusyBackend, %{})
       on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
 
-      assert Store.list(:webhook_idempotency) == []
+      assert_raise RuntimeError, "Store could not list :webhook_idempotency", fn ->
+        Store.list(:webhook_idempotency)
+      end
+
       assert Store.fetch_all(:webhook_idempotency) == {:error, :store_unavailable}
     end
 
@@ -786,6 +800,7 @@ defmodule LemonCore.StoreTest do
     test "finalize_run writes history to RunHistoryStore" do
       token = unique_token()
       key = session_key(token)
+      cleanup_session(key)
       rid = run_id(token, :history_delegate)
 
       assert :ok =

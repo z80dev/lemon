@@ -1,12 +1,14 @@
 defmodule CodingAgent.Tools.Task.LiveBridgeTest do
   use ExUnit.Case, async: false
 
+  import CodingAgent.AsyncHelpers
+
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskProgressBindingServer
   alias CodingAgent.TaskProgressBindingStore
+  alias CodingAgent.{TaskRuntime, TaskRuntimeHelpers}
   alias CodingAgent.TaskStore
   alias CodingAgent.Tools.Task
-  alias CodingAgent.Tools.Task.LiveBridge
   alias LemonCore.{Bus, Event}
   alias LemonPlatformTest.EventsFixtures
 
@@ -105,22 +107,10 @@ defmodule CodingAgent.Tools.Task.LiveBridgeTest do
     send(run_pid, :release)
   end
 
-  test "given child run completed event, bridge terminates and binding is deleted" do
-    binding = %{
-      task_id: "task_bridge_complete",
-      child_run_id: "run_child_bridge_complete",
-      parent_run_id: "run_parent_bridge_complete",
-      parent_session_key: "agent:default:telegram:default:dm:12345",
-      parent_agent_id: "default",
-      root_action_id: "tool_call_bridge_complete",
-      surface: {:status_task, "tool_call_bridge_complete"}
-    }
-
-    :ok = TaskProgressBindingStore.new_binding(binding)
-    assert {:ok, binding} = TaskProgressBindingStore.get_by_child_run_id(binding.child_run_id)
-
-    assert {:ok, pid} = LiveBridge.start_link(binding)
-    ref = Process.monitor(pid)
+  test "given child run completed event, the owner closes its bridge and deletes the binding" do
+    {id, binding} = bridged_child("complete")
+    owner = TaskRuntime.whereis(id)
+    assert_eventually(fn -> is_map(TaskRuntimeHelpers.entry(id).bridge) end)
 
     :ok =
       Bus.broadcast(
@@ -128,26 +118,17 @@ defmodule CodingAgent.Tools.Task.LiveBridgeTest do
         Event.new(:run_completed, EventsFixtures.run_completed())
       )
 
-    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
+    assert_eventually(fn -> TaskRuntimeHelpers.entry(id).bridge == nil end)
+    assert TaskRuntime.whereis(id) == owner
 
     assert {:error, :not_found} =
              TaskProgressBindingStore.get_by_child_run_id(binding.child_run_id)
   end
 
-  test "duplicate child action updates do not crash" do
-    binding = %{
-      task_id: "task_bridge_dupe",
-      child_run_id: "run_child_bridge_dupe",
-      parent_run_id: "run_parent_bridge_dupe",
-      parent_session_key: "agent:default:telegram:default:dm:12345",
-      parent_agent_id: "default",
-      root_action_id: "tool_call_bridge_dupe",
-      surface: {:status_task, "tool_call_bridge_dupe"}
-    }
-
-    :ok = TaskProgressBindingStore.new_binding(binding)
-    assert {:ok, pid} = LiveBridge.start_link(binding)
-    assert Process.alive?(pid)
+  test "duplicate child action updates do not crash the owner" do
+    {id, binding} = bridged_child("dupe")
+    owner = TaskRuntime.whereis(id)
+    Bus.subscribe(Bus.run_topic(binding.parent_run_id))
 
     action_event =
       Event.new(:engine_action, %{
@@ -159,14 +140,38 @@ defmodule CodingAgent.Tools.Task.LiveBridgeTest do
         level: nil
       })
 
+    assert_eventually(fn -> is_map(TaskRuntimeHelpers.entry(id).bridge) end)
     :ok = Bus.broadcast(Bus.run_topic(binding.child_run_id), action_event)
     :ok = Bus.broadcast(Bus.run_topic(binding.child_run_id), action_event)
 
-    Process.sleep(50)
-    assert Process.alive?(pid)
+    assert_receive %Event{type: :task_projected_child_action}, 1_000
+    assert_receive %Event{type: :task_projected_child_action}, 1_000
+    assert TaskRuntime.whereis(id) == owner
   end
 
-  test "missing binding is ignored safely" do
-    assert :ok = LiveBridge.start_for_child_run("missing_child_run")
+  test "a child without a binding has no bridge" do
+    id = TaskStore.new_task(%{run_id: "missing_child_run"})
+    :ok = TaskRuntimeHelpers.register(id, nil)
+    on_exit(fn -> TaskRuntimeHelpers.stop(id) end)
+    assert TaskRuntimeHelpers.entry(id).bridge == nil
+  end
+
+  defp bridged_child(suffix) do
+    binding = %{
+      task_id: "task_bridge_#{suffix}",
+      child_run_id: "run_child_bridge_#{suffix}",
+      parent_run_id: "run_parent_bridge_#{suffix}",
+      parent_session_key: "agent:default:telegram:default:dm:12345",
+      parent_agent_id: "default",
+      root_action_id: "tool_call_bridge_#{suffix}",
+      surface: {:status_task, "tool_call_bridge_#{suffix}"}
+    }
+
+    :ok = TaskProgressBindingStore.new_binding(binding)
+    assert {:ok, binding} = TaskProgressBindingStore.get_by_child_run_id(binding.child_run_id)
+    id = TaskStore.new_task(%{run_id: binding.child_run_id})
+    :ok = TaskRuntimeHelpers.register(id, nil)
+    on_exit(fn -> TaskRuntimeHelpers.stop(id) end)
+    {id, binding}
   end
 end

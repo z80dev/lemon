@@ -29,7 +29,7 @@ defmodule LemonPlatformTest do
   |---|---|---|
   | `LemonCore.Store.Backend` | `LemonPlatformTest.BackendCase` | storage for the platform's key/value store |
   | `LemonChannels.Plugin` | `LemonPlatformTest.PluginCase` | a chat/messaging channel (Telegram, Discord, …) |
-  | `LemonMemory.Provider` | `LemonPlatformTest.ProviderCase` | a searchable long-term memory source |
+  | `LemonMemory.Provider` | `LemonPlatformTest.ProviderCase` | a long-term memory write target |
 
   Each case template's moduledoc is the reference guide for its behaviour: the
   contract in prose, a minimal worked implementation, and every option the suite
@@ -92,7 +92,7 @@ defmodule LemonPlatformTest do
 
       iex> %{optional: optional} = LemonPlatformTest.callbacks(LemonCore.Store.Backend)
       iex> Enum.sort(optional)
-      [close: 1, compare_and_delete_many: 2, compare_and_swap: 5, confirm_durable: 1, list_recent: 3, ping: 1, sweep: 3, sync: 1, with_durability: 2]
+      [close: 1, compare_and_delete_many: 2, compare_and_swap: 5, confirm_durable: 1, list_recent: 3, ping: 1, read_keys: 2, read_list: 2, read_range: 5, read_recent: 3, reader: 1, sweep: 3, sync: 1, with_durability: 2]
   """
   @spec callbacks(module()) :: %{required: [{atom(), arity()}], optional: [{atom(), arity()}]}
   def callbacks(behaviour) do

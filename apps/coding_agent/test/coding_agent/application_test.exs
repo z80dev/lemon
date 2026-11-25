@@ -19,8 +19,9 @@ defmodule CodingAgent.ApplicationTest do
           {CodingAgent.ProcessSupervisor,
            [
              CodingAgent.ProcessRegistry,
-             CodingAgent.ProcessStoreServer,
+             # Sessions precede the store: a store restart must not stop them.
              CodingAgent.ProcessManager,
+             CodingAgent.ProcessStoreServer,
              CodingAgent.LaneQueue
            ]}
         ] do

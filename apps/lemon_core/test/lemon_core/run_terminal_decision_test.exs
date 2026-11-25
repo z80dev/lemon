@@ -155,18 +155,24 @@ defmodule LemonCore.RunTerminalDecisionTest do
 
     run_id = "ephemeral-run"
     summary = %{attempt_id: "attempt-2", completed: %{ok: true, answer: "private answer"}}
+    event = %{type: :action, data: "buffered"}
+    assert :ok = Store.append_run_event(server, run_id, event)
+    assert :ok = Store.ping(server)
     assert :ok = RunStore.finalize(server, run_id, summary)
+    assert {:ok, live_record} = Store.fetch_run(server, run_id)
+    refute Map.has_key?(live_record, :events)
+    assert %{events: [^event]} = Store.get_run_with_events(server, run_id)
     :ok = stop_supervised!(server)
     start_supervised!(spec)
 
-    assert {:ok, nil} = Store.fetch_run(server, run_id)
+    assert {:error, :evicted} = Store.fetch_run(server, run_id)
 
     assert {:ok, %{outcome: :success, status: :completed, attempt_id: "attempt-2"} = decision} =
              TerminalOutbox.decision(server, run_id)
 
     refute inspect(decision) =~ "private answer"
 
-    assert {:ok, %{record: %{summary: ^summary}, notification: :pending}} =
+    assert {:ok, %{record: %{summary: ^summary, events: [^event]}, notification: :pending}} =
              TerminalOutbox.pending(server, run_id)
 
     assert {:ok, [{^run_id, _}]} = Store.terminal_pending_page(server, nil, 1)

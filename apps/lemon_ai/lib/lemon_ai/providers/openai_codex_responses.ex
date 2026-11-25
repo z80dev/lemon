@@ -49,9 +49,8 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
   alias LemonAi.EventStream
   alias LemonAi.Providers.OpenAIResponsesShared
-  alias LemonAi.Retry
-  alias LemonAi.Providers.SSEParser
   alias LemonAi.Providers.StreamingHelper
+  alias LemonAi.Providers.StreamTransport
   import LemonAi.Providers.AssistantMessageHelper
 
   # ============================================================================
@@ -133,12 +132,13 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
              headers,
              body,
              fn ->
-               stream_with_retries(
+               StreamTransport.post_sse(
                  responses_url(model.base_url),
-                 body,
                  headers,
+                 body,
                  LemonAi.Provider.retry_policy(opts),
-                 0
+                 provider: :openai_codex,
+                 idle_timeout: StreamTransport.idle_timeout_for(opts.stream_idle_timeout)
                )
              end
            ) do
@@ -210,7 +210,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
     # Add tools if present
     body =
-      if context.tools && context.tools != [] do
+      if context.tools != [] do
         Map.put(
           body,
           "tools",
@@ -278,7 +278,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
     headers =
       base_headers
-      |> Map.merge(model.headers || %{})
+      |> Map.merge(model.headers)
       |> Map.merge(opts.headers || %{})
       |> Map.reject(fn {key, _} -> String.downcase(to_string(key)) in @controlled_headers end)
       |> Map.put("version", @client_version)
@@ -377,84 +377,6 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
     end
   end
 
-  defp stream_with_retries(url, body, headers, policy, attempt) do
-    headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
-    retry_allowed? = Retry.retry_allowed?(attempt, policy)
-
-    case Req.post(url,
-           json: body,
-           headers: headers_list,
-           into: :self,
-           retry: false,
-           receive_timeout: 300_000
-         ) do
-      {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
-        {:ok, SSEParser.events(response)}
-
-      {:ok, %Req.Response{status: status, body: error_body, headers: response_headers}} ->
-        error_text = normalize_error_body(error_body)
-
-        retry_delay =
-          if retry_allowed? and LemonAi.Error.retryable_http_error?(status, error_text) do
-            Retry.http_retry_delay_ms(
-              attempt,
-              response_headers,
-              policy,
-              {:http_error, status, error_text}
-            )
-          else
-            :give_up
-          end
-
-        case retry_delay do
-          :give_up ->
-            {:error,
-             LemonAi.Error.parse_http_error(status, error_text, response_headers, :openai_codex),
-             Retry.retry_after_ms(response_headers)}
-
-          delay_ms ->
-            LemonAi.Provider.retry_sleep(delay_ms, policy)
-            stream_with_retries(url, body, headers, policy, attempt + 1)
-        end
-
-      {:error, reason} ->
-        cond do
-          retry_allowed? and LemonAi.Error.retryable_transport_error?(reason) ->
-            LemonAi.Provider.retry_sleep(Retry.backoff_delay_ms(attempt, policy), policy)
-            stream_with_retries(url, body, headers, policy, attempt + 1)
-
-          true ->
-            {:error, reason, nil}
-        end
-    end
-  end
-
-  defp normalize_error_body(body) when is_binary(body), do: body
-
-  defp normalize_error_body(%Req.Response.Async{} = async) do
-    collect_async_body(async, "")
-  end
-
-  defp normalize_error_body(body) when is_map(body), do: Jason.encode!(body)
-
-  defp normalize_error_body(other), do: inspect(other)
-
-  defp collect_async_body(%Req.Response.Async{ref: ref, pid: pid}, acc) do
-    receive do
-      {^ref, {:data, chunk}} ->
-        collect_async_body(%Req.Response.Async{ref: ref, pid: pid}, acc <> chunk)
-
-      {^ref, :done} ->
-        acc
-
-      {:DOWN, ^ref, :process, ^pid, _reason} ->
-        acc
-    after
-      1_000 ->
-        acc
-    end
-  end
-
   # ============================================================================
   # Event Mapping
   # ============================================================================
@@ -483,51 +405,56 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   end
 
   defp map_codex_events(events) do
-    Stream.flat_map(events, fn event ->
-      type = event["type"]
-
-      cond do
-        type == "error" ->
-          code =
-            event["code"] || get_in(event, ["error", "code"]) || get_in(event, ["error", "type"])
-
-          message = event["message"] || get_in(event, ["error", "message"])
-
-          detail =
-            cond do
-              is_binary(message) and String.trim(message) != "" ->
-                message
-
-              is_binary(code) and String.trim(code) != "" ->
-                code
-
-              true ->
-                inspect(event, limit: 500)
-            end
-
-          raise "Codex error: #{detail}"
-
-        type == "response.failed" ->
-          message = get_in(event, ["response", "error", "message"])
-          raise message || "Codex response failed"
-
-        type in ["response.done", "response.completed"] ->
-          response = event["response"]
-
-          normalized_response =
-            if response do
-              status = normalize_codex_status(response["status"])
-              Map.put(response, "status", status)
-            else
-              response
-            end
-
-          [Map.merge(event, %{"type" => "response.completed", "response" => normalized_response})]
-
-        true ->
-          [event]
-      end
+    Stream.flat_map(events, fn
+      event when not is_map(event) -> [event]
+      event -> map_codex_event(event)
     end)
+  end
+
+  defp map_codex_event(event) do
+    type = event["type"]
+
+    cond do
+      type == "error" ->
+        code =
+          event["code"] || get_in(event, ["error", "code"]) || get_in(event, ["error", "type"])
+
+        message = event["message"] || get_in(event, ["error", "message"])
+
+        detail =
+          cond do
+            is_binary(message) and String.trim(message) != "" ->
+              message
+
+            is_binary(code) and String.trim(code) != "" ->
+              code
+
+            true ->
+              inspect(event, limit: 500)
+          end
+
+        raise "Codex error: #{detail}"
+
+      type == "response.failed" ->
+        message = get_in(event, ["response", "error", "message"])
+        raise message || "Codex response failed"
+
+      type in ["response.done", "response.completed"] ->
+        response = event["response"]
+
+        normalized_response =
+          if response do
+            status = normalize_codex_status(response["status"])
+            Map.put(response, "status", status)
+          else
+            response
+          end
+
+        [Map.merge(event, %{"type" => "response.completed", "response" => normalized_response})]
+
+      true ->
+        [event]
+    end
   end
 
   defp normalize_codex_status(status) when is_binary(status) do

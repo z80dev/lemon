@@ -14,7 +14,7 @@ defmodule CodingAgent.Executor.SessionRunner do
   alias CodingAgent.Session.Presentation
   alias CodingAgent.Session.RunTranslator
   alias CodingAgent.Tools.SendFile
-  alias CodingAgent.Tools.Task.Params
+  alias CodingAgent.Tools.Task.InvocationAuthority
   alias LemonGateway.ExecutionRequest
   alias LemonGateway.Tools.SmsClaimMessage
   alias LemonGateway.Tools.SmsGetInboxNumber
@@ -110,9 +110,8 @@ defmodule CodingAgent.Executor.SessionRunner do
     defp attach_context_budget(state, fields) do
       case CodingAgent.Session.context_budget(state.session) do
         {:ok, budget} ->
-          Map.update(fields, :usage, %{context_budget: budget}, fn usage ->
-            Map.put(usage || %{}, :context_budget, budget)
-          end)
+          usage = Map.get(fields, :usage) || %LemonCore.Events.Usage{}
+          Map.put(fields, :usage, %{usage | context_budget: budget})
 
         _ ->
           fields
@@ -132,8 +131,10 @@ defmodule CodingAgent.Executor.SessionRunner do
     GenServer.start_link(__MODULE__, opts)
   end
 
+  # A cast: the gateway Run that requests cancellation never blocks on a busy
+  # session; it holds its permit until this runner exits or its drain deadline.
   def cancel(pid, reason \\ :user_requested) do
-    GenServer.call(pid, {:cancel, reason})
+    GenServer.cast(pid, {:cancel, reason})
   end
 
   def steer(pid, text) do
@@ -251,6 +252,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         config_cwd: get_opt(run_opts, :config_cwd),
         channel_identity: LemonCore.MapHelpers.get_key(meta, :channel_identity),
         tern_pane: Map.get(meta, :tern_pane),
+        delegated_budget: LemonCore.MapHelpers.get_key(meta, :delegated_budget),
         invocation_context_key: LemonCore.MapHelpers.get_key(meta, :invocation_context_key),
         memory_context_key: LemonCore.MapHelpers.get_key(meta, :memory_context_key),
         memory_context_verified:
@@ -259,7 +261,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         shared_memory_grant:
           Map.get(meta, :shared_memory_grant, Map.get(meta, "shared_memory_grant")) == true,
         invocation_mcp_servers: Map.get(meta, :mcp_servers),
-        native_managed_context: Params.managed_metadata?(meta),
+        native_managed_context: InvocationAuthority.managed_metadata?(meta),
         native_lineage_handle: Map.get(meta, :native_lineage_handle),
         native_lineage_run_id: Map.get(meta, :native_lineage_run_id),
         native_source_profile_id: Map.get(meta, :profile_id),
@@ -380,14 +382,15 @@ defmodule CodingAgent.Executor.SessionRunner do
     end
   end
 
-  def handle_call({:cancel, reason}, _from, state) do
+  @impl true
+  def handle_cast({:cancel, reason}, state) do
     translator = RunTranslator.mark_cancelled(state.translator, reason)
 
     if state.session do
       CodingAgent.Session.abort(state.session)
     end
 
-    {:reply, :ok, %{state | translator: translator}}
+    {:noreply, %{state | translator: translator}}
   end
 
   @impl true
@@ -543,7 +546,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     with :ok <- CodingAgent.Session.save(session) do
       case LemonCore.RouterBridge.register_native_resume(run_id, token) do
         {:error, :unavailable} = error ->
-          if Params.managed_metadata?(meta), do: error, else: :ok
+          if InvocationAuthority.managed_metadata?(meta), do: error, else: :ok
 
         result ->
           result

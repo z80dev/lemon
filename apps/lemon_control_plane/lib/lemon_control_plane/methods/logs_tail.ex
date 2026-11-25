@@ -12,6 +12,7 @@ defmodule LemonControlPlane.Methods.LogsTail do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Auth.Authorize
+  alias LemonControlPlane.Protocol.Errors
 
   @default_limit 100
   @max_limit 1_000
@@ -40,16 +41,22 @@ defmodule LemonControlPlane.Methods.LogsTail do
     limit = normalize_limit(get_param(params, "limit") || get_param(params, "lines"))
     level = normalize_level(get_param(params, "level") || get_param(params, "filter"))
 
-    logs = limit |> get_recent_logs(level) |> project_logs(content?)
+    case get_recent_logs(limit, level) do
+      {:ok, entries} when is_list(entries) ->
+        logs = Enum.map(entries, &project_entry(&1, content?))
 
-    {:ok,
-     %{
-       "logs" => logs,
-       "total" => length(logs),
-       "filters" => %{"limit" => limit, "level" => level},
-       "contentWithheld" => not content?,
-       "summary" => summary(logs, limit, level, content?)
-     }}
+        {:ok,
+         %{
+           "logs" => logs,
+           "total" => length(logs),
+           "filters" => %{"limit" => limit, "level" => level},
+           "contentWithheld" => not content?,
+           "summary" => summary(logs, limit, level, content?)
+         }}
+
+      _unavailable ->
+        {:error, Errors.unavailable("Log tail is unavailable")}
+    end
   end
 
   defp get_recent_logs(limit, level) do
@@ -58,17 +65,9 @@ defmodule LemonControlPlane.Methods.LogsTail do
     if Code.ensure_loaded?(mod) and function_exported?(mod, :get_logs, 2) do
       apply(mod, :get_logs, [limit, level])
     else
-      # Fallback: return empty list
-      []
+      {:error, :unavailable}
     end
-  rescue
-    _ -> []
   end
-
-  defp project_logs(logs, content?) when is_list(logs),
-    do: Enum.map(logs, &project_entry(&1, content?))
-
-  defp project_logs(_logs, _content?), do: []
 
   defp project_entry(entry, true), do: LemonCore.Redact.project(entry)
 

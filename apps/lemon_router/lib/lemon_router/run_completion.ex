@@ -28,7 +28,7 @@ defmodule LemonRouter.RunCompletion do
 
     case RunStore.finalize(command.run_id, summary) do
       :ok ->
-        :ok = LemonRouter.RunReceiptStore.retain_terminal_evidence(command.run_id)
+        _ = LemonRouter.RunReceiptStore.retain_terminal_evidence_best_effort(command.run_id)
 
         # Pre-executor terminalizations have no RunProcess to write history.
         # A stable event ID lets a live RunProcess enrich the same receipt.
@@ -54,7 +54,7 @@ defmodule LemonRouter.RunCompletion do
         TerminalOutbox.publish(command.run_id, event)
 
       {:error, {:already_finalized, run_id}} when run_id == command.run_id ->
-        :ok = LemonRouter.RunReceiptStore.retain_terminal_evidence(run_id)
+        _ = LemonRouter.RunReceiptStore.retain_terminal_evidence_best_effort(run_id)
 
         case committed_summary(run_id) do
           {:ok, summary} ->

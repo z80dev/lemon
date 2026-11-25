@@ -184,40 +184,6 @@ defmodule CodingAgent.Tools.PostWriteSwapRaceTest do
     end
   end
 
-  describe "read tracker" do
-    test "an archive write records the committed bytes, never a swapped ancestor's file", ctx do
-      archive = Path.join(ctx.sub, "bundle.zip")
-      {:ok, _} = :zip.create(String.to_charlist(archive), [{~c"member.txt", "inside"}])
-
-      {:ok, _} =
-        :zip.create(String.to_charlist(Path.join(ctx.outside, "bundle.zip")), [
-          {~c"member.txt", "SECRET"}
-        ])
-
-      outside_bytes = File.read!(Path.join(ctx.outside, "bundle.zip"))
-
-      {result, before} =
-        race(ctx, "sub/bundle.zip", fn ->
-          Write.execute(
-            "write",
-            %{"path" => "sub/bundle.zip:member.txt", "content" => "updated"},
-            nil,
-            nil,
-            ctx.root,
-            ctx.opts
-          )
-        end)
-
-      assert %AgentToolResult{} = result
-      assert_tree_unchanged(ctx, before)
-      # Nothing may reopen the archive by name after the commit.
-      refute_received {:path_request, _}
-      committed = File.read!(swapped_or_original(archive))
-      assert FileReadTracker.check(ctx.opts, archive, committed) == :ok
-      assert FileReadTracker.check(ctx.opts, archive, outside_bytes) == {:error, :stale}
-    end
-  end
-
   # Swaps `root/sub` for a symlink to `outside` just before the first
   # file-server request for a path in this test's directory (workspace or
   # operator bin; other processes' requests are ignored) served after `rel`'s
@@ -258,11 +224,6 @@ defmodule CodingAgent.Tools.PostWriteSwapRaceTest do
       {:ok, bytes} -> bytes
       _ -> nil
     end
-  end
-
-  defp swapped_or_original(path) do
-    moved = Path.join(Path.dirname(path) <> ".moved", Path.basename(path))
-    if File.exists?(moved), do: moved, else: path
   end
 
   defp assert_outside_untouched(ctx, before) do

@@ -39,9 +39,15 @@ defmodule LemonControlPlane.Methods.ContentScopeTest do
   defmodule LogRing do
     @moduledoc false
     def get_logs(_limit, _level),
-      do: [
-        %{level: "info", message: :persistent_term.get({__MODULE__, :message}), timestamp_ms: 1}
-      ]
+      do:
+        {:ok,
+         [
+           %{
+             level: "info",
+             message: :persistent_term.get({__MODULE__, :message}),
+             timestamp_ms: 1
+           }
+         ]}
   end
 
   setup do
@@ -167,7 +173,7 @@ defmodule LemonControlPlane.Methods.ContentScopeTest do
   end
 
   describe "session.detail" do
-    test "read-only callers get no prompt, answer, previews, raw events or run record", c do
+    test "is a routing projection with no run content for either scope", c do
       {key, _run_id} = session(c.token)
 
       params = %{
@@ -177,20 +183,12 @@ defmodule LemonControlPlane.Methods.ContentScopeTest do
         "includeRunRecord" => true
       }
 
-      detail = dispatch("session.detail", params, read_only())
-      assert_withheld(detail)
-      assert [run] = detail["runs"]
-      assert run["ok"] == false
-      assert run["eventCount"] == 1
-      assert run["toolCallCount"] == 1
-      assert detail["options"]["includeFullText"] == false
-      assert detail["summary"]["cleanup"]["includesMessageBodies"] == false
-    end
-
-    test "operator.content callers get full text", c do
-      {key, _run_id} = session(c.token)
-      params = %{"sessionKey" => key, "includeFullText" => true, "includeRawEvents" => true}
-      assert_content(dispatch("session.detail", params, with_content()))
+      for ctx <- [read_only(), with_content()] do
+        detail = dispatch("session.detail", params, ctx)
+        assert_withheld(detail)
+        assert detail["session"]["sessionKey"] == key
+        refute Map.has_key?(detail, "runs")
+      end
     end
   end
 

@@ -97,6 +97,10 @@ defmodule CodingAgent.Session do
   require Logger
 
   @reset_abort_wait_ms 5_000
+  # The caller outlasts the session's own bounded abort wait plus the reset
+  # work after it, so a slow abort returns `:ok` or `{:error, :busy}` instead
+  # of exiting the caller while the reset may still complete.
+  @reset_call_timeout_ms @reset_abort_wait_ms + 10_000
   @todo_call_timeout_ms 30_000
 
   # Calls that report `{:error, :busy}` while a manual compaction/summary runs.
@@ -231,6 +235,10 @@ defmodule CodingAgent.Session do
     auto_compaction: %CompactionLifecycle.State{},
     manual_operation: nil,
     overflow_recovery: %OverflowRecovery.State{},
+    # True from accepting a prompt until the agent starts its run: every agent
+    # event before that `{:agent_start}` belongs to an earlier run and must not
+    # end the accepted prompt.
+    awaiting_agent_start: false,
     root_idle_token: nil,
     root_idle_timer: nil,
     root_retention_ttl: nil,
@@ -325,7 +333,8 @@ defmodule CodingAgent.Session do
           wasm_host_calls: %{reference() => map()},
           auto_compaction: CompactionLifecycle.State.t(),
           manual_operation: ManualOperation.State.t() | nil,
-          overflow_recovery: OverflowRecovery.State.t()
+          overflow_recovery: OverflowRecovery.State.t(),
+          awaiting_agent_start: boolean()
         }
 
   @type event_handler_callbacks :: %{
@@ -352,6 +361,8 @@ defmodule CodingAgent.Session do
       resource-ownership bindings remain independently enforced.
 
     * `:budget_limits` - Cumulative run/session caps, overriding SettingsManager.budgets.
+    * `:delegated_budget` - Run caps (`max_run_tokens`, `max_run_cost_usd`) a
+      delegating `agent` call reserved for this run; they only tighten the caps.
     * `:model` - The AI model to use (`LemonAi.Types.Model.t()`). If not provided,
       uses `default_model` from SettingsManager.
     * `:system_prompt` - Explicit system prompt text. Takes highest precedence
@@ -422,6 +433,13 @@ defmodule CodingAgent.Session do
   `{:error, {:already_started, owner_pid}}` without loading or rewriting it and
   without sending an abnormal linked exit to the caller.
 
+  `init/1` only admits the process as the journal's live owner. Journal load,
+  settings, extensions, WASM and profile MCP connection run in
+  `handle_continue/2`, so a supervisor starting this process is never blocked
+  by them. `start_link/1` (and `CodingAgent.SessionSupervisor.start_session/1`)
+  still return only after initialization finished, with `{:error, reason}` and
+  no linked exit when it failed.
+
   ## Examples
 
       # With explicit system prompt only
@@ -446,17 +464,62 @@ defmodule CodingAgent.Session do
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
-    with {:ok, opts} <- validate_execution_options(opts) do
-      {name, opts} = Keyword.pop(opts, :name)
-      # Keep short inter-message gaps warm; reclaim heaps between user turns.
-      server_opts = [hibernate_after: Keyword.get(opts, :hibernate_after, 5_000)]
-      server_opts = if name, do: Keyword.put(server_opts, :name, name), else: server_opts
-      GenServer.start_link(__MODULE__, opts, server_opts)
+    ref = make_ref()
+
+    with {:ok, opts} <- validate_execution_options(opts),
+         {:ok, pid} <- start_owner(opts, {self(), ref}) do
+      await_initialized(pid, ref)
     end
   end
 
   @doc false
+  # Admits the owner and returns without waiting for initialization, which
+  # reports `{ref, :ok | {:error, reason}}` to `reply_to`. Supervisors call this
+  # so slow initialization never runs in (and serializes) the supervisor.
+  # `opts` must already have passed `validate_execution_options/1`.
+  @spec start_owner(keyword(), {pid(), reference()}) :: GenServer.on_start()
+  def start_owner(opts, {caller, ref} = reply_to) when is_pid(caller) and is_reference(ref) do
+    {name, opts} = Keyword.pop(opts, :name)
+    # Keep short inter-message gaps warm; reclaim heaps between user turns.
+    server_opts = [hibernate_after: Keyword.get(opts, :hibernate_after, 5_000)]
+    server_opts = if name, do: Keyword.put(server_opts, :name, name), else: server_opts
+    GenServer.start_link(__MODULE__, {opts, reply_to}, server_opts)
+  end
+
+  @doc false
+  @spec await_initialized(pid(), reference()) :: {:ok, pid()} | {:error, term()}
+  def await_initialized(pid, ref) do
+    monitor = Process.monitor(pid)
+
+    receive do
+      {^ref, :ok} ->
+        Process.demonitor(monitor, [:flush])
+        {:ok, pid}
+
+      {^ref, {:error, reason}} ->
+        # The owner releases the journal before replying; report only once it
+        # is gone, as a failed synchronous init would.
+        receive do
+          {:DOWN, ^monitor, :process, ^pid, _} -> {:error, reason}
+        end
+
+      {:DOWN, ^monitor, :process, ^pid, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc false
+  # The advisor reviewer was retired (#705); refuse it so a caller never
+  # believes a review is running.
   def validate_execution_options(opts) when is_list(opts) do
+    if Keyword.has_key?(opts, :advisor),
+      do: {:error, {:unsupported_option, :advisor}},
+      else: validate_supported_execution_options(opts)
+  end
+
+  def validate_execution_options(_opts), do: {:error, :invalid_session_options}
+
+  defp validate_supported_execution_options(opts) do
     opts =
       if is_nil(opts[:session_file]) or
            CodingAgent.SessionManager.current_snapshot?(
@@ -473,8 +536,6 @@ defmodule CodingAgent.Session do
 
     validate_execution_authority(opts)
   end
-
-  def validate_execution_options(_opts), do: {:error, :invalid_session_options}
 
   @doc false
   def validate_live_execution_options(
@@ -844,7 +905,7 @@ defmodule CodingAgent.Session do
   """
   @spec reset(GenServer.server()) :: :ok | {:error, :busy}
   def reset(session) do
-    GenServer.call(session, :reset)
+    GenServer.call(session, :reset, @reset_call_timeout_ms)
   end
 
   @doc """
@@ -1074,27 +1135,65 @@ defmodule CodingAgent.Session do
   # GenServer Callbacks
   # ============================================================================
 
-  @spec init(keyword()) ::
-          {:ok, t()} | {:error, {:already_started, pid()}} | {:stop, term()}
+  @spec init({keyword(), {pid(), reference()}}) ::
+          {:ok, {:starting, keyword(), {pid(), reference()}, String.t()},
+           {:continue, :initialize}}
+          | {:error, term()}
   @impl true
-  def init(opts) do
+  def init({opts, reply_to}) do
     Process.flag(:trap_exit, true)
     CodingAgent.SessionRegistry.track_live()
 
-    Ownership.initialize(opts, fn owned_opts ->
-      connection =
-        if Keyword.get(owned_opts, :executor_root, false),
-          do: CodingAgent.Session.Invocation.open_mcp(owned_opts),
-          else: {:ok, Keyword.get(owned_opts, :mcp_session_id)}
+    # Only ownership admission runs here, inside the starter (often the
+    # SessionSupervisor). Everything slow runs in handle_continue/2 below.
+    case Ownership.admit(opts) do
+      {:ok, opts, path} -> {:ok, {:starting, opts, reply_to, path}, {:continue, :initialize}}
+      {:error, _reason} = error -> error
+    end
+  end
 
-      case connection do
-        {:ok, id} ->
-          initialize_owned_session(Keyword.put(owned_opts, :mcp_session_id, id))
+  @impl true
+  def handle_continue(:initialize, {:starting, opts, {caller, ref}, path} = starting) do
+    case initialize_owner(opts, path) do
+      {:ok, state} ->
+        send(caller, {ref, :ok})
+        {:noreply, state}
 
-        {:error, reason} ->
-          {:stop, reason}
-      end
-    end)
+      {:error, reason} ->
+        # Release the journal before replying so a retry is not refused by
+        # this dying owner. A linked starter already has its answer; unlink so
+        # the failure is not also delivered as an exit signal.
+        Ownership.release(path)
+        Process.unlink(caller)
+        send(caller, {ref, {:error, reason}})
+        {:stop, {:shutdown, reason}, starting}
+    end
+  end
+
+  defp initialize_owner(opts, path) do
+    connection =
+      if Keyword.get(opts, :executor_root, false),
+        do: CodingAgent.Session.Invocation.open_mcp(opts),
+        else: {:ok, Keyword.get(opts, :mcp_session_id)}
+
+    with {:ok, id} <- connection,
+         {:ok, state} <- initialize_owned_session(Keyword.put(opts, :mcp_session_id, id)) do
+      # Admission published the requested journal; follow the file the
+      # lifecycle actually opened if a preloaded journal selected another.
+      if Path.expand(state.session_file) != Path.expand(path),
+        do: Ownership.transfer(path, state.session_file, fn -> :ok end)
+
+      {:ok, state}
+    end
+  catch
+    :error, reason ->
+      {:error, {Exception.normalize(:error, reason, __STACKTRACE__), __STACKTRACE__}}
+
+    :exit, reason ->
+      {:error, reason}
+
+    :throw, value ->
+      {:error, {{:nocatch, value}, __STACKTRACE__}}
   end
 
   defp initialize_owned_session(opts) do
@@ -1135,24 +1234,19 @@ defmodule CodingAgent.Session do
 
     maybe_subscribe_exec_approvals(state)
 
-    :ok = LemonCore.ExecApprovalExpiry.watch_session(state.session_manager.header.id, self())
-    advisor = Keyword.get(opts, :advisor, false)
+    # Without a recorded owner, approvals of this session could outlive it.
+    case LemonCore.ExecApprovalExpiry.watch_session(state.session_manager.header.id, self()) do
+      :ok ->
+        {:ok, state}
 
-    if is_list(advisor) do
-      cursor = CodingAgent.Session.EventLog.cursor(state.event_log)
-      send(self(), {:start_advisor, Keyword.put(advisor, :initial_cursor, cursor)})
+      {:error, reason} ->
+        {:stop, {:exec_approval_watch_failed, reason}}
     end
-
-    {:ok, state}
   end
 
   @spec handle_call(term(), GenServer.from(), t()) ::
           {:reply, term(), t()} | {:noreply, t()} | {:stop, term(), term(), t()}
   @impl true
-  def handle_call(:advisor_context, _from, state) do
-    {:reply, Map.take(state, [:agent, :model, :cwd, :run_id, :tool_policy]), state}
-  end
-
   def handle_call(request, _from, %{manual_operation: %ManualOperation.State{}} = state)
       when is_tuple(request) and elem(request, 0) in @manual_operation_busy_calls,
       do: {:reply, {:error, :busy}, state}
@@ -1769,15 +1863,17 @@ defmodule CodingAgent.Session do
   end
 
   def handle_cast(:abort, state) do
-    had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
+    # No agent run reports the end of a prompt that was never dispatched, nor of
+    # a run parked in overflow recovery (the agent is idle while it summarizes),
+    # so the session ends those itself.
+    ends_locally =
+      not is_nil(state.pending_prompt_timer_ref) or state.overflow_recovery.in_progress
 
     state =
       state
       |> ManualOperation.cancel(:aborted)
       |> WasmBridge.cancel_host_calls(:aborted)
-      |> cancel_pending_prompt()
-      |> CompactionLifecycle.cancel_for_new_prompt()
-      |> CompactionManager.clear_overflow_recovery_state()
+      |> CompactionManager.cancel_overflow_recovery(:aborted)
 
     Control.cancel_parent(self())
 
@@ -1787,17 +1883,13 @@ defmodule CodingAgent.Session do
     # instead of holding abort until the resource's supervisor shutdown timeout.
     CodingAgent.ToolResources.stop(state.session_manager.header.id)
 
-    if had_pending_prompt do
-      # If abort lands before deferred prompt dispatch, emit a terminal canceled
-      # event so subscribers don't wait for a lifecycle event that never comes.
-      state = %{state | terminal_event: {:canceled, :assistant_aborted}}
-      Notifier.broadcast_event(state, {:canceled, :assistant_aborted})
-      Notifier.complete_event_streams(state, {:canceled, :assistant_aborted})
+    state = if ends_locally, do: terminalize(state, {:canceled, :assistant_aborted}), else: state
 
-      {:noreply, settle_lifecycle_activity(%{state | event_streams: %{}})}
-    else
-      {:noreply, settle_lifecycle_activity(state)}
-    end
+    {:noreply,
+     state
+     |> cancel_pending_prompt()
+     |> CompactionLifecycle.cancel_for_new_prompt()
+     |> settle_lifecycle_activity()}
   end
 
   def handle_cast({:unsubscribe, pid, ref}, state) do
@@ -1822,7 +1914,8 @@ defmodule CodingAgent.Session do
   end
 
   defp accept_prompt(state, text, opts) do
-    if state.is_streaming or ManualOperation.in_flight?(state) do
+    if state.is_streaming or not is_nil(state.pending_prompt_timer_ref) or
+         ManualOperation.in_flight?(state) do
       {:error, :busy}
     else
       state = CompactionLifecycle.cancel_for_new_prompt(state)
@@ -1835,7 +1928,7 @@ defmodule CodingAgent.Session do
   defp schedule_prompt(state, message) do
     ref = make_ref()
     send(self(), {:do_prompt, ref, message, state.system_prompt})
-    State.begin_prompt(state, ref)
+    state |> State.begin_prompt(ref) |> Map.put(:awaiting_agent_start, true)
   end
 
   defp subscribe_client(state, pid, opts) do
@@ -1869,7 +1962,10 @@ defmodule CodingAgent.Session do
             agent_opts = [
               system_prompt: CodingAgent.Session.PromptJournal.blocks(state),
               preempt: Keyword.get(opts, :preempt, true),
-              defer_start: not is_nil(state.pending_prompt_timer_ref)
+              # Overflow recovery resumes the agent itself once compaction lands.
+              defer_start:
+                not is_nil(state.pending_prompt_timer_ref) or
+                  state.overflow_recovery.in_progress
             ]
 
             state =
@@ -1955,16 +2051,6 @@ defmodule CodingAgent.Session do
     {:stop, {:shutdown, :extensions_compromised}, state}
   end
 
-  def handle_info({:start_advisor, opts}, state) do
-    session = self()
-
-    Task.Supervisor.start_child(CodingAgent.TaskSupervisor, fn ->
-      CodingAgent.Advisor.start(session, opts)
-    end)
-
-    {:noreply, state}
-  end
-
   def handle_info({:wait_for_idle, ref, :ok}, %{lifecycle_activity: %{waiter: ref}} = state) do
     {:noreply, settle_lifecycle_activity(put_in(state.lifecycle_activity.waiter, nil))}
   end
@@ -2015,6 +2101,14 @@ defmodule CodingAgent.Session do
     state = SteeringJournal.bind(state, ids)
     Notifier.broadcast_event(state, event)
     {:noreply, state}
+  end
+
+  # Until the accepted prompt's run starts, every agent event is an earlier
+  # run's: its messages are still journaled and its budget counted, but none of
+  # it may end, stream to or clear the accepted prompt.
+  def handle_info({:agent_event, event}, %{awaiting_agent_start: true} = state)
+      when event != {:agent_start} do
+    {:noreply, handle_stale_agent_event(event, state)}
   end
 
   def handle_info({:agent_event, {:turn_start} = event}, state) do
@@ -2253,7 +2347,8 @@ defmodule CodingAgent.Session do
 
   def handle_info({:do_prompt, ref, message, system_prompt}, state) do
     if state.pending_prompt_timer_ref == ref do
-      {:noreply, CompactionLifecycle.before_prompt(state, message, system_prompt)}
+      {:noreply,
+       CompactionLifecycle.before_prompt(state, message, system_prompt, session_callbacks())}
     else
       {:noreply, state}
     end
@@ -2271,8 +2366,12 @@ defmodule CodingAgent.Session do
 
       state =
         case LemonAgent.Agent.prompt(state.agent, message) do
-          :ok -> state
-          {:error, :already_streaming} -> queue_reserved_prompt(state, message)
+          :ok ->
+            state
+
+          # The running loop carries the prompt; its events are this prompt's.
+          {:error, :already_streaming} ->
+            queue_reserved_prompt(%{state | awaiting_agent_start: false}, message)
         end
 
       {:noreply, settle_lifecycle_activity(state)}
@@ -2323,8 +2422,12 @@ defmodule CodingAgent.Session do
     |> Map.put(:event_cursor, CodingAgent.Session.EventLog.cursor(state.event_log))
   end
 
-  @spec terminate(term(), t()) :: :ok
+  @spec terminate(term(), t() | {:starting, keyword(), {pid(), reference()}, String.t()}) :: :ok
   @impl true
+  # Initialization failed before a session state existed; handle_continue/2
+  # already released the journal and answered the starter.
+  def terminate(_reason, {:starting, _opts, _reply_to, _path}), do: :ok
+
   def terminate(reason, state) do
     _ = WasmBridge.cancel_host_calls(state, :session_unavailable)
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
@@ -2620,12 +2723,12 @@ defmodule CodingAgent.Session do
 
   def attach_recalled_context(%LemonAi.Types.UserMessage{content: content} = message, sections)
       when is_list(sections) do
-    %{message | content: append_recalled(content, sections, LemonAi.Types.TextContent)}
+    %{message | content: append_recalled(content, sections)}
   end
 
   def attach_recalled_context(%CustomMessage{content: content} = message, sections)
       when is_list(sections) do
-    %{message | content: append_recalled(content, sections, CodingAgent.Messages.TextContent)}
+    %{message | content: append_recalled(content, sections)}
   end
 
   def attach_recalled_context(message, _sections), do: message
@@ -2972,18 +3075,18 @@ defmodule CodingAgent.Session do
   defp recalled_begin(marker), do: "[lemon:recalled-context id=#{marker}]"
   defp recalled_end(marker), do: "[/lemon:recalled-context id=#{marker}]"
 
-  defp append_recalled(content, sections, _text_module) when is_binary(content) do
+  defp append_recalled(content, sections) when is_binary(content) do
     content <> @recalled_separator <> recalled_block(sections)
   end
 
-  defp append_recalled(content, sections, text_module) when is_list(content) do
-    content ++ [struct(text_module, type: :text, text: recalled_block(sections))]
+  defp append_recalled(content, sections) when is_list(content) do
+    content ++ [%LemonAi.Types.TextContent{type: :text, text: recalled_block(sections)}]
   end
 
   # Content that is neither a binary nor a list of blocks is a shape this module
   # did not build and cannot safely extend, so the turn goes out without the
   # attachment rather than with a message the provider will reject.
-  defp append_recalled(content, _sections, _text_module), do: content
+  defp append_recalled(content, _sections), do: content
 
   # Sections are rendered under their own headings, in the order the registry
   # returned them, inside one wrapper. One wrapper rather than one per section:
@@ -3137,9 +3240,44 @@ defmodule CodingAgent.Session do
 
   @spec handle_agent_event(LemonAgent.Types.agent_event(), t()) :: t()
   defp handle_agent_event(event, state) do
+    state = if event == {:agent_start}, do: %{state | awaiting_agent_start: false}, else: state
     state = record_terminal_event(state, event)
     state = EventHandler.handle(event, state, event_handler_callbacks())
     if event == {:agent_start}, do: maybe_watch_root_idle(state), else: state
+  end
+
+  defp handle_stale_agent_event({:message_end, _message} = raw_event, state) do
+    {:message_end, message} = strip_recalled_context_from_event(raw_event)
+
+    state
+    |> persist_message(message)
+    |> CodingAgent.Session.ToolIntentGate.flush()
+  end
+
+  defp handle_stale_agent_event({:usage_budget_updated, usage}, state),
+    do: BudgetLedger.update(state, usage)
+
+  defp handle_stale_agent_event(_event, state), do: state
+
+  # The one terminal path for a run the agent will not end itself: an aborted
+  # prompt that never reached the agent or a run parked in overflow recovery, a
+  # failed or stale overflow recovery, and a recovery-band block. A run that is
+  # no longer live (not streaming, no pending prompt) already had its terminal
+  # event, so this is a no-op and the event is broadcast and streams complete
+  # exactly once.
+  @spec terminalize(t(), {:error, term(), term()} | {:canceled, term()}) :: t()
+  defp terminalize(state, event) do
+    if state.is_streaming or not is_nil(state.pending_prompt_timer_ref) do
+      state = cancel_pending_prompt(state)
+      Notifier.broadcast_event(state, event)
+
+      event
+      |> handle_agent_event(state)
+      |> then(&CompactionManager.clear_overflow_recovery_state_on_terminal(event, &1))
+      |> settle_lifecycle_activity()
+    else
+      state
+    end
   end
 
   defp record_terminal_event(state, event) do
@@ -3197,7 +3335,7 @@ defmodule CodingAgent.Session do
     %{
       restore_messages_from_session: &restore_messages_from_session/1,
       broadcast_event: &broadcast_event/2,
-      handle_agent_event: &handle_agent_event/2
+      terminalize: &terminalize/2
     }
   end
 

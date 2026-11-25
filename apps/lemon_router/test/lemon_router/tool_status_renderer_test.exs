@@ -355,20 +355,6 @@ defmodule LemonRouter.ToolStatusRendererTest do
     refute String.contains?(text, "Tool 2")
   end
 
-  test "whatsapp also truncates like telegram" do
-    actions =
-      for i <- 1..6, into: %{} do
-        {"a#{i}", %{title: "Tool #{i}", phase: :completed, ok: true, detail: %{}}}
-      end
-
-    order = Enum.map(1..6, &"a#{&1}")
-    text = ToolStatusRenderer.render("whatsapp:12345", actions, order)
-
-    assert String.contains?(text, "(2 tools omitted)")
-    refute String.contains?(text, "Tool 1")
-    assert String.contains?(text, "Tool 6")
-  end
-
   test "nil channel_id does not truncate" do
     actions =
       for i <- 1..7, into: %{} do

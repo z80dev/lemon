@@ -9,15 +9,13 @@ defmodule LemonControlPlane.EventBridgeScopeTest do
 
   alias LemonControlPlane.{Connections, EventBridge}
   alias LemonControlPlane.Methods.Registry
-  alias LemonCore.{AgentRuntime, Bus, Event}
+  alias LemonCore.{Bus, Event}
 
   @prose "the merger closes Friday at 41 dollars"
   @secret "PROMPT_SECRET_7Q2"
   @full [:admin, :read, :write, :approvals, :pairing, :content]
 
   defmodule Runtime do
-    @behaviour LemonCore.AgentRuntime.Provider
-
     def session_event_replay(_key, _cursor, _limit),
       do: Application.fetch_env!(:lemon_control_plane, __MODULE__)
   end
@@ -184,7 +182,7 @@ defmodule LemonControlPlane.EventBridgeScopeTest do
         {:ok, %{events: [entry], cursor: cursor(1), has_more: false}}
       )
 
-      :ok = AgentRuntime.register(Runtime)
+      :ok = Application.put_env(:lemon_core, :agent_runtime_provider, Runtime)
 
       on_exit(fn ->
         restore_env(:lemon_core, :agent_runtime_provider, original)
@@ -253,14 +251,14 @@ defmodule LemonControlPlane.EventBridgeScopeTest do
 
   describe "goal loop verdicts" do
     test "read-only recipients get the verdict action, never the judge's reason", c do
-      alias LemonAgent.Workspace.GoalStore
+      alias LemonAutomation.GoalStore
 
       read = connect(:read_only, [:read])
       full = connect(:full, @full)
 
       assert {:ok, _} =
                GoalStore.set(c.session_key, "Close the deal: #{@prose}",
-                 authority: LemonAgent.Workspace.GoalAuthority.operator()
+                 authority: LemonAutomation.GoalAuthority.operator()
                )
 
       on_exit(fn -> GoalStore.clear(c.session_key) end)

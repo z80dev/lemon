@@ -18,7 +18,9 @@ defmodule CodingAgent.Tools.EvalBridgeTest do
 
   @tag :python3
   test "code-mode local bash bridge returns real split streams and exit status", ctx do
-    bash = CodingAgent.Tools.Bash.tool(ctx.cwd, tool_disclosure: %{profile: :code_mode})
+    bash =
+      CodingAgent.Tools.Bash.tool(ctx.cwd, tool_disclosure: %{enabled: true, profile: :code_mode})
+
     resolver = fn "bash" -> {:ok, bash} end
 
     assert {:ok, result} =

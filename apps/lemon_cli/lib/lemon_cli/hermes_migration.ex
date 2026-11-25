@@ -2155,6 +2155,10 @@ defmodule LemonCli.HermesMigration do
     db = Path.join(ctx.store_dir, "memory.sqlite3")
     append_journal!(ctx, %{"op" => "database", "path" => db, "existed" => File.exists?(db)})
 
+    # Migration runs offline (`LemonCore.Backup.with_offline_target/3` refuses
+    # while a runtime uses the target), so this is the only memory writer. Each
+    # document is confirmed; a timed-out write may still land, so it is
+    # reported as outcome_unknown rather than migrated or failed.
     {:ok, store} =
       Store.start_link(
         name: :"hermes_migration_memory_#{System.unique_integer([:positive])}",
@@ -2163,19 +2167,8 @@ defmodule LemonCli.HermesMigration do
 
     try do
       docs = session_docs(db_path)
-      Enum.each(docs, &Store.put(store, &1))
-      Process.sleep(100)
-
-      [
-        item(
-          "sessions",
-          db_path,
-          Path.join(ctx.store_dir, "memory.sqlite3"),
-          "migrated",
-          "Imported #{length(docs)} Hermes sessions as Lemon memory documents",
-          %{"count" => length(docs)}
-        )
-      ]
+      results = Enum.map(docs, &Store.put_sync(store, &1))
+      [session_import_item(ctx, db_path, length(docs), results)]
     after
       GenServer.stop(store)
     end
@@ -2190,6 +2183,51 @@ defmodule LemonCli.HermesMigration do
           Exception.message(e)
         )
       ]
+  end
+
+  defp session_import_item(ctx, db_path, total, results) do
+    destination = Path.join(ctx.store_dir, "memory.sqlite3")
+    unknown = Enum.count(results, &match?({:error, {:timeout_or_down, _}}, &1))
+    failed = Enum.count(results, &(&1 != :ok)) - unknown
+
+    details = %{
+      "count" => total - failed - unknown,
+      "failed" => failed,
+      "outcome_unknown" => unknown
+    }
+
+    cond do
+      unknown > 0 ->
+        item(
+          "sessions",
+          db_path,
+          destination,
+          "error",
+          "outcome_unknown: #{unknown} of #{total} Hermes session imports may or may not " <>
+            "have been written; inspect memory before re-running the migration",
+          details
+        )
+
+      failed > 0 ->
+        item(
+          "sessions",
+          db_path,
+          destination,
+          "error",
+          "Could not import #{failed} of #{total} Hermes sessions",
+          details
+        )
+
+      true ->
+        item(
+          "sessions",
+          db_path,
+          destination,
+          "migrated",
+          "Imported #{total} Hermes sessions as Lemon memory documents",
+          %{"count" => total}
+        )
+    end
   end
 
   defp session_docs(db_path) do
@@ -2485,11 +2523,7 @@ defmodule LemonCli.HermesMigration do
     _ = if File.exists?(dest) and Keyword.get(opts, :overwrite, false), do: File.rm_rf!(dest)
     File.mkdir_p!(Path.dirname(dest))
 
-    if File.dir?(source) do
-      File.cp_r!(source, dest)
-    else
-      File.cp!(source, dest)
-    end
+    _ = if File.dir?(source), do: File.cp_r!(source, dest), else: File.cp!(source, dest)
 
     copy_mode!(source, dest)
   end

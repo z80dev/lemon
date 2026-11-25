@@ -90,7 +90,7 @@ CodingAgent.Supervisor (one_for_one)
   +-- Search.Supervisor (rest_for_one)
   |     +-- Search.TaskSupervisor (bounded Task.Supervisor)
   |     +-- Search.SingleFlight
-  +-- Tools.TodoStoreOwner, Tools.Bash.ShellState, Session.UserPrompt
+  +-- Tools.Bash.ShellState, Session.UserPrompt
   +-- MutationLock, FileReadTracker, WorkspaceReads, ConflictStore
   +-- ExecutionNode.FileService, ExecutionNode.ProcessService
   +-- ExecutionNode.ToolSession.Tree (rest_for_one)
@@ -98,18 +98,22 @@ CodingAgent.Supervisor (one_for_one)
   |     +-- ExecutionNode.ToolSession.Supervisor (DynamicSupervisor)
   +-- Wasm.SidecarSupervisor
   +-- TaskSupervisor (bounded Task.Supervisor)
-  +-- TaskStoreServer, AsyncFollowups, Tools.Task.Control, Tools.Task.Speculation
+  +-- TaskStoreServer, AsyncFollowups
+  +-- TaskRuntime.Tree (rest_for_one)
+  |     +-- TaskRuntime.Journal (owner snapshots for crash adoption)
+  |     +-- TaskRuntime.Registry, TaskRuntime.Parents
+  |     +-- TaskRuntime.Supervisor (DynamicSupervisor; one TaskRuntime.Child per task)
+  +-- Tools.Task.Speculation
   +-- TaskProgressBindingServer, ParentQuestionStoreServer, RunGraphServer
   +-- ProcessSupervisor (rest_for_one)
   |     +-- ProcessRegistry
+  |     +-- ProcessManager (DynamicSupervisor; before the store, so a store
+  |     |   restart never stops running commands)
   |     +-- ProcessStoreServer
-  |     +-- ProcessManager (DynamicSupervisor)
   |     +-- LaneQueue (background process launch FIFO)
   +-- SessionTree (rest_for_one)
   |     +-- SessionRegistry
   |     +-- SessionSupervisor (DynamicSupervisor)
-  |     +-- Tools.Task.LiveBridgeSupervisor
-  +-- AdvisorSupervisor (DynamicSupervisor; temporary session reviewers)
   +-- BackgroundRun.Tree (rest_for_one)
   |     +-- BackgroundRun.Registry
   |     +-- BackgroundRun.Supervisor (DynamicSupervisor)
@@ -141,7 +145,6 @@ These caches survive requesting-process exits, but are disposable on owner
 restart. Web entries reload from their configured disk cache; extension inventory
 and capability results repopulate on demand. The fallback placeholder key is
 runtime-ephemeral and changes after owner restart; persisted keys are unaffected.
-`TodoStoreOwner` owns the todo projection without a caller-created fallback.
 Direct tool/store callers must start the `coding_agent` application.
 Pre-boot Python feature checks may run uncached without starting the application
 or creating a table, preserving CLI capability inspection before worker setup.
@@ -210,8 +213,8 @@ startup/config-registration operations (`init`, `reset`, `register`,
 | Search | `grep`, `find`, `ast_grep` (when the real ast-grep CLI is installed) |
 | Execution | `bash`, `bash_output`, `kill_process`, `process_input` (see [shell and background processes](../../docs/tools/shell.md)), `debug` (DAP debugger; see [debugger](../../docs/tools/debug.md)) |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
-| Task / Agent | `task`, `agent`, `parent_question`, [`todo`](../../docs/tools/todo.md), `kanban` |
-| System | `tool_auth`, `extensions_status`, [`report_issue`](../../docs/tools/report-issue.md) (bounded local tool-misbehavior notes) |
+| Task / Agent | `task`, `agent`, `parent_question`, [`todo`](../../docs/tools/todo.md) |
+| System | `tool_auth`, `extensions_status` (read-only status report) |
 
 Telegram and Discord channel sessions also get `send_file`
 (`CodingAgent.Tools.SendFile`), which queues an existing file for delivery to
@@ -249,10 +252,11 @@ editing remains available for a uniquely matched region; ambiguous matches repor
 their line locations and never choose an occurrence silently. Read-only internal
 references and transformed formats do not advertise editing snapshots.
 
-**Rich reads.** `read` also accepts directories, ZIP/TAR/TAR.GZ/TGZ archives,
+**Rich reads.** `read` also accepts ZIP/TAR/TAR.GZ/TGZ archives,
 `bundle.zip:member/path`, PDFs, notebooks, and native images. Archive members are
-read in memory, not extracted into the workspace. `offset`/`limit` select displayed
-lines; follow `next_offset` for bounded directory/member/document output.
+read in memory, not extracted into the workspace. Directories are refused in
+favour of `ls`. `offset`/`limit` select displayed
+lines; follow `next_offset` for bounded member/document output.
 PDFs support `page`/`page_limit`; notebooks support `cell`/`cell_limit` and include
 source, execution counts, text outputs, and errors. PDF extraction requires
 `pdftotext`, `mutool`, or Python with `pypdf`/PyMuPDF on the operator's absolute
@@ -472,10 +476,13 @@ in support bundles. The BEAM manager can also start/stop sessions, run the
 initialize handshake, send framed JSON-RPC requests, synchronize open/change/
 close document notifications, and capture redacted diagnostic notifications.
 
-`kanban` is implemented in `LemonSkills.Tools` and exposes durable board and task operations backed by
-`LemonAgent.Workspace.KanbanStore`. It is the model-facing surface for multi-agent work
-that should outlive one session. Kanban-dispatched worker runs block the
-`kanban` tool so a leased task cannot recursively manage its own board.
+`kanban`, `goal` and `cron` are contributed by `lemon_automation` through
+`LemonAgent.ToolRegistry` at boot and follow the built-ins in tool order.
+`kanban` (`LemonAutomation.Tools.Kanban`) exposes durable board and task
+operations backed by `LemonAutomation.KanbanStore`. It is the model-facing
+surface for multi-agent work that should outlive one session. Kanban-dispatched
+worker runs block the `kanban` tool so a leased task cannot recursively manage
+its own board.
 
 **Additional tools (not in default set):**
 
@@ -487,7 +494,7 @@ that should outlive one session. Kanban-dispatched worker runs block the
 | `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
-**Internal helpers (not exposed as tools):** `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
+**Internal helpers (not exposed as tools):** `Tools.WebCache`, `Tools.WebGuard`.
 
 Internal task runs infer a restrictive `tool_policy` and verification guardrail when the prompt says `use ... tools only`, so tool-constrained subtasks have to verify against tool output instead of guessing. For internal bash-only tasks, the runner accepts both backticked commands and plain phrasings like `Run this exact command and return the output: ...`, which keeps provider-generated shell subtasks on the normal child-session path.
 
@@ -505,6 +512,15 @@ Task, process, run-graph and parent-question stores share
 `CodingAgent.DurableTable`: each domain server remains the serialized owner,
 loads its existing DETS tuples before readiness, and normalizes interrupted work
 through a domain callback. File names and tuple layouts are unchanged.
+`CodingAgent.RuntimeTables` is the ETS heir of every DETS-backed mirror: an
+owner that crashes is restarted with its live table, so queued and running
+tasks/runs keep their state and their workers' later finishes are accepted.
+Restart normalization (queued/running work becomes `:lost`, persisted) applies
+only at boot: first start, application restart or a clean owner stop. The run
+graph marks queued or running runs idle for `:run_graph_stale_ttl_seconds`
+(default 7 days) `:lost` with `:stale` instead of keeping them forever.
+`ProcessStoreServer` accepts data-only requests (no caller closures) and replies
+`{:error, :store_unavailable}` when its storage fails rather than exiting.
 Task-progress bindings use the same lifecycle with no DETS backing and remain
 transient. Expiration uses a private timestamp/key index rather than folding
 every retained record or log buffer; sweeps run in the owner mailbox, not an
@@ -566,7 +582,7 @@ A top-level `context` string (at most 64 KiB; not allowed per item) is shared ba
 
 Instead of `prompt`, a task (or batch item or swarm node) may pass `steps`: one to four non-empty prompts for **one** child session. The first step (wrapped with any shared `context`) starts the child; each later step is sent to the same session after the previous one answers, so the child keeps its history and tools between stages. The last step's answer is the task result and the only one validated against `output_schema`. A failed step, cancellation or exhausted request budget ends the chain with that outcome; the request budget covers all steps. `prompt` and `steps` are mutually exclusive.
 
-Async completions reach the parent as `Task <name> (<task_id>) [<persona>] completed.` or `… failed: <reason>`, followed by the child's visible answer, so a parent with several children in flight can attribute each one; a failure keeps any partial answer under the failure line. Answers longer than 12,000 characters keep the first 10,000 and end with a pointer to `read agent://<task_id>`, which returns the full stored output.
+Async completions reach the parent as `Task <name> (<task_id>) [<persona>] completed.`, `… failed: <reason>` or `… was cancelled.`, built from the task's stored terminal record and followed by the child's visible answer, so a parent with several children in flight can attribute each one; a failure keeps any partial answer under the failure line. A child cancelled because its parent aborted sends no notice, and a join suppresses the notice of every task it returned. Answers longer than 12,000 characters keep the first 10,000 and end with a pointer to `read agent://<task_id>`, which returns the full stored output.
 
 A task child's routing identity (`session_key`, `agent_id`) is always the
 launching session's captured context: the `task` tool rejects `session_key` and
@@ -644,7 +660,7 @@ Merge-back rechecks cancellation after waiting for the parent checkout's merge l
 
 Both `patch` and `branch` modes refuse task submodule (gitlink) changes with `status: "error"` and retain the task checkout, index and branch for manual review. This includes committed changes, staged pointer-only changes in uninitialized submodules, initialized checkouts whose HEAD moved or whose contents are dirty even under `ignore = all`, additions, deletions and replacements; excluded pins are never treated as an empty result eligible for deletion. The guard checks both staged and working-tree gitlink differences before staging, preserving the original index and initialized checkout. The parent's HEAD, index and submodule checkout remain untouched. An initialized but unchanged checkout still qualifies for empty-task cleanup. Review the retained task worktree and commit or transfer its changes manually.
 
-The local, no-network consumer smoke is `mix run --no-start scripts/task_worktrees_smoke.exs` from the umbrella root. It uses real child bash tools and local submodule repositories to exercise staged/committed pin retention, initialized HEAD-change retention under `ignore = all`, empty-task cleanup and ordinary-file merging through the public `task` tool without ExUnit.
+Submodule pin retention, empty-task cleanup and merge-back are covered by `scripts/test path apps/coding_agent/test/coding_agent/tools/task_worktree_test.exs apps/coding_agent/test/coding_agent/tools/task_worktree_merge_test.exs`.
 
 Parents can use `action: "message"` (or `"steer"`) with `task_id` and `message` to deliver peer input at the next child steering boundary, or `action: "cancel"` to cancel a queued/running child. Cancellation and result reads remain bound to the owning parent session/agent; messaging additionally permits the immediate family described below. Cancelling or terminating a parent cancels its children and descendants, including queued children. Unresponsive workers are stopped after a short cancellation grace period. Children always use subagent bootstrap scope and leaf-worker tool policy by default, preserving profile/workspace isolation.
 
@@ -731,7 +747,7 @@ Unattached child inbox admission runs in a per-child mailbox owner with the
 existing 64-message / 256-KiB cap, rather than a queue in the shared control
 coordinator.
 
-For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. Joins reserve followup delivery while waiting. `wait_all` permanently suppresses completed joined tasks, while `wait_any` suppresses only its completed winner and releases every loser; failure, abort, an unknown run, or a child clarification releases the reservation without permanent suppression. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup preserves the full visible task answer and submits router fallbacks as native followup runs; delivery failures are contained after task/run state is terminalized. Async launches fail immediately when their supervised worker cannot start, rather than returning a task id that remains queued forever. Async completions default to `:followup`; `:steer` and `:steer_backlog` also use non-preempting delivery. Live parents finish every already-issued tool call, then receive the completion before their next model request; unavailable parents fall back to router followup runs.
+For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. Joins reserve followup delivery while waiting. `wait_all` permanently suppresses every joined task, whatever its terminal status, while `wait_any` suppresses only its winner and releases every loser; a join that fails or is aborted, an unknown run, or a child clarification releases the reservation without permanent suppression. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup preserves the full visible task answer and submits router fallbacks as native followup runs; delivery failures are contained after task/run state is terminalized. Async launches fail immediately when their supervised worker cannot start, rather than returning a task id that remains queued forever. Async completions default to `:followup`; `:steer` and `:steer_backlog` also use non-preempting delivery. Live parents finish every already-issued tool call, then receive the completion before their next model request; unavailable parents fall back to router followup runs.
 
 Supervised task admission is bounded independently of the native-child semaphore.
 Capacity exhaustion returns `Background task capacity is exhausted`; an absent
@@ -741,7 +757,9 @@ is retried. `LaneQueue` reports the mapped reason inside `task_start_failed`;
 delegated runs already submitted retain their tracking-error receipt instead of
 claiming that the remote work was never started.
 
-The delegated `agent` tool mirrors each accepted async router run into `RunGraph`, so `agent action=join` waits on the same lifecycle that its completion watcher updates. TaskStore and RunGraph retain the parent run/session, the parent's child list links to the delegated run, and request metadata carries trusted `delegated_by.run_id`; caller-supplied metadata cannot forge that lineage. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
+The delegated `agent` tool registers every delegated run (sync or async) in `RunGraph` before submitting it, so `agent action=join` waits on the same lifecycle that its completion watcher updates. TaskStore and RunGraph retain the parent run/session, the parent's child list links to the delegated run, and request metadata carries trusted `delegated_by.run_id`; caller-supplied metadata cannot forge that lineage. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
+
+Delegation is bounded. A synchronous `agent` run or an `agent action=join` lends the calling run's gateway permit (`LemonGateway.Slots.suspend/2`) while it waits and takes it back at the front of the queue afterwards, so parents blocked on children and delegation chains cannot stall admission under `[gateway].max_concurrent_runs`; only the calling run's own permit is lent (an `agent` call inside an in-process `task` child lends nothing). Both waits are limited by `timeout_ms` (default 120000); a synchronous run that times out is aborted. `CodingAgent.BudgetEnforcer` refuses a delegation when the parent session's budget or the parent run's budget is exhausted or its `max_children` are active, reserves the child against the parent, and sends the child's token/cost limits as `meta.delegated_budget`; the child session applies them as `max_run_tokens`/`max_run_cost_usd` (they can only tighten its configured caps) and stops when it would exceed them. Model-supplied metadata cannot set that field. The child's reported usage is charged to the parent run and the parent session's budget scope on completion. Aborting the run that delegated (or a synchronous timeout) aborts its sync and async children through the run orchestrator (`RouterBridge.abort_run/2`); each child then emits its own terminal event.
 
 `agent action=poll` and `action=join` are scoped like `task`: each delegated task record stores the submitting session and agent as its owner, and `Control.authorize/2` makes a foreign `task_id` indistinguishable from a missing one, so another session can neither read its status nor consume its join followup. Poll and join reuse `CodingAgent.Tools.Task.Result`: join content carries each child's answer and poll returns bounded, structured details rather than raw child events. When router submission returns `:outcome_unknown`, the tool records a `tracking_lost` task under the request's fixed run id and starts the normal completion watcher; it never resubmits automatically.
 
@@ -840,8 +858,7 @@ The first definition for an ID wins, searching project `.lemon/agents/`, project
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.Checkpoint` | Compatibility wrapper over `LemonCore.Checkpoint` with coding-agent todo/requirement resume state |
-| `CodingAgent.Tools.FeatureRequirements` | Persists `FEATURE_REQUIREMENTS.json` with dependency-aware progress tracking |
+| `CodingAgent.Checkpoint` | Compatibility wrapper over `LemonCore.Checkpoint` with coding-agent todo resume state |
 | `LemonEvals.Harness` | Evaluation harness for automated agent testing; includes deterministic tool contracts, read/edit workflow checks, remember/recall contracts, and relevant-skill prompt progressive-disclosure checks |
 
 The eval harness is intentionally lightweight and deterministic. It should catch harness-contract drift before behavioral/LLM evals run: default tool registry coverage, stable builtin tool ordering, basic file workflow viability, memory recall scope, and skill prompt guidance that points agents to `read_skill` and `skill_manage` without inlining full skill bodies.
@@ -868,7 +885,6 @@ shell history.
 | `CodingAgent.Messages` | Message type definitions and LLM format conversion |
 | `CodingAgent.BashExecutor` | Streaming shell command execution |
 | `CodingAgent.InternalUrls` | Internal URL protocol handling |
-| `CodingAgent.InternalUrls.NotesProtocol` | `notes://` protocol handler |
 | `CodingAgent.Progress` | Progress reporting utilities |
 | `CodingAgent.Utils.Http` | HTTP utility functions |
 
@@ -960,8 +976,13 @@ working directory. Automatic resume refuses a missing or corrupt mapped journal
 instead of replacing that session's history with a fresh conversation. Unbound
 automatic native tokens retain their fresh-session fallback.
 
-Each assistant message also stores a versioned `system-prompt-digest` snapshot in
-the same JSONL append: the digest, exact ordered prompt blocks and resume metadata.
+Each assistant message also stores a versioned `system-prompt-digest` reference:
+the prompt digest and the plan revision it was composed under. The exact ordered
+prompt blocks are journaled once per digest on a branch, as a
+`lemon.prompt_snapshot` custom entry appended just before the first reply that
+used them (with a separate base prompt only when a plan overlay makes one
+differ). Journals written before this format embed the blocks in every reply and
+are still read.
 The digest includes block order and directory-derived flags, not just flattened
 text. Resume and branch restoration adopt a rebuilt prompt only when its digest
 matches the selected branch's latest reply; otherwise they retain the journaled
@@ -1025,9 +1046,8 @@ versioned `"lemon.todo"` entry with the complete list on each successful write
 (`CodingAgent.Session.Todos`); a write that cannot be journaled, or that was
 prepared before a branch switch, reports failure. Startup/resume (including
 forked files), rewind, tree navigation and reset all restore plan mode and todos
-through `CodingAgent.Session.BranchState.restore/1`; `Tools.TodoStore` is only an
-ETS projection, not a recovery source. Live and stopped-session progress readers
-materialize the journal rather than treating a missing cache as an empty list.
+through `CodingAgent.Session.BranchState.restore/1`. Live and stopped-session
+progress readers materialize the journal.
 Branches saved before the journal
 use their latest successful todo-write result; otherwise they start empty, and
 an unsupported entry version makes reads fail rather than show older state.
@@ -1486,19 +1506,18 @@ Once `worker-1` is online, a model can route a delegated run through the
 
 An explicit abort cancels the registry invocation and sends
 `node.invoke.cancel` to the targeted worker. Node disconnects fail pending
-invocations. Steering and redirect operations are not supported across this
-remote boundary.
+invocations. Steer and redirect cross the boundary as `node.invoke.control`
+(text only, at most 16 KiB, bound to the live invocation and run); the controller
+reports them accepted only after the worker's `node.invoke.control.result`
+confirms that the destination session took the text, and fails closed on
+disconnect, timeout, or a terminal run.
 
 ## Dependencies
 
 ### Umbrella Dependencies
 
-| App | Purpose |
-|-----|---------|
-| `agent_core` | Core agent runtime, types (`AgentTool`, `AgentToolResult`), event loop, abort signals |
-| `ai` | AI model providers, LLM integration, message types, OAuth resolution |
-| `lemon_skills` | Skill discovery, loading, and relevance matching |
-| `lemon_core` | Shared primitives -- sessions, storage, bus (PubSub), exec approvals, secrets, config, telemetry, introspection |
+The direct umbrella dependencies are generated from `mix.exs` in
+[architecture boundaries](../../docs/architecture_boundaries.md#direct-dependency-policy).
 
 ### External Dependencies
 

@@ -15,7 +15,7 @@ defmodule LemonCli.UpdateCommand do
   def run(args) do
     with {:ok, command, opts} <- parse(args),
          :ok <- validate_mode(command) do
-      ensure_started()
+      _ = ensure_started()
       execute(command, opts)
     else
       {:error, :usage} -> usage_error()
@@ -263,6 +263,7 @@ defmodule LemonCli.UpdateCommand do
   end
 
   defp ensure_started do
-    Enum.each([:crypto, :ssl, :inets, :jason, :lemon_core], &Application.ensure_all_started/1)
+    Enum.each([:crypto, :ssl, :inets, :jason], &Application.ensure_all_started/1)
+    LemonCore.CLI.start(:lemon_core)
   end
 end

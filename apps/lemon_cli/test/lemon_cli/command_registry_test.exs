@@ -5,7 +5,7 @@ defmodule LemonCli.CommandRegistryTest do
 
   alias LemonCli.{CLI, CommandRegistry, CompletionCommand}
 
-  @runtime_families ~w(setup model gateway doctor config mcp secrets channels providers connect blueprints profile backup context sessions runs cron logs omp learn update completion migrate node service version send media models policy skill usage)
+  @runtime_families ~w(setup model gateway doctor config mcp secrets channels providers connect blueprints profile backup context sessions runs cron logs browser omp learn update completion migrate node service version send media models policy skill usage)
   @lifecycle ~w(tui web start run daemon stop restart status uninstall)
   @release_only ~w(remote eval rpc)
   @source_only ~w(reload)

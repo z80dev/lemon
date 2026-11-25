@@ -351,6 +351,13 @@ through `RELEASE_COOKIE` or `LEMON_GATEWAY_NODE_COOKIE`; the `--cookie` option
 is removed because its value is visible in process argv. See
 [distribution cookie security](../security/threat-model.md#distribution-cookie).
 
+`./bin/lemon-gateway [runtime options]` is `./bin/lemon start` with the node
+name defaulting to `lemon_gateway` (`LEMON_GATEWAY_NODE_NAME`). It shares the
+health probe and start lock, so it reuses a healthy runtime instead of starting
+a second router and channel adapters. It never fetches dependencies; run
+`mix deps.get` yourself after dependency changes. `bin/lemon-control-plane` is
+removed: use `./bin/lemon start` or `./bin/lemon daemon`.
+
 Both ports must be integers from 1 through 65535. Environment defaults are
 `LEMON_CONTROL_PLANE_PORT=4040` and `LEMON_WEB_PORT=4080`; source `status` and
 `stop` also accept the port flags.
@@ -534,6 +541,17 @@ owns that daemon. An explicitly configured
 `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true` runtime can be used
 without a credential; the launcher does not silently enable this compatibility
 mode.
+
+One-shot commands (`doctor`, `config`, `secrets`, `usage`, `context`, `learn`,
+`learning`, `mcp`, `update`, `migrate`, `providers`, `setup`, ...) start the core
+services in client mode, so running them next to a daemon is safe: they never
+expire the daemon's pending approvals, sweep its store, run its config reloader
+or run history, or install a SIGTERM handler. `doctor`, `config show`/`validate`,
+`usage` and `secrets status`/`list`/`check` also open the store read-only.
+Commands that change stored state, such as `secrets set`, still write the shared
+store directly. Only the first runtime to open a store owns it
+(`<store>.runtime.lock`); a second runtime on the same store, such as a node
+worker, leaves the owner's approvals alone.
 
 ## Help and exit codes
 
@@ -1227,16 +1245,24 @@ lemon sessions maintain \
 
 Confirmation rejects relative ages and dates: it requires the exact numeric
 cutoff returned by preview. Tokens remain server-side and bind the full candidate
-set and revisions. Newly created or changed journals/artifacts, changed active
-state, or an expired/missing preview invalidate confirmation. Run and review a
-fresh preview after a mismatch. Mutation failures are not automatically retried;
-partial failures report verified counts without claiming complete success.
+set: every journal and artifact by its file metadata (size, inode, timestamps,
+mode, link count) and each candidate's content by SHA-256. Newly created or
+changed journals/artifacts, changed active state, or an expired/missing preview
+invalidate confirmation. Run and review a fresh preview after a mismatch.
+Mutation failures are not automatically retried; partial failures report
+verified counts without claiming complete success.
+
+Preview takes no lock, so running sessions, session startups and artifact
+writes are never blocked by it. Confirmation re-hashes candidates first and
+holds the exclusive session-root lock only to re-check metadata and move or
+delete them.
 
 Active native sessions are never moved or deleted. Artifacts are retained while
 their native session has a live, active, or archived journal. Only managed spill
 directories for orphaned sessions can be swept; arbitrary external targets and
-symlinks are excluded. Native journal listing uses a metadata index that rebuilds
-automatically if missing or stale; no manual repair command is needed.
+symlinks are excluded. Native journals have no metadata index; an
+`.index.sqlite3` file left in a session directory by an older release is unused
+and can be deleted.
 
 The authenticated admin RPC `sessions.maintain` uses `olderThanMs`, `dryRun`
 (default `true`), and optional `confirmToken`. Reports use camelCase keys,
@@ -1522,13 +1548,18 @@ lemon doctor [options]
 | `--bundle [PATH]` | Write a redacted support bundle |
 | `--bundle-path PATH` | Set the support bundle path |
 
-When `LEMON_BOT_PUBLIC_URL` is set, the offline `bot.admission_origins` check
-requires its origin in both `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` and
-`LEMON_CRON_ADMISSION_ALLOWED_ORIGINS`. Origins match by scheme, case-insensitive
-host, and effective port (so HTTPS port 443 can be omitted). Each environment
+The read-only `bot.admission_origins` check takes the Bot origin from
+`LEMON_BOT_PUBLIC_URL`, or else from the receipt `lemon-bot https enable`
+publishes in `~/.lemon/bot-https.json`, and requires it in both
+`LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` and
+`LEMON_CRON_ADMISSION_ALLOWED_ORIGINS`. It skips when neither is set. Origins
+match by scheme, case-insensitive host, and effective port (so HTTPS port 443 can
+be omitted). The allowlists are exactly those admission enforces: each environment
 allowlist replaces its app configuration, even when empty; only an absent variable
 uses the app's configured allowlist, including the same-machine loopback default.
-Missing entries fail with the affected variable names, never URL values.
+Missing entries fail with the affected variable names, never URL values. Manage
+the Bot's HTTPS address with `lemon-bot https` (see
+[Lemon Bot getting started](../getting-started/lemon-bot.md#give-lemon-bot-an-https-address)).
 
 ### `lemon config`
 
@@ -1894,6 +1925,24 @@ lemon logs [-n 50] [--level info|warning|error] [--follow] [--json]
 | `--json` | Emit JSON; follow emits one document per poll |
 
 Reads logs.tail while online, otherwise the launcher log. File reads are bounded to the last 1 MiB; unknown-level file lines are excluded with --level.
+
+### `lemon browser`
+
+Stop the local browser driver and the Chrome it launched.
+
+```text
+lemon browser stop [--json]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `stop` | Stop the local browser driver and the Chrome it launched |
+
+| Option | Purpose |
+| --- | --- |
+| `--json` | Emit the result as JSON |
+
+Stops the driver behind the local, relay and cdp providers. A browser it only attached to keeps running. In-flight browser actions report an unknown outcome; the next browser request starts a fresh driver.
 
 ### `lemon omp`
 

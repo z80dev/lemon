@@ -154,10 +154,8 @@ defmodule LemonAi.Models.OmpGateway do
   @doc "Request headers that attribute gateway usage to this Lemon host."
   @spec attribution_headers() :: %{String.t() => String.t()}
   def attribution_headers do
-    case :inet.gethostname() do
-      {:ok, host} -> %{"x-omp-app" => "lemon", "x-omp-hostname" => List.to_string(host)}
-      _ -> %{"x-omp-app" => "lemon"}
-    end
+    {:ok, host} = :inet.gethostname()
+    %{"x-omp-app" => "lemon", "x-omp-hostname" => List.to_string(host)}
   end
 
   defp chat_row?(%{"id" => id} = row) when is_binary(id) and id != "",

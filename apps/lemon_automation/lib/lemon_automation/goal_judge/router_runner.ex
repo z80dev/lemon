@@ -1,7 +1,7 @@
 defmodule LemonAutomation.GoalJudge.RouterRunner do
   @moduledoc false
 
-  alias LemonAgent.Workspace.GoalAuthority
+  alias LemonAutomation.GoalAuthority
   alias LemonAutomation.RunCompletionWaiter
 
   # The judge inspects only; the goal's recorded authority confines it further.

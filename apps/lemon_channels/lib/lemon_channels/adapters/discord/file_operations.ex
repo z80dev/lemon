@@ -12,6 +12,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
 
   require Logger
 
+  alias LemonChannels.Adapters.Discord.ThreadResolver
   alias LemonChannels.Adapters.Telegram.Transport.FileOperations, as: TelegramFileOps
   alias LemonChannels.BindingResolver
   alias LemonChannels.CommandAuthority
@@ -247,7 +248,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   def send_file_to_channel(channel_id, path, filename) when is_integer(channel_id) do
     api =
       cfg_get(
-        LemonChannels.GatewayConfig.get(:discord, %{}) || %{},
+        LemonCore.GatewayConfig.get(:discord, %{}) || %{},
         :api_mod,
         Nostrum.Api.Message
       )
@@ -331,8 +332,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   end
 
   defp resolve_project_root(_state, interaction) do
-    channel_id = interaction_channel_id(interaction)
-    thread_id = interaction_thread_id(interaction)
+    %{channel_id: channel_id, thread_id: thread_id} = ThreadResolver.location!(interaction)
     scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
     root = BindingResolver.resolve_cwd(scope)
     TelegramFileOps.ensure_project_root(root)
@@ -406,16 +406,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
 
   defp interaction_channel_id(interaction) do
     interaction |> map_get(:channel_id) |> parse_id()
-  end
-
-  defp interaction_thread_id(interaction) do
-    interaction
-    |> map_get(:channel)
-    |> map_get(:thread_metadata)
-    |> case do
-      %{} -> interaction |> map_get(:channel_id) |> parse_id()
-      _ -> nil
-    end
   end
 
   defp send_channel_message(channel_id, text) when is_integer(channel_id) and is_binary(text) do

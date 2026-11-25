@@ -49,16 +49,21 @@ defmodule LemonRouter.RestartCarryoverTest do
   setup do
     {:ok, run_supervisor} = DynamicSupervisor.start_link(strategy: :one_for_one)
 
-    # Only this test's coordinators may take part in the drain.
+    # Only this test's coordinators may take part in the drain. Unlinked, so it
+    # outlives the test process: a linked supervisor exits with the test and
+    # drops the registered name while `on_exit` is restoring it.
     {:ok, coordinators} = DynamicSupervisor.start_link(strategy: :one_for_one)
+    Process.unlink(coordinators)
     original = Process.whereis(LemonRouter.SessionCoordinatorSupervisor)
     if original, do: Process.unregister(LemonRouter.SessionCoordinatorSupervisor)
     Process.register(coordinators, LemonRouter.SessionCoordinatorSupervisor)
     clear_carryover()
 
     on_exit(fn ->
-      if Process.whereis(LemonRouter.SessionCoordinatorSupervisor),
-        do: Process.unregister(LemonRouter.SessionCoordinatorSupervisor)
+      if Process.whereis(LemonRouter.SessionCoordinatorSupervisor) == coordinators do
+        Process.unregister(LemonRouter.SessionCoordinatorSupervisor)
+        DynamicSupervisor.stop(coordinators)
+      end
 
       if original && Process.alive?(original),
         do: Process.register(original, LemonRouter.SessionCoordinatorSupervisor)
@@ -191,6 +196,23 @@ defmodule LemonRouter.RestartCarryoverTest do
     assert item.request.prompt == "Summarize"
   end
 
+  test "debounce-merged followups replay their merged prompt", ctx do
+    key = conversation()
+    outcomes = %{boundary: :clean, now: :clean}
+
+    :ok = submit(key, "Fix the bug", outcomes, ctx.run_supervisor)
+    assert_receive {:started, _active_id}
+    :ok = submit(key, "Also check", outcomes, ctx.run_supervisor, queue_mode: :followup)
+    :ok = submit(key, "the logs", outcomes, ctx.run_supervisor, queue_mode: :followup)
+
+    assert {:ok, %{carried: 1}} = RestartCarryover.drain(:work, drain_ctx(0, 2_000))
+
+    assert {:ok, [{_key, %{items: [_continue, %{kind: :replay} = replay]}}]} =
+             Store.fetch_all(RestartCarryover.table())
+
+    assert replay.request.prompt == "Also check\nthe logs"
+  end
+
   test "meta process handles are dropped; other process-bound terms skip the item", ctx do
     key = conversation()
     outcomes = %{boundary: :clean, now: :clean}
@@ -250,7 +272,7 @@ defmodule LemonRouter.RestartCarryoverTest do
         run_id: run_id,
         session_key: elem(key, 1),
         conversation_key: key,
-        queue_mode: :collect,
+        queue_mode: Keyword.get(opts, :queue_mode, :collect),
         execution_request: %ExecutionCommand{
           run_id: run_id,
           session_key: elem(key, 1),

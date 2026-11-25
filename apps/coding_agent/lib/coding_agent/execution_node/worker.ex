@@ -65,7 +65,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
   @protocol_version 1
   @execution_protocol_version 2
   @max_control_text_bytes 16 * 1_024
+  # Unacknowledged non-delta events per invocation. Deltas coalesce into one
+  # queue entry per run of adjacent deltas and are bounded by bytes instead.
   @max_pending_events 64
+  @max_pending_delta_bytes 4 * 1_024 * 1_024
   @max_capability_waiters 64
   @approval_decisions %{
     "approve_once" => :approve_once,
@@ -127,6 +130,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     "memory.transfer.apply" => %{"version" => @protocol_version, "contextVersion" => 1},
     "memory.transfer.status" => %{"version" => @protocol_version, "contextVersion" => 1},
     "memory.transfer.inspect" => %{"version" => @protocol_version, "contextVersion" => 1},
+    "memory.transfer.release" => %{"version" => @protocol_version, "contextVersion" => 1},
     "node.invoke.control" => %{
       "version" => @protocol_version,
       "operations" => ["steer", "redirect"],
@@ -608,28 +612,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
         {:keep_state, state}
 
       invoke_id ->
-        invocation = Map.fetch!(state.invocations, invoke_id)
-        next_bytes = invocation.delta_bytes + byte_size(text)
-        next_count = invocation.delta_count + 1
-
-        if next_bytes > result_content_limit(state) or
-             next_count > LemonCore.JSONPayload.default_max_items() do
-          {:keep_state,
-           stop_invocation(state, invoke_id, invocation, :result_payload_limit_exceeded)}
-        else
-          invocations =
-            Map.update!(state.invocations, invoke_id, fn current ->
-              %{
-                current
-                | deltas: [text | current.deltas],
-                  delta_bytes: next_bytes,
-                  delta_count: next_count
-              }
-            end)
-
-          state = %{state | invocations: invocations}
-          {:keep_state, forward_event(state, invoke_id, RemoteEventCodec.encode_delta(text))}
-        end
+        {:keep_state, forward_delta(state, invoke_id, text)}
     end
   end
 
@@ -658,7 +641,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
         {:keep_state, state}
 
       invoke_id ->
-        {:keep_state, forward_event(state, invoke_id, RemoteEventCodec.encode_engine(event))}
+        {:keep_state,
+         forward_event(
+           state,
+           invoke_id,
+           RemoteEventCodec.encode_engine(event, event_budget(state, invoke_id))
+         )}
     end
   end
 
@@ -682,7 +670,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
       when session_key == pending.session_key ->
         invocation = %{invocation | approvals: MapSet.put(invocation.approvals, pending.id)}
         state = put_invocation(state, invoke_id, invocation)
-        {:keep_state, forward_event(state, invoke_id, RemoteEventCodec.encode_approval(pending))}
+
+        {:keep_state,
+         forward_event(
+           state,
+           invoke_id,
+           RemoteEventCodec.encode_approval(pending, event_budget(state, invoke_id))
+         )}
 
       _ ->
         {:keep_state, state}
@@ -703,7 +697,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
       {invoke_id, _invocation} ->
         {:keep_state,
-         forward_event(state, invoke_id, RemoteEventCodec.encode_checkpoint(type, payload))}
+         forward_event(
+           state,
+           invoke_id,
+           RemoteEventCodec.encode_checkpoint(type, payload, event_budget(state, invoke_id))
+         )}
     end
   end
 
@@ -1639,14 +1637,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
         run_ref: run_ref,
         context: context,
         monitor_ref: monitor_ref,
-        deltas: [],
-        delta_bytes: 0,
-        delta_count: 0,
         run_id: request.run_id,
         session_key: request.session_key,
         event_seq: 0,
         event_queue: :queue.new(),
         pending_events: 0,
+        pending_delta_bytes: 0,
         inflight: nil,
         completed: nil,
         approvals: MapSet.new(),
@@ -1822,13 +1818,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp complete_invocation(state, invoke_id, completed) do
     invocation = Map.fetch!(state.invocations, invoke_id)
-    accumulated = invocation.deltas |> Enum.reverse() |> IO.iodata_to_binary()
-
-    answer =
-      case completed.answer do
-        answer when is_binary(answer) and answer != "" -> answer
-        _ -> accumulated
-      end
+    answer = if is_binary(completed.answer), do: completed.answer, else: ""
 
     record_memory_completion(state, invocation, answer, completed)
 
@@ -2562,10 +2552,34 @@ defmodule CodingAgent.ExecutionNode.Worker do
     else
       invocation = %{
         invocation
-        | event_queue: :queue.in(event, invocation.event_queue),
+        | event_queue: :queue.in({:event, event}, invocation.event_queue),
           pending_events: invocation.pending_events + 1
       }
 
+      state |> put_invocation(invoke_id, invocation) |> drain_events(invoke_id)
+    end
+  end
+
+  # Adjacent queued deltas coalesce into one entry, so a slow acknowledgement
+  # path batches text instead of growing the queue per chunk. Splitting to the
+  # event budget happens when the entry is sent.
+  defp forward_delta(state, invoke_id, text) do
+    invocation = Map.fetch!(state.invocations, invoke_id)
+    pending_bytes = invocation.pending_delta_bytes + byte_size(text)
+
+    if pending_bytes > @max_pending_delta_bytes do
+      fail_stream(state, invoke_id, :event_backpressure_limit_exceeded)
+    else
+      queue =
+        case :queue.peek_r(invocation.event_queue) do
+          {:value, {:delta, pending}} ->
+            :queue.in({:delta, [pending, text]}, :queue.drop_r(invocation.event_queue))
+
+          _ ->
+            :queue.in({:delta, text}, invocation.event_queue)
+        end
+
+      invocation = %{invocation | event_queue: queue, pending_delta_bytes: pending_bytes}
       state |> put_invocation(invoke_id, invocation) |> drain_events(invoke_id)
     end
   end
@@ -2575,26 +2589,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
     if is_nil(invocation.inflight) do
       case :queue.out(invocation.event_queue) do
-        {{:value, event}, queue} ->
-          seq = invocation.event_seq + 1
-          params = %{"invokeId" => invoke_id, "seq" => seq, "event" => event}
-
-          case LemonCore.JSONPayload.validate(params,
-                 max_bytes: min(result_content_limit(state), 65_536)
-               ) do
-            {:ok, _stats} ->
-              request(state, "node.invoke.event", params, {:invoke_event, invoke_id, seq})
-
-              put_invocation(state, invoke_id, %{
-                invocation
-                | event_seq: seq,
-                  inflight: seq,
-                  event_queue: queue,
-                  pending_events: invocation.pending_events - 1
-              })
-
-            {:error, _reason} ->
-              fail_stream(state, invoke_id, :event_payload_limit_exceeded)
+        {{:value, entry}, queue} ->
+          case next_event(entry, queue, invocation, event_budget(state, invoke_id)) do
+            {:ok, event, invocation} -> send_event(state, invoke_id, invocation, event)
+            {:error, _reason} -> fail_stream(state, invoke_id, :event_payload_limit_exceeded)
           end
 
         {:empty, _queue} ->
@@ -2605,6 +2603,42 @@ defmodule CodingAgent.ExecutionNode.Worker do
     else
       state
     end
+  end
+
+  defp next_event({:event, event}, queue, invocation, _budget) do
+    {:ok, event,
+     %{invocation | event_queue: queue, pending_events: invocation.pending_events - 1}}
+  end
+
+  defp next_event({:delta, pending}, queue, invocation, budget) do
+    text = IO.iodata_to_binary(pending)
+
+    with {:ok, event, rest} <- RemoteEventCodec.take_delta(text, budget) do
+      queue = if rest == "", do: queue, else: :queue.in_r({:delta, rest}, queue)
+      sent = byte_size(text) - byte_size(rest)
+
+      {:ok, event,
+       %{
+         invocation
+         | event_queue: queue,
+           pending_delta_bytes: invocation.pending_delta_bytes - sent
+       }}
+    end
+  end
+
+  defp send_event(state, invoke_id, invocation, event) do
+    seq = invocation.event_seq + 1
+    params = %{"invokeId" => invoke_id, "seq" => seq, "event" => event}
+    request(state, "node.invoke.event", params, {:invoke_event, invoke_id, seq})
+    put_invocation(state, invoke_id, %{invocation | event_seq: seq, inflight: seq})
+  end
+
+  # Byte budget for one `event` inside its `node.invoke.event` envelope.
+  defp event_budget(state, invoke_id) do
+    max(
+      min(result_content_limit(state), RemoteEventCodec.max_bytes()) - byte_size(invoke_id) - 64,
+      1
+    )
   end
 
   defp fail_stream(state, invoke_id, reason) do

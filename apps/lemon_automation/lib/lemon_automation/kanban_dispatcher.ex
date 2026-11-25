@@ -15,7 +15,7 @@ defmodule LemonAutomation.KanbanDispatcher do
   its durable cards and the exact dispatcher invocation and owned workers.
   Drift returns `{:error, :stale}` without touching the replacement invocation.
 
-  A board without recorded `LemonAgent.Workspace.KanbanAuthority` is
+  A board without recorded `LemonAutomation.KanbanAuthority` is
   quarantined: `start_board/2` returns `{:error, :kanban_authority_missing}`.
   Only the operator surfaces `reauthorize_board/2` (idle boards only) and
   `share_board/3`, both bound to `expected_revision:`, change authority here.
@@ -24,7 +24,7 @@ defmodule LemonAutomation.KanbanDispatcher do
 
   use GenServer
 
-  alias LemonAgent.Workspace.{KanbanAuthority, KanbanStore}
+  alias LemonAutomation.{KanbanAuthority, KanbanStore}
   alias LemonAutomation.{KanbanCodingWorkflow, KanbanGitWorkflow}
 
   def start_link(opts \\ []) do
@@ -47,6 +47,14 @@ defmodule LemonAutomation.KanbanDispatcher do
 
   def status(board_id, opts \\ []) do
     GenServer.call(Keyword.get(opts, :name, __MODULE__), {:status, board_id})
+  end
+
+  @doc """
+  `status/2` for up to 100 boards in one call: `{:ok, %{board_id => status}}`
+  with every requested board present.
+  """
+  def status_many(board_ids, opts \\ []) when is_list(board_ids) and length(board_ids) <= 100 do
+    GenServer.call(Keyword.get(opts, :name, __MODULE__), {:status_many, board_ids})
   end
 
   @doc "Operator path: grant operator authority to an idle (e.g. quarantined) board."
@@ -187,6 +195,7 @@ defmodule LemonAutomation.KanbanDispatcher do
               |> put_in([:boards, board_id], dispatcher)
               |> schedule_tick(board_id, 0)
 
+            KanbanStore.ring_changed(board_id)
             {:reply, {:ok, public_dispatcher(dispatcher)}, state}
         end
     end
@@ -334,6 +343,7 @@ defmodule LemonAutomation.KanbanDispatcher do
               do: Process.send_after(self(), {:reconcile_stopped, board_id}, 1_000)
 
             stopped = public_dispatcher(%{dispatcher | status: "stopped", running: %{}})
+            KanbanStore.ring_changed(board_id)
             {:reply, {:ok, Map.put(stopped, :aborts, aborts)}, state}
 
           {:error, reason} ->
@@ -343,18 +353,11 @@ defmodule LemonAutomation.KanbanDispatcher do
   end
 
   def handle_call({:status, board_id}, _from, state) do
-    dispatcher = Map.get(state.boards, board_id)
-    reconcile_board(board_id, if(dispatcher, do: dispatcher.running, else: %{}))
+    {:reply, {:ok, board_status(board_id, state)}, state}
+  end
 
-    {:reply,
-     {:ok,
-      %{
-        running: not is_nil(dispatcher),
-        control_revision: control_revision(board_id, state),
-        reconciling_count:
-          length(unowned_runs(board_id, if(dispatcher, do: dispatcher.running, else: %{}))),
-        dispatcher: dispatcher && public_dispatcher(dispatcher)
-      }}, state}
+  def handle_call({:status_many, board_ids}, _from, state) do
+    {:reply, {:ok, Map.new(board_ids, &{&1, board_status(&1, state)})}, state}
   end
 
   @impl true
@@ -546,6 +549,19 @@ defmodule LemonAutomation.KanbanDispatcher do
     end
   end
 
+  defp board_status(board_id, state) do
+    dispatcher = Map.get(state.boards, board_id)
+    running = if(dispatcher, do: dispatcher.running, else: %{})
+    reconcile_board(board_id, running)
+
+    %{
+      running: not is_nil(dispatcher),
+      control_revision: control_revision(board_id, state),
+      reconciling_count: length(unowned_runs(board_id, running)),
+      dispatcher: dispatcher && public_dispatcher(dispatcher)
+    }
+  end
+
   defp reconcile_board(board_id, running) do
     unowned_runs(board_id, running)
     |> Enum.each(fn task ->
@@ -662,17 +678,40 @@ defmodule LemonAutomation.KanbanDispatcher do
     end
   end
 
-  # Bind operator confirmation to the exact dispatcher and durable leases/runs.
+  # Bind operator confirmation to the exact dispatcher and the operator-visible
+  # board/task state. Heartbeat-only data (lease expiry renewed every tick,
+  # `updated_at_ms`) is excluded so the revision only moves on real transitions.
+  # One task scan per call.
   defp control_revision(board_id, state) do
     dispatcher = Map.get(state.boards, board_id)
 
     invocation =
-      dispatcher && {dispatcher.invocation_id, dispatcher.started_at_ms, dispatcher.running}
+      dispatcher &&
+        {dispatcher.invocation_id, dispatcher.started_at_ms,
+         dispatcher.running |> Map.values() |> Enum.map(& &1.task_id) |> Enum.sort()}
 
-    {KanbanStore.get_board(board_id), KanbanStore.list_tasks(board_id, limit: 10_000), invocation}
+    board = KanbanStore.get_board(board_id) |> Map.delete(:updated_at_ms)
+
+    tasks =
+      board_id
+      |> KanbanStore.list_tasks(limit: 10_000)
+      |> Enum.map(&revision_task/1)
+      |> Enum.sort()
+
+    {board, tasks, invocation}
     |> :erlang.term_to_binary([:deterministic])
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode16(case: :lower)
+  end
+
+  defp revision_task(task) do
+    lease = task.meta["kanbanLease"] || %{}
+    run = task.meta["kanbanRun"] || %{}
+    workflow = task.meta["codingWorkflow"] || %{}
+
+    {task.id, task.status, task.run_id, task.assignee, task.session_key, lease["id"],
+     lease["workerId"], run["runId"], run["status"], run["abortRequested"], workflow["phase"],
+     workflow["cancelRequested"]}
   end
 
   defp public_dispatcher(dispatcher) do

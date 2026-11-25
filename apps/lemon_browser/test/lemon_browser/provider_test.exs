@@ -43,14 +43,39 @@ defmodule LemonBrowser.ProviderTest do
       "http://127.0.0.1:9/private?token=ignored-by-local"
     )
 
-    System.put_env("LEMON_BROWSER_ATTACH_ONLY", "true")
-
     assert {:ok, _} = ProviderProbe.available?("local")
     refute File.exists?(marker)
-    assert ProviderProbe.driver_options("local") == [cdp_endpoint: "", attach_only: false]
+    assert ProviderProbe.driver_options("local") == [cdp_endpoint: ""]
     assert {:ok, config} = LocalServer.configuration(ProviderProbe.driver_options("local"))
     assert config["endpoint"] == ""
     assert config["launchesBrowser"]
+  end
+
+  @tag :tmp_dir
+  test "attach-only makes local unavailable instead of launching Chrome", %{tmp_dir: root} do
+    driver = Path.join(root, "local-driver.js")
+    File.write!(driver, "throw new Error('driver must not execute');")
+    System.put_env("LEMON_BROWSER_DRIVER_PATH", driver)
+    System.put_env("LEMON_BROWSER_ATTACH_ONLY", "1")
+
+    assert {:error, :attach_only} = ProviderProbe.available?("local")
+
+    for requested <- ["local", "auto"] do
+      resolution =
+        LemonCore.BrowserProvider.resolve(
+          provider: requested,
+          config: %{},
+          probe: ProviderProbe,
+          computer_use_enabled: false
+        )
+
+      assert resolution.provider == nil
+      assert resolution.checks["local"].reason =~ "LEMON_BROWSER_ATTACH_ONLY"
+    end
+
+    assert {:ok, config} = LocalServer.configuration(ProviderProbe.driver_options("local"))
+    assert config["attachOnly"]
+    refute config["launchesBrowser"]
   end
 
   @tag :tmp_dir
@@ -140,7 +165,7 @@ defmodule LemonBrowser.ProviderTest do
   end
 
   @tag :tmp_dir
-  test "selected local provider clears inherited remote CDP and attach-only settings", %{
+  test "selected local provider clears inherited remote CDP and keeps attach-only", %{
     tmp_dir: root
   } do
     driver = Path.join(root, "fake-driver.cjs")
@@ -168,7 +193,8 @@ defmodule LemonBrowser.ProviderTest do
              )
 
     assert result["endpoint"] in [nil, ""]
-    assert result["attachOnly"] == "false"
+    # The user's attach-only setting is never overwritten: the driver will not launch.
+    assert result["attachOnly"] == "true"
     refute "--cdp-endpoint" in result["args"]
     refute "--attach-only" in result["args"]
     refute inspect(LocalServer.status(server)) =~ "must-not-attach"

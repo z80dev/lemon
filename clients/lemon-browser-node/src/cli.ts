@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { asBool, asInt, asString, parseCliArgs, type CliArgs } from './cli-args.js';
 import { LemonSocket } from './lemon-socket.js';
 import { runBrowserNode } from './index.js';
-import { resolveOpenClawUserDataDir } from './openclaw-profile.js';
+import { defaultUserDataDir } from './chrome.js';
 
 export type BrowserNodeCliConfig = {
   wsUrl: string;
@@ -18,7 +18,7 @@ export type BrowserNodeCliConfig = {
   attachOnly: boolean;
   allowUnenforcedEgress: boolean;
   executablePath: string | null;
-  openclawProfile: string;
+  browserProfile: string;
   userDataDir: string;
   doPair: boolean;
   nodeName: string;
@@ -46,10 +46,10 @@ export function resolveCliConfig(params: {
     asBool(params.args['allow-unenforced-egress']) || asBool(env.LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS);
   const executablePath = asString(params.args['executable-path']) ?? asString(env.LEMON_CHROME_EXECUTABLE);
 
-  const openclawProfile = asString(params.args['openclaw-profile']) ?? 'openclaw';
+  const browserProfile = asString(params.args['browser-profile']) ?? 'default';
   const userDataDir =
     asString(params.args['user-data-dir']) ??
-    resolveOpenClawUserDataDir(openclawProfile);
+    defaultUserDataDir(browserProfile, env.HOME || os.homedir());
 
   const doPair = asBool(params.args['pair']);
   const defaultNodeName = `Local Browser (${params.hostname ?? os.hostname()})`;
@@ -76,7 +76,7 @@ export function resolveCliConfig(params: {
     attachOnly,
     allowUnenforcedEgress,
     executablePath,
-    openclawProfile,
+    browserProfile,
     userDataDir,
     doPair,
     nodeName,

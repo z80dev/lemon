@@ -1194,7 +1194,12 @@ defmodule LemonRouter.RunProcessTest do
 
       assert_receive %LemonCore.Event{
                        type: :run_completed,
-                       payload: %{completed: %{error: {:run_idle_watchdog_timeout, 1}}},
+                       payload: %{
+                         completed: %{
+                           error: :run_idle_watchdog_timeout,
+                           meta: %{cancelled: true, cancel_reason: :run_idle_watchdog_timeout}
+                         }
+                       },
                        meta: %{run_id: ^run_id, synthetic: true}
                      },
                      1_500
@@ -1283,7 +1288,12 @@ defmodule LemonRouter.RunProcessTest do
 
       assert_receive %LemonCore.Event{
                        type: :run_completed,
-                       payload: %{completed: %{error: {:run_idle_watchdog_timeout, 1}}},
+                       payload: %{
+                         completed: %{
+                           error: :run_idle_watchdog_timeout,
+                           meta: %{cancel_reason: :run_idle_watchdog_timeout}
+                         }
+                       },
                        meta: %{run_id: ^run_id}
                      },
                      1_500
@@ -1320,7 +1330,12 @@ defmodule LemonRouter.RunProcessTest do
 
       assert_receive %LemonCore.Event{
                        type: :run_completed,
-                       payload: %{completed: %{error: :user_requested}},
+                       payload: %{
+                         completed: %{
+                           error: :user_requested,
+                           meta: %{cancelled: true, cancel_reason: :user_requested}
+                         }
+                       },
                        meta: %{run_id: ^run_id}
                      },
                      1_500
@@ -1932,8 +1947,7 @@ defmodule LemonRouter.RunProcessTest do
 
       :ok =
         LemonRouter.StreamCoalescer.finalize_run(session_key, "telegram", previous_run_id,
-          final_text: previous_answer,
-          dispatch?: false
+          final_text: previous_answer
         )
 
       job =
@@ -2767,7 +2781,7 @@ defmodule LemonRouter.RunProcessTest do
              end)
     end
 
-    test "marks pending compaction before overflow when input_tokens approaches threshold" do
+    test "marks pending compaction before overflow when context_tokens approaches threshold" do
       run_id = "run_#{System.unique_integer([:positive])}"
 
       session_key =
@@ -2816,7 +2830,7 @@ defmodule LemonRouter.RunProcessTest do
             completed: %{
               ok: true,
               answer: "done",
-              usage: %{input_tokens: 950, output_tokens: 50}
+              usage: %{input: 900, output: 50, context_tokens: 950}
             }
           },
           %{run_id: run_id, session_key: session_key}
@@ -2844,7 +2858,7 @@ defmodule LemonRouter.RunProcessTest do
              end)
     end
 
-    test "marks pending compaction before overflow when usage input is reported as :input" do
+    test "marks pending compaction before overflow when the last call's input approaches threshold" do
       run_id = "run_#{System.unique_integer([:positive])}"
 
       session_key =
@@ -2893,7 +2907,13 @@ defmodule LemonRouter.RunProcessTest do
             completed: %{
               ok: true,
               answer: "done",
-              usage: %{input: 950, output: 50}
+              usage: %{
+                input: 950,
+                output: 50,
+                occurrences: [
+                  %{usage: %{input: 950, cache_read: 0, cache_write: 0, output: 50}}
+                ]
+              }
             }
           },
           %{run_id: run_id, session_key: session_key}
@@ -2921,7 +2941,7 @@ defmodule LemonRouter.RunProcessTest do
              end)
     end
 
-    test "counts cached input tokens toward preemptive compaction threshold" do
+    test "counts the last call's cached input toward preemptive compaction threshold" do
       run_id = "run_#{System.unique_integer([:positive])}"
 
       session_key =
@@ -2970,7 +2990,20 @@ defmodule LemonRouter.RunProcessTest do
             completed: %{
               ok: true,
               answer: "done",
-              usage: %{input_tokens: 200, cached_input_tokens: 750, output_tokens: 50}
+              usage: %{
+                "input" => 200,
+                "output" => 50,
+                "occurrences" => [
+                  %{
+                    "usage" => %{
+                      "input" => 200,
+                      "cache_read" => 750,
+                      "cache_write" => 0,
+                      "output" => 50
+                    }
+                  }
+                ]
+              }
             }
           },
           %{run_id: run_id, session_key: session_key}

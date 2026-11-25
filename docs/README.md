@@ -39,7 +39,7 @@ Source modules and tests define implementation APIs. LemonSim lives in
 - Built-in tools: [file and search](tools/files-and-search.md),
   [shell and background processes](tools/shell.md), [user questions](tools/ask.md),
   [checkpoints/rewind](tools/checkpoint.md), [todo plans](tools/todo.md),
-  [local tool issue reports](tools/report-issue.md), [Web/browser](tools/web.md),
+  [Web/browser](tools/web.md),
   [browser tool](tools/browser.md), [Firecrawl](tools/firecrawl.md), [media](tools/media.md),
   [LSP](tools/lsp.md), [eval kernels](tools/eval.md), [debugger](tools/debug.md),
   [omp delegate](tools/omp.md) and [computer use](tools/computer-use.md)
@@ -64,7 +64,7 @@ overview and the app guides below, rather than keeping a second runtime catalog.
 
 - [Add a channel](getting-started/add-a-channel.md) and [lemon_gateway](platform/lemon_gateway.md)
 - [Lemon in Tern](user-guide/tern.md)
-- [OpenAI-compatible API](tools/openai-compatible-api.md), [ACP](tools/acp.md),
+- [ACP](tools/acp.md),
   [extensions/MCP clients](extensions.md) and [WASM](tools/wasm.md)
 - [Delegating to omp](user-guide/omp.md): run, watch, steer and resume omp sessions
 - [A2A peers](user-guide/a2a-peers.md) and [Honcho memory](user-guide/honcho.md)
@@ -74,11 +74,10 @@ overview and the app guides below, rather than keeping a second runtime catalog.
 - Build: [first agent](getting-started/build-your-first-agent.md), [add a tool](getting-started/add-a-tool.md),
   [add a channel](getting-started/add-a-channel.md) and [persist memory](getting-started/persist-memory.md)
 - Architecture: [overview](architecture/overview.md), [app boundaries](architecture_boundaries.md),
-  [BEAM lifecycle invariants](beam_agents.md), [bus events](platform/bus-events.md),
-  [model selection](model-selection-decoupling.md) and [execution policy](execution-policy.md)
-- [omp port ledger](omp-port-ledger.md): upstream origins, native trust boundaries and package ownership
-- [Context](context.md), [bootstrap](assistant_bootstrap_contract.md),
-  [long-running harnesses](long-running-agent-harnesses.md) and [parent questions](subagent-parent-questions.md)
+  [BEAM lifecycle invariants](beam_agents.md), [bus events](platform/bus-events.md)
+  and [execution policy](execution-policy.md)
+- [Assistant bootstrap](assistant_bootstrap_contract.md) and
+  [long-running harnesses](long-running-agent-harnesses.md)
 - [Hot reload](runtime-hot-reload.md), [telemetry](telemetry.md) and [error reporting](error-reporting.md)
 - [Testing lanes](testing.md), [deterministic test patterns](testing/deterministic-test-patterns.md),
   [platform test harness](platform/lemon_platform_test.md) and [Mix tasks](mix-tasks.md)
@@ -86,8 +85,12 @@ overview and the app guides below, rather than keeping a second runtime catalog.
 - Releases: [deployment flows](release/deployment_flows.md),
   [release/support checklist](release/release_checklist_and_support_policy.md),
   [five-package status](platform-split.md) and [Hex publication](release/hex-packages.md)
-  — 0.2.0 is published; 0.1.0 is retired
+  — the 0.2 line is published (`lemon_ai` 0.2.1); 0.1.0 is retired
 - [Root contributor/app guide index](../AGENTS.md#ownership-and-app-guides)
+- Design records and history (the code is authoritative where they differ):
+  [model selection design](model-selection-decoupling.md),
+  [subagent parent questions](subagent-parent-questions.md) and the
+  [omp port ledger](omp-port-ledger.md) of upstream origins and trust boundaries
 
 ## Benchmarks
 
@@ -134,6 +137,14 @@ checkout so repository-relative links resolve. `npm --prefix docs run link-check
 uses that same recursive entrypoint, including root-level docs pages. CI uses
 the same npm build/link commands. Links to repository files are rewritten for
 the website; the site is served at the root of `https://lemon.food/`.
+
+Link checking proves a target exists, not that it still says what the page
+claims. `scripts/check_docs_source_refs.mjs` (in `verify_docs_site`, the Docs
+Site workflow and `scripts/test quality`) fails when a telemetry catalog row's
+linked `function/arity` no longer emits that event, a linked `function/arity`
+is not defined in the linked module, a `file.ex:N` or `#LN` citation names a
+missing line, or a shell command block names a missing repository path. Cite
+functions or modules rather than line numbers; line numbers rot silently.
 
 Update the canonical page for a changed behavior, not four prose copies. Keep
 contributor guides operational, API detail in moduledocs, and workflows here.

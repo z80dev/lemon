@@ -34,8 +34,8 @@ defmodule LemonControlPlane.Methods.ErrorCopyTest do
     key = "error-copy-goal-#{System.unique_integer([:positive])}"
 
     {:ok, _} =
-      LemonAgent.Workspace.GoalStore.set(key, "test goal",
-        authority: LemonAgent.Workspace.GoalAuthority.operator()
+      LemonAutomation.GoalStore.set(key, "test goal",
+        authority: LemonAutomation.GoalAuthority.operator()
       )
 
     try do
@@ -56,7 +56,7 @@ defmodule LemonControlPlane.Methods.ErrorCopyTest do
         end
       )
     after
-      LemonAgent.Workspace.GoalStore.clear(key)
+      LemonAutomation.GoalStore.clear(key)
     end
   end
 

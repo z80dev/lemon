@@ -288,7 +288,14 @@ defmodule LemonCore.UsageRecordsTest do
       meta: %{}
     }
 
+    # Run records are not a usage source: only the ledger's occurrences are.
     assert :ok = Store.finalize_run(ctx.store, "legacy", summary)
+
+    assert {:ok, %{records: [], incomplete: false}} =
+             query(ctx.store, %{"fromMs" => 4000, "toMs" => 5000, "runId" => "legacy"})
+
+    legacy = UsageLedger.entry("legacy", summary.session_key, summary)
+    assert :ok = UsageLedger.record(ctx.ledger, legacy)
 
     assert {:ok, %{records: [record], incomplete: true}} =
              query(
@@ -311,6 +318,73 @@ defmodule LemonCore.UsageRecordsTest do
                ctx.store,
                %{"fromMs" => 4000, "toMs" => 5000, "runId" => "not-attributable"}
              )
+  end
+
+  defmodule RangeOnlyBackend do
+    @moduledoc "ETS backend that refuses whole-table reads of the occurrence table."
+    @behaviour LemonCore.Store.Backend
+
+    alias LemonCore.Store.EtsBackend
+
+    @impl true
+    defdelegate init(opts), to: EtsBackend
+    @impl true
+    defdelegate put(state, table, key, value), to: EtsBackend
+    @impl true
+    defdelegate put_new(state, table, key, value), to: EtsBackend
+    @impl true
+    defdelegate get(state, table, key), to: EtsBackend
+    @impl true
+    defdelegate delete(state, table, key), to: EtsBackend
+    @impl true
+    def list(_state, :usage_occurrences), do: {:error, :full_scan_refused}
+    def list(state, table), do: EtsBackend.list(state, table)
+    @impl true
+    defdelegate reader(state), to: EtsBackend
+    @impl true
+    def read_list(_reader, table) when table in [:usage_occurrences, :usage_records],
+      do: {:error, :full_scan_refused}
+
+    def read_list(reader, table), do: EtsBackend.read_list(reader, table)
+
+    @impl true
+    def read_range(reader, table, from_ms, to_ms, untimed) do
+      send(:persistent_term.get({__MODULE__, :observer}), {:range_read, table, from_ms, to_ms})
+      EtsBackend.read_range(reader, table, from_ms, to_ms, untimed)
+    end
+  end
+
+  test "a page reads only the window's whole days of occurrences, never the full table" do
+    :persistent_term.put({RangeOnlyBackend, :observer}, self())
+    on_exit(fn -> :persistent_term.erase({RangeOnlyBackend, :observer}) end)
+    store = :usage_records_range_store
+    ledger = :usage_records_range_ledger
+
+    start_supervised!(
+      Supervisor.child_spec(
+        {Store,
+         name: store, backend: RangeOnlyBackend, cached_tables: [], finalize_run_hooks: []},
+        id: store
+      )
+    )
+
+    start_supervised!(
+      Supervisor.child_spec({UsageLedger, name: ledger, store: store}, id: ledger)
+    )
+
+    day = 86_400_000
+
+    for {run, at} <- [{"yesterday", day - 1}, {"today", day + 10}, {"tomorrow", 2 * day}] do
+      usage = %{input: 1, output: 1, total_tokens: 2, cost: 0.1}
+      assert :ok = UsageLedger.record(ledger, entry(run, "agent:bot:main", at, usage))
+    end
+
+    assert {:ok, %{records: [%{run_id: "today"}], incomplete: false}} =
+             query(store, %{"fromMs" => day + 5, "toMs" => day + 20})
+
+    assert_received {:range_read, :usage_occurrences, ^day, to_ms}
+    assert to_ms == 2 * day
+    assert_received {:range_read, :usage_records, ^day, ^to_ms}
   end
 
   test "unavailable owner and invalid range fail, never return an empty page", ctx do

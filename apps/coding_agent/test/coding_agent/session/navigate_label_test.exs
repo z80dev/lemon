@@ -9,22 +9,25 @@ defmodule CodingAgent.Session.NavigateLabelTest do
   alias LemonAi.Types.{AssistantMessage, Model, ModelCost, TextContent}
 
   # A native lifecycle with a message barrier between initialization (which has
-  # loaded and persisted the journal) and ownership publication.
+  # loaded and persisted the journal) and the end of its deferred startup. Like
+  # CodingAgent.Session, it is published as the owner at admission in init/1.
   defmodule PausedStartup do
     use GenServer
 
     def init(opts) do
       Process.flag(:trap_exit, true)
-      observer = Keyword.fetch!(opts, :observer)
 
-      CodingAgent.Session.Ownership.initialize(opts, fn opts ->
-        {:ok, state, _report} = CodingAgent.Session.Lifecycle.initialize(opts, self())
-        send(observer, {:journal_loaded, self()})
+      with {:ok, opts, _path} <- CodingAgent.Session.Ownership.admit(opts),
+           do: {:ok, opts, {:continue, :initialize}}
+    end
 
-        receive do
-          :publish_owner -> {:ok, state}
-        end
-      end)
+    def handle_continue(:initialize, opts) do
+      {:ok, state, _report} = CodingAgent.Session.Lifecycle.initialize(opts, self())
+      send(Keyword.fetch!(opts, :observer), {:journal_loaded, self()})
+
+      receive do
+        :finish_startup -> {:noreply, state}
+      end
     end
 
     def handle_call(request, from, state),
@@ -144,7 +147,7 @@ defmodule CodingAgent.Session.NavigateLabelTest do
   end
 
   describe "file ownership admission" do
-    test "mutations wait through startup persistence until live ownership is published", ctx do
+    test "mutations during startup queue behind the owner published at admission", ctx do
       {path, ids} = durable_tree(ctx)
       opts = Keyword.put(resume_opts(ctx, path), :observer, self())
 
@@ -163,7 +166,7 @@ defmodule CodingAgent.Session.NavigateLabelTest do
           ControlPlaneProvider.session_plan(ctx.key, ctx.root, :enter, [])
         end)
 
-      await_admission(path)
+      await_calls(session, 1)
 
       label =
         Task.async(fn ->
@@ -175,8 +178,8 @@ defmodule CodingAgent.Session.NavigateLabelTest do
           ControlPlaneProvider.session_navigate(ctx.key, ctx.root, ids.first_answer, [])
         end)
 
-      await_admission(path, 3)
-      send(session, :publish_owner)
+      await_calls(session, 3)
+      send(session, :finish_startup)
       assert {:ok, ^session} = Task.await(startup)
       assert {:ok, %{"mode" => "plan"}} = Task.await(plan)
       assert {:ok, %{"label" => "during startup"}} = Task.await(label)
@@ -535,8 +538,11 @@ defmodule CodingAgent.Session.NavigateLabelTest do
       {:messages, messages} = Process.info(session, :messages)
 
       Enum.count(messages, fn
-        {:"$gen_call", _, {op, _, _}} when op in [:label_entry_receipt, :navigate_entry] -> true
-        _ -> false
+        {:"$gen_call", _, {op, _, _}} when op in [:label_entry_receipt, :navigate_entry, :plan] ->
+          true
+
+        _ ->
+          false
       end) >= count
     end)
   end

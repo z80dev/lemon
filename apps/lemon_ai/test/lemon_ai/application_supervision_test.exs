@@ -15,7 +15,6 @@ defmodule LemonAi.ApplicationSupervisionTest do
     ensure_process_running(LemonAi.RateLimiterRegistry)
     ensure_process_running(LemonAi.CircuitBreakerRegistry)
     ensure_process_running(LemonAi.ProviderSupervisor)
-    ensure_process_running(LemonAi.CallDispatcher)
 
     :ok
   end
@@ -43,7 +42,6 @@ defmodule LemonAi.ApplicationSupervisionTest do
       assert LemonAi.RateLimiterRegistry in child_ids
       assert LemonAi.CircuitBreakerRegistry in child_ids
       assert LemonAi.ProviderSupervisor in child_ids
-      assert LemonAi.CallDispatcher in child_ids
     end
   end
 

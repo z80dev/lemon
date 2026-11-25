@@ -29,8 +29,8 @@ defmodule LemonGateway.Voice.CallSession do
 
   require Logger
 
-  alias LemonCore.Httpc
-  alias LemonGateway.Voice.{AudioConversion, Config, DeepgramClient}
+  alias LemonGateway.Voice.{AudioConversion, Config, DeepgramCall}
+  alias LemonMedia.Providers.{DeepgramStream, Speech}
 
   defstruct [
     :call_sid,
@@ -173,7 +173,7 @@ defmodule LemonGateway.Voice.CallSession do
   def handle_event(:cast, _event, :closing, _data), do: :keep_state_and_data
 
   def handle_event(:cast, {:audio_from_twilio, audio}, _state, data) do
-    if data.deepgram_ws_pid, do: DeepgramClient.send_audio(data.deepgram_ws_pid, audio)
+    if data.deepgram_ws_pid, do: DeepgramStream.send_audio(data.deepgram_ws_pid, audio)
 
     {:keep_state, %{data | last_activity_at: DateTime.utc_now()},
      [{{:timeout, :silence}, data.silence_timeout_ms, :inactive}]}
@@ -262,8 +262,8 @@ defmodule LemonGateway.Voice.CallSession do
 
     # The session owns the call: close its Deepgram socket and the Twilio stream
     # however it ends (hang-up, silence, max duration, crash).
-    DeepgramClient.stop(data.deepgram_ws_pid)
-    if is_binary(data.call_sid), do: DeepgramClient.stop_for_call(data.call_sid)
+    DeepgramCall.stop(data.deepgram_ws_pid)
+    if is_binary(data.call_sid), do: DeepgramCall.stop_for_call(data.call_sid)
     if is_pid(data.twilio_ws_pid), do: send(data.twilio_ws_pid, :call_ended)
 
     Logger.info("Call session terminated: #{data.call_sid}")
@@ -378,46 +378,30 @@ defmodule LemonGateway.Voice.CallSession do
   end
 
   defp synthesize_speech(text) do
-    api_key = Config.elevenlabs_api_key()
-    voice_id = Config.elevenlabs_voice_id()
-    output_format = Config.elevenlabs_output_format()
+    case Config.elevenlabs_api_key() do
+      key when is_binary(key) and key != "" -> synthesize_speech(text, key)
+      _ -> {:error, :missing_api_key}
+    end
+  end
 
-    url =
-      "https://api.elevenlabs.io/v1/text-to-speech/#{voice_id}/stream" <>
-        "?output_format=#{URI.encode_www_form(output_format)}"
+  defp synthesize_speech(text, api_key) do
+    request = %{
+      text: text,
+      api_key: api_key,
+      voice: Config.elevenlabs_voice_id(),
+      output_format: Config.elevenlabs_output_format(),
+      model: "eleven_turbo_v2_5",
+      voice_settings: %{stability: 0.5, similarity_boost: 0.75},
+      receive_timeout: 10_000
+    }
 
-    # :httpc expects charlists for headers
-    headers = [
-      {~c"xi-api-key", String.to_charlist(api_key)},
-      {~c"content-type", ~c"application/json"}
-    ]
+    case Speech.elevenlabs_tts(request) do
+      {:ok, audio} ->
+        {:ok, audio}
 
-    body =
-      Jason.encode!(%{
-        text: text,
-        model_id: "eleven_turbo_v2_5",
-        voice_settings: %{
-          stability: 0.5,
-          similarity_boost: 0.75
-        }
-      })
-
-    case Httpc.request(
-           :post,
-           {String.to_charlist(url), headers, ~c"application/json", body},
-           [timeout: 10_000],
-           []
-         ) do
-      {:ok, {{_, 200, _}, _headers, response_body}} ->
-        {:ok, response_body}
-
-      {:ok, {{_, status, _}, headers, response_body}} ->
-        # Log the response headers to debug content-type issues
-        Logger.warning("ElevenLabs TTS error: status=#{status}, headers=#{inspect(headers)}")
-        {:error, {:http_error, status, response_body}}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, reason} = error ->
+        Logger.warning("ElevenLabs TTS error: #{inspect(reason)}")
+        error
     end
   end
 

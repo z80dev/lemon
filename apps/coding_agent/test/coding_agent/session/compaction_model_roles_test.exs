@@ -13,7 +13,8 @@ defmodule CodingAgent.Session.CompactionModelRolesTest do
           %LemonAi.Types.TextContent{
             text:
               inspect(
-                {model.provider, model.id, opts.api_key, opts.headers, opts.thinking_budgets}
+                {model.provider, model.id, opts.api_key, opts.headers,
+                 opts.provider_options[:azure_openai_responses]}
               )
           }
         ],
@@ -69,10 +70,9 @@ defmodule CodingAgent.Session.CompactionModelRolesTest do
     assert opts[:api_key] == "synthetic-summary-key"
     assert opts[:stream_options].api_key == "synthetic-summary-key"
 
-    assert opts[:stream_options].thinking_budgets[:azure_base_url] ==
-             "https://synthetic-azure.invalid"
-
-    assert opts[:stream_options].thinking_budgets[:azure_api_version] == "synthetic-version"
+    azure = opts[:stream_options].provider_options.azure_openai_responses
+    assert azure.base_url == "https://synthetic-azure.invalid"
+    assert azure.api_version == "synthetic-version"
     assert state.model.provider == :openai
     assert state.model.id == "gpt-4o"
   end
@@ -175,7 +175,7 @@ defmodule CodingAgent.Session.CompactionModelRolesTest do
     selected = %{opts[:model] | api: :compaction_model_roles_test}
     opts = Keyword.put(opts, :model, selected)
     unused_active = %{state.model | api: :unused_compaction_active_api}
-    messages = [%CodingAgent.Messages.UserMessage{content: "Summarize the selected provider"}]
+    messages = [%LemonAi.Types.UserMessage{content: "Summarize the selected provider"}]
 
     assert {:ok, summary} = Compaction.generate_summary(messages, unused_active, opts)
     assert_selected_summary(summary)

@@ -14,7 +14,7 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
   alias CodingAgent.Tools.{ReadSkill, SkillManage}
   alias LemonEvals.Types
   alias LemonSkills.Curator
-  alias LemonSkills.Tools.{Recall, Remember}
+  alias LemonSkills.Tools.Remember
   alias LemonAi.Types.{TextContent, ToolResultMessage}
 
   @spec memory_scope_contract_eval(String.t()) :: Types.eval_result()
@@ -26,19 +26,14 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
           "lemon_memory_scope_eval_#{System.unique_integer([:positive, :monotonic])}"
         )
 
-      {:ok, search_calls} = Agent.start_link(fn -> [] end)
-
-      search_fn = fn query, opts ->
-        Agent.update(search_calls, &[{query, opts} | &1])
+      docs =
         [eval_memory_doc("scoped-deployment-notes", project_dir, project_dir, "eval-agent")]
-      end
 
-      tool =
-        Recall.tool(project_dir,
+      {tool, search_calls} =
+        eval_recall_tool(project_dir, docs,
           workspace_dir: project_dir,
           session_scope: :main,
-          agent_id: "eval-agent",
-          search_fn: search_fn
+          agent_id: "eval-agent"
         )
 
       agent_result =
@@ -307,11 +302,7 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
       File.mkdir_p!(project_dir)
       File.mkdir_p!(home_dir)
 
-      {:ok, search_calls} = Agent.start_link(fn -> [] end)
-
-      search_fn = fn query, opts ->
-        Agent.update(search_calls, &[{query, opts} | &1])
-
+      docs =
         [
           eval_memory_doc(
             "prior-deployment-incident",
@@ -320,7 +311,6 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
             "learning-tool-trace-eval"
           )
         ]
-      end
 
       tool_opts = [
         run_id: "eval-learning-tool-trace",
@@ -329,10 +319,9 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
         agent_id: "learning-tool-trace-eval"
       ]
 
-      search_tool =
-        Recall.tool(project_dir,
+      {search_tool, search_calls} =
+        eval_recall_tool(project_dir, docs,
           workspace_dir: home_dir,
-          search_fn: search_fn,
           agent_id: "learning-tool-trace-eval",
           session_scope: :main
         )

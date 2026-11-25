@@ -10,12 +10,9 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
   # remain authoritative; barriers replace sleeps and synchronize the lost-event
   # window before a second collection.
   defmodule MissingRuntime do
-    @behaviour LemonCore.AgentRuntime.Provider
   end
 
   defmodule Runtime do
-    @behaviour LemonCore.AgentRuntime.Provider
-
     def session_recovery_snapshot(_key, _cwd) do
       pid = Application.fetch_env!(:lemon_control_plane, __MODULE__)
 
@@ -73,7 +70,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
       )
 
     Application.put_env(:lemon_control_plane, Runtime, state)
-    :ok = AgentRuntime.register(Runtime)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, Runtime)
     :ok = RunStore.create_session_index(key, LemonCore.SessionKey.agent_id(key), :tui)
     if Process.whereis(Registry) == nil, do: start_supervised!(Registry)
 
@@ -299,6 +296,34 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
              SessionsSnapshot.handle(params(c), ctx([:read, :approvals, :content]))
 
     assert unavailable["snapshot"]["approvals"] == %{"status" => "unavailable"}
+  end
+
+  test "approval projection shows command, path and arguments and flags a clipped plan", c do
+    plan = "## Plan\n" <> String.duplicate("step ", 1_000) <> "FINAL"
+
+    for {id, tool, action} <- [
+          {"a-bash", "bash", %{"command" => "rm -rf ./build", "cwd" => "/private/workspace"}},
+          {"b-edit", "edit", %{"path" => "lib/app.ex", "old_text" => "old", "new_text" => "new"}},
+          {"c-plan", "propose_plan", %{"title" => "Big", "plan" => plan}}
+        ] do
+      :ok = ExecApprovalStore.put_pending(id, %{approval(c, id) | tool: tool, action: action})
+    end
+
+    assert {:ok, result} = SessionsSnapshot.handle(params(c), ctx([:read, :approvals, :content]))
+    items = Map.new(result["snapshot"]["approvals"]["items"], &{&1["id"], &1})
+
+    assert items["a-bash"]["action"]["command"] == "rm -rf ./build"
+    assert items["a-bash"]["truncated"] == false
+    refute inspect(items["a-bash"]) =~ "/private/workspace"
+
+    assert items["b-edit"]["action"]["path"] == "lib/app.ex"
+    assert items["b-edit"]["argumentsPreview"] =~ ~s("new_text": "new")
+    assert items["b-edit"]["planTruncated"] == false
+
+    assert items["c-plan"]["planTruncated"] == true
+    assert items["c-plan"]["truncated"] == true
+    refute items["c-plan"]["action"]["plan"] =~ "FINAL"
+    assert result["snapshot"]["approvals"]["truncated"] == true
   end
 
   test "only read-authorized operators can collect native owner recovery", c do
@@ -632,7 +657,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
 
     Agent.update(c.state, &%{&1 | native_result: {:error, :unavailable}})
     assert {:error, {:unavailable, _, nil}} = SessionsSnapshot.handle(params(c), ctx())
-    :ok = AgentRuntime.register(MissingRuntime)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, MissingRuntime)
     assert {:error, {:unavailable, _, nil}} = SessionsSnapshot.handle(params(c), ctx())
   end
 

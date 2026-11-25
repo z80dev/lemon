@@ -86,22 +86,20 @@ integration registrations only, not per-request state or lazy caches.
 
 ## Module Inventory
 
-### Core Agent
+An orientation map, not an API reference: function signatures, struct fields and
+options are documented in each module's `@moduledoc`/`@doc`.
 
-| Module | File | Purpose |
-|--------|------|---------|
-| `LemonAgent` | `lib/agent_core.ex` | Top-level API facade. Delegates to `Agent` for lifecycle operations (`new_agent/1`, `prompt/2`, `abort/1`, `wait_for_idle/2`, `get_state/1`). Provides convenience constructors (`new_tool/1`, `new_tool_result/1`, `text_content/1`, `image_content/2`, `get_text/1`). Wraps `Loop.stream/4` and `Loop.stream_continue/3` as `agent_loop/4` and `agent_loop_continue/3`. |
-| `LemonAgent.Agent` | `lib/agent_core/agent.ex` | GenServer for stateful agent management. Handles prompts, streaming, subscriber broadcasting, steering/follow-up queues, abort signals, and waiter notification. |
-| `LemonAgent.AgentRegistry` | `lib/agent_core/agent_registry.ex` | Registry wrapper for agent lookup by `{session_id, role, index}` keys. Supports `via/1` tuples, `lookup/1`, `list/0`, and `count/0`. |
-| `LemonAgent.Application` | `lib/agent_core/application.ex` | OTP application with the supervision tree above. |
-
-### Loop and Execution
-
-| Module | File | Purpose |
-|--------|------|---------|
-| `LemonAgent.Loop` | `lib/agent_core/loop.ex` | Stateless agent loop: `agent_loop/5`, `agent_loop_continue/4`, `stream/4`, `stream_continue/3`. Orchestrates prompt injection, LLM streaming, tool call execution, steering, and follow-up in a recursive inner/outer loop. |
-| LemonAgent.Loop.Streaming (internal) | `lib/agent_core/loop/streaming.ex` | LLM response streaming. Calls `LemonAi.stream/3` (or a custom `stream_fn`), processes SSE events, builds partial `AssistantMessage`, emits `message_start`/`message_update`/`message_end` events. |
-| LemonAgent.Loop.ToolCalls (internal) | `lib/agent_core/loop/tool_calls.ex` | Supervised tool execution. Only tools opting into `parallel_safe: true` overlap; sequential tools are ordering barriers. Supports `max_tool_concurrency`, steering, abort, crash and timeout recovery. |
+| Module | Source | Purpose |
+|--------|--------|---------|
+| `LemonAgent` | `lib/lemon_agent.ex` | Top-level facade: agent lifecycle, tool and tool-result constructors, and `agent_loop/4` / `agent_loop_continue/3` over the loop's streams. |
+| `LemonAgent.Agent` | `lib/lemon_agent/agent.ex` | GenServer for one stateful agent: prompts, subscribers, steering/follow-up queues, abort and waiters. |
+| `LemonAgent.AgentRegistry` | `lib/lemon_agent/agent_registry.ex` | Agent lookup by `{session_id, role, index}`. |
+| `LemonAgent.Application` | `lib/lemon_agent/application.ex` | The supervision tree above. |
+| `LemonAgent.Loop` | `lib/lemon_agent/loop.ex` | Stateless agent loop (`stream/4`, `stream_continue/3`). Internal `Loop.Streaming` streams the provider response; internal `Loop.ToolCalls` runs supervised tool tasks, overlapping only `parallel_safe: true` tools. |
+| `LemonAgent.EventStream` | `lib/lemon_agent/event_stream.ex` | Published facade over the single `LemonAi.EventStream` implementation; preserves agent terminal events, cooperative abort and cancellation draining. |
+| `LemonAgent.AbortSignal` | `lib/lemon_agent/abort_signal.ex` | Atomics-backed, monotonic cooperative cancellation with `{:lemon_abort, signal, :abort \| :redirect}` notifications. |
+| `LemonAgent.ModelRuntime.ProviderConfiguration` | `lib/lemon_agent/model_runtime/provider_configuration.ex` | Comment-preserving provider fallback/pool mutations with revision-checked previews and exact destructive confirmation. |
+| `LemonAgent.Types` | `lib/lemon_agent/types.ex` | Core types and the nested `AgentTool`, `AgentToolResult`, `AgentContext`, `AgentState` and `AgentLoopConfig` structs. |
 
 ### Empty and malformed reply recovery
 
@@ -123,26 +121,6 @@ model can self-correct. Empty-reply exhaustion keeps the existing terminal
 assistant error path (and the router's existing whole-run retry).
 Ordinary text-only final answers are not classified as unexpected stops.
 
-### Events and Context
-
-| Module | File | Purpose |
-|--------|------|---------|
-| `LemonAgent.EventStream` | `lib/lemon_agent/event_stream.ex` | Published API facade over the single `LemonAi.EventStream` implementation. Preserves agent terminal events, cooperative abort and cancellation draining; no separate queue or process implementation. |
-| `LemonAgent.Context` | `lib/agent_core/context.ex` | Context window management. `truncate/2` keeps retained messages chronological, enforces both bookends limits, and treats assistant tool-call/result transcripts atomically; also provides `estimate_size/2`, `estimate_tokens/1`, `make_transform/1`, `stats/2`, and `check_size/3`. |
-| `LemonAgent.AbortSignal` | `lib/lemon_agent/abort_signal.ex` | Atomics-backed cooperative cancellation. `new/0`, `abort/1`, `aborted?/1`, `subscribe/1`, `unsubscribe/1`. Abort is monotonic; signals are garbage collected when no longer referenced, with no explicit cleanup. Subscribers receive `{:lemon_abort, signal, :abort \| :redirect}` notifications. |
-| `LemonAgent.Proxy` | `lib/agent_core/proxy.ex` | SSE proxy stream function for routing LLM calls through a server. Reconstructs partial `AssistantMessage` from bandwidth-optimized SSE events. Includes `ProxyStreamOptions` struct. |
-| `LemonAgent.ModelRuntime.ProviderConfiguration` | `lib/lemon_agent/model_runtime/provider_configuration.ex` | Shared comment-preserving provider fallback/pool mutation boundary. Preview results carry an opaque config revision; applies can reject concurrent edits, and destructive operations require exact confirmation without returning credential references. |
-
-### Types
-
-| Module | File | Purpose |
-|--------|------|---------|
-| `LemonAgent.Types` | `lib/agent_core/types.ex` | Core type definitions: `thinking_level`, `agent_message`, `agent_event`. |
-| `LemonAgent.Types.AgentTool` | (nested in types.ex) | Tool definition: `name`, `description`, `parameters` (JSON Schema), `label`, `execute` (4-arity function). |
-| `LemonAgent.Types.AgentToolResult` | (nested in types.ex) | Tool result: `content` (list of text/image blocks), `details`, `trust` (`:trusted` or `:untrusted`). |
-| `LemonAgent.Types.AgentContext` | (nested in types.ex) | Conversation context: `system_prompt`, `messages`, `tools`. |
-| `LemonAgent.Types.AgentState` | (nested in types.ex) | Runtime state: `system_prompt`, `model`, `thinking_level`, `tools`, `messages`, `is_streaming`, `stream_message`, `pending_tool_calls`, `error`. |
-| `LemonAgent.Types.AgentLoopConfig` | (nested in types.ex) | Loop config: `model`, `convert_to_llm`, `transform_context`, `get_api_key`, `get_steering_messages`, `get_follow_up_messages`, `max_tool_concurrency`, `stream_options`, `stream_fn`. |
 
 ## Key Concepts and Design Patterns
 
@@ -317,7 +295,6 @@ The library emits telemetry events under the `[:lemon_agent, ...]` prefix:
 - `[:lemon_agent, :tool_task, :start]` / `[:lemon_agent, :tool_task, :end]` / `[:lemon_agent, :tool_task, :error]` -- Individual tool execution.
 - `[:lemon_agent, :tool_call, :start | :stop | :exception]` -- Content-free tool outcomes with native monotonic timing.
 - `[:lemon_agent, :tool_result, :emit]` -- Tool result emission.
-- `[:lemon_agent, :context, :size]` / `[:lemon_agent, :context, :warning]` / `[:lemon_agent, :context, :truncated]` -- Context management.
 
 Optional `LemonAgent.GenAISpans` handlers export model and tool spans with GenAI
 attributes. Export is off by default, has no required OpenTelemetry dependency,
@@ -440,42 +417,6 @@ streams disable both timers so a long-running tool is not mistaken for a stalled
 provider. Standalone `LemonAgent.EventStream` instances expose these as
 `:idle_timeout` and `:timeout` with the same defaults.
 
-### Context Management
-
-```elixir
-transform = LemonAgent.Context.make_transform(
-  max_messages: 50,
-  max_chars: 200_000
-)
-
-config = %LemonAgent.Types.AgentLoopConfig{
-  transform_context: transform,
-  model: model,
-  convert_to_llm: &my_convert/1
-}
-
-# Standalone usage
-size = LemonAgent.Context.estimate_size(messages, system_prompt)
-{truncated, dropped} = LemonAgent.Context.truncate(messages, max_messages: 50)
-stats = LemonAgent.Context.stats(messages, system_prompt)
-```
-
-### Proxy Streaming
-
-```elixir
-config = %LemonAgent.Types.AgentLoopConfig{
-  model: model,
-  convert_to_llm: &my_convert/1,
-  stream_fn: fn model, context, opts ->
-    LemonAgent.Proxy.stream_proxy(model, context, %LemonAgent.Proxy.ProxyStreamOptions{
-      auth_token: get_auth_token(),
-      proxy_url: "https://genai.example.com",
-      reasoning: opts.reasoning
-    })
-  end
-}
-```
-
 ### Using EventStream Directly
 
 ```elixir
@@ -494,66 +435,21 @@ LemonAgent.EventStream.complete(stream, final_messages)
 
 ## Dependencies
 
-| Dependency | Type | Purpose |
-|-----------|------|---------|
-| `ai` | umbrella | Low-level LLM API abstractions (streaming, providers, message types) |
-| `lemon_core` | umbrella | Shared primitives (telemetry, introspection, ResumeToken) |
-| `req` | hex (~> 0.5) | HTTP client used by `LemonAgent.Proxy` |
-| `jason` | hex (~> 1.4) | JSON encoding/decoding |
-| `stream_data` | hex (~> 1.1, test only) | Property-based testing |
+`mix.exs` is the source of truth. Inside the umbrella, `lemon_agent` depends on
+`lemon_ai` and `lemon_core`; as a Hex package it requires `lemon_ai ~> 0.3` and
+`lemon_core ~> 0.3`. The generated
+[package map and dependency policy](https://github.com/z80dev/lemon/blob/main/docs/architecture_boundaries.md)
+list every app's version, publication status and permitted dependencies.
 
 ## Testing
 
-### Running Tests
+Run from the umbrella root:
 
 ```bash
-# All agent_core tests
-mix test apps/lemon_agent
-
-# Specific test file
-mix test apps/lemon_agent/test/lemon_agent/agent_test.exs
-
-# Run with integration tests
-mix test apps/lemon_agent --include integration
+scripts/test path apps/lemon_agent/test
+scripts/test path apps/lemon_agent/test/lemon_agent/agent_test.exs
 ```
 
-### Test Organization
-
-Tests are organized to mirror the source structure:
-
-```
-apps/lemon_agent/test/
-|-- agent_core_test.exs               Top-level module tests
-|-- agent_core_module_test.exs         Module-level tests
-|-- agent_registry_test.exs            Registry tests
-|-- agent_core/
-|   |-- agent_test.exs                Agent GenServer tests
-|   |-- agent_queue_test.exs          Steering/follow-up queue tests
-|   |-- abort_signal_test.exs         Abort signal unit tests
-|   |-- abort_signal_concurrency_test.exs
-|   |-- application_test.exs          Application startup tests
-|   |-- application_supervision_test.exs
-|   |-- context_test.exs              Context management tests
-|   |-- context_property_test.exs     Property-based context tests
-|   |-- event_stream_test.exs         EventStream unit tests
-|   |-- event_stream_concurrency_test.exs
-|   |-- event_stream_edge_cases_test.exs
-|   |-- event_stream_runner_test.exs
-|   |-- proxy_test.exs                Proxy stream tests
-|   |-- proxy_error_test.exs
-|   |-- proxy_stream_integration_test.exs
-|   |-- types_test.exs
-|   |-- property_test.exs
-|   |-- supervision_test.exs
-|   |-- tool_supervision_test.exs
-|   |-- telemetry_test.exs
-|   |-- loop/
-|   |   |-- tool_calls_test.exs
-|   |   |-- streaming_test.exs
-|   |-- loop_test.exs
-|   |-- loop_abort_test.exs
-|   |-- loop_edge_cases_test.exs
-|   +-- loop_additional_edge_cases_test.exs
-```
-
-Integration tests that require external services are tagged with `@tag :integration` and excluded from the default test run.
+Tests mirror the source tree under `test/lemon_agent/`. Integration tests that
+require external services are tagged `@tag :integration` and excluded by default;
+add `--include integration` to run them.

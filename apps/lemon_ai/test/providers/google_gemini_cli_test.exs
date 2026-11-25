@@ -1339,33 +1339,29 @@ defmodule LemonAi.Providers.GoogleGeminiCliTest do
       refute public_error =~ String.duplicate("x", 100)
     end
 
-    test "an HTTP failure after an empty stream retry retains typed actionable classification" do
-      request_key = make_ref()
+    test "an empty response is a transient failure without a start event or a re-POST" do
       test_pid = self()
 
-      Req.Test.stub(__MODULE__, fn conn ->
-        attempt = Process.get(request_key, 0)
-        Process.put(request_key, attempt + 1)
-        send(test_pid, {:request_attempt, attempt})
+      for body <- [
+            "",
+            sse_body([%{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}])
+          ] do
+        Req.Test.stub(__MODULE__, fn conn ->
+          send(test_pid, :request_attempt)
+          Plug.Conn.send_resp(conn, 200, body)
+        end)
 
-        if attempt == 0 do
-          Plug.Conn.send_resp(conn, 200, "")
-        else
-          Plug.Conn.send_resp(conn, 400, "Prompt is too long. token=private-retry-credential")
-        end
-      end)
+        {:ok, stream} =
+          GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
 
-      {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
-
-      assert {:error, result} = EventStream.result(stream, 5000)
-      assert_receive {:request_attempt, 0}
-      assert_receive {:request_attempt, 1}
-      refute_receive {:request_attempt, _}
-      assert %{status: 400, category: :context_length, retryable: false} = result.error_details
-      assert LemonAi.Error.failover_action(result) == :compact
-      assert byte_size(result.error_message) in 1..512
-      refute Jason.encode!(result.error_details) =~ "private-retry-credential"
-      refute result.error_message =~ "Req.Response"
+        events = Enum.to_list(EventStream.events(stream))
+        assert {:error, result} = EventStream.result(stream, 5000)
+        assert_receive :request_attempt
+        refute_receive :request_attempt, 100
+        refute Enum.any?(events, &match?({:start, _}, &1))
+        refute Enum.any?(events, &match?({:done, _, _}, &1))
+        assert %{category: :transient, retryable: true} = result.error_details
+      end
     end
 
     test "handles malformed SSE data gracefully" do

@@ -1,7 +1,7 @@
 defmodule LemonAutomation.KanbanCodingWorkflowTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Workspace.KanbanStore
+  alias LemonAutomation.KanbanStore
   alias LemonAutomation.{KanbanDispatcher, KanbanGitWorkflow, KanbanRunWorker}
 
   defmodule Router do
@@ -201,15 +201,17 @@ defmodule LemonAutomation.KanbanCodingWorkflowTest do
     {board, card} = create(context, %{"publish" => %{"mode" => "branch", "remote" => "origin"}})
     grant_publication(context, board)
 
-    runner = fn program, args, _opts ->
-      {output, code} = System.cmd(program, args, stderr_to_stdout: true)
+    # Every command runs in the workflow's sanitized environment (it carries
+    # the commit identity); only the push's outcome is made uncertain.
+    runner = fn program, args, opts ->
+      result = KanbanGitWorkflow.command(program, args, Keyword.delete(opts, :runner))
 
       if "push" in args do
         Agent.update(context.state, &%{&1 | pushes: &1.pushes + 1})
-        assert code == 0
+        assert {:ok, _} = result
         {:error, :command_timeout}
       else
-        if code == 0, do: {:ok, output}, else: {:error, :git_failed}
+        result
       end
     end
 
@@ -553,7 +555,7 @@ defmodule LemonAutomation.KanbanCodingWorkflowTest do
   end
 
   defp kanban(params, cwd, opts),
-    do: LemonSkills.Tools.Kanban.execute("call", params, nil, nil, cwd, opts)
+    do: LemonAutomation.Tools.Kanban.execute("call", params, nil, nil, cwd, opts)
 
   defp create(context, config, session_opts \\ []) do
     %{details: %{board: board}} =

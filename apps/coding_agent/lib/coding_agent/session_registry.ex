@@ -34,11 +34,11 @@ defmodule CodingAgent.SessionRegistry do
     {:via, Registry, {@registry, session_id}}
   end
 
-  @doc "Look up a session in the application's registry."
-  @spec lookup(String.t()) :: {:ok, pid()} | :error
-  def lookup(session_id) when is_binary(session_id) do
-    if Process.whereis(@registry) do
-      case Registry.lookup(@registry, session_id) do
+  @doc "Look up a session in `registry` (default: the application's registry)."
+  @spec lookup(String.t(), atom()) :: {:ok, pid()} | :error
+  def lookup(session_id, registry \\ @registry) when is_binary(session_id) do
+    if Process.whereis(registry) do
+      case Registry.lookup(registry, session_id) do
         [{pid, _value}] -> {:ok, pid}
         [] -> :error
       end

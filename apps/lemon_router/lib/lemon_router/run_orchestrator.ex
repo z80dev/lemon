@@ -12,6 +12,10 @@ defmodule LemonRouter.RunOrchestrator do
   # - Delegating run-start mechanics to `LemonRouter.RunStarter`
   # - Subscribing external event bridges before coordinator handoff
   # - Consuming prepared compaction markers only after coordinator acceptance
+  #
+  # The mailbox serializes admission state only. Callers fix run IDs before
+  # calling; issuer callbacks, durable-receipt compaction and presence reads
+  # run in other processes, so a slow callback cannot stall unrelated work.
 
   use GenServer
 
@@ -39,6 +43,10 @@ defmodule LemonRouter.RunOrchestrator do
   alias LemonRouter.RestartCarryover.CrashRecovery
 
   @abort_tombstone_ttl_ms 300_000
+  # The one window for submit, abort, native follow-up, lifecycle-fence and
+  # presence calls. It outlasts coordinator admission (15 s), so a call merely
+  # queued behind serialized admission still gets its answer. A call exceeding
+  # it is outcome-unknown for that request only; its caller holds the run ID.
   @serialized_mutation_timeout_ms 20_000
   @run_admission_table :router_run_admissions
   @abort_tombstone_table :router_abort_tombstones
@@ -48,6 +56,8 @@ defmodule LemonRouter.RunOrchestrator do
   @run_admission_retention_ms 86_400_000
   @receipt_cleanup_interval_ms 60_000
   @lifecycle_retry_ms 1_000
+  # Off-mailbox admission work: issuer callbacks and receipt compaction.
+  @admission_tasks LemonRouter.AdmissionTaskSupervisor
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -60,11 +70,20 @@ defmodule LemonRouter.RunOrchestrator do
   @doc false
   def abort_tombstone_table, do: @abort_tombstone_table
 
-  # This barrier only reads durable state. Never call coordinators from the
-  # orchestrator: they may be waiting for a serialized start/admission.
+  # Run presence brackets its live reads with two snapshots. The barrier orders
+  # a snapshot after every admission already in the mailbox; the durable table
+  # reads then run in the caller, never on the admission mailbox. Never call
+  # coordinators from the orchestrator: they may be waiting for a serialized
+  # start/admission.
   @doc false
-  def presence_snapshot do
-    GenServer.call(__MODULE__, :presence_snapshot, @serialized_mutation_timeout_ms)
+  def presence_snapshot(server \\ __MODULE__) do
+    with :ok <- GenServer.call(server, :presence_barrier, @serialized_mutation_timeout_ms),
+         {:ok, admissions} <- Store.fetch_all(@run_admission_table),
+         {:ok, receipts} <- LemonRouter.RunReceiptStore.fetch_all() do
+      {:ok, %{admissions: Map.new(admissions), receipts: Map.new(receipts)}}
+    else
+      _ -> {:error, :query_failed}
+    end
   end
 
   @doc """
@@ -87,26 +106,26 @@ defmodule LemonRouter.RunOrchestrator do
 
   ## Returns
 
-  `{:ok, run_id}` on success, `{:error, reason}` on failure.
+  `{:ok, run_id}` on success, `{:error, reason}` on failure. The run ID is fixed
+  in the caller's process before the orchestrator is called: a request without
+  one gets a fresh ID here, never on the server. `{:error, :outcome_unknown}`
+  means the call reached the orchestrator but its answer was lost (timeout or
+  exit): the run may still execute under that ID, so reconcile it rather than
+  resubmitting. `{:error, :unavailable}` means no orchestrator received it.
+  Callers that must reconcile an unknown outcome supply their own run ID.
   """
   @spec submit(RunRequest.t() | map() | keyword()) :: {:ok, binary()} | {:error, term()}
-  def submit(%RunRequest{} = request), do: submit(__MODULE__, request)
-
-  def submit(request) when is_map(request) or is_list(request) do
-    normalized = RunRequest.new(request)
-    submit(__MODULE__, normalized)
-  end
+  def submit(request) when is_map(request) or is_list(request), do: submit(__MODULE__, request)
 
   @doc """
   Submit a run request to a specific orchestrator server.
   """
   @spec submit(GenServer.server(), RunRequest.t() | map() | keyword()) ::
           {:ok, binary()} | {:error, term()}
-  def submit(server, %RunRequest{} = request), do: GenServer.call(server, {:submit, request})
-
   def submit(server, request) when is_map(request) or is_list(request) do
-    normalized = RunRequest.new(request)
-    submit(server, normalized)
+    with {:ok, settings} <- SubmissionBuilder.admission_settings() do
+      call_admission(server, {:submit, fix_run_id(request), settings})
+    end
   end
 
   @doc "Admit a fixed-ID fresh native execution from immutable local tool provenance."
@@ -115,11 +134,9 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   def submit_native_followup(server, source, %RunRequest{} = request) do
-    GenServer.call(
-      server,
-      {:native_followup, source, request, :local},
-      @serialized_mutation_timeout_ms
-    )
+    with {:ok, settings} <- SubmissionBuilder.admission_settings() do
+      call_admission(server, {:native_followup, source, request, :local, settings})
+    end
   end
 
   @doc false
@@ -134,11 +151,9 @@ defmodule LemonRouter.RunOrchestrator do
         %RunRequest{} = request,
         authenticated_session
       ) do
-    GenServer.call(
-      server,
-      {:native_followup, source, request, authenticated_session},
-      @serialized_mutation_timeout_ms
-    )
+    with {:ok, settings} <- SubmissionBuilder.admission_settings() do
+      call_admission(server, {:native_followup, source, request, authenticated_session, settings})
+    end
   end
 
   @doc "Seal immutable executing-host native startup policy before native execution begins."
@@ -154,16 +169,24 @@ defmodule LemonRouter.RunOrchestrator do
 
   @doc false
   def recover_orphan(server, run_id, admission) do
-    GenServer.call(server, {:recover_orphan, run_id, admission}, @serialized_mutation_timeout_ms)
+    with {:ok, settings} <- SubmissionBuilder.admission_settings() do
+      GenServer.call(
+        server,
+        {:recover_orphan, run_id, admission, nil, settings},
+        @serialized_mutation_timeout_ms
+      )
+    end
   end
 
   @doc false
   def abandon_orphan(run_id, admission, :graceful_carryover) do
-    GenServer.call(
-      __MODULE__,
-      {:recover_orphan, run_id, admission, :graceful_carryover},
-      @serialized_mutation_timeout_ms
-    )
+    with {:ok, settings} <- SubmissionBuilder.admission_settings() do
+      GenServer.call(
+        __MODULE__,
+        {:recover_orphan, run_id, admission, :graceful_carryover, settings},
+        @serialized_mutation_timeout_ms
+      )
+    end
   end
 
   @doc false
@@ -174,24 +197,43 @@ defmodule LemonRouter.RunOrchestrator do
   @doc "Submit once and return the owning queue's durable disposition."
   def submit_with_receipt(request), do: submit_with_receipt(__MODULE__, request)
 
-  def submit_with_receipt(server, %RunRequest{} = request) do
-    GenServer.call(server, {:submit_with_receipt, request}, @serialized_mutation_timeout_ms)
+  def submit_with_receipt(server, request) when is_map(request) or is_list(request) do
+    with {:ok, settings} <- SubmissionBuilder.admission_settings() do
+      call_admission(server, {:submit_with_receipt, fix_run_id(request), settings})
+    end
   end
 
-  def submit_with_receipt(server, request) when is_map(request) or is_list(request) do
-    submit_with_receipt(server, RunRequest.new(request))
+  # Only a call that never reached a live orchestrator is a definite
+  # rejection; any later exit may follow an admission that still runs.
+  defp call_admission(server, message) do
+    GenServer.call(server, message, @serialized_mutation_timeout_ms)
+  catch
+    :exit, {:noproc, _} -> {:error, :unavailable}
+    :exit, _ -> {:error, :outcome_unknown}
   end
+
+  defp fix_run_id(%RunRequest{run_id: run_id} = request)
+       when is_binary(run_id) and run_id != "",
+       do: request
+
+  defp fix_run_id(%RunRequest{} = request),
+    do: %RunRequest{request | run_id: LemonCore.Id.run_id()}
+
+  defp fix_run_id(request), do: request |> RunRequest.new() |> fix_run_id()
 
   @doc """
   Read a fixed-ID admission receipt without dispatching work.
 
   A run ID fenced by an abort tombstone before it crossed dispatch reports
   `state: :aborted`: it never executed and can never execute.
+  `:rejected` is a point-in-time definite rejection; a deliberate same-ID
+  submission may reopen it. `:terminal` is completion evidence without an
+  accepted receipt; execution may already have had effects.
   """
   def run_receipt(run_id) when is_binary(run_id) and run_id != "" do
     case LemonRouter.RunReceiptStore.fetch(run_id) do
       {:ok, %{} = receipt} ->
-        {:ok, receipt}
+        {:ok, project_terminal_receipt(receipt)}
 
       {:ok, nil} ->
         # Read the permanent tombstone before the admission; see aborted_before_dispatch?/2.
@@ -199,10 +241,13 @@ defmodule LemonRouter.RunOrchestrator do
              {:ok, admission} <- Store.fetch(@run_admission_table, run_id) do
           cond do
             aborted_before_dispatch?(admission, tombstone) ->
-              {:ok, unresolved_receipt(run_id, admission_session_key(admission), :aborted)}
+              confirmed_receipt(run_id, admission, :aborted)
+
+            match?(%{state: "rejected"}, admission) ->
+              confirmed_receipt(run_id, admission, :rejected)
 
             is_map(admission) ->
-              {:ok, unresolved_receipt(run_id, nil, :outcome_unknown)}
+              read_unresolved_admission(run_id, admission, tombstone)
 
             true ->
               {:error, :not_found}
@@ -216,6 +261,119 @@ defmodule LemonRouter.RunOrchestrator do
     end
   catch
     :exit, _ -> {:error, :unavailable}
+  end
+
+  defp confirmed_receipt(run_id, admission, state) do
+    case Store.confirm_durable() do
+      :ok -> {:ok, unresolved_receipt(run_id, admission_session_key(admission), state)}
+      _ -> {:error, :unavailable}
+    end
+  end
+
+  defp project_terminal_receipt(%{state: :outcome_unknown, terminal: true} = receipt),
+    do: %{receipt | state: :terminal}
+
+  defp project_terminal_receipt(receipt), do: receipt
+
+  defp read_unresolved_admission(run_id, %{terminal: true} = admission, _tombstone),
+    do: confirmed_receipt(run_id, admission, :terminal)
+
+  defp read_unresolved_admission(run_id, admission, tombstone) do
+    session_key = admission_session_key(admission)
+
+    case RunStore.fetch(run_id) do
+      {:ok, %{summary: %{}}} ->
+        {:ok, unresolved_receipt(run_id, session_key, :terminal)}
+
+      {:error, :evicted} ->
+        {:ok, unresolved_receipt(run_id, session_key, :terminal)}
+
+      {:ok, run} ->
+        reconcile_handoff(run_id, admission, tombstone, run)
+
+      {:error, _} ->
+        {:error, :unavailable}
+    end
+  end
+
+  # Reconcile only attempts with local ownership evidence from this router
+  # incarnation. Legacy and previous-boot rows remain the boot replayer's job.
+  # The receiver must claim the exact handoff via CAS before any queue effect.
+  defp reconcile_handoff(
+         run_id,
+         %{state: "submitting", handoff: {_, _, sender, recipient}} = admission,
+         tombstone,
+         run
+       ) do
+    unknown =
+      {:ok, unresolved_receipt(run_id, admission_session_key(admission), :outcome_unknown)}
+
+    cond do
+      not current_handoff?(admission) ->
+        unknown
+
+      is_nil(recipient) and is_nil(run) and inactive_sender?(sender) ->
+        reject_unclaimed_handoff(run_id, admission, tombstone, unknown)
+
+      is_pid(recipient) and not Process.alive?(recipient) and inactive_sender?(sender) and
+          Registry.lookup(LemonRouter.RunRegistry, run_id) == [] ->
+        settle_lost_recipient(run_id, admission)
+
+      true ->
+        unknown
+    end
+  end
+
+  defp reconcile_handoff(run_id, _admission, _tombstone, _run),
+    do: {:ok, unresolved_receipt(run_id, nil, :outcome_unknown)}
+
+  defp current_handoff?(%{handoff: {epoch, _, _, _}}) do
+    Registry.meta(LemonRouter.ConversationRegistry, :admission_epoch) == {:ok, epoch}
+  rescue
+    ArgumentError -> false
+  end
+
+  defp current_handoff?(_admission), do: false
+
+  defp inactive_sender?(sender), do: sender == self() or not Process.alive?(sender)
+
+  defp reject_unclaimed_handoff(run_id, admission, tombstone, unknown) do
+    rejected = rejected_admission(Map.delete(admission, :handoff), :not_started)
+
+    case Store.compare_and_swap(Store, @run_admission_table, run_id, admission, rejected,
+           durable: true
+         ) do
+      :ok ->
+        state = if is_map(tombstone), do: :aborted, else: :rejected
+        {:ok, unresolved_receipt(run_id, admission_session_key(admission), state)}
+
+      {:error, :mismatch} ->
+        unknown
+
+      _error ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp settle_lost_recipient(run_id, admission) do
+    # The recipient might have committed a receipt before exiting, after the
+    # initial read. A live run or accepted receipt must not be abandoned here.
+    case LemonRouter.RunReceiptStore.fetch(run_id) do
+      {:ok, %{} = receipt} ->
+        {:ok, project_terminal_receipt(receipt)}
+
+      {:ok, nil} ->
+        case abandon_crashed_admission(run_id, admission, :recipient_lost, %{}) do
+          {{:ok, _}, _} ->
+            {:ok, unresolved_receipt(run_id, admission_session_key(admission), :terminal)}
+
+          _ ->
+            {:error, :unavailable}
+        end
+
+      {:error, _} ->
+        {:error, :unavailable}
+    end
   end
 
   @doc """
@@ -379,16 +537,27 @@ defmodule LemonRouter.RunOrchestrator do
       run_admission_retention_ms:
         Keyword.get(opts, :run_admission_retention_ms, @run_admission_retention_ms),
       receipt_cleanup_interval_ms:
-        Keyword.get(opts, :receipt_cleanup_interval_ms, @receipt_cleanup_interval_ms),
-      last_receipt_cleanup_ms: 0,
+        positive_interval!(
+          Keyword.get(opts, :receipt_cleanup_interval_ms, @receipt_cleanup_interval_ms)
+        ),
+      receipt_compaction: nil,
+      native_checks: %{},
+      admission_settings: nil,
       abort_tombstones: %{},
       lifecycle_watches: %{},
       restart_boot_id: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
       accepted_run_ids: %{}
     }
 
+    schedule_receipt_compaction(state)
     {:ok, state, {:continue, :watch_lifecycle_fences}}
   end
+
+  defp positive_interval!(interval_ms) when is_integer(interval_ms) and interval_ms > 0,
+    do: interval_ms
+
+  defp positive_interval!(_interval_ms),
+    do: raise(ArgumentError, "receipt_cleanup_interval_ms must be a positive integer")
 
   # Fences are durable rows, so admission refuses fenced sessions from the first
   # call after a restart. Reloading here only re-monitors their owners, so a
@@ -399,32 +568,18 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   @impl true
-  def handle_call(:presence_snapshot, _from, state) do
-    result =
-      with {:ok, admissions} <- Store.fetch_all(@run_admission_table),
-           {:ok, receipts} <- LemonRouter.RunReceiptStore.fetch_all() do
-        {:ok, %{admissions: Map.new(admissions), receipts: Map.new(receipts)}}
-      else
-        _ -> {:error, :query_failed}
-      end
-
-    {:reply, result, state}
-  end
-
   def handle_call(:presence_barrier, _from, state), do: {:reply, :ok, state}
 
-  def handle_call({:recover_orphan, run_id, admission}, _from, state) do
-    {result, state} = recover_crashed_admission(run_id, admission, state)
-    {:reply, result, state}
-  end
-
-  def handle_call({:recover_orphan, run_id, admission, reason}, _from, state) do
+  # Each admission message carries the config snapshot its caller read; it is
+  # the state's `admission_settings` for that message only.
+  def handle_call({:recover_orphan, run_id, admission, reason, settings}, _from, state) do
+    state = %{state | admission_settings: settings}
     {result, state} = recover_crashed_admission(run_id, admission, state, reason)
     {:reply, result, state}
   end
 
-  def handle_call({:submit_with_receipt, %RunRequest{} = params}, from, state) do
-    {:reply, result, next_state} = handle_call({:submit, params}, from, state)
+  def handle_call({:submit_with_receipt, %RunRequest{} = params, settings}, from, state) do
+    {:reply, result, next_state} = handle_call({:submit, params, settings}, from, state)
 
     receipt_result =
       case result do
@@ -441,39 +596,57 @@ defmodule LemonRouter.RunOrchestrator do
     {:reply, receipt_result, next_state}
   end
 
-  def handle_call({:submit, %RunRequest{} = params}, _from, state) do
-    state = maybe_cleanup_durable_receipts(state)
-    params = ensure_run_id(params)
+  def handle_call({:submit, %RunRequest{} = params, settings}, _from, state) do
+    # A malformed request is refused before the durable claim, never raised
+    # inside admission.
+    case SubmissionBuilder.validate_request(params) do
+      :ok ->
+        {result, state} = submit_idempotently(params, %{state | admission_settings: settings})
+        {:reply, result, state}
 
-    {result, state} = submit_idempotently(params, state)
-
-    {:reply, result, state}
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
   end
 
-  def handle_call({:native_followup, captured, %RunRequest{} = request, transport}, _from, state) do
-    result =
-      with :ok <- RunRequest.validate_invocation_context_key(request.run_id),
-           {:ok, source} <- LemonRouter.NativeLineage.authenticate(captured, transport) do
-        identity =
-          request_identity(%{
-            request
-            | meta: LemonRouter.NativeLineage.semantic_meta(request.meta || %{}, source.run_id)
-          })
+  def handle_call(
+        {:native_followup, captured, %RunRequest{} = request, transport, settings},
+        from,
+        state
+      ) do
+    state = %{state | admission_settings: settings}
 
-        native_followup_once(
-          Map.put(source, :authenticated_transport, transport),
-          request,
-          identity,
-          state
-        )
+    with :ok <- RunRequest.validate_invocation_context_key(request.run_id),
+         {:ok, source} <- LemonRouter.NativeLineage.authenticate(captured, transport) do
+      identity =
+        request_identity(%{
+          request
+          | meta: LemonRouter.NativeLineage.semantic_meta(request.meta || %{}, source.run_id)
+        })
+
+      case pending_native_check(state, request.run_id) do
+        # The same follow-up is already waiting on its issuer: answer both callers once.
+        {ref, %{identity: ^identity}} ->
+          {:noreply, update_in(state.native_checks[ref].waiters, &[from | &1])}
+
+        {_ref, _other_request} ->
+          {:reply, {:error, :run_id_conflict}, state}
+
+        nil ->
+          native_followup_once(
+            Map.put(source, :authenticated_transport, transport),
+            request,
+            identity,
+            from,
+            state
+          )
       end
-
-    {:reply, result, state}
+    else
+      error -> {:reply, error, state}
+    end
   end
 
   def handle_call({:register_abort, run_id, reason}, _from, state) do
-    state = maybe_cleanup_durable_receipts(state)
-
     reason_code = normalize_abort_reason(reason)
 
     tombstone = %{
@@ -529,8 +702,8 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
-  def handle_call({:submit, _invalid}, _from, state) do
-    {:reply, {:error, :invalid_run_request}, state}
+  def handle_call({:submit, _invalid, _settings}, _from, state) do
+    {:reply, {:error, :invalid_submission}, state}
   end
 
   @impl true
@@ -544,6 +717,39 @@ defmodule LemonRouter.RunOrchestrator do
       else: reconcile_lifecycle_fence(watch.session_key, watch.generation)
 
     {:noreply, %{state | lifecycle_watches: watches}}
+  end
+
+  # An issuer callback answered off the mailbox: commit it in admission order.
+  def handle_info({ref, admitted}, state) when is_map_key(state.native_checks, ref) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, finish_native_check(ref, admitted, state)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state)
+      when is_map_key(state.native_checks, ref) do
+    {:noreply, finish_native_check(ref, {:error, :outcome_unknown}, state)}
+  end
+
+  def handle_info(:compact_durable_receipts, state) do
+    now_ms = System.system_time(:millisecond)
+
+    state = %{
+      state
+      | accepted_run_ids: prune_expired_cache(state.accepted_run_ids, now_ms),
+        abort_tombstones: prune_expired_cache(state.abort_tombstones, now_ms)
+    }
+
+    schedule_receipt_compaction(state)
+    {:noreply, start_receipt_compaction(state, now_ms)}
+  end
+
+  def handle_info({ref, _done}, %{receipt_compaction: ref} = state) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, %{state | receipt_compaction: nil}}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{receipt_compaction: ref} = state) do
+    {:noreply, %{state | receipt_compaction: nil}}
   end
 
   def handle_info(:watch_lifecycle_fences, state) do
@@ -709,9 +915,18 @@ defmodule LemonRouter.RunOrchestrator do
         coordinator = session_coordinator_mod()
 
         submitted =
-          if mode == :recovery,
-            do: coordinator.submit_recovered(submission.conversation_key, submission),
-            else: coordinator.submit(submission.conversation_key, submission)
+          case mode do
+            :recovery ->
+              coordinator.submit_recovered(submission.conversation_key, submission)
+
+            {:handoff, attempt} ->
+              coordinator.submit(submission.conversation_key, submission,
+                admission_attempt: attempt
+              )
+
+            :new ->
+              coordinator.submit(submission.conversation_key, submission)
+          end
 
         case submitted do
           :ok ->
@@ -746,6 +961,15 @@ defmodule LemonRouter.RunOrchestrator do
               :ok -> {:ok, run_id}
               {:error, _} -> {:error, :outcome_unknown}
             end
+
+          {:error, :outcome_unknown} ->
+            # The coordinator may have enqueued the run, which then starts and
+            # completes under this fixed ID: keep its event subscription.
+            Logger.warning(
+              "Session coordinator submission outcome unknown run_id=#{inspect(run_id)}"
+            )
+
+            {:error, :outcome_unknown}
 
           {:error, reason} ->
             LemonCore.EventBridge.unsubscribe_run(run_id)
@@ -788,7 +1012,7 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
-  defp recover_crashed_admission(run_id, expected, state, disposition \\ nil) do
+  defp recover_crashed_admission(run_id, expected, state, disposition) do
     with {:ok, tombstone} <- Store.fetch(@abort_tombstone_table, run_id),
          {:ok, current} <- Store.fetch(@run_admission_table, run_id),
          {:ok, decision} <- LemonCore.TerminalOutbox.decision(run_id),
@@ -807,7 +1031,7 @@ defmodule LemonRouter.RunOrchestrator do
             _ -> {{:error, :outcome_unknown}, state}
           end
 
-        recovery_live?(run_id, state) ->
+        current_handoff?(current) or recovery_live?(run_id, state) ->
           {{:ok, :skipped}, state}
 
         is_map(tombstone) ->
@@ -819,10 +1043,11 @@ defmodule LemonRouter.RunOrchestrator do
         is_map(receipt) and receipt[:target_run_id] not in [nil, run_id] ->
           abandon_crashed_admission(run_id, current, :joined_run, state)
 
-        MapHelpers.get_key(current, :state) == "claimed" ->
+        MapHelpers.get_key(current, :state) == "claimed" or
+            match?(%{handoff: {_, _, _, nil}}, current) ->
           abandon_crashed_admission(run_id, current, :not_started, state)
 
-        not CrashRecovery.enabled?() ->
+        not state.admission_settings.crash_resume ->
           abandon_crashed_admission(run_id, current, :disabled, state)
 
         Map.get(current, :restart_attempt, 0) >= CrashRecovery.max_attempts() ->
@@ -951,18 +1176,25 @@ defmodule LemonRouter.RunOrchestrator do
   defp build_native_submission(request, state) do
     with {:ok, submission} <- SubmissionBuilder.build(request, state),
          {:ok, submission} <- LemonRouter.NativeLineage.capture_submission(submission),
-         :ok <- CrashRecovery.capture(submission) do
+         :ok <- CrashRecovery.capture(submission, state.admission_settings.crash_resume) do
       {:ok, submission}
     end
   end
 
-  defp native_followup_once(source, request, identity, state) do
+  defp native_followup_once(source, request, identity, from, state) do
     case Store.fetch(@run_admission_table, request.run_id) do
       {:ok, nil} ->
-        reserve_native_followup(source, request, identity, state)
+        reserve_native_followup(source, request, identity, from, state)
 
+      fetched ->
+        {:reply, replay_native_followup(fetched, request.run_id, identity), state}
+    end
+  end
+
+  defp replay_native_followup(fetched, run_id, identity) do
+    case fetched do
       {:ok, %{identity: ^identity, native_followup: %{status: :accepted}}} ->
-        {:ok, request.run_id}
+        {:ok, run_id}
 
       {:ok, %{identity: ^identity, native_followup: %{status: status}}}
       when status in [:denied, :admission_unavailable, :aborted, :rejected] ->
@@ -982,25 +1214,25 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
-  defp reserve_native_followup(source, request, identity, state) do
+  defp reserve_native_followup(source, request, identity, from, state) do
     case LemonRouter.NativeLineage.prepare_request(source, request) do
       {:ok, prepared, destination} ->
         case LemonRouter.NativeLineage.reserve(source, prepared, identity, destination) do
           {:ok, entry, :new} ->
-            issue_native_followup(source, prepared, identity, entry, destination, state)
+            start_native_check(source, prepared, identity, entry, destination, from, state)
 
           {:ok, _, :existing} ->
-            {:error, :outcome_unknown}
+            {:reply, {:error, :outcome_unknown}, state}
 
           {:error, :admission_unavailable} ->
-            reject_native_preparation(request, identity, :admission_unavailable)
+            {:reply, reject_native_preparation(request, identity, :admission_unavailable), state}
 
           error ->
-            error
+            {:reply, error, state}
         end
 
       {:error, reason} ->
-        reject_native_preparation(request, identity, reason)
+        {:reply, reject_native_preparation(request, identity, reason), state}
     end
   end
 
@@ -1019,33 +1251,86 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
-  defp issue_native_followup(source, request, identity, entry, destination, state) do
-    result =
-      try do
+  # The reservation is durable before issuer I/O. The issuer callback runs in a
+  # task, so a slow issuer cannot stall the mailbox; finish_native_check/3
+  # commits its answer in admission order. Concurrent callers of the same
+  # follow-up wait for that one callback.
+  defp start_native_check(source, request, identity, entry, destination, from, state) do
+    started =
+      guard_native(fn ->
         with :ok <- native_abort_preflight(request.run_id, state),
              :ok <- LemonRouter.NativeLineage.current_source(source),
-             :ok <- LemonRouter.NativeLineage.current_target(request, destination),
-             {:ok, admitted} <- LemonRouter.NativeLineage.admit(source, request, entry),
-             :ok <- LemonRouter.NativeLineage.current_source(source),
-             :ok <- LemonRouter.NativeLineage.current_target(admitted, destination),
-             :ok <- LemonRouter.NativeLineage.record_outcome(request.run_id, :dispatch_pending),
-             {:ok, run_id} <- submit_native_followup_request(admitted, identity, state),
-             {:ok, current} <- Store.fetch(@run_admission_table, run_id),
-             {:ok, _} <-
-               persist_accepted_admission(
-                 run_id,
-                 identity,
-                 current,
-                 state.run_admission_retention_ms
-               ) do
-          {:ok, run_id}
+             :ok <- LemonRouter.NativeLineage.current_target(request, destination) do
+          LemonCore.TaskSupervisor.async_nolink(@admission_tasks, fn ->
+            guard_native(fn -> LemonRouter.NativeLineage.admit(source, request, entry) end)
+          end)
         end
-      rescue
-        _ -> {:error, :outcome_unknown}
-      catch
-        _, _ -> {:error, :outcome_unknown}
-      end
+      end)
 
+    case started do
+      {:ok, %Task{ref: ref}} ->
+        check = %{
+          run_id: request.run_id,
+          identity: identity,
+          source: source,
+          entry: entry,
+          destination: destination,
+          waiters: [from],
+          settings: state.admission_settings
+        }
+
+        {:noreply, put_in(state.native_checks[ref], check)}
+
+      # The callback never started: nothing can have been admitted.
+      {:error, reason} when reason in [:task_capacity_reached, :task_supervisor_unavailable] ->
+        {:reply, record_native_outcome(request.run_id, {:error, :admission_unavailable}), state}
+
+      error ->
+        {:reply, record_native_outcome(request.run_id, error), state}
+    end
+  end
+
+  defp finish_native_check(ref, admitted, state) do
+    {check, checks} = Map.pop(state.native_checks, ref)
+    state = %{state | native_checks: checks, admission_settings: check.settings}
+    result = record_native_outcome(check.run_id, commit_native_followup(check, admitted, state))
+    Enum.each(check.waiters, &GenServer.reply(&1, result))
+    state
+  end
+
+  # Aborts, transport changes and placement moves can land while the issuer
+  # answers, so each is re-read here, and the reservation must be the exact row
+  # this check reserved, before dispatch.
+  defp commit_native_followup(check, admitted, state) do
+    guard_native(fn ->
+      with {:ok, admitted} <- admitted,
+           :ok <- native_reservation_current(check.run_id, check.entry),
+           :ok <- native_abort_preflight(check.run_id, state),
+           :ok <- LemonRouter.NativeLineage.current_source(check.source),
+           :ok <- LemonRouter.NativeLineage.current_target(admitted, check.destination),
+           :ok <- LemonRouter.NativeLineage.record_outcome(check.run_id, :dispatch_pending),
+           {:ok, run_id} <- submit_native_followup_request(admitted, check.identity, state),
+           {:ok, current} <- Store.fetch(@run_admission_table, run_id),
+           {:ok, _} <-
+             persist_accepted_admission(
+               run_id,
+               check.identity,
+               current,
+               state.run_admission_retention_ms
+             ) do
+        {:ok, run_id}
+      end
+    end)
+  end
+
+  defp native_reservation_current(run_id, entry) do
+    case Store.fetch(@run_admission_table, run_id) do
+      {:ok, ^entry} -> :ok
+      _ -> {:error, :outcome_unknown}
+    end
+  end
+
+  defp record_native_outcome(run_id, result) do
     status =
       case result do
         {:ok, _} -> :accepted
@@ -1056,13 +1341,24 @@ defmodule LemonRouter.RunOrchestrator do
         _ -> :outcome_unknown
       end
 
-    case LemonRouter.NativeLineage.record_outcome(request.run_id, status) do
-      :ok ->
-        with {:error, {:rejected, reason}} <- result, do: {:error, reason}
-
-      _ ->
-        {:error, :outcome_unknown}
+    case {LemonRouter.NativeLineage.record_outcome(run_id, status), result} do
+      {:ok, {:error, {:rejected, reason}}} -> {:error, reason}
+      {:ok, {:ok, _run_id}} -> result
+      {:ok, {:error, ^status}} -> result
+      _ -> {:error, :outcome_unknown}
     end
+  end
+
+  defp guard_native(fun) do
+    fun.()
+  rescue
+    _ -> {:error, :outcome_unknown}
+  catch
+    _, _ -> {:error, :outcome_unknown}
+  end
+
+  defp pending_native_check(state, run_id) do
+    Enum.find(state.native_checks, fn {_ref, check} -> check.run_id == run_id end)
   end
 
   # do_submit refuses definitively (lifecycle fence, invalid request,
@@ -1257,6 +1553,21 @@ defmodule LemonRouter.RunOrchestrator do
     # fence, including when dispatch's outcome cannot be established.
     submitting = compact_admission("submitting", identity, reopen_rejected(admission))
 
+    {submitting, mode} =
+      if session_coordinator_mod() == SessionCoordinator do
+        {:ok, epoch} = Registry.meta(LemonRouter.ConversationRegistry, :admission_epoch)
+        attempt = :crypto.strong_rand_bytes(16)
+
+        submitting =
+          submitting
+          |> Map.merge(Map.take(admission, [:claimed_at_ms, :expires_at_ms, :retention_ms]))
+          |> Map.put(:handoff, {epoch, attempt, self(), nil})
+
+        {submitting, {:handoff, attempt}}
+      else
+        {submitting, :new}
+      end
+
     case Store.compare_and_swap(
            Store,
            @run_admission_table,
@@ -1266,7 +1577,7 @@ defmodule LemonRouter.RunOrchestrator do
            durable: true
          ) do
       :ok ->
-        case do_submit(attach_request_identity(params, identity), state) do
+        case do_submit(attach_request_identity(params, identity), state, mode) do
           {:ok, run_id} ->
             case persist_accepted_admission(
                    run_id,
@@ -1282,6 +1593,9 @@ defmodule LemonRouter.RunOrchestrator do
             end
 
           {:error, :outcome_unknown} ->
+            # The coordinator may still have this timed-out call in its mailbox.
+            # CAS either fences that specific attempt or loses to its recipient.
+            if match?({:handoff, _}, mode), do: run_receipt(params.run_id)
             {{:error, :outcome_unknown}, state}
 
           {:error, reason} = error ->
@@ -1290,16 +1604,11 @@ defmodule LemonRouter.RunOrchestrator do
             # Otherwise, only an unchanged pre-enqueue claim records the definite
             # rejection: terminal, never executed, so it proves nothing is running
             # while still allowing the same request to be resubmitted.
-            case Store.compare_and_swap(
-                   Store,
-                   @run_admission_table,
-                   params.run_id,
-                   submitting,
-                   rejected_admission(admission, reason),
-                   durable: true
-                 ) do
+            case persist_rejected_admission(params.run_id, submitting, admission, reason) do
               :ok ->
-                if CrashRecovery.enabled?(), do: CrashRecovery.settle(Store, params.run_id)
+                if state.admission_settings.crash_resume,
+                  do: CrashRecovery.settle(Store, params.run_id)
+
                 {error, state}
 
               {:error, :mismatch} ->
@@ -1322,6 +1631,34 @@ defmodule LemonRouter.RunOrchestrator do
   catch
     :exit, _ -> {{:error, :outcome_unknown}, state}
   end
+
+  defp persist_rejected_admission(run_id, submitting, admission, reason) do
+    with {:ok, current} <- Store.fetch(@run_admission_table, run_id),
+         true <- unchanged_handoff?(submitting, current) do
+      Store.compare_and_swap(
+        Store,
+        @run_admission_table,
+        run_id,
+        current,
+        rejected_admission(admission, reason),
+        durable: true
+      )
+    else
+      false -> {:error, :mismatch}
+      error -> error
+    end
+  end
+
+  defp unchanged_handoff?(expected, current) when expected == current, do: true
+
+  defp unchanged_handoff?(
+         %{handoff: {epoch, attempt, sender, nil}} = expected,
+         %{handoff: {epoch, attempt, sender, recipient}} = current
+       )
+       when is_pid(recipient),
+       do: %{current | handoff: expected.handoff} == expected
+
+  defp unchanged_handoff?(_expected, _current), do: false
 
   defp accept_terminal_replay(run_id, identity, admission, state) do
     case persist_accepted_admission(
@@ -1470,19 +1807,29 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp compact_admission(state, identity, entry) when state in ["submitting", "accepted"] do
-    %{state: state, identity: identity}
-    |> Map.merge(
-      Map.take(entry, [
-        :scope,
-        :terminal,
-        :native_source,
-        :native_followup,
-        :native_root_binding,
-        :restart_attempt,
-        :restart_boot_id,
-        :native_failure
-      ])
-    )
+    compacted =
+      Map.merge(
+        %{state: state, identity: identity},
+        Map.take(entry, [
+          :scope,
+          :terminal,
+          :native_source,
+          :native_followup,
+          :native_root_binding,
+          :restart_attempt,
+          :restart_boot_id,
+          :native_failure
+        ])
+      )
+
+    if state == "submitting" and Map.has_key?(entry, :handoff) do
+      Map.merge(
+        compacted,
+        Map.take(entry, [:handoff, :claimed_at_ms, :expires_at_ms, :retention_ms])
+      )
+    else
+      compacted
+    end
   end
 
   # A definite pre-dispatch rejection (lifecycle fence, unknown agent, invalid
@@ -1586,14 +1933,6 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
-  defp ensure_run_id(%RunRequest{run_id: run_id} = request)
-       when is_binary(run_id) and run_id != "",
-       do: request
-
-  defp ensure_run_id(%RunRequest{} = request) do
-    %RunRequest{request | run_id: LemonCore.Id.run_id()}
-  end
-
   defp reject_tombstoned_submission(%RunRequest{} = request, reason) do
     agent_id = request.agent_id || SessionKey.agent_id(request.session_key) || "default"
 
@@ -1670,25 +2009,23 @@ defmodule LemonRouter.RunOrchestrator do
     :exit, _ -> {:error, :store_unavailable}
   end
 
-  defp maybe_cleanup_durable_receipts(state) do
-    now_ms = System.system_time(:millisecond)
+  defp schedule_receipt_compaction(%{receipt_cleanup_interval_ms: interval_ms}),
+    do: Process.send_after(self(), :compact_durable_receipts, interval_ms)
 
-    if now_ms - state.last_receipt_cleanup_ms >= state.receipt_cleanup_interval_ms do
-      compact_durable_admissions(now_ms)
-      compact_abort_tombstones(now_ms)
-
-      %{
-        state
-        | last_receipt_cleanup_ms: now_ms,
-          accepted_run_ids: prune_expired_cache(state.accepted_run_ids, now_ms),
-          abort_tombstones: prune_expired_cache(state.abort_tombstones, now_ms)
-      }
-    else
-      state
+  # Full-table compaction runs in a task, never on the admission mailbox. Each
+  # write is a compare-and-swap or compare-and-delete against the row it read,
+  # so an admission racing it keeps its own update.
+  defp start_receipt_compaction(%{receipt_compaction: nil} = state, now_ms) do
+    case LemonCore.TaskSupervisor.async_nolink(@admission_tasks, fn ->
+           compact_durable_admissions(now_ms)
+           compact_abort_tombstones(now_ms)
+         end) do
+      {:ok, %Task{ref: ref}} -> %{state | receipt_compaction: ref}
+      {:error, _not_started} -> state
     end
-  catch
-    :exit, _ -> %{state | last_receipt_cleanup_ms: System.system_time(:millisecond)}
   end
+
+  defp start_receipt_compaction(state, _now_ms), do: state
 
   defp compact_existing_admission(run_id, entry, identity) do
     case MapHelpers.get_key(entry, :state) do

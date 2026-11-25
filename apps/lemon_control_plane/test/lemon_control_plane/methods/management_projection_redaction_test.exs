@@ -1,15 +1,13 @@
 defmodule LemonControlPlane.Methods.ManagementProjectionRedactionTest do
   @moduledoc """
-  Management projections returned to `operator.content` callers (tasks, cron
-  runs, session detail) pass every arbitrary term through the shared redacting
+  Management projections returned to `operator.content` callers (tasks and cron
+  runs) pass every arbitrary term through the shared redacting
   projector. Read-only callers get metadata only; see ContentScopeTest.
   """
   use ExUnit.Case, async: false
 
   alias LemonAutomation.{CronManager, CronRun, CronStore}
   alias LemonControlPlane.Methods.Registry
-  alias LemonControlPlane.TestSupport.SessionCleanup
-  alias LemonCore.RunStore
 
   @secret "sk-" <> String.duplicate("q", 48)
   @bearer "Bearer abcdefghijklmnop.qrstuvwx"
@@ -128,7 +126,7 @@ defmodule LemonControlPlane.Methods.ManagementProjectionRedactionTest do
     refute Jason.encode!(projected) =~ @secret
   end
 
-  test "the same term projects identically through task, cron and session methods" do
+  test "the same term projects identically through task and cron methods" do
     term = shared_term()
     put_tasks([{"task-parity", %{status: :completed, result: term}}])
     [task] = dispatch("tasks.recent.list", %{})["tasks"]
@@ -156,51 +154,8 @@ defmodule LemonControlPlane.Methods.ManagementProjectionRedactionTest do
     end)
 
     %{"runs" => [cron_run]} = dispatch("cron.runs", %{"id" => job.id, "includeMeta" => true})
-
-    # session.detail completed error
-    key = "agent:t16e_detail_#{token}:main"
-    agent = LemonCore.SessionKey.agent_id(key)
-    :ok = RunStore.create_session_index(key, agent, :tui)
-    on_exit(fn -> SessionCleanup.delete(key) end)
-
-    :ok =
-      RunStore.finalize("t16e-run-#{token}", %{
-        session_key: key,
-        agent_id: agent,
-        origin: :tui,
-        prompt: "hello",
-        completed: %{ok: false, error: term}
-      })
-
-    detail = dispatch("session.detail", %{"sessionKey" => key})
-    [detail_run] = detail["runs"]
-
     assert_scrubbed(task["result"])
     assert task["result"] == cron_run["meta"]
-    assert task["result"] == detail_run["error"]
-  end
-
-  test "session.detail includeFullText for a content token still redacts credentials" do
-    token = System.unique_integer([:positive])
-    key = "agent:t16e_full_#{token}:main"
-    agent = LemonCore.SessionKey.agent_id(key)
-    :ok = RunStore.create_session_index(key, agent, :tui)
-    on_exit(fn -> SessionCleanup.delete(key) end)
-
-    :ok =
-      RunStore.finalize("t16e-full-#{token}", %{
-        session_key: key,
-        agent_id: agent,
-        origin: :tui,
-        prompt: "api_key=#{@secret}",
-        completed: %{ok: true, answer: "here: #{@bearer}"}
-      })
-
-    detail = dispatch("session.detail", %{"sessionKey" => key, "includeFullText" => true})
-    encoded = Jason.encode!(detail)
-    refute encoded =~ @secret
-    refute encoded =~ "abcdefghijklmnop"
-    assert detail["summary"]["cleanup"]["includesSecretValues"] == false
   end
 
   defp depth(value) when is_map(value),

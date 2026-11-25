@@ -49,10 +49,10 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
+  # A cast: the gateway Run that requests cancellation never waits on this
+  # runner; it holds its permit until the runner exits or its drain deadline.
   def cancel(pid, reason \\ :user_requested) do
-    GenServer.call(pid, {:cancel, reason})
-  catch
-    :exit, _ -> :ok
+    GenServer.cast(pid, {:cancel, reason})
   end
 
   @spec steer(pid(), String.t()) :: :ok | {:error, term()}
@@ -128,7 +128,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
     meta = request.meta || %{}
 
     meta =
-      if not CodingAgent.Tools.Task.Params.managed_metadata?(meta) and
+      if not CodingAgent.Tools.Task.InvocationAuthority.managed_metadata?(meta) and
            not Map.has_key?(meta, :invocation_context_key) and
            Map.has_key?(meta, "invocation_context_key"),
          do:
@@ -191,12 +191,13 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
   end
 
   @impl true
-  def handle_call({:cancel, reason}, _from, state) do
+  def handle_cast({:cancel, reason}, state) do
     :ok = NodeRegistry.cancel(state.invoke_id, reason)
     state = reply_pending_controls(state, {:error, :cancelled})
-    {:stop, :normal, :ok, state}
+    {:stop, :normal, state}
   end
 
+  @impl true
   def handle_call({:control, _operation, _text}, _from, %{invoke_id: nil} = state) do
     {:reply, {:error, :not_ready}, state}
   end
@@ -438,7 +439,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
 
   defp merge_node_meta(meta, node) when is_map(meta) do
     meta
-    |> CodingAgent.Tools.Task.Params.sanitize_child_metadata()
+    |> CodingAgent.Tools.Task.InvocationAuthority.sanitize_child_metadata()
     |> Map.put(:node, node)
   end
 

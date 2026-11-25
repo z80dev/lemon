@@ -5,6 +5,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 import tempfile
 import time
@@ -42,10 +43,30 @@ def regressions(current, baseline):
     return failures
 
 
+# The probe's own fixed failure messages; interpolated ones are excluded.
+PROBE_FAILURES = frozenset(re.findall(r'raise[ (]"([^"#]*)"', PROBE.read_text()))
+
+
+def failure_reason(log):
+    """Names why a probe VM failed without echoing runtime output: the probe's
+    own fixed message, else only the exception module (never paths or terms)."""
+    reason = 'no exception reported'
+    try:
+        lines = log.read_text(errors='replace').splitlines()
+    except OSError:
+        return reason
+    for line in lines:
+        match = re.match(r'\s*\*\* \(([A-Z][\w.]*)\) ?(.*)$', line)
+        if match:
+            module, message = match.groups()
+            reason = f'{module}: {message}' if message in PROBE_FAILURES else module
+    return reason
+
+
 def measure(boots, turns):
     samples = {metric: [] for metric in METRICS}
     versions = None
-    for _ in range(boots):
+    for boot in range(1, boots + 1):
         with tempfile.TemporaryDirectory(prefix='lemon-latency-') as temporary:
             state = Path(temporary)
             env = isolated_environment(state,
@@ -66,7 +87,9 @@ def measure(boots, turns):
                                                stdout=log, stderr=log, start_new_session=True)
                     status = process.wait(timeout=120 + turns * 60)
                 if status != 0 or not result.exists():
-                    raise RuntimeError('offline latency runtime failed; run the probe locally to diagnose')
+                    raise RuntimeError(
+                        f'offline latency runtime failed in boot {boot}/{boots} (exit {status}): '
+                        f'{failure_reason(state / "runtime.log")}; run the probe locally to diagnose')
                 data = json.loads(result.read_text())
                 # The probe records readiness inside the VM; launcher-to-ready is
                 # separately timestamped by its readiness receipt (not VM shutdown).

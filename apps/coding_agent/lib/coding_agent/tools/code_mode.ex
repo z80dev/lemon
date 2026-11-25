@@ -12,9 +12,15 @@ defmodule CodingAgent.Tools.CodeMode do
   @max_timeout_s 600
   @max_yield_s 30
 
+  @doc """
+  The single code-mode predicate: the disclosure policy must be enabled and use
+  the `:code_mode` profile. Every code-mode surface (the `eval` tool and the
+  `bash` stream relay) is selected through this function.
+  """
   def enabled?(opts) do
     case Keyword.get(opts, :tool_disclosure) do
-      %{enabled: true, profile: :code_mode} -> true
+      %{enabled: true, profile: profile} -> profile in [:code_mode, "code_mode"]
+      %{"enabled" => true, "profile" => profile} -> profile in [:code_mode, "code_mode"]
       _ -> false
     end
   end

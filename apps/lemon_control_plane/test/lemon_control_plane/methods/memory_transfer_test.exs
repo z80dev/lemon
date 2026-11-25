@@ -7,7 +7,7 @@ defmodule LemonControlPlane.Methods.MemoryTransferTest do
 
   @moduletag :tmp_dir
 
-  setup %{tmp_dir: tmp_dir} do
+  setup %{tmp_dir: tmp_dir} = tags do
     state = Path.join(tmp_dir, "state")
     File.mkdir_p!(state)
     old_paths = Application.get_env(:lemon_core, :paths)
@@ -37,7 +37,16 @@ defmodule LemonControlPlane.Methods.MemoryTransferTest do
         &{"memory.transfer." <> &1, %{"version" => 1, "contextVersion" => 1}}
       )
 
-    :ok = NodeRegistry.register(source, source_name, self(), %{capabilities: capabilities})
+    source_capabilities =
+      if tags[:source_release],
+        do:
+          Map.put(capabilities, "memory.transfer.release", %{
+            "version" => 1,
+            "contextVersion" => 1
+          }),
+        else: capabilities
+
+    :ok = NodeRegistry.register(source, source_name, self(), %{capabilities: source_capabilities})
     :ok = NodeRegistry.register(target, target_name, self(), %{capabilities: capabilities})
     {:ok, _} = ProfileStore.create(%{"id" => "transfer-profile", "node" => source_name})
 
@@ -103,6 +112,39 @@ defmodule LemonControlPlane.Methods.MemoryTransferTest do
                Map.put(ctx.params, "snapshotDigest", String.duplicate("b", 64)),
                %{}
              )
+  end
+
+  @tag :source_release
+  test "a remote source releases its frozen snapshot once the receipt is recorded", ctx do
+    task = Task.async(fn -> MemoryTransfer.handle(ctx.params, %{}) end)
+    reply(request(ctx.source, "prepare"), ctx.envelope)
+    reply(request(ctx.source, "validate"), %{"valid" => true})
+    reply(request(ctx.target, "apply"), ctx.receipt)
+    release = request(ctx.source, "release")
+    assert release["args"] == Map.drop(ctx.envelope, ["snapshot", "snapshotDigest"])
+    assert Store.get(:control_memory_transfers, ctx.params["mutationId"])["state"] == "completed"
+    reply(release, %{"released" => true})
+    assert Task.await(task) == {:ok, ctx.receipt}
+
+    assert MemoryTransfer.handle(ctx.params, %{}) == {:ok, ctx.receipt}
+    refute_receive {:node_event, "node.invoke.request", _}
+  end
+
+  @tag :source_release
+  test "a failed remote source release never changes the recorded receipt", ctx do
+    task = Task.async(fn -> MemoryTransfer.handle(ctx.params, %{}) end)
+    reply(request(ctx.source, "prepare"), ctx.envelope)
+    reply(request(ctx.source, "validate"), %{"valid" => true})
+    apply = request(ctx.target, "apply")
+    service_error(apply, "transfer_pending")
+    assert {:error, {:unavailable, _, _}} = Task.await(task)
+    refute_receive {:node_event, "node.invoke.request", _}
+
+    recovered = Task.async(fn -> MemoryTransfer.handle(ctx.params, %{}) end)
+    reply(request(ctx.target, "status"), ctx.receipt)
+    service_error(request(ctx.source, "release"), "memory_unavailable")
+    assert Task.await(recovered) == {:ok, ctx.receipt}
+    assert Store.get(:control_memory_transfers, ctx.params["mutationId"])["state"] == "completed"
   end
 
   test "uncertain apply reconciles only destination status and never replays", ctx do
@@ -252,10 +294,19 @@ defmodule LemonControlPlane.Methods.MemoryTransferTest do
       |> Map.take(~w(profileId mutationId sourceNodeId nodeId snapshotDigest))
       |> Map.put("copied", true)
 
+    source_key =
+      "source:" <>
+        (:crypto.hash(:sha256, "transfer-local\0" <> params["mutationId"])
+         |> Base.encode16(case: :lower))
+
+    assert {:ok, %{"snapshot" => _}} = LemonMemory.Store.transfer_get(store, source_key)
     reply(apply, receipt)
     assert Task.await(task) == {:ok, receipt}
     assert {:ok, %{"node" => "local"}} = ProfileStore.get("transfer-local")
     refute inspect(Store.get(:control_memory_transfers, params["mutationId"])) =~ "complete-tail"
+
+    # The frozen local source snapshot is released once the receipt is recorded.
+    assert {:error, :not_found} = LemonMemory.Store.transfer_get(store, source_key)
   end
 
   test "explicit read-only status without controller intent never starts a transfer", ctx do

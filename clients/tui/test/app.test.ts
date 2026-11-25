@@ -8,7 +8,7 @@ import { newSessionKey } from "../src/session-key.ts";
 import { initTheme, resetTheme } from "../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "./helpers/memory-terminal.ts";
-import { waitForText } from "./helpers/wait.ts";
+import { waitFor, waitForText } from "./helpers/wait.ts";
 
 const teardown: Array<() => void> = [];
 
@@ -206,6 +206,24 @@ describe("AppShell", () => {
 
 		expect(confirmed).toEqual([["arxiv"]]);
 	});
+
+	test.each(["single", "multi"] as const)(
+		"a rejected %s picker callback is reported, not thrown",
+		async (kind) => {
+			const { app, terminal } = await bootApp();
+			const fail = async () => {
+				throw new Error("private /Users/secret path");
+			};
+			const items = [{ value: "a", label: "a" }];
+			if (kind === "single") app.host.openPicker({ title: "Pick", items, onSelect: fail });
+			else app.host.openMultiPicker({ title: "Pick", items, onConfirm: fail });
+			terminal.sendInput("\r");
+			const chat = () => renderPlain(app.chatContainer.render(120));
+			await waitFor(() => chat().includes("failed unexpectedly"), { what: "the notice" });
+			expect(chat()).not.toContain("/Users/secret");
+			expect(app.client.recentFrames().some((line) => line.includes("unhandled Error"))).toBe(true);
+		},
+	);
 
 	test("streams deltas into one block and finalizes on completed", async () => {
 		const { app, server } = await bootApp();

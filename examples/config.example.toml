@@ -214,10 +214,32 @@ enable_webhook = false
 enable_xmtp = false
 enable_a2a = false
 
-[gateway.queue]
-mode = "collect"
-cap = 50
-drop = "oldest"
+# Gateway-native HTTP listeners are off unless opted in at startup.
+# LEMON_GATEWAY_INGRESS_ENABLED can override this boolean.
+[gateway.ingress]
+enabled = false
+
+# Generic webhook also needs [gateway] enable_webhook = true.
+# [gateway.webhook]
+# port = 4046
+# [gateway.webhook.integrations.example]
+## Add token = "<your strong random secret>" before enabling this integration.
+# mode = "async"
+# agent_id = "default"
+
+# [gateway.sms]
+# webhook_enabled = true
+# webhook_port = 4041
+# webhook_url = "https://sms.example.com/webhooks/twilio/sms"
+# auth_token_secret = "twilio_auth_token"
+
+# [gateway.voice]
+# enabled = true
+# websocket_port = 4047
+# public_url = "https://voice.example.com"
+# twilio_auth_token_secret = "twilio_auth_token"
+# deepgram_api_key_secret = "deepgram_api_key"
+# elevenlabs_api_key_secret = "elevenlabs_api_key"
 
 # [gateway.telegram]
 # bot_token_secret = "TELEGRAM_BOT_TOKEN"
@@ -353,11 +375,10 @@ allow_tools = []
 # Explicit providers fail closed; selection never installs LCU/native hosts.
 # LEMON_BROWSER_PROVIDER overrides this setting. Hosted credentials stay in env/secrets.
 # [runtime.tools.browser]
-# provider = "auto" # tern|lcu|relay|local|cdp|browserbase|browser_use|firecrawl|camofox|controller|hybrid
+# provider = "auto" # tern|lcu|relay|local|cdp|browserbase|browser_use|firecrawl|camofox
 # tern = true # false, or LEMON_BROWSER_TERN=0, disables native PiP
 # Legacy backend selection remains supported:
-# LEMON_BROWSER_BACKEND=local|tern|controller|hybrid|browserbase|browser_use|firecrawl|camofox
-# LEMON_BROWSER_HYBRID_PUBLIC_BACKEND=browser_use # required with hybrid
+# LEMON_BROWSER_BACKEND=local|tern|browserbase|browser_use|firecrawl|camofox
 # BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID, BROWSER_USE_API_KEY,
 # FIRECRAWL_API_KEY, or CAMOFOX_URL / CAMOFOX_API_KEY configure hosted backends.
 

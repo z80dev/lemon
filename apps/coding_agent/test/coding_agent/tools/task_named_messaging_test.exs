@@ -271,11 +271,11 @@ defmodule CodingAgent.Tools.TaskNamedMessagingTest do
         parent_session_id: opts[:session_id]
       })
 
-    :ok = Control.register(id, AbortSignal.new(), nil, parent, fn _ -> :ok end)
+    :ok = CodingAgent.TaskRuntimeHelpers.register(id, parent)
     :ok = Control.attach_session(id, child, "family-child")
 
     on_exit(fn ->
-      if Process.whereis(Control), do: Control.complete(id)
+      CodingAgent.TaskRuntimeHelpers.stop(id)
       TaskStore.delete_task(id)
     end)
 

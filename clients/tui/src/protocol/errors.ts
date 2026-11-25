@@ -47,7 +47,11 @@ export class ControlPlaneError extends Error {
 	}
 }
 
-/** A request was issued while the client had no live, handshaken connection. */
+/**
+ * A request was refused before it reached the socket: the client had no live,
+ * handshaken connection (or the socket would not take the frame). Nothing was
+ * sent, so the daemon cannot have acted on it.
+ */
 export class NotConnectedError extends Error {
 	readonly code = "NOT_CONNECTED";
 	readonly method?: string;
@@ -55,6 +59,24 @@ export class NotConnectedError extends Error {
 	constructor(method?: string, message?: string) {
 		super(message ?? (method ? `not connected (${method})` : "not connected"));
 		this.name = "NotConnectedError";
+		this.method = method;
+	}
+}
+
+/**
+ * The connection dropped after the request was written to the socket and before
+ * its answer arrived. The daemon may already have acted on it: the outcome is
+ * unknown, and a mutation must not be retried before its target is inspected.
+ */
+export class ConnectionLostError extends Error {
+	readonly code = "CONNECTION_LOST";
+	readonly method?: string;
+
+	constructor(method?: string, reason?: string) {
+		super(
+			`connection lost before ${method ? `"${method}"` : "the request"} was answered${reason ? ` (${reason})` : ""}`,
+		);
+		this.name = "ConnectionLostError";
 		this.method = method;
 	}
 }
@@ -119,7 +141,10 @@ export function offlineMessage(url: string): string {
 /** User-facing failures; method names, close codes and wire details stay in /debug. */
 export function describeError(error: unknown): string {
 	if (error instanceof AuthenticationError) return error.message;
-	if (error instanceof NotConnectedError) return "not connected — run /reconnect, then try again";
+	if (error instanceof NotConnectedError)
+		return "not connected — nothing was sent; run /reconnect, then try again";
+	if (error instanceof ConnectionLostError)
+		return "the connection dropped before Lemon answered — the outcome is unknown; check before trying again";
 	if (error instanceof RequestTimeoutError)
 		return `Lemon did not answer within ${error.timeoutMs / 1000}s — run /reconnect before trying again`;
 	if (error instanceof MethodUnavailableError)
@@ -138,6 +163,67 @@ export function describeError(error: unknown): string {
 		}
 	}
 	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * What a failed mutation proves about its effect:
+ *   `not-sent`  the request never reached the daemon (pre-send gate, unsupported method);
+ *   `refused`   the daemon answered with a definite refusal — nothing was changed;
+ *   `unknown`   it may have taken effect (connection lost after dispatch, timeout,
+ *               `retrySafe: false`, a generic server failure, an unreadable receipt).
+ * Only `not-sent` and `refused` may ever be offered for an automatic or blind retry.
+ */
+export type MutationOutcome = "not-sent" | "refused" | "unknown";
+
+/** Server codes that refuse a request before it changes anything. */
+const REFUSAL_CODES: Readonly<Partial<Record<string, true>>> = {
+	INVALID_REQUEST: true,
+	INVALID_PARAMS: true,
+	METHOD_NOT_FOUND: true,
+	UNAUTHORIZED: true,
+	FORBIDDEN: true,
+	PERMISSION_DENIED: true,
+	NOT_FOUND: true,
+	CONFLICT: true,
+	RATE_LIMITED: true,
+	NOT_IMPLEMENTED: true,
+	HANDSHAKE_REQUIRED: true,
+	ALREADY_CONNECTED: true,
+	callback_origin_not_allowed: true,
+	callback_requires_https: true,
+	invalid_callback_url: true,
+};
+
+export function classifyMutationError(error: unknown): MutationOutcome {
+	if (
+		error instanceof NotConnectedError ||
+		error instanceof MethodUnavailableError ||
+		error instanceof HandshakeError
+	) {
+		return "not-sent";
+	}
+	if (error instanceof ControlPlaneError) {
+		const details =
+			typeof error.details === "object" && error.details !== null
+				? (error.details as { retrySafe?: unknown; reason?: unknown })
+				: undefined;
+		if (details?.retrySafe === false || details?.reason === "outcome_unknown") return "unknown";
+		if (details?.retrySafe === true) return "refused";
+		return REFUSAL_CODES[error.code] === true ? "refused" : "unknown";
+	}
+	return "unknown";
+}
+
+/** The protocol-level code of a failure, or `fallback` for a local/receipt error. */
+export function failureCode(error: unknown, fallback: string): string {
+	return error instanceof ControlPlaneError ||
+		error instanceof NotConnectedError ||
+		error instanceof ConnectionLostError ||
+		error instanceof RequestTimeoutError ||
+		error instanceof MethodUnavailableError ||
+		error instanceof HandshakeError
+		? error.code
+		: fallback;
 }
 
 /**
