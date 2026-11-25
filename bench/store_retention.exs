@@ -2,6 +2,7 @@
 alias LemonCore.Store
 alias LemonCore.Store.ReadCache
 
+{:ok, _cache} = LemonCore.RuntimeCache.start_link()
 {:ok, store} = Store.start_link(name: :bench_retention, cached_tables: [])
 
 {legacy_bytes, _} =
@@ -25,7 +26,23 @@ IO.puts(
   "Stored record ETF bytes: #{:erlang.external_size(record)} once vs #{legacy_bytes} cumulative rewrites (legacy model)"
 )
 
-for i <- 1..100_000 do
+for i <- 1..9_999 do
+  :ok = Store.put(:bench_retention, :runs, "run-#{i}", %{events: [], summary: %{completed: %{}}})
+end
+
+{legacy_page_us, legacy_page} =
+  :timer.tc(fn -> GenServer.call(store, {:generic_fetch_all, :runs}) end)
+
+{indexed_page_us, {:ok, %{records: []}}} =
+  :timer.tc(fn ->
+    LemonCore.UsageRecords.query(%{"fromMs" => 0, "toMs" => 1}, store: :bench_retention)
+  end)
+
+IO.puts(
+  "10k run rows: legacy Store reply #{:erlang.external_size(legacy_page)} ETF bytes in #{legacy_page_us} µs; usage page copies no run rows, #{indexed_page_us} µs"
+)
+
+for i <- 10_000..100_000 do
   :ok = Store.put(:bench_retention, :runs, "run-#{i}", %{events: [], summary: %{completed: %{}}})
 end
 
