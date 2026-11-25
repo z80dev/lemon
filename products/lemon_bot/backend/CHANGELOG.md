@@ -74,6 +74,13 @@
 
 ### Added
 
+- `lemon-bot https enable --tailscale|--url HTTPS_ORIGIN`, `status` and
+  `disable` (moved from Lemon's `lemon bot https`) manage this backend's HTTPS
+  address, its owned Tailscale Serve route, the controller callback allowlists
+  and its first-party private MCP approval under one lock and an ownership
+  receipt. A failure after any change reports that settings changed and keeps
+  ownership for disable. The internal `https-policy` subcommand is gone; the
+  policy check runs in-process (#723).
 - Backend-driven SSH attachment provides private asynchronous progress, durable
   nonce replay, supervised node/product reverse tunnels and reconnect-safe
   enrollment. Preview reports SSH prerequisites; machine views cache tunnel

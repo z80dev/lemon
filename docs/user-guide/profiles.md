@@ -331,8 +331,8 @@ non-allowlisted origins with `callback_origin_not_allowed`. Only the last adds
 `details: {"origin": "https://host:8443"}`: a canonical origin, never the URL's
 path, query, credentials or token. These are definite pre-mutation rejections.
 Add the origin to `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` and, for routines,
-`LEMON_CRON_ADMISSION_ALLOWED_ORIGINS`; `lemon doctor` checks both when
-`LEMON_BOT_PUBLIC_URL` is set.
+`LEMON_CRON_ADMISSION_ALLOWED_ORIGINS`; `lemon doctor` checks both for
+`LEMON_BOT_PUBLIC_URL` or the origin published by `lemon-bot https`.
 
 The existing **current target profile's `mcpServers`** is the operator-authored
 identity/origin/tool ceiling. For managed contexts, register credential-free

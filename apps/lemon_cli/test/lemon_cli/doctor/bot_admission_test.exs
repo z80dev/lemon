@@ -1,5 +1,6 @@
 defmodule LemonCli.Doctor.BotAdmissionTest do
   use ExUnit.Case, async: false
+  @moduletag :tmp_dir
 
   alias LemonCli.Doctor.BotAdmission
   alias LemonCore.Doctor
@@ -12,9 +13,15 @@ defmodule LemonCli.Doctor.BotAdmissionTest do
     {:lemon_automation, :cron_admission_allowed_origins}
   ]
 
-  setup do
+  defmodule OwnerAllowlist do
+    @moduledoc false
+    def allowed_origins, do: Application.get_env(:lemon_cli, __MODULE__, [])
+  end
+
+  setup %{tmp_dir: home} do
     environment = Map.new([@public_url, @native, @cron], &{&1, System.fetch_env(&1)})
     configuration = Map.new(@app_keys, &{&1, Application.fetch_env(elem(&1, 0), elem(&1, 1))})
+    runtime = Application.fetch_env(:lemon_core, :doctor_runtime)
 
     on_exit(fn ->
       for {key, original} <- environment do
@@ -30,25 +37,98 @@ defmodule LemonCli.Doctor.BotAdmissionTest do
           :error -> Application.delete_env(app, key)
         end
       end
+
+      case runtime do
+        {:ok, value} -> Application.put_env(:lemon_core, :doctor_runtime, value)
+        :error -> Application.delete_env(:lemon_core, :doctor_runtime)
+      end
+
+      Application.delete_env(:lemon_cli, OwnerAllowlist)
     end)
 
     for key <- [@public_url, @native, @cron], do: System.delete_env(key)
     for {app, key} <- @app_keys, do: Application.put_env(app, key, [])
-    :ok
+    %{home: home}
   end
 
   test "the CLI check is registered with the shared doctor framework" do
     assert BotAdmission in Doctor.registered_checks()
   end
 
-  test "an unset Bot public URL skips the offline check" do
+  test "an unset Bot public URL with nothing published skips the offline check", %{home: home} do
     System.put_env(@native, "invalid")
     System.put_env(@cron, "invalid")
 
-    assert [check] = BotAdmission.run(runtime: :external)
+    assert [check] = BotAdmission.run(runtime: :external, home: home)
     assert check.name == "bot.admission_origins"
     assert check.status == :skip
     assert check.message =~ @public_url
+  end
+
+  test "the origin published by lemon-bot https is checked read-only", %{home: home} do
+    path = Path.join([home, ".lemon", "bot-https.json"])
+    File.mkdir_p!(Path.dirname(path))
+
+    receipt =
+      Jason.encode!(%{"schema" => 2, "phase" => "active", "origin" => "https://bot.example"})
+
+    File.write!(path, receipt)
+    before = File.stat!(path)
+
+    assert [%{status: :fail}] = BotAdmission.run(home: home)
+
+    System.put_env(@native, "https://bot.example")
+    System.put_env(@cron, "https://bot.example")
+    assert [%{status: :pass}] = BotAdmission.run(home: home)
+    assert File.read!(path) == receipt
+    assert File.stat!(path).mtime == before.mtime
+    assert File.ls!(Path.dirname(path)) == ["bot-https.json"]
+  end
+
+  test "an unreadable published receipt fails without disclosing it", %{home: home} do
+    path = Path.join([home, ".lemon", "bot-https.json"])
+    File.mkdir_p!(Path.dirname(path))
+    target = Path.join(home, "private-receipt.json")
+    File.write!(target, Jason.encode!(%{"origin" => "https://private.example"}))
+
+    for write <- [
+          fn -> File.write!(path, "{private-garbage") end,
+          fn ->
+            File.write!(path, Jason.encode!(%{"origin" => "https://private.example/path"}))
+          end,
+          fn -> File.ln_s!(target, path) end
+        ] do
+      File.rm(path)
+      write.()
+      assert [check] = BotAdmission.run(home: home)
+      assert check.status == :fail
+      refute inspect(check) =~ "private"
+    end
+  end
+
+  test "allowlists come from the admission owners, not their application configuration", %{
+    home: home
+  } do
+    Application.put_env(
+      :lemon_core,
+      :doctor_runtime,
+      native_followup_admission: OwnerAllowlist,
+      cron_admission: OwnerAllowlist
+    )
+
+    for {app, key} <- @app_keys, do: Application.put_env(app, key, ["https://bot.example"])
+
+    assert [%{status: :fail}] =
+             BotAdmission.run(bot_public_url: "https://bot.example", home: home)
+
+    Application.put_env(:lemon_cli, OwnerAllowlist, ["https://bot.example"])
+
+    assert [%{status: :pass}] =
+             BotAdmission.run(bot_public_url: "https://bot.example", home: home)
+
+    Application.put_env(:lemon_core, :doctor_runtime, [])
+    assert [check] = BotAdmission.run(bot_public_url: "https://bot.example", home: home)
+    assert check.status == :skip
   end
 
   test "an explicit doctor origin checks controller allowlists without changing environment" do

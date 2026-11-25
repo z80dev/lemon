@@ -80,7 +80,10 @@ config :lemon_core, :doctor_runtime,
   lsp_server_manager: LemonLsp.ServerManager,
   channel_diagnostics: LemonChannels.Doctor.Diagnostics,
   # `builtin?/1` decides which provider names doctor output may show verbatim.
-  provider_names: LemonAgent.ModelRuntime.CustomProviders
+  provider_names: LemonAgent.ModelRuntime.CustomProviders,
+  # `allowed_origins/0`: the callback allowlists the Bot admission check validates.
+  native_followup_admission: LemonRouter.NativeFollowupAdmission,
+  cron_admission: LemonAutomation.CronAdmission
 
 # Diagnostics owned by apps that depend on lemon_core register themselves here.
 # Modules missing from a given build are skipped (see LemonCore.Doctor).

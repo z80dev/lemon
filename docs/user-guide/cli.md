@@ -1541,13 +1541,18 @@ lemon doctor [options]
 | `--bundle [PATH]` | Write a redacted support bundle |
 | `--bundle-path PATH` | Set the support bundle path |
 
-When `LEMON_BOT_PUBLIC_URL` is set, the offline `bot.admission_origins` check
-requires its origin in both `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` and
-`LEMON_CRON_ADMISSION_ALLOWED_ORIGINS`. Origins match by scheme, case-insensitive
-host, and effective port (so HTTPS port 443 can be omitted). Each environment
+The read-only `bot.admission_origins` check takes the Bot origin from
+`LEMON_BOT_PUBLIC_URL`, or else from the receipt `lemon-bot https enable`
+publishes in `~/.lemon/bot-https.json`, and requires it in both
+`LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` and
+`LEMON_CRON_ADMISSION_ALLOWED_ORIGINS`. It skips when neither is set. Origins
+match by scheme, case-insensitive host, and effective port (so HTTPS port 443 can
+be omitted). The allowlists are exactly those admission enforces: each environment
 allowlist replaces its app configuration, even when empty; only an absent variable
 uses the app's configured allowlist, including the same-machine loopback default.
-Missing entries fail with the affected variable names, never URL values.
+Missing entries fail with the affected variable names, never URL values. Manage
+the Bot's HTTPS address with `lemon-bot https` (see
+[Lemon Bot getting started](../getting-started/lemon-bot.md#give-lemon-bot-an-https-address)).
 
 ### `lemon config`
 
