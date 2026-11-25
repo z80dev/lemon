@@ -107,6 +107,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- **Breaking:** learning reminder settings moved from `skills.json` to
+  `[skills.learning_nudge]` in `config.toml` (background review under
+  `[skills.learning_nudge.background_review]`, operator-only); a project
+  `.lemon/config.toml` can only turn reminders off or lengthen their intervals.
+  A `learning_nudge` object left in `skills.json` is no longer read and
+  `lemon doctor` warns about it. `skills.json` now holds only the `disabled`
+  list (#655).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
@@ -214,6 +221,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Skill disable state is the union of the global and project `skills.json`
+  lists: enabling a skill at project scope (blueprint activation, control-plane
+  `skills.enable`, `skill_manage restore`) no longer lifts a global disable or a
+  curator archive and no longer writes an empty list. `skills.json` writes are
+  atomic under a lock, and an unreadable or malformed file now hides every skill
+  instead of re-enabling all of them; `lemon doctor` reports it (#655).
 - Discord boots again: `lemon_channels` now starts `:gun`, which Nostrum needs
   for its gateway and REST connections; previously a configured bot token
   failed with `:noproc` and no Discord service started (#670).
