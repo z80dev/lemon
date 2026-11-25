@@ -165,7 +165,7 @@ scripts/test path \
   apps/lemon_core/test/lemon_core/bus_bounded_subscription_test.exs \
   apps/lemon_core/test/lemon_core/bus_test.exs \
   apps/lemon_core/test/lemon_core/bus_registry_fallback_test.exs \
-  apps/lemon_agent/test/lemon_agent/event_stream_test.exs \
+  apps/lemon_ai/test/lemon_ai/event_stream_test.exs \
   apps/coding_agent/test/coding_agent/session_backpressure_test.exs \
   apps/coding_agent/test/coding_agent/session_recovery_test.exs \
   apps/coding_agent/test/coding_agent/session/notifier_backpressure_test.exs \

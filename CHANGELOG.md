@@ -107,6 +107,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Duplicate test families are collapsed to one canonical file per module
+  (#732): EventStream, Loop, CircuitBreaker, CallDispatcher, ProviderRegistry,
+  Google/OpenAI Responses shared helpers, TextSanitizer, CodingAgent session,
+  extensions, bash executor and edit tests, about 23K fewer test lines.
+  `LemonAgent.EventStream` tests now cover only the facade's abort-signal,
+  `:agent` event format and cancel-grace options; queue, drop-strategy,
+  ownership and cancellation coverage lives with `LemonAi.EventStream`.
+  `mix lemon.check_duplicate_tests` (part of `mix lemon.quality`) now also
+  fails when an `_edge_cases`, `_additional_edge_cases`, `_comprehensive`,
+  `_extended` or `_consolidation` test file or module sits beside its
+  canonical test.
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle

@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.Lemon.CheckDuplicateTests do
   use Mix.Task
 
-  @shortdoc "Check for duplicate test module names"
+  @shortdoc "Check for duplicate test modules and layered test families"
   @ignored_dirs MapSet.new([
                   ".elixir_ls",
                   ".expert",
@@ -14,9 +14,18 @@ defmodule Mix.Tasks.Lemon.CheckDuplicateTests do
                   "tmp"
                 ])
 
+  @layered_suffixes "additional_edge_cases|edge_cases|comprehensive|extended|consolidation"
+  @layered_module_suffixes "AdditionalEdgeCases|EdgeCases|Comprehensive|Extended|Consolidation"
+
   @moduledoc """
   Scans test files for duplicate literal module declarations, resolving nested
   names against their enclosing module and respecting absolute `Elixir` names.
+
+  It also rejects layered test families: a test file with a
+  `_additional_edge_cases`, `_edge_cases`, `_comprehensive`, `_extended` or
+  `_consolidation` suffix fails when its canonical sibling (`foo_test.exs` in
+  the same directory) or canonical module (`FooTest` for `FooEdgeCasesTest`)
+  exists. Fold such cases into the canonical file instead.
 
   Usage:
     mix lemon.check_duplicate_tests
@@ -32,27 +41,76 @@ defmodule Mix.Tasks.Lemon.CheckDuplicateTests do
       )
 
     root = opts[:root] || File.cwd!()
+    files = test_files(root)
+    occurrences = Enum.flat_map(files, &module_occurrences(root, &1))
 
-    duplicates =
-      root
-      |> test_files()
-      |> Enum.flat_map(&module_occurrences(root, &1))
-      |> Enum.group_by(fn {module_name, _path} -> module_name end, fn {_module_name, path} ->
+    modules =
+      Enum.group_by(occurrences, fn {module_name, _path} -> module_name end, fn {_name, path} ->
         path
       end)
+
+    duplicates =
+      modules
       |> Enum.filter(fn {_module_name, paths} -> length(paths) > 1 end)
       |> Enum.sort_by(fn {module_name, _paths} -> module_name end)
 
-    if duplicates == [] do
+    layered = layered_files(root, files, occurrences, modules)
+
+    errors =
+      [
+        duplicates != [] &&
+          "Duplicate test modules found:\n" <>
+            Enum.map_join(duplicates, "\n", fn {module_name, paths} ->
+              "  - #{module_name}: #{Enum.join(Enum.sort(paths), ", ")}"
+            end),
+        layered != [] &&
+          "Layered test files found beside their canonical test; fold their cases into it:\n" <>
+            Enum.map_join(layered, "\n", fn {path, canonical} ->
+              "  - #{path} (canonical: #{canonical})"
+            end)
+      ]
+      |> Enum.filter(&is_binary/1)
+
+    if errors == [] do
       Mix.shell().info("[ok] duplicate test module check passed")
     else
-      details =
-        Enum.map_join(duplicates, "\n", fn {module_name, paths} ->
-          "  - #{module_name}: #{Enum.join(Enum.sort(paths), ", ")}"
-        end)
-
-      Mix.raise("Duplicate test modules found:\n#{details}")
+      Mix.raise(Enum.join(errors, "\n"))
     end
+  end
+
+  defp layered_files(root, files, occurrences, modules) do
+    file_pattern = Regex.compile!("^(.+?)_(#{@layered_suffixes})_test\\.exs$")
+    module_pattern = Regex.compile!("^(.+?)(#{@layered_module_suffixes})Test$")
+
+    by_path =
+      Enum.flat_map(files, fn file ->
+        case Regex.run(file_pattern, Path.basename(file)) do
+          [_, base, _suffix] ->
+            canonical = Path.join(Path.dirname(file), base <> "_test.exs")
+
+            if File.regular?(canonical),
+              do: [{Path.relative_to(file, root), Path.relative_to(canonical, root)}],
+              else: []
+
+          nil ->
+            []
+        end
+      end)
+
+    by_module =
+      Enum.flat_map(occurrences, fn {module_name, path} ->
+        with [_, base, _suffix] <- Regex.run(module_pattern, module_name),
+             [canonical | _] <- Map.get(modules, base <> "Test"),
+             true <- canonical != path do
+          [{path, canonical}]
+        else
+          _ -> []
+        end
+      end)
+
+    (by_path ++ by_module)
+    |> Enum.uniq_by(fn {path, _canonical} -> path end)
+    |> Enum.sort()
   end
 
   defp module_occurrences(root, file) do

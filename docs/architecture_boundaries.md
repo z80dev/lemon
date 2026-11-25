@@ -88,7 +88,7 @@ between the `architecture_policy` and `package_map` markers are generated from
 it and from `apps/*/mix.exs`, and must not be edited by hand. `mix lemon.quality`
 runs the docs link check (local Markdown links in `docs/**/*.md` must resolve),
 the generated-table freshness and publish-set checks, the architecture check and
-the duplicate test-module guard.
+the duplicate test-module and layered test-family guard.
 
 The architecture checker enforces all of the following:
 
