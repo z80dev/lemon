@@ -509,6 +509,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   parser (`LemonSkills.Frontmatter`); a rule or skill manifest that repeats a
   frontmatter key, or a rule whose frontmatter exceeds 16 KiB (skills: 64 KiB),
   is rejected with a warning instead of resolving last-wins (#671).
+- The `lsp` tool starts one language server per workspace instead of one per
+  member project: the outermost Mix umbrella, Cargo, npm/yarn/pnpm, Go or uv
+  workspace inside the working directory is the root (else the nearest marker).
+  `LemonLsp.ServerManager` keeps at most eight servers live, evicting the
+  least-recently-used one without an in-flight request and failing with
+  `{:error, :lsp_session_limit}` when all are busy; `status/0` and the doctor
+  report `max_active_count` beside `active_count` (#690).
 - The `lsp` tool refuses a non-UTF-8 file with a clear error instead of crashing
   the language-server session it shares with other leases, restarting it and
   telling the model to retry. `LemonLsp.ServerManager` returns
