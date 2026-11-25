@@ -897,9 +897,11 @@ defmodule LemonRouter.SessionCoordinatorTest do
   } do
     alias LemonRouter.{RunProcess, TestExecutor}
     key = {:session, unique_session_key()}
+    # Ids unique across the suite: a terminal record left by another test would be adopted.
+    run_id = "redirect-active-#{System.unique_integer([:positive])}"
 
     active =
-      submission(key, "run1", "one", :collect, run_supervisor,
+      submission(key, run_id, "one", :collect, run_supervisor,
         run_process_module: RunProcess,
         run_process_opts: %{executor: TestExecutor}
       )
@@ -910,11 +912,11 @@ defmodule LemonRouter.SessionCoordinatorTest do
     }
 
     :ok = SessionCoordinator.submit(key, active)
-    assert_receive {:test_executor_started, "run1", runner, owner}
-    assert RunProcess.whereis("run1") == owner
+    assert_receive {:test_executor_started, ^run_id, runner, owner}
+    assert RunProcess.whereis(run_id) == owner
 
-    :ok = submit(key, "run2", "two", :redirect, run_supervisor)
-    assert_receive {:test_executor_redirect, "run1", "two", ^owner}
+    :ok = submit(key, "#{run_id}-redirect", "two", :redirect, run_supervisor)
+    assert_receive {:test_executor_redirect, ^run_id, "two", ^owner}
 
     TestExecutor.complete(runner, %{answer: "redirected"})
     assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
