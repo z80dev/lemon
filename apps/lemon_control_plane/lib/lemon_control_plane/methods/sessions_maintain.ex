@@ -67,6 +67,12 @@ defmodule LemonControlPlane.Methods.SessionsMaintain do
        {:internal_error, "Maintenance stopped with partial changes; run a new preview",
         %{"reason" => "partial_failure", "report" => format_report(report)}}}
 
+  defp result({:error, :outcome_unknown}),
+    do:
+      {:error,
+       {:unavailable, "Maintenance outcome is unknown; reconcile before running a fresh preview",
+        %{"reason" => "outcome_unknown", "retrySafe" => false}}}
+
   defp result({:error, _reason}),
     do:
       {:error,

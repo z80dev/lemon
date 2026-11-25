@@ -1,7 +1,9 @@
 defmodule LemonCore.SessionMaintenanceTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.{AgentRuntime, SessionLifecycle, Store}
+  import ExUnit.CaptureLog
+
+  alias LemonCore.{SessionLifecycle, Store}
 
   @table :session_maintenance_previews
   @cutoff 1_700_000_000_000
@@ -22,7 +24,7 @@ defmodule LemonCore.SessionMaintenanceTest do
     provider = Application.fetch_env(:lemon_core, :agent_runtime_provider)
     {:ok, retained} = Store.fetch_all(@table)
     Enum.each(retained, fn {key, _} -> :ok = Store.delete(@table, key) end)
-    :ok = AgentRuntime.register(Provider)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, Provider)
 
     Process.put(:maintenance_plan, %{
       candidates: [%{kind: :archive, id: "/private/journal", bytes: 12}],
@@ -97,9 +99,14 @@ defmodule LemonCore.SessionMaintenanceTest do
   test "a failed mutation never replays and never leaks the exception" do
     Process.put(:maintenance_execute, fn _ -> raise "private mutation failure" end)
     assert {:ok, preview} = SessionLifecycle.maintenance(older_than_ms: @cutoff)
-    assert {:error, {:partial_failure, report}} = execute(preview.confirmation_token)
-    refute report.verified
-    refute inspect(report) =~ "private"
+
+    log =
+      capture_log(fn ->
+        assert {:error, :outcome_unknown} = execute(preview.confirmation_token)
+      end)
+
+    assert log =~ "SessionMaintenance execute callback failed"
+    refute log =~ "private mutation failure"
     assert_received {:executed, _}
     assert {:error, :confirmation_mismatch} = execute(preview.confirmation_token)
     refute_received {:executed, _}

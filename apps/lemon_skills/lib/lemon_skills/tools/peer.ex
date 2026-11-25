@@ -155,12 +155,18 @@ defmodule LemonSkills.Tools.Peer do
       context ->
         limit = normalize_limit(params["limit"])
 
-        result(%{
-          peer_id: peer.id,
-          context:
-            Map.take(context, [:id, :peer_id, :turn_count, :created_at_ms, :updated_at_ms]),
-          messages: A2AStore.history(peer.id, context.id, limit: limit, direction: :outbound)
-        })
+        case A2AStore.history(peer.id, context.id, limit: limit, direction: :outbound) do
+          {:ok, messages} ->
+            result(%{
+              peer_id: peer.id,
+              context:
+                Map.take(context, [:id, :peer_id, :turn_count, :created_at_ms, :updated_at_ms]),
+              messages: messages
+            })
+
+          {:error, _reason} ->
+            {:error, "peer history is temporarily unavailable"}
+        end
 
       is_binary(params["context_id"]) and params["context_id"] != "" ->
         {:error, "unknown context_id for this session"}

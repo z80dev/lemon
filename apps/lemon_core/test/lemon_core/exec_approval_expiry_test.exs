@@ -97,7 +97,7 @@ defmodule LemonCore.ExecApprovalExpiryTest do
     previous = Application.get_env(:lemon_core, :agent_runtime_provider)
     owner = spawn(fn -> receive do: (:stop -> :ok) end)
     Process.register(owner, :approval_runtime_owner)
-    assert :ok = LemonCore.AgentRuntime.register(OwnerProvider)
+    assert :ok = Application.put_env(:lemon_core, :agent_runtime_provider, OwnerProvider)
 
     on_exit(fn ->
       Process.exit(owner, :kill)

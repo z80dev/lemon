@@ -1256,7 +1256,7 @@ defmodule LemonControlPlane.ACPTest do
   test "/context shows the server breakdown and a matching usage update" do
     :persistent_term.put({ContextRuntime, :observer}, self())
     :persistent_term.put({ContextRuntime, :result}, :report)
-    :ok = LemonCore.AgentRuntime.register(ContextRuntime)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, ContextRuntime)
     parent = self()
 
     {:ok, %{"result" => %{"sessionId" => id}}} =
@@ -1360,7 +1360,7 @@ defmodule LemonControlPlane.ACPTest do
 
   test "file commands are advertised after built-ins and submitted verbatim" do
     :persistent_term.put({CommandsRuntime, :observer}, self())
-    :ok = LemonCore.AgentRuntime.register(CommandsRuntime)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, CommandsRuntime)
     parent = self()
 
     Application.put_env(:lemon_control_plane, :acp_submitter, fn request ->
@@ -1408,7 +1408,7 @@ defmodule LemonControlPlane.ACPTest do
   defp start_plan_runtime do
     :ets.new(PlanRuntime, [:named_table, :public, :set])
     :ets.insert(PlanRuntime, {:observer, self()})
-    :ok = LemonCore.AgentRuntime.register(PlanRuntime)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, PlanRuntime)
   end
 
   test "unknown sessions and unsupported configuration fail closed" do
@@ -1511,7 +1511,7 @@ defmodule LemonControlPlane.ACPTest do
   end
 
   test "replay reconciles interrupted tools only from finalized durable runs" do
-    :ok = LemonCore.AgentRuntime.register(InterruptedHistory)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, InterruptedHistory)
     id = new_session()
     session = Store.get(:acp_sessions, id)
     run_id = LemonCore.Id.run_id()

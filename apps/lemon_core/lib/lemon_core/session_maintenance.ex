@@ -97,11 +97,14 @@ defmodule LemonCore.SessionMaintenance do
     with {:ok, entry} <- consume(cutoff, token) do
       report = report(entry.plan, cutoff, token, false)
 
-      case call(entry.provider, :session_maintenance_execute, [entry.plan]) do
+      case execute_plan(entry.provider, entry.plan) do
         {:ok, result} -> finish(report, result, true)
         {:error, :confirmation_mismatch} -> {:error, :confirmation_mismatch}
         {:error, {:partial_failure, result}} -> finish(report, result, false)
-        _ -> {:error, {:partial_failure, report}}
+        # Never reached: the consumed preview applied nothing.
+        :not_dispatched -> {:error, :maintenance_unavailable}
+        # Reached and failed, or answered malformed: deletions may have applied.
+        _ -> {:error, :outcome_unknown}
       end
     end
   end
@@ -153,11 +156,11 @@ defmodule LemonCore.SessionMaintenance do
       report = %{report | archived_count: archived, swept_count: swept, verified: verified}
       if verified, do: {:ok, report}, else: {:error, {:partial_failure, report}}
     else
-      {:error, {:partial_failure, report}}
+      {:error, :outcome_unknown}
     end
   end
 
-  defp finish(report, _result, _success?), do: {:error, {:partial_failure, report}}
+  defp finish(_report, _result, _success?), do: {:error, :outcome_unknown}
 
   defp report(plan, cutoff, token, dry_run) do
     %{
@@ -197,16 +200,21 @@ defmodule LemonCore.SessionMaintenance do
   defp valid_plan?(_), do: false
 
   defp call(provider, function, args) do
-    if is_atom(provider) and not is_nil(provider) and Code.ensure_loaded?(provider) and
-         function_exported?(provider, function, length(args)) do
-      apply(provider, function, args)
-    else
-      {:error, :maintenance_unavailable}
-    end
-  rescue
-    _ -> {:error, :maintenance_unavailable}
-  catch
-    _, _ -> {:error, :maintenance_unavailable}
+    LemonCore.RuntimeSeam.invoke(provider, function, args,
+      unavailable: {:error, :maintenance_unavailable},
+      log: "SessionMaintenance plan",
+      log_level: :warning
+    )
+  end
+
+  defp execute_plan(provider, plan) do
+    LemonCore.RuntimeSeam.invoke(provider, :session_maintenance_execute, [plan],
+      unavailable: :not_dispatched,
+      exception: {:error, :outcome_unknown},
+      exit: {:error, :outcome_unknown},
+      throw: {:error, :outcome_unknown},
+      log: "SessionMaintenance execute"
+    )
   end
 
   defp locked(fun) do

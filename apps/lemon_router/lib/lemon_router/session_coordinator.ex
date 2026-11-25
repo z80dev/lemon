@@ -1312,7 +1312,7 @@ defmodule LemonRouter.SessionCoordinator do
         meta = incoming_meta |> Map.delete("node") |> Map.put(:node, node)
         args = [active.cwd, prompt, meta]
 
-        case LemonCore.AgentRuntime.call(:prepare_prompt, args, prompt) do
+        case LemonCore.AgentRuntime.query(:prepare_prompt, args) do
           prepared when is_binary(prepared) -> prepared
           _ -> prompt
         end

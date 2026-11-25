@@ -174,8 +174,7 @@ defmodule LemonControlPlane.A2A.RunnerTest do
 
     assert %{turn_count: 0} = A2AStore.get_context(:inbound, "local", context_id)
 
-    assert [%{id: ^message_id, role: "ROLE_USER"}] =
-             A2AStore.history("local", context_id)
+    assert {:ok, [%{id: ^message_id, role: "ROLE_USER"}]} = A2AStore.history("local", context_id)
 
     cleanup_task(task_id, context_id, message_id, run_id)
   end
@@ -229,7 +228,7 @@ defmodule LemonControlPlane.A2A.RunnerTest do
     runner_ref = Process.monitor(runner_pid)
     assert_receive {:DOWN, ^runner_ref, :process, ^runner_pid, :normal}, 1_000
 
-    assert [%{id: ^message_id, task_id: ^task_id}] = A2AStore.history("local", context_id)
+    assert {:ok, [%{id: ^message_id, task_id: ^task_id}]} = A2AStore.history("local", context_id)
     cleanup_task(task_id, context_id, message_id, run_id)
   end
 
@@ -361,7 +360,7 @@ defmodule LemonControlPlane.A2A.RunnerTest do
 
     assert %{turn_count: 1} = A2AStore.get_context(:inbound, "local", context_id)
 
-    assert Enum.map(A2AStore.history("local", context_id), & &1.role) == [
+    assert Enum.map(elem(A2AStore.history("local", context_id), 1), & &1.role) == [
              "ROLE_USER",
              "ROLE_AGENT"
            ]

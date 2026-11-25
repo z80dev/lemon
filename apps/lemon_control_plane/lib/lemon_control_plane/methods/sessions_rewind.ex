@@ -27,9 +27,14 @@ defmodule LemonControlPlane.Methods.SessionsRewind do
         confirmation_token: token
       ]
 
-      fallback = if dry_run, do: :unavailable, else: :outcome_unknown
+      args = [key, cwd, entry_id, opts]
 
-      case AgentRuntime.call(:session_rewind, [key, cwd, entry_id, opts], {:error, fallback}) do
+      result =
+        if dry_run,
+          do: AgentRuntime.query(:session_rewind, args),
+          else: AgentRuntime.mutate(:session_rewind, args)
+
+      case result do
         {:ok, result} when is_map(result) ->
           fields =
             if dry_run,

@@ -8,6 +8,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking (0.3.0):** `LemonCore.AgentRuntime.query/3` and `mutate/2` replace
+  `call/3`, and provider callback groups are required. Failed reads are explicit
+  errors; runtime and credential mutations whose callback failed after dispatch
+  return `{:error, :outcome_unknown}` and must be reconciled before retry (#626).
 - `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
   fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
   instead of launching a browser (#660).
