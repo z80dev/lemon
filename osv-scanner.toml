@@ -5,21 +5,6 @@
 
 # mix.lock (shipped runtime)
 [[IgnoredVulns]]
-id = "EEF-CVE-2026-128361"
-ignoreUntil = 2026-12-15
-reason = "phoenix 1.8.16 Presence tracker crash; Lemon does not use Phoenix.Presence. Fixed in phoenix 1.8.17: upgrade."
-
-[[IgnoredVulns]]
-id = "EEF-CVE-2026-129344"
-ignoreUntil = 2026-12-15
-reason = "phoenix 1.8.16 V1 serializer broadcast crash (DoS). Fixed in phoenix 1.8.17: upgrade."
-
-[[IgnoredVulns]]
-id = "EEF-CVE-2026-126334"
-ignoreUntil = 2026-12-15
-reason = "phoenix_live_view 1.2.13 can skip live_session on_mount hooks; LemonWeb's operator live_session relies on on_mount. Fixed in 1.2.14: upgrade promptly."
-
-[[IgnoredVulns]]
 id = "EEF-CVE-2026-117678"
 ignoreUntil = 2026-12-31
 reason = "idna 7.1.0 punycode CPU use; hackney pins idna ~> 7.1.0, so the 8.0.0 fix needs a hackney release."

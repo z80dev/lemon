@@ -830,6 +830,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `osv-scanner.toml` (#734).
 - db_connection 2.10.2 → 2.10.3 (EEF-CVE-2026-133555: code execution through
   the `:log` option of a forged `DBConnection.Stream`), found by the OSV gate.
+- phoenix 1.8.16 → 1.8.17 (EEF-CVE-2026-128361, EEF-CVE-2026-129344) and
+  phoenix_live_view 1.2.13 → 1.2.15 (EEF-CVE-2026-126334: a LiveView joined
+  without a `url` skipped its `live_session` `on_mount` hooks, which gate the
+  LemonWeb operator pages); LemonWeb's vendored Phoenix and LiveView client
+  bundles match the new releases, and their OSV acceptances are removed.
 - Archive reads and in-place archive writes (`read`/`write` on `x.zip:member`,
   `.tar`, `.tar.gz`, `.tgz`) and SVGZ decoding now inflate through one
   streaming, abort-aware bound: members are rejected as soon as decoded bytes
