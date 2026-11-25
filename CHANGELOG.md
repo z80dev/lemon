@@ -434,6 +434,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   so a history record stored under them reports unknown counters. The
   completion's `tokens`/`cost_usd` duplicates of `total_tokens`/`cost.total`
   and the clients' cumulative `contextTokens` fallback are gone (#669).
+- Deleting a session (`sessions.delete`, `lemon sessions delete`, prune)
+  removes every piece of state kept for it, not only chat state, policy and
+  run history: memory documents (recall and search no longer return a deleted
+  conversation), session-scoped approval grants, the session goal, Telegram and
+  Discord message indexes and model overrides, the web workspace, router
+  compaction and agent-messaging state, and native session journals with their
+  model pins. `verified: true` now means every owning store verified its
+  deletion; a failure restores all of them. `sessions.reset` also revokes the
+  session's approval grants and drops message indexes, pending selected
+  resumes and compaction markers that could resume the old conversation (#692).
+
 - One-shot CLI commands (`lemon doctor`, `config`, `secrets`, `usage`, `context`,
   `learn`, `learning`, `mcp`, `update`, `migrate`, `providers`, `setup`, and the
   `mix lemon.secrets*`/`lemon.config`/`lemon.usage` tasks) boot the core in a

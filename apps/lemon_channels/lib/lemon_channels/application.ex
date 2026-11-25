@@ -51,6 +51,11 @@ defmodule LemonChannels.Application do
     # exists, so we ask it to mirror our hot index into its read cache.
     LemonCore.Store.register_cached_table(KnownTargetStore.table())
 
+    :ok =
+      LemonCore.SessionLifecycle.Participant.register(:channels, LemonChannels.SessionParticipant,
+        operations: [:delete, :reset]
+      )
+
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
         # After the router (50): the outbox flush must follow run suspension.

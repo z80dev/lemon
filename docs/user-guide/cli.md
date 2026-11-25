@@ -1289,10 +1289,21 @@ lemon sessions delete agent:research:main \
   --confirm agent:research:main
 ```
 
-A mismatch is a usage error and does not mutate state. The lifecycle service
-deletes canonical run history last, verifies all core-owned state is gone, and
-restores recoverable ancillary metadata if final deletion or verification
-fails.
+A mismatch is a usage error and does not mutate state. Deletion removes every
+piece of state kept for the session: chat state, session policy, lifecycle
+metadata, session-scoped approval grants, memory documents (so recall and
+search no longer return the conversation), the session goal, Telegram and
+Discord message indexes and model overrides, the web workspace, router
+compaction and agent-messaging state, and the native session journals with
+their model pins. Canonical run history is deleted last. Success is reported
+only after every store verified its deletion; if any step fails before run
+history is deleted, everything is restored and the session stays intact. A
+store that cannot be read stops the deletion before anything changes.
+
+`sessions.reset` keeps the session and its preferences (model overrides,
+goal, workspace, memory) but revokes its session-scoped approval grants and
+drops message indexes, pending selected resumes and compaction markers that
+would bring the old conversation back.
 
 ## omp delegate sessions
 

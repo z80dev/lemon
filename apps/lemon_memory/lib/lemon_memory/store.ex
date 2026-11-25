@@ -769,16 +769,38 @@ defmodule LemonMemory.Store do
   end
 
   @doc """
-  Delete all documents for a session scope.
+  Delete all documents of a session and their search rows in one transaction.
+
+  Synchronous: `:ok` means SQLite committed the deletion, so neither recall
+  nor search can return the session's documents afterwards.
   """
-  @spec delete_by_session(binary()) :: :ok
+  @spec delete_by_session(binary()) :: :ok | {:error, term()}
   def delete_by_session(session_key) when is_binary(session_key) do
     delete_by_session(__MODULE__, session_key)
   end
 
-  @spec delete_by_session(GenServer.server(), binary()) :: :ok
+  @spec delete_by_session(GenServer.server(), binary()) :: :ok | {:error, term()}
   def delete_by_session(server, session_key) when is_binary(session_key) do
-    GenServer.cast(server, {:delete_by_session, session_key})
+    GenServer.call(server, {:delete_by_session, session_key}, 15_000)
+  catch
+    :exit, _ -> {:error, :memory_unavailable}
+  end
+
+  @doc "Strictly read every document of a session, newest first."
+  @spec fetch_session_documents(GenServer.server(), binary()) ::
+          {:ok, [Document.t()]} | {:error, term()}
+  def fetch_session_documents(server \\ __MODULE__, session_key) when is_binary(session_key) do
+    GenServer.call(server, {:session_documents, session_key}, 15_000)
+  catch
+    :exit, _ -> {:error, :memory_unavailable}
+  end
+
+  @doc "Write documents read by `fetch_session_documents/2` back (idempotent upserts)."
+  @spec restore_documents(GenServer.server(), [Document.t()]) :: :ok | {:error, term()}
+  def restore_documents(server \\ __MODULE__, documents) when is_list(documents) do
+    GenServer.call(server, {:restore_documents, documents}, 15_000)
+  catch
+    :exit, _ -> {:error, :memory_unavailable}
   end
 
   @doc """
@@ -998,19 +1020,6 @@ defmodule LemonMemory.Store do
     {:noreply, state}
   end
 
-  def handle_cast({:delete_by_session, session_key}, state) do
-    run_delete(
-      state.conn,
-      state.stmts.fts_delete_by_session,
-      [session_key],
-      "fts_delete_by_session"
-    )
-
-    run_delete(state.conn, state.stmts.delete_by_session, [session_key], "delete_by_session")
-    prune_transfer_journal(state)
-    {:noreply, state}
-  end
-
   def handle_cast({:delete_by_agent, agent_id}, state) do
     run_delete(state.conn, state.stmts.fts_delete_by_agent, [agent_id], "fts_delete_by_agent")
     run_delete(state.conn, state.stmts.delete_by_agent, [agent_id], "delete_by_agent")
@@ -1220,6 +1229,33 @@ defmodule LemonMemory.Store do
   end
 
   @impl true
+  def handle_call({:delete_by_session, session_key}, _from, state) do
+    result = delete_session_documents(state, session_key)
+    if result == :ok, do: prune_transfer_journal(state)
+    {:reply, result, state}
+  end
+
+  def handle_call({:session_documents, session_key}, _from, state) do
+    # LIMIT -1 is SQLite's "no limit": a snapshot covers every document.
+    {:reply, do_query_result(state, state.stmts.get_by_session, [session_key, -1]), state}
+  end
+
+  def handle_call({:restore_documents, documents}, _from, state) do
+    result =
+      Enum.reduce_while(documents, :ok, fn
+        %Document{} = doc, :ok ->
+          case do_put(state, doc) do
+            :ok -> {:cont, :ok}
+            {:error, _} = error -> {:halt, error}
+          end
+
+        _other, :ok ->
+          {:halt, {:error, :invalid_document}}
+      end)
+
+    {:reply, result, state}
+  end
+
   def handle_call({:get_by_session, session_key, opts}, _from, state) do
     result = do_scoped_query(state, :get_by_session, session_key, opts)
     {:reply, result, state}
@@ -2075,6 +2111,31 @@ defmodule LemonMemory.Store do
   end
 
   defp decode_row(_), do: {:error, :invalid_row}
+
+  defp delete_session_documents(state, session_key) do
+    with :ok <- Sqlite3.execute(state.conn, "BEGIN IMMEDIATE"),
+         :ok <- step_statement(state, state.stmts.fts_delete_by_session, [session_key]),
+         :ok <- step_statement(state, state.stmts.delete_by_session, [session_key]),
+         :ok <- Sqlite3.execute(state.conn, "COMMIT") do
+      :ok
+    else
+      _failed ->
+        _ = Sqlite3.execute(state.conn, "ROLLBACK")
+        {:error, :memory_unavailable}
+    end
+  rescue
+    _ ->
+      _ = Sqlite3.execute(state.conn, "ROLLBACK")
+      {:error, :memory_unavailable}
+  end
+
+  defp step_statement(state, stmt, params) do
+    with :ok <- Sqlite3.reset(stmt),
+         :ok <- Sqlite3.bind(stmt, params),
+         :done <- Sqlite3.step(state.conn, stmt) do
+      :ok
+    end
+  end
 
   defp run_delete(conn, stmt, params, op) do
     with :ok <- Sqlite3.reset(stmt),

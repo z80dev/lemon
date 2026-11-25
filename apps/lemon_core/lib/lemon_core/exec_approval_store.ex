@@ -87,6 +87,36 @@ defmodule LemonCore.ExecApprovalStore do
   def put_session_policy(session_key, tool, action_hash, value),
     do: Store.put(@session_policy_table, {session_key, tool, action_hash}, value)
 
+  @doc """
+  Strictly read every session-scope grant of `session_key`, including grants
+  isolated by an invocation context of that session.
+  """
+  @spec fetch_session_grants(binary()) :: {:ok, [{term(), map()}]} | {:error, :store_unavailable}
+  def fetch_session_grants(session_key) when is_binary(session_key) do
+    with {:ok, entries} <- Store.fetch_all(@session_policy_table) do
+      grants = Enum.filter(entries, fn {key, _grant} -> session_grant_key?(key, session_key) end)
+      {:ok, Enum.sort_by(grants, &elem(&1, 0))}
+    end
+  end
+
+  @doc "Delete one session-scope grant by its exact policy key."
+  @spec delete_session_grant(term()) :: :ok | {:error, term()}
+  def delete_session_grant(key), do: Store.delete(@session_policy_table, key)
+
+  @doc "Write back one session-scope grant read by `fetch_session_grants/1`."
+  @spec restore_session_grant(term(), map()) :: :ok | {:error, term()}
+  def restore_session_grant(key, grant), do: Store.put(@session_policy_table, key, grant)
+
+  defp session_grant_key?({session_key, _tool, _hash}, session_key), do: true
+
+  defp session_grant_key?(
+         {{:invocation_context, session_key, _context}, _tool, _hash},
+         session_key
+       ),
+       do: true
+
+  defp session_grant_key?(_key, _session_key), do: false
+
   @spec put_pending(binary(), map()) :: :ok
   def put_pending(approval_id, value) when is_binary(approval_id) and is_map(value),
     do: Store.put(@pending_table, approval_id, value)

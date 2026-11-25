@@ -55,6 +55,8 @@ defmodule LemonAgent.Application do
       children ++
         LemonAgent.GenAISpans.children(Application.get_env(:lemon_agent, :gen_ai_spans, []))
 
+    :ok = LemonCore.SessionLifecycle.Participant.register(:goals, LemonAgent.SessionParticipant)
+
     opts = [strategy: :one_for_one, name: LemonAgent.Supervisor]
     Supervisor.start_link(children, opts)
   end
