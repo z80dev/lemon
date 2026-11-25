@@ -6,7 +6,11 @@ defmodule LemonControlPlane.Methods.SessionsCompactTest do
   defmodule RecordingProvider do
     def compact_session(key, opts) do
       send(self(), {:compact_request, key, opts})
-      Process.get(:compaction_result, :ok)
+
+      case Process.get(:compaction_result, :ok) do
+        {:raise, exception} -> raise exception
+        result -> result
+      end
     end
   end
 
@@ -117,23 +121,42 @@ defmodule LemonControlPlane.Methods.SessionsCompactTest do
   test "classifies native refusals and never leaks arbitrary runtime results or exceptions" do
     for {reason, code} <- [
           session_not_found: :not_found,
-          busy: :conflict,
-          unavailable: :unavailable
+          busy: :conflict
         ] do
       Process.put(:compaction_result, {:error, reason})
       assert {:error, {^code, _, _}} = SessionsCompact.handle(%{"sessionKey" => "compact"}, %{})
     end
 
+    for reason <- [:unavailable, :session_registry_not_available] do
+      Process.put(:compaction_result, {:error, reason})
+
+      assert SessionsCompact.handle(%{"sessionKey" => "compact"}, %{}) ==
+               {:error,
+                {:unavailable, "Native session runtime unavailable", %{"reason" => "unavailable"}}}
+    end
+
     for result <- [
           {:error, {:provider_failure, "Bearer PRIVATE_TOKEN", "/secret/summary"}},
-          {:error, RuntimeError.exception("private exception and summary")},
-          {:ok, %{summary: "PRIVATE_SUMMARY", tokens_before: "PRIVATE_TOKEN"}},
-          "unexpected private return"
+          {:error, RuntimeError.exception("private exception and summary")}
         ] do
       Process.put(:compaction_result, result)
 
       assert {:error, {:internal_error, "Native session operation failed", nil}} =
                SessionsCompact.handle(%{"sessionKey" => "compact"}, %{})
+    end
+
+    for result <- [
+          {:ok, %{summary: "PRIVATE_SUMMARY", tokens_before: "PRIVATE_TOKEN"}},
+          "unexpected private return",
+          {:raise, RuntimeError.exception("private raised exception")}
+        ] do
+      Process.put(:compaction_result, result)
+
+      assert SessionsCompact.handle(%{"sessionKey" => "compact"}, %{}) ==
+               {:error,
+                {:unavailable,
+                 "Native session mutation outcome is unknown; reconcile before retrying",
+                 %{"reason" => "outcome_unknown", "retrySafe" => false}}}
     end
   end
 

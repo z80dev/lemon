@@ -46,10 +46,6 @@ defmodule LemonControlPlane.Methods.SessionsCompact do
              "summary" => summary(session_key, opts)
            }}
 
-        {:error, :session_registry_not_available} ->
-          {:error,
-           {:internal_error, "Failed to compact session", :session_registry_not_available}}
-
         {:error, reason} ->
           NativeSessions.failure(reason)
       end
@@ -72,7 +68,7 @@ defmodule LemonControlPlane.Methods.SessionsCompact do
   defp compact_session(session_key, opts) do
     case AgentRuntime.mutate(:compact_session, [session_key, opts]) do
       :ok -> :ok
-      {:error, :unavailable} -> {:error, :session_registry_not_available}
+      {:error, :session_registry_not_available} -> {:error, :unavailable}
       {:error, reason} -> {:error, reason}
       _ -> {:error, :outcome_unknown}
     end
