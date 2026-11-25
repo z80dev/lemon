@@ -115,7 +115,6 @@ defmodule CodingAgent.Session.StartupIsolationTest do
   # about five seconds, so every assertion made while the gate is held is
   # about ordering (the blocked start is still pending), not elapsed time.
   test "a session whose init blocks on MCP does not delay another start or stop", ctx do
-    existing = SessionSupervisor.list_sessions()
     {:ok, stopped} = SessionSupervisor.start_session(base_opts(ctx))
 
     slow =
@@ -134,10 +133,8 @@ defmodule CodingAgent.Session.StartupIsolationTest do
     refute Process.alive?(stopped)
     assert Task.yield(slow, 0) == nil
 
-    # The second start was admitted and is initializing beside the blocked one.
-    LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(fn ->
-      length(SessionSupervisor.list_sessions() -- existing) == 2
-    end)
+    assert {:ok, {:ok, pid}} = Task.yield(other, 3_000) || Task.shutdown(other)
+    on_exit(fn -> SessionSupervisor.stop_session(pid) end)
 
     assert Task.yield(slow, 0) == nil
     send(handler, :release)
@@ -146,8 +143,6 @@ defmodule CodingAgent.Session.StartupIsolationTest do
     on_exit(fn -> SessionSupervisor.stop_session(session) end)
     assert Session.get_state(session).mcp_session_id =~ "profile-mcp-"
 
-    assert {:ok, pid} = Task.await(other, 60_000)
-    on_exit(fn -> SessionSupervisor.stop_session(pid) end)
     assert session in SessionSupervisor.list_sessions()
     assert pid in SessionSupervisor.list_sessions()
   end
