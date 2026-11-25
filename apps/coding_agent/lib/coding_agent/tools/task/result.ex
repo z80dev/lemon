@@ -4,7 +4,6 @@ defmodule CodingAgent.Tools.Task.Result do
   require Logger
 
   alias CodingAgent.JoinAwait
-  alias CodingAgent.RunGraph
   alias CodingAgent.TaskStore
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
@@ -57,7 +56,7 @@ defmodule CodingAgent.Tools.Task.Result do
 
         case JoinAwait.await(run_ids, task_ids, mode, signal, opts) do
           {:ok, join_result} ->
-            suppressed = joined_completion_task_ids(task_ids, join_result)
+            suppressed = joined_task_ids(task_ids, join_result)
             TaskStore.finish_auto_followup_join(task_ids, suppressed, join_token)
             build_join_result(task_ids, join_result)
 
@@ -246,37 +245,20 @@ defmodule CodingAgent.Tools.Task.Result do
     {:ok, Map.get(params, "mode") |> normalize_join_mode()}
   end
 
-  defp joined_completion_task_ids(task_ids, %{mode: :wait_any, run: run}) do
-    if RunGraph.normalize_status(run[:status]) == :completed do
-      task_ids
-      |> Enum.find(fn task_id ->
-        case TaskStore.get(task_id) do
-          {:ok, %{run_id: run_id}, _events} -> run_id == run[:id]
-          _ -> false
-        end
-      end)
-      |> List.wrap()
-    else
-      []
-    end
-  end
-
-  defp joined_completion_task_ids(task_ids, %{mode: :wait_all, runs: runs}) do
-    completed_run_ids =
-      runs
-      |> Enum.filter(&(RunGraph.normalize_status(&1[:status]) == :completed))
-      |> MapSet.new(& &1[:id])
-
-    Enum.filter(task_ids, fn task_id ->
-      case TaskStore.get(task_id) do
-        {:ok, %{run_id: run_id}, _events} ->
-          MapSet.member?(completed_run_ids, run_id)
-
-        _ ->
-          false
+  # A join reports every task it returns, whatever its terminal status, so none
+  # of them may wake the parent again with a followup.
+  defp joined_task_ids(task_ids, %{mode: :wait_any, run: run}) do
+    task_ids
+    |> Enum.find(fn task_id ->
+      case TaskStore.get_record(task_id) do
+        {:ok, %{run_id: run_id}} -> run_id == run[:id]
+        _ -> false
       end
     end)
+    |> List.wrap()
   end
+
+  defp joined_task_ids(task_ids, %{mode: :wait_all}), do: task_ids
 
   defp build_parent_question_result(task_ids, mode, request) do
     %AgentToolResult{

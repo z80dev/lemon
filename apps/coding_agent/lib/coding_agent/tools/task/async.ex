@@ -27,6 +27,9 @@ defmodule CodingAgent.Tools.Task.Async do
           :ok | {:error, launch_error()}
   def run_async(task_id, run_id, run_fun, followup_context, lifecycle_context) do
     supervisor = Map.get(lifecycle_context, :task_supervisor, CodingAgent.TaskSupervisor)
+    # Followups skip children cancelled because their parent aborted.
+    followup_context =
+      Map.put(followup_context, :parent_signal, lifecycle_context[:parent_signal])
 
     turn =
       turn(fn result ->
@@ -272,6 +275,10 @@ defmodule CodingAgent.Tools.Task.Async do
         maybe_record_budget_completion(run_id, %{error: other})
         maybe_send_async_followup(followup_context, task_id, run_id, {:error, other})
     end
+
+    # Owner-side early terminalization (cancel before launch, parent death) has
+    # no later terminal event to clean up after it.
+    delete_progress_binding(run_id)
   end
 
   defp maybe_send_async_followup(followup_context, task_id, run_id, outcome) do

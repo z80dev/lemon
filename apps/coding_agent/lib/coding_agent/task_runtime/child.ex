@@ -22,15 +22,20 @@ defmodule CodingAgent.TaskRuntime.Child do
 
   | Phase | Event | Next phase |
   | --- | --- | --- |
-  | running | worker exit, completed with retained session | idle (park TTL; zero disables) |
-  | running | worker exit, completed without live session | parked |
+  | running | worker exit, completed and resumable with a live session | idle (park TTL; zero disables) |
+  | running | worker exit, completed and resumable without a live session | parked |
+  | running | worker exit, completed but not resumable | completed |
   | running | worker exit otherwise | aborted |
   | idle | park timeout | parked |
   | idle or parked | message accepted | running |
   | live | cancel, parent abort or scheduler DOWN | cancelling (force-cancel grace) |
-  | cancelling | worker exit or force timeout | killed |
-  | killed, aborted | retention timeout | stopped |
+  | cancelling | worker exit or force timeout (at once without a worker) | killed |
+  | killed, aborted, completed | retention timeout | stopped |
   | any | parent session DOWN | stopped |
+
+  Every cancellation and parent DOWN runs the turn's finalizer (a no-op once
+  the worker claimed the turn), so a child cancelled before its worker started
+  still terminalizes its graph run, budget and progress binding.
 
   State timeouts belong to a phase, so traffic never resets a park or
   force-cancel deadline and leaving the phase cancels it.
@@ -58,7 +63,7 @@ defmodule CodingAgent.TaskRuntime.Child do
   @force_cancel_ms 2_000
   @adopting_attempts 2
   @terminalizing_attempt 3
-  @terminal_phases [:killed, :aborted]
+  @terminal_phases [:killed, :aborted, :completed]
   @bridge_terminal_events [
     :run_completed,
     :task_completed,
@@ -383,10 +388,9 @@ defmodule CodingAgent.TaskRuntime.Child do
   def handle_event(:state_timeout, :force_cancel, :cancelling, data) do
     stop_child(data)
 
-    if is_pid(data.worker) do
-      Process.exit(data.worker, :kill)
-      finalize(data, "Task aborted")
-    end
+    if is_pid(data.worker), do: Process.exit(data.worker, :kill)
+    # Claim-protected: a no-op when the worker (or an earlier turn) finalized.
+    finalize(data, "Task aborted")
 
     TaskStore.set_agent_state(data.id, :killed)
     data = data |> detach_worker() |> detach_session() |> drop_pending()
@@ -445,6 +449,8 @@ defmodule CodingAgent.TaskRuntime.Child do
     end
   end
 
+  # Without a worker there is nothing to wait for: finalize at once.
+  defp phase_timeouts(:cancelling, %{worker: nil}), do: [{:state_timeout, 0, :force_cancel}]
   defp phase_timeouts(:cancelling, _data), do: [{:state_timeout, @force_cancel_ms, :force_cancel}]
 
   defp phase_timeouts(phase, _data) when phase in @terminal_phases,
@@ -484,8 +490,16 @@ defmodule CodingAgent.TaskRuntime.Child do
       next(phase, data)
     else
       stop_child(data)
-      phase = if phase in [:cancelling, :killed], do: :killed, else: :aborted
-      TaskStore.set_agent_state(data.id, phase)
+
+      phase =
+        cond do
+          phase in [:cancelling, :killed] -> :killed
+          # A completed turn that cannot be resumed is still a completed task.
+          TaskRuntime.status(projection(data), data.id) == :completed -> :completed
+          true -> :aborted
+        end
+
+      if phase != :completed, do: TaskStore.set_agent_state(data.id, phase)
       data = data |> detach_session() |> drop_pending()
       next(phase, %{data | resume: nil})
     end
@@ -512,10 +526,9 @@ defmodule CodingAgent.TaskRuntime.Child do
     {:next_state, _phase, data, _actions} = cancel(phase, data)
     stop_child(data)
 
-    if is_pid(data.worker) do
-      Process.exit(data.worker, :kill)
-      finalize(data, "Task aborted")
-    end
+    if is_pid(data.worker), do: Process.exit(data.worker, :kill)
+    # Finalize even before launch so graph, budget and progress terminalize.
+    finalize(data, "Task aborted")
 
     {:stop, :normal, data}
   end

@@ -33,7 +33,11 @@ defmodule CodingAgent.AbortWaitersTest do
     owner = TaskRuntime.whereis(id)
     assert [{^owner, _}] = Registry.lookup(LemonAgent.AbortSignal.Registry, parent_signal)
     AbortSignal.abort(parent_signal)
-    assert {:cancelling, %{phase: :cancelling}} = :sys.get_state(owner)
+    # With no worker to wait for, the cancellation terminalizes at once.
+    CodingAgent.AsyncHelpers.assert_eventually(fn ->
+      match?({:killed, %{phase: :killed}}, :sys.get_state(owner))
+    end)
+
     assert AbortSignal.aborted?(signal)
   end
 
