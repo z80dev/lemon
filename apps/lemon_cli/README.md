@@ -405,7 +405,7 @@ failure terms are never printed.
 ## Context references
 
 `lemon context preview` and `lemon context resolve` are packaged adapters over
-the shared `LemonCore.Context` service. They accept root-confined
+the shared `LemonSkills.Context` service. They accept root-confined
 `@file:`/`@folder:`, shell-free `@git-diff`, SSRF-guarded `@url:`, and redacted
 `@session:` references. PDF, DOCX, XLSX, PPTX, and ipynb content is sniffed
 from bytes and selected under explicit byte/page/item/depth/time/archive

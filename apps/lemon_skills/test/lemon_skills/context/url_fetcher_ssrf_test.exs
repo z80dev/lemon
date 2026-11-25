@@ -1,7 +1,7 @@
-defmodule LemonCore.Context.URLFetcherSsrfTest do
+defmodule LemonSkills.Context.URLFetcherSsrfTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.Context.URLFetcher
+  alias LemonSkills.Context.URLFetcher
 
   test "metadata aliases, IPv4-mapped and 6to4 targets are rejected" do
     for url <- [

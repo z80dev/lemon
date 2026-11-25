@@ -1,7 +1,7 @@
-defmodule LemonCore.ContextTest do
+defmodule LemonSkills.ContextTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.Context
+  alias LemonSkills.Context
   alias LemonCore.{RunStore, SessionLifecycle}
 
   setup do
@@ -11,6 +11,19 @@ defmodule LemonCore.ContextTest do
     File.mkdir_p!(Path.join(root, "docs/nested"))
     on_exit(fn -> File.rm_rf!(root) end)
     %{root: root}
+  end
+
+  test "the context service ships in lemon_skills, not the published lemon_core package" do
+    assert Application.get_application(Context) == :lemon_skills
+    assert Application.get_application(Context.Document) == :lemon_skills
+    assert Application.get_application(Context.URLFetcher) == :lemon_skills
+
+    {:ok, core_modules} = :application.get_key(:lemon_core, :modules)
+
+    refute Enum.any?(
+             core_modules,
+             &String.starts_with?(Atom.to_string(&1), "Elixir.LemonCore.Context")
+           )
   end
 
   test "preview and resolve share exact budgets while preview omits content", %{root: root} do
@@ -124,7 +137,7 @@ defmodule LemonCore.ContextTest do
     session_key = "agent:context_session_#{suffix}:main"
     run_id = "context-session-run-#{suffix}"
     secret = "context-session-secret-#{suffix}"
-    on_exit(fn -> LemonCore.TestSupport.SessionCleanup.delete(session_key) end)
+    on_exit(fn -> LemonSkills.TestSupport.SessionCleanup.delete(session_key) end)
 
     :ok =
       RunStore.finalize(run_id, %{

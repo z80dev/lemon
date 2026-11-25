@@ -2,7 +2,7 @@
 
 ## Learn from bounded sources
 
-`LemonSkills.Learn` turns existing `LemonCore.Context` references into one
+`LemonSkills.Learn` turns existing `LemonSkills.Context` references into one
 durable-memory proposal and one audited synthesis draft. `review/2` never
 writes; it returns hashes, counts, audit rule identifiers, and destination
 conflicts without returning source text, prompts, paths, URLs, or secrets.

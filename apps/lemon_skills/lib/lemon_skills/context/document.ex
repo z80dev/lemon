@@ -1,4 +1,4 @@
-defmodule LemonCore.Context.Document do
+defmodule LemonSkills.Context.Document do
   @moduledoc """
   Bounded, format-sniffed text extraction for context references.
 

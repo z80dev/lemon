@@ -13,6 +13,12 @@
 
 ### Changed
 
+- `LemonSkills.Context` (with `Context.Document` and `Context.URLFetcher`), the
+  bounded context-reference preview/resolve service behind `lemon context` and
+  `LemonSkills.Learn`, moved here from `lemon_core` (`LemonCore.Context`). Its
+  references, limits and results are unchanged; `@url:` fetching stays on the
+  shared `LemonCore.Net.HTTP` address policy (#724).
+
 - **Breaking:** media provider HTTP clients, the Google JWT exchange and the
   artifact writer moved to `lemon_media` (`LemonMedia.Providers`,
   `LemonMedia.GoogleAuth`, `LemonMedia.Artifact`); `MediaCommon.write_artifact/2`,
