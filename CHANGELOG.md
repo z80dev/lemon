@@ -215,6 +215,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Cron never announces a job or run change that failed to persist: when a
+  store write fails, `CronManager` emits no event, leaves its in-memory state
+  unchanged and returns `{:error, :store_unavailable}` (or
+  `{:error, :outcome_unknown}` when the write may have landed) from add,
+  update, model refresh, remove, run-now, wake and abort. A run is never
+  submitted, and a terminal never delivered or reported as an abort, unless
+  its write was confirmed (#87).
 - Discord boots again: `lemon_channels` now starts `:gun`, which Nostrum needs
   for its gateway and REST connections; previously a configured bot token
   failed with `:noproc` and no Discord service started (#670).
