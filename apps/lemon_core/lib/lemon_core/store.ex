@@ -1039,7 +1039,7 @@ defmodule LemonCore.Store do
         runs_retention_ms = positive_ms!(config, :runs_retention_ms, @default_runs_retention_ms)
 
         # Client VMs leave periodic sweeps to the runtime owning the database.
-        if Keyword.get(config, :sweep, true), do: schedule_sweep()
+        _ = if Keyword.get(config, :sweep, true), do: schedule_sweep()
 
         {:ok,
          %{

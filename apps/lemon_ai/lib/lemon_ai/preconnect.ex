@@ -17,9 +17,10 @@ defmodule LemonAi.Preconnect do
 
   @doc "Queues an optional warm-up hint; invalid or unavailable hints are ignored."
   def hint(%Model{} = model) do
-    with {:ok, origin} <- origin(model), pid when is_pid(pid) <- Process.whereis(__MODULE__) do
-      GenServer.cast(pid, {:hint, origin})
-    end
+    _ =
+      with {:ok, origin} <- origin(model), pid when is_pid(pid) <- Process.whereis(__MODULE__) do
+        GenServer.cast(pid, {:hint, origin})
+      end
 
     :ok
   end
@@ -48,7 +49,7 @@ defmodule LemonAi.Preconnect do
 
     if map_size(origins) < 8 and not Map.has_key?(origins, origin) do
       request = state.request
-      Task.Supervisor.start_child(LemonAi.PreconnectTasks, fn -> request.(origin) end)
+      _ = Task.Supervisor.start_child(LemonAi.PreconnectTasks, fn -> request.(origin) end)
       {:noreply, %{state | origins: Map.put(origins, origin, now + 30_000)}}
     else
       {:noreply, %{state | origins: origins}}

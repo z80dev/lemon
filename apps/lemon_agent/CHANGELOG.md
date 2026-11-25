@@ -10,6 +10,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonAgent.AbortSignal.t()` (an `:atomics` reference); abort-signal,
+  loop-input and callback typespecs now use it, and the package is
+  Dialyzer-clean (#734). No runtime change.
 - `Workspace.KanbanStore.changed_topic/0` and `ring_changed/1`: every
   operator-visible board/task write (not lease renewals) broadcasts the
   content-free doorbell `{:kanban_changed, board_id}` on the `kanban` Bus topic (#687).

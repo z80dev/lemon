@@ -15,6 +15,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- Dialyzer-clean (#734): `Lemon.Reload` no longer reports a successful
+  code change as an error; extension manifests that are valid JSON but not an
+  object are rejected as such instead of as oversized; several public typespecs
+  (exec-approval store writes, `Update.Remote` check results, archive
+  preflight) now match the values returned. The crash-report stand-in
+  exception is named `LemonCore.StatusRedaction.RedactedCrashError` (#499).
 - `LemonCore.Config.Features`: `routing_feedback` now defaults to `:off`
   (`%Features{}` and `resolve/1` with no setting); enable it with `"on"` (#647).
 - **Breaking:** the test harness (`LemonCore.Testing`, `Testing.Case`,

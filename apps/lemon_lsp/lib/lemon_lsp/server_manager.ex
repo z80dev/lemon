@@ -420,7 +420,7 @@ defmodule LemonLsp.ServerManager do
     requests =
       Enum.reverse(parked) ++
         Enum.map(targeted, fn {_ref, request} ->
-          Process.cancel_timer(request.timer)
+          _ = Process.cancel_timer(request.timer)
           request
         end)
 
@@ -458,7 +458,7 @@ defmodule LemonLsp.ServerManager do
         {:noreply, state}
 
       {request, evictions} ->
-        Process.cancel_timer(request.timer)
+        _ = Process.cancel_timer(request.timer)
         state = %{state | evictions: evictions}
 
         case reply do

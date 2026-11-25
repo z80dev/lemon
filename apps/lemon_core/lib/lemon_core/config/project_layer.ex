@@ -171,7 +171,6 @@ defmodule LemonCore.Config.ProjectLayer do
   end
 
   defp rule_for(rules, key) when is_map(rules), do: Map.get(rules, key, Map.get(rules, :any))
-  defp rule_for(_rules, _key), do: nil
 
   defp apply_rule(nil, _value, _operator, _path), do: {:reject, :operator_only}
   defp apply_rule(:allow, value, _operator, _path), do: {:allow, value}

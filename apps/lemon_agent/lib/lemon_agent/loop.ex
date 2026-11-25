@@ -110,7 +110,7 @@ defmodule LemonAgent.Loop do
           [LemonAgent.Types.agent_message()],
           AgentContext.t(),
           AgentLoopConfig.t(),
-          reference() | nil,
+          AbortSignal.t() | nil,
           AgentLoopConfig.stream_fn() | nil
         ) :: EventStream.t()
   def agent_loop(prompts, context, config, signal, stream_fn) do
@@ -121,7 +121,7 @@ defmodule LemonAgent.Loop do
           [LemonAgent.Types.agent_message()],
           AgentContext.t(),
           AgentLoopConfig.t(),
-          reference() | nil,
+          AbortSignal.t() | nil,
           AgentLoopConfig.stream_fn() | nil,
           pid() | nil
         ) :: EventStream.t()
@@ -186,7 +186,7 @@ defmodule LemonAgent.Loop do
   @spec agent_loop_continue(
           AgentContext.t(),
           AgentLoopConfig.t(),
-          reference() | nil,
+          AbortSignal.t() | nil,
           AgentLoopConfig.stream_fn() | nil
         ) :: EventStream.t()
   def agent_loop_continue(context, config, signal, stream_fn) do
@@ -196,7 +196,7 @@ defmodule LemonAgent.Loop do
   @spec agent_loop_continue(
           AgentContext.t(),
           AgentLoopConfig.t(),
-          reference() | nil,
+          AbortSignal.t() | nil,
           AgentLoopConfig.stream_fn() | nil,
           pid() | nil
         ) :: EventStream.t()
@@ -617,7 +617,7 @@ defmodule LemonAgent.Loop do
                 "api=#{inspect(message.api)} " <>
                 "model=#{inspect(message.model)} " <>
                 "error_message=#{inspect(message.error_message)} " <>
-                "content_blocks=#{length(message.content || [])}"
+                "content_blocks=#{length(List.wrap(message.content))}"
             )
 
             reason =

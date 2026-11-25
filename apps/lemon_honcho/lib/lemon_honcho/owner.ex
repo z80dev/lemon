@@ -202,8 +202,6 @@ defmodule LemonHoncho.Owner do
     end
   end
 
-  defp document_memory(_meta), do: :error
-
   # `v2-<role>-<readable label>-<owner digest>`: the label is for a human
   # reading Honcho's dashboard; identity is the digest. Within Honcho's
   # `[A-Za-z0-9_-]{1,512}` peer id rule by construction.

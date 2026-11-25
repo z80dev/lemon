@@ -393,7 +393,7 @@ defmodule LemonMCP.Client.HTTP do
         state
 
       {entry, requests} ->
-        Process.cancel_timer(entry.timer)
+        _ = Process.cancel_timer(entry.timer)
         Process.demonitor(entry.caller_ref, [:flush])
         GenServer.reply(entry.from, reply)
         %{state | requests: requests}
@@ -402,7 +402,7 @@ defmodule LemonMCP.Client.HTTP do
 
   defp drop(state, id, entry) do
     state = stop_task(state, entry)
-    Process.cancel_timer(entry.timer)
+    _ = Process.cancel_timer(entry.timer)
     %{state | requests: Map.delete(state.requests, id)}
   end
 

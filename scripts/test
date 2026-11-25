@@ -334,6 +334,7 @@ run_quality() {
   check_skipped_tests
   scripts/check_changelog
   python3 scripts/test_changed_tests.py
+  python3 scripts/test_ci_gates.py
   node --test scripts/check_docs_source_refs.test.mjs
   node scripts/check_docs_source_refs.mjs
   run_shellcheck

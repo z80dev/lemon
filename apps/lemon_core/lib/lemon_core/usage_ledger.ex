@@ -209,7 +209,7 @@ defmodule LemonCore.UsageLedger do
 
   @impl true
   def handle_cast({:record, entry, store}, state) do
-    do_record(entry, store)
+    _ = do_record(entry, store)
     {:noreply, state}
   end
 

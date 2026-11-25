@@ -706,9 +706,10 @@ defmodule LemonCore.ExecApprovals do
       decision == :deny ->
         result = finish_resolution(approval_id, claim, :denied, decision)
 
-        settle(result, approval_id, pending, fn ->
-          emit_resolution(approval_id, pending, :deny)
-        end)
+        _ =
+          settle(result, approval_id, pending, fn ->
+            emit_resolution(approval_id, pending, :deny)
+          end)
 
         result
 

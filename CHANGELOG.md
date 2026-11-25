@@ -300,6 +300,20 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `agent.wait` returns `UNAVAILABLE` when the run store cannot be read instead
   of reporting a timeout, and no longer copies a raw exception message into its
   error details (#620).
+- Source (`bin/lemon`) and packaged distributed runtimes start OTP's `rex`,
+  `global_name_server` and `global_group` again: `-kernel start_distribution
+  false` (#551) had dropped them, so every native session start failed on
+  `:global` and the weekly Product Smoke was red (#499).
+- `scripts/test quality` passes Credo again: the crash-report stand-in exception
+  is `LemonCore.StatusRedaction.RedactedCrashError` (#499).
+- The nightly offline latency lane names the failing boot and the probe's fixed
+  failure message (or only the exception module) instead of a bare "runtime
+  failed" (#499).
+- Dialyzer: the five published packages (`lemon_core`, `lemon_ai`,
+  `lemon_agent`, `lemon_memory`, `lemon_platform_test`) and the other gated apps
+  have zero findings; fixes include `Lemon.Reload` treating a successful code
+  change as an error and extension manifests reporting non-object JSON as
+  oversized (#499, #734).
 - One-shot CLI commands (`lemon doctor`, `config`, `secrets`, `usage`, `context`,
   `learn`, `learning`, `mcp`, `update`, `migrate`, `providers`, `setup`, and the
   `mix lemon.secrets*`/`lemon.config`/`lemon.usage` tasks) boot the core in a
@@ -889,6 +903,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- The OSV dependency scan is a gate: it uses OSV-Scanner 2.7.1 (2.3.5 failed
+  against the current OSV API and reported "No issues found"), scans every
+  shipped lockfile including `apps/lemon_web/assets` and `products/lemon_bot`,
+  and fails on any finding not accepted, with a reason and expiry, in
+  `osv-scanner.toml` (#734).
+- db_connection 2.10.2 → 2.10.3 (EEF-CVE-2026-133555: code execution through
+  the `:log` option of a forged `DBConnection.Stream`), found by the OSV gate.
 - Archive reads and in-place archive writes (`read`/`write` on `x.zip:member`,
   `.tar`, `.tar.gz`, `.tgz`) and SVGZ decoding now inflate through one
   streaming, abort-aware bound: members are rejected as soon as decoded bytes

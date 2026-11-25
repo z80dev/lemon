@@ -114,7 +114,7 @@ defmodule LemonCore.Update.ManagedInstall do
       tmp = Path.join(dir, ".current.tmp.#{os_pid()}")
 
       try do
-        File.rm(tmp)
+        _ = File.rm(tmp)
 
         with :ok <- File.ln_s(version, tmp),
              :ok <- File.rename(tmp, current) do
@@ -237,7 +237,7 @@ defmodule LemonCore.Update.ManagedInstall do
       tmp = Path.join(root, ".current.tmp.#{os_pid()}")
 
       try do
-        File.rm(tmp)
+        _ = File.rm(tmp)
 
         with :ok <- File.ln_s(Path.join("versions", key), tmp),
              :ok <- File.rename(tmp, current) do
@@ -497,7 +497,7 @@ defmodule LemonCore.Update.ManagedInstall do
 
   defp replace(partial, final) do
     aside = "#{final}.broken.#{os_pid()}"
-    File.rm_rf(aside)
+    _ = File.rm_rf(aside)
 
     case File.rename(final, aside) do
       :ok -> swap_in(partial, final, aside)
@@ -508,11 +508,11 @@ defmodule LemonCore.Update.ManagedInstall do
   defp swap_in(partial, final, aside) do
     case rename_into_place(partial, final) do
       {:ok, dir} ->
-        File.rm_rf(aside)
+        _ = File.rm_rf(aside)
         {:ok, dir}
 
       {:error, reason} ->
-        File.rename(aside, final)
+        _ = File.rename(aside, final)
         {:error, reason}
     end
   end

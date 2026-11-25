@@ -227,14 +227,14 @@ defmodule LemonAgent.Types do
              %{
                id: String.t(),
                json: String.t(),
-               signal: reference() | nil,
+               signal: LemonAgent.AbortSignal.t() | nil,
                prepare: (map() -> {:ok, map()} | {:error, [String.t()]})
              }}
             | {:settle, String.t()}
     @type execute_fn ::
             (tool_call_id :: String.t(),
              params :: map(),
-             signal :: reference() | nil,
+             signal :: LemonAgent.AbortSignal.t() | nil,
              on_update :: on_update() | nil ->
                LemonAgent.Types.AgentToolResult.t()
                | {:ok, LemonAgent.Types.AgentToolResult.t()}
@@ -338,12 +338,16 @@ defmodule LemonAgent.Types do
 
     Contains the system prompt, message history, and available tools.
     Similar to LemonAi.Types.Context but uses AgentTool and agent_message.
+
+    Loop entry points accept this struct or a plain map with the same
+    conversation fields. `terminate_turn` is initialized by the loop.
     """
-    @type t :: %__MODULE__{
-            system_prompt: LemonAi.SystemPrompt.t(),
-            messages: [LemonAgent.Types.agent_message()],
-            tools: [LemonAgent.Types.AgentTool.t()],
-            terminate_turn: boolean()
+    @type t :: %{
+            required(:system_prompt) => LemonAi.SystemPrompt.t(),
+            required(:messages) => [LemonAgent.Types.agent_message()],
+            required(:tools) => [LemonAgent.Types.AgentTool.t()],
+            optional(:terminate_turn) => boolean(),
+            optional(any()) => any()
           }
     defstruct system_prompt: nil, messages: [], tools: [], terminate_turn: false
 
@@ -382,7 +386,7 @@ defmodule LemonAgent.Types do
     """
     @type t :: %__MODULE__{
             system_prompt: LemonAi.SystemPrompt.t(),
-            model: LemonAi.Types.Model.t(),
+            model: LemonAi.Types.Model.t() | nil,
             thinking_level: LemonAgent.Types.thinking_level(),
             tools: [LemonAgent.Types.AgentTool.t()],
             messages: [LemonAgent.Types.agent_message()],
@@ -484,12 +488,12 @@ defmodule LemonAgent.Types do
             ([LemonAgent.Types.agent_message()] ->
                [LemonAi.Types.message()] | {:ok, [LemonAi.Types.message()]} | {:error, term()})
     @type transform_context_fn ::
-            ([LemonAgent.Types.agent_message()], signal :: reference() | nil ->
+            ([LemonAgent.Types.agent_message()], signal :: LemonAgent.AbortSignal.t() | nil ->
                [LemonAgent.Types.agent_message()]
                | {:ok, [LemonAgent.Types.agent_message()]}
                | {:error, term()})
     @type get_api_key_fn :: (provider :: String.t() -> String.t() | nil)
-    @type get_model_fn :: (-> LemonAi.Types.Model.t())
+    @type get_model_fn :: (-> LemonAi.Types.Model.t() | nil)
     @type resolve_stream_options_fn ::
             (LemonAi.Types.Model.t(), LemonAi.Types.Model.t(), LemonAi.Types.StreamOptions.t() ->
                LemonAi.Types.StreamOptions.t())
@@ -502,7 +506,10 @@ defmodule LemonAgent.Types do
              LemonAi.Types.StreamOptions.t() ->
                :ok | {:error, term()})
     @type resolve_thinking_fn ::
-            (LemonAi.Types.Model.t(), LemonAgent.Types.agent_message(), reference() | nil ->
+            (LemonAi.Types.Model.t(),
+             LemonAgent.Types.agent_message(),
+             LemonAgent.AbortSignal.t()
+             | nil ->
                {:ok, LemonAi.Types.StreamOptions.thinking_level() | nil} | {:error, :aborted})
     @type on_thinking_resolved_fn ::
             (term(), LemonAi.Types.StreamOptions.thinking_level() | nil -> term())
@@ -517,7 +524,7 @@ defmodule LemonAgent.Types do
 
     @type hooks :: %{
             optional(:queue_owner) => pid() | nil,
-            optional(:queue_ref) => reference() | nil,
+            optional(:queue_ref) => LemonAgent.AbortSignal.t() | nil,
             optional(:queue_timeout) => timeout(),
             optional(:queued_start) => boolean(),
             optional(:emit_system_prompt) => boolean(),
@@ -526,7 +533,7 @@ defmodule LemonAgent.Types do
           }
 
     @type t :: %__MODULE__{
-            model: LemonAi.Types.Model.t(),
+            model: LemonAi.Types.Model.t() | nil,
             convert_to_llm: convert_to_llm_fn(),
             transform_context: transform_context_fn() | nil,
             get_api_key: get_api_key_fn() | nil,
@@ -627,6 +634,7 @@ defmodule LemonAgent.Types do
 
   ## Message Lifecycle
   Emitted for user, assistant, and tool_result messages.
+  - `{:input_bound, ids}` - Queued input IDs claimed by the active invocation
   - `{:message_start, message}` - Message processing started
   - `{:message_update, assistant_event}` - Delta-only provider update (assistant only);
     use `LemonAgent.Agent.get_state/1` for a partial message snapshot
@@ -656,6 +664,7 @@ defmodule LemonAgent.Types do
              %{run_usage: LemonAgent.Budget.usage(), session_usage: LemonAgent.Budget.usage()}}
           | {:budget_exceeded, details :: LemonAgent.Budget.details()}
           | {:budget_warning, details :: %{message: String.t()}}
+          | {:input_bound, ids :: [term()]}
           | {:message_start, message :: agent_message()}
           | {:message_update, assistant_event :: LemonAi.EventStream.event()}
           | {:message_end, message :: agent_message()}

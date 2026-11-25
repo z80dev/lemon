@@ -284,7 +284,7 @@ defmodule LemonAi.CircuitBreaker do
     monotonic_time = Keyword.get(opts, :monotonic_time)
 
     table = :ets.new(__MODULE__, [:protected, :set, read_concurrency: true])
-    Registry.update_value(LemonAi.CircuitBreakerRegistry, provider, fn _ -> table end)
+    _ = Registry.update_value(LemonAi.CircuitBreakerRegistry, provider, fn _ -> table end)
 
     state = %{
       provider: provider,

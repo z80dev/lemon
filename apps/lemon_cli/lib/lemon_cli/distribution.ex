@@ -5,28 +5,56 @@ defmodule LemonCli.Distribution do
   # Reuse its supervisor spec, changing only auth's start function so the cookie
   # is installed before the following net_kernel child can open a listener.
   # Keep this contract pinned by the real-node launcher regression.
+  #
+  # `-kernel start_distribution false` also drops the kernel servers OTP starts
+  # with every node, distributed or not: `rex`, `global_name_server` and
+  # `global_group`. `:global` (native session ownership) and `:rpc` need them,
+  # so start them here in kernel's own order around the distribution supervisor.
   def boot do
+    manual? = :application.get_env(:kernel, :start_distribution) == {:ok, false}
+
+    if manual? do
+      start_kernel_child!(kernel_server(:rex, :rpc))
+      start_kernel_child!(kernel_server(:global_name_server, :global))
+    end
+
     case node_options() do
       nil ->
         :ok
 
       options ->
-        child = %{
+        start_kernel_child!(%{
           id: :net_sup_dynamic,
           start: {__MODULE__, :start_link, [options]},
           restart: :permanent,
           shutdown: 1000,
           type: :supervisor
-        }
-
-        case :supervisor.start_child(:kernel_sup, child) do
-          {:ok, _pid} -> :ok
-          _ -> fail!("could not start authenticated distribution")
-        end
+        })
     end
+
+    if manual?, do: start_kernel_child!(kernel_server(:global_group, :global_group))
 
     if :init.get_argument(:user) == {:ok, [[~c"Elixir.LemonCli.Distribution"]]} do
       :ok = :user_drv.start_shell(%{initial_shell: :iex.shell()})
+    end
+  end
+
+  # The child specifications `kernel:start_distribution/0` would have used.
+  defp kernel_server(id, module) do
+    %{
+      id: id,
+      start: {module, :start_link, []},
+      restart: :permanent,
+      shutdown: 2000,
+      type: :worker,
+      modules: [module]
+    }
+  end
+
+  defp start_kernel_child!(%{id: id} = child) do
+    case :supervisor.start_child(:kernel_sup, child) do
+      {:ok, _pid} -> :ok
+      _ -> fail!("could not start kernel #{id}")
     end
   end
 
@@ -57,26 +85,17 @@ defmodule LemonCli.Distribution do
       fail!("requires OTP 29, -nocookie and -kernel start_distribution false")
     end
 
-    case :erl_distribution.init([options]) do
-      {:ok, {%{strategy: :one_for_all, intensity: 0} = flags, children}} ->
-        case Enum.reverse(children) do
-          [
-            %{id: :net_kernel, start: {:net_kernel, :start_link, [^options]}},
-            %{id: :auth, start: {:auth, :start_link, []}}
-            | earlier
-          ] ->
-            if Enum.any?(earlier, &(&1.id in [:auth, :net_kernel])) do
-              fail!("unexpected distribution supervisor children")
-            end
-
-            {flags, children}
-
-          _ ->
-            fail!("unexpected distribution supervisor children")
-        end
-
-      _ ->
-        fail!("unexpected distribution supervisor specification")
+    with {:ok, {flags, children}} <- :erl_distribution.init([options]),
+         %{strategy: :one_for_all, intensity: 0} <- flags,
+         [
+           %{id: :net_kernel, start: {:net_kernel, :start_link, [^options]}},
+           %{id: :auth, start: {:auth, :start_link, []}}
+           | earlier
+         ] <- Enum.reverse(children),
+         false <- Enum.any?(earlier, &(&1.id in [:auth, :net_kernel])) do
+      {flags, children}
+    else
+      _ -> fail!("unexpected distribution supervisor specification")
     end
   end
 
@@ -124,6 +143,7 @@ defmodule LemonCli.Distribution do
     }
   end
 
+  @spec fail!(String.t()) :: no_return()
   defp fail!(reason) do
     otp = :erlang.system_info(:otp_release)
     raise "Secure distribution boot refused on OTP #{otp}: #{reason}"

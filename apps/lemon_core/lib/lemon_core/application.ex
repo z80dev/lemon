@@ -110,7 +110,7 @@ defmodule LemonCore.Application do
     # Attach any :logger handlers configured under :lemon_core, :logger (see
     # config/runtime.exs). A no-op when nothing is configured there.
     drop_unloadable_handlers()
-    Logger.add_handlers(:lemon_core)
+    _ = Logger.add_handlers(:lemon_core)
 
     # If configured, install a log-to-file handler early so dropped/errored
     # messages can be diagnosed even when stdout/stderr isn't persisted.

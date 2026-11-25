@@ -67,7 +67,7 @@ defmodule LemonAgent.AutoThinking do
   def clamp_effort(model, effort), do: clamp(model, effort)
 
   @doc "Classifies one user prompt with bounded completion and cooperative abort."
-  @spec resolve(Model.t(), map(), reference() | nil, keyword()) ::
+  @spec resolve(Model.t(), map(), AbortSignal.t() | nil, keyword()) ::
           {:ok, atom() | nil} | {:error, :aborted}
   def resolve(model, message, signal, opts \\ []) do
     cond do
@@ -105,7 +105,7 @@ defmodule LemonAgent.AutoThinking do
   end
 
   @doc false
-  @spec prepare_turn(AgentLoopConfig.t(), [map()], reference() | nil) ::
+  @spec prepare_turn(AgentLoopConfig.t(), [map()], AbortSignal.t() | nil) ::
           {:ok, AgentLoopConfig.t()} | {:error, :aborted}
   def prepare_turn(config, messages, signal) do
     config =

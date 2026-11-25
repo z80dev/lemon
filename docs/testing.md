@@ -147,7 +147,7 @@ responsibilities. No live provider calls are needed for `premerge` or `changed`.
 | `nightly.yml` | daily + dispatch | the full `ci.yml`; `scripts/test coverage` over every app; the prompt/skill/overflow regression files with `--repeat-until-failure 5`; `scripts/test eval-fast` with 20 iterations; the `nightly-red` issue |
 | `product-smoke.yml` | PRs touching `apps/**`, weekly, dispatch | Boots a `lemon_runtime_full` release against a local deterministic provider |
 | `release-smoke.yml` | release paths, weekly, dispatch | Release assembly and boot matrix |
-| `osv-scanner.yml` | lockfile changes, weekly | The only dependency-vulnerability scan (Mix, npm, Bun lockfiles) |
+| `osv-scanner.yml` | lockfile changes, weekly | The only dependency-vulnerability scan (Mix, npm, Bun, Cargo, SwiftPM lockfiles). Blocking: any finding not accepted (reason + expiry) in `osv-scanner.toml` fails it; `scripts/test_ci_gates.py` (quality lane) pins that every shipped lockfile is scanned and filtered. |
 | `docs-site.yml` | `docs/**` changes | VitePress build and link check |
 | `release.yml` | tag / dispatch | Skips the gates when `scripts/ci_verified_commit` finds (or waits up to 30 minutes for) a green `ci.yml` push run on the release commit or on an ancestor it differs from only by version fields and changelogs; otherwise calls `ci.yml` itself, so the release runs the same sharded jobs. Then builds and publishes artifacts. |
 | `live-eval.yml` | dispatch | `scripts/test live-eval` with repository secrets |

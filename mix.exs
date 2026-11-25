@@ -26,9 +26,10 @@ defmodule Lemon.MixProject do
     ]
   end
 
-  # Advisory Dialyzer lane (see .github/workflows/dialyzer.yml). PLTs are
-  # written under _build/ so they're picked up by the existing gitignore
-  # rule and can be cached in CI keyed on mix.lock.
+  # Dialyzer lane: the `dialyzer` job in .github/workflows/ci.yml runs the
+  # whole umbrella and scripts/dialyzer_gate.sh gates the clean apps. PLTs are
+  # written under _build/ so they're picked up by the existing gitignore rule
+  # and can be cached in CI keyed on mix.lock.
   defp dialyzer do
     [
       plt_core_path: "_build/dialyzer",
@@ -37,10 +38,20 @@ defmodule Lemon.MixProject do
       # per-app PLT discovery never pulls it in on its own; add it explicitly
       # so Discord adapter calls into Nostrum.Api.* type-check.
       plt_add_apps: [:mix, :ex_unit, :public_key, :nostrum],
+      # Umbrella apps are analysed from their own beams on every run. Keeping
+      # them out of the dependency PLT means a code change no longer makes the
+      # cached PLT stale (dialyxir otherwise adds every in_umbrella dependency).
+      plt_ignore_apps: umbrella_apps(),
       flags: [:error_handling, :unmatched_returns],
       ignore_warnings: ".dialyzer_ignore.exs",
       list_unused_filters: true
     ]
+  end
+
+  defp umbrella_apps do
+    for mix_file <- Path.wildcard(Path.join(__DIR__, "apps/*/mix.exs")) do
+      mix_file |> Path.dirname() |> Path.basename() |> String.to_atom()
+    end
   end
 
   # Runtime release configuration

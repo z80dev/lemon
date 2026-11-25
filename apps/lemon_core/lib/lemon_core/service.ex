@@ -444,7 +444,7 @@ defmodule LemonCore.Service do
 
           Unit.owned?(parsed, spec, opts) ->
             with :ok <- module.uninstall(spec, opts) do
-              cleanup_status(spec, opts)
+              _ = cleanup_status(spec, opts)
               {:ok, Map.put(base(spec), :action, "removed")}
             end
 
@@ -528,21 +528,22 @@ defmodule LemonCore.Service do
   defp cleanup_manual_record(_spec, "none", _item, _opts), do: :ok
 
   defp cleanup_manual_record(spec, _manager, item, opts) do
-    if Readiness.ready?(item) do
-      manual =
-        shell_spec(spec.role, "none", Keyword.merge(opts, name: spec.name, port: spec.port))
+    _ =
+      if Readiness.ready?(item) do
+        manual =
+          shell_spec(spec.role, "none", Keyword.merge(opts, name: spec.name, port: spec.port))
 
-      case Unit.read(manual.path, "none") do
-        {:ok, parsed} ->
-          if Unit.owned?(parsed, manual, opts) do
-            File.rm(Manual.record_path(manual, opts))
-            File.rm(manual.path)
-          end
+        case Unit.read(manual.path, "none") do
+          {:ok, parsed} ->
+            if Unit.owned?(parsed, manual, opts) do
+              _ = File.rm(Manual.record_path(manual, opts))
+              File.rm(manual.path)
+            end
 
-        _ ->
-          :ok
+          _ ->
+            :ok
+        end
       end
-    end
 
     :ok
   end
@@ -774,7 +775,7 @@ defmodule LemonCore.Service do
   end
 
   defp cleanup_status(%{role: "worker", name: name}, opts) do
-    File.rm(LemonCore.WorkerStatus.path(name, home: Role.home(opts)))
+    _ = File.rm(LemonCore.WorkerStatus.path(name, home: Role.home(opts)))
 
     :ok
   end

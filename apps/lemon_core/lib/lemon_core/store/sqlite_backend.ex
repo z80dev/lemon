@@ -204,9 +204,7 @@ defmodule LemonCore.Store.SqliteBackend do
   def ping(state) do
     case Sqlite3.execute(state.conn, "SELECT 1") do
       :ok -> {:ok, state}
-      :busy -> {:error, :sqlite_busy}
       {:error, reason} -> {:error, reason}
-      other -> {:error, {:sqlite_ping_failed, other}}
     end
   end
 
@@ -489,7 +487,6 @@ defmodule LemonCore.Store.SqliteBackend do
         end
       else
         {:error, reason} -> {:error, reason}
-        other -> {:error, {:sqlite_list_failed, other}}
       end
     end
   end
@@ -523,7 +520,6 @@ defmodule LemonCore.Store.SqliteBackend do
         end
       else
         {:error, reason} -> {:error, reason}
-        other -> {:error, {:sqlite_list_recent_failed, other}}
       end
     end
   end
@@ -1074,7 +1070,6 @@ defmodule LemonCore.Store.SqliteBackend do
         {:ok, current, _state} when current === expected -> {:cont, :ok}
         {:ok, _current, _state} -> {:halt, {:error, :mismatch}}
         {:error, reason} -> {:halt, {:error, reason}}
-        other -> {:halt, {:error, {:sqlite_get_failed, other}}}
       end
     end)
   end

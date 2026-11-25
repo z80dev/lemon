@@ -210,7 +210,11 @@ jobs:
         run: mix dialyzer --plt
 
       # The full umbrella keeps a documented backlog, so this run is advisory;
-      # the gate below is what blocks. `--format github`/`short` crash on
+      # the gate below is what blocks. It stays on pull requests: measured at
+      # 317-369 s per job (PR run 44444860833, nightly 45111786191) against
+      # 382-736 s test shards, it is not the critical path, and umbrella apps
+      # are kept out of the PLT (root mix.exs) so code changes no longer
+      # rebuild it. `--format github`/`short` crash on
       # OTP 28.5's `:exact_compare` tag, so use Erlang's own formatter.
       # --ignore-exit-status is required: with `list_unused_filters: true` a
       # stale .dialyzer_ignore.exs entry otherwise makes dialyxir discard the

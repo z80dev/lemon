@@ -10,34 +10,8 @@
   # value is correct at runtime; this is a well-known Elixir+Dialyzer PLT
   # limitation with MapSet's opaque-map representation, not a real bug. Each
   # entry below was confirmed per file when it was added.
-  {"lib/coding_agent/tools/web_guard.ex", :call_without_opaque},
-  {"lib/coding_agent/tools/web_guard.ex", :call_with_opaque},
-  {"lib/coding_agent/workspace.ex", :call_without_opaque},
   {"lib/lemon_cli/hermes_migration.ex", :call_without_opaque},
   {"lib/lemon_core/extensions/manifest.ex", :call_without_opaque},
-  {"lib/lemon_core/oauth/local_callback_listener.ex", :call_without_opaque},
   {"lib/lemon_router/tool_status_renderer.ex", :call_without_opaque},
-  {"lib/lemon_router/tool_status_renderer.ex", :call_with_opaque},
-
-  # ── unknown_function: IEx.Helpers.recompile/0 ───────────────────────────
-  #
-  # The Discord and Telegram `/reload` admin commands call
-  # IEx.Helpers.recompile/0 directly, which only exists when the release is
-  # attached to a live IEx session (`iex -S mix` / remote console). `:iex`
-  # is intentionally not a runtime dependency of a compiled release, so it
-  # can never be in the PLT's app set — this is permanent, not a PLT
-  # configuration gap (contrast with the Nostrum `unknown_function` warnings
-  # in the same files, which ARE fixable by adding :nostrum to
-  # plt_add_apps and are intentionally NOT ignored here).
-  #
-  # Matched by a regex over the warning's short description rather than the
-  # exact `file:line:col:...` text: an exact-text entry is pinned to a line
-  # number, and these two transport files are among the most heavily edited in
-  # the umbrella. A pinned entry that drifts is not merely useless — dialyxir
-  # treats an unused filter as an error and then DISCARDS the entire formatted
-  # warning list (Dialyxir.Dialyzer.Runner.run), so one drifted line number
-  # blanks the whole Dialyzer report and every app looks clean. The regex is
-  # still scoped to these two files and to this one message, so it cannot
-  # swallow a genuine `unknown_function` typo elsewhere in them.
-  ~r{^lib/lemon_channels/adapters/(discord|telegram)/transport\.ex:\d+:\d+:unknown_function Function IEx\.Helpers\.recompile/0 does not exist\.$}
+  {"lib/lemon_router/tool_status_renderer.ex", :call_with_opaque}
 ]

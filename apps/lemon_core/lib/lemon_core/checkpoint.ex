@@ -337,7 +337,7 @@ defmodule LemonCore.Checkpoint do
     for {key, %{expires_at_ms: expires_at} = record} <-
           LemonCore.Store.list(@confirmation_table),
         expires_at <= now do
-      LemonCore.Store.compare_and_delete(@confirmation_table, key, record)
+      _ = LemonCore.Store.compare_and_delete(@confirmation_table, key, record)
     end
 
     :ok
@@ -672,8 +672,6 @@ defmodule LemonCore.Checkpoint do
     )
   end
 
-  defp maybe_emit_checkpoint_deleted(_missing, _opts), do: :ok
-
   defp checkpoint_created_payload(checkpoint) do
     checkpoint
     |> checkpoint_base_payload()
@@ -819,7 +817,6 @@ defmodule LemonCore.Checkpoint do
             {:ok, %{exists: true, type: "symlink", target: target}, budget}
           else
             {:error, reason} when is_atom(reason) -> {:error, {:stat_failed, path, reason}}
-            error -> error
           end
 
         {:ok, %ConfinedFS.Stat{type: type}} ->
