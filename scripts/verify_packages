@@ -363,7 +363,8 @@ generate_and_check() {
 
   echo
   echo "==> generating $name ${*:-(no flags)} against the unpacked packages"
-  (cd "$REPO_ROOT/installer" && mix run -e \
+  # Keep Mix's installer build artifacts off the source checkout.
+  (cd "$REPO_ROOT/installer" && consumer env MIX_BUILD_PATH="$TMP/installer_build" mix run -e \
     "Mix.Task.run(\"lemon.new\", [\"$dir\", \"--packages-path\", \"$PKG_DIR\", \"--no-install\"] ++ System.argv())" \
     -- "$@")
 
