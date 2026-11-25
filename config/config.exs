@@ -83,7 +83,10 @@ config :lemon_core, :doctor_runtime,
   provider_names: LemonAgent.ModelRuntime.CustomProviders,
   # `allowed_origins/0`: the callback allowlists the Bot admission check validates.
   native_followup_admission: LemonRouter.NativeFollowupAdmission,
-  cron_admission: LemonAutomation.CronAdmission
+  cron_admission: LemonAutomation.CronAdmission,
+  # The one credential-readiness predicate doctor and setup readiness share
+  # with the runtime (see LemonCore.CredentialReadiness).
+  credential_readiness: LemonAgent.ModelRuntime.Credentials
 
 # Diagnostics owned by apps that depend on lemon_core register themselves here.
 # Modules missing from a given build are skipped (see LemonCore.Doctor).

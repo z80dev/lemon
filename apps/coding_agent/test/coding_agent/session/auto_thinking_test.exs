@@ -2,7 +2,7 @@ defmodule CodingAgent.Session.AutoThinkingTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.{Session, SessionManager, SettingsManager}
-  alias CodingAgent.Session.ModelResolver
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
 
   alias LemonAi.Types.{

@@ -15,7 +15,7 @@ defmodule CodingAgent.Session.ProviderFallbackAcceptanceTest do
 
   alias LemonAi.Types.{AssistantMessage, Context, StreamOptions, TextContent, Usage}
   alias LemonAgent.ModelRuntime.{CredentialHealth, SessionPins}
-  alias CodingAgent.Session.ProviderFallback
+  alias LemonAgent.ModelRuntime.ProviderFailover
   alias CodingAgent.SettingsManager
 
   @bad_one_env "PFA_POOL_BAD_ONE"
@@ -60,7 +60,10 @@ defmodule CodingAgent.Session.ProviderFallbackAcceptanceTest do
     end
 
     wrapped =
-      ProviderFallback.maybe_wrap(stream_fn, pool_settings(), File.cwd!(), session_id: session_id)
+      ProviderFailover.wrap(
+        stream_fn,
+        ProviderFailover.new(pool_settings(), session_id: session_id, cwd: File.cwd!())
+      )
 
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
@@ -99,7 +102,10 @@ defmodule CodingAgent.Session.ProviderFallbackAcceptanceTest do
     end
 
     wrapped =
-      ProviderFallback.maybe_wrap(stream_fn, pool_settings(), File.cwd!(), session_id: session_id)
+      ProviderFailover.wrap(
+        stream_fn,
+        ProviderFailover.new(pool_settings(), session_id: session_id, cwd: File.cwd!())
+      )
 
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 

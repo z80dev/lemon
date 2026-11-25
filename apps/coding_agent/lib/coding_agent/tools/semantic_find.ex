@@ -30,7 +30,7 @@ defmodule CodingAgent.Tools.SemanticFind do
   """
 
   alias CodingAgent.Executor.Usage
-  alias CodingAgent.Session.ModelResolver
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias CodingAgent.SettingsManager
   alias CodingAgent.Tools.PathHelpers
   alias CodingAgent.Tools.SemanticFind.Candidates

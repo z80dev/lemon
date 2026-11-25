@@ -43,8 +43,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   alias LemonAgent.ModelRuntime.OmpConfig
   alias LemonAgent.ModelRuntime.OmpToken
   alias LemonAgent.ModelRuntime.ProviderNames
+  alias LemonAgent.ModelRuntime.StreamOptions.ProviderSettings
   alias LemonAgent.ModelRuntime.VertexToken
-  alias LemonAgent.ProviderConfigResolver
   alias LemonCore.Secrets
 
   @raw_anthropic_secret "llm_anthropic_api_key_raw"
@@ -465,18 +465,301 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   def fetch_secret_api_key(_, _), do: :miss
 
-  @doc """
-  Whether a provider has any usable credential.
+  @typedoc """
+  Credential readiness: `:ready` (a credential is present), `:not_required`
+  (keyless provider), `:missing` (none configured) or `:unusable` (configured
+  but fails closed, for example an encrypted secret under another master key).
+  """
+  @type readiness :: :ready | :not_required | :missing | :unusable
 
-  Pool credentials count: pass the normalized routing config as
-  `opts[:provider_routing]` and any resolvable pool credential for the
-  provider makes it ready, before the per-provider special paths run.
+  @doc """
+  The single credential-readiness predicate shared by doctor, setup readiness,
+  provider status, the CLI, the model catalog and runtime routing.
+
+  Follows `resolve_provider_api_key/3`'s precedence (including authoritative
+  OAuth/omp selections that never fall back to ambient credentials) and counts
+  pool credentials: pass the routing config as `opts[:provider_routing]`.
+
+  ## Modes (`opts[:mode]`)
+
+    * `:presence` (default) - side-effect free: never decrypts a secret,
+      refreshes an OAuth login, runs an external secret source or omp, or
+      makes a network request. Stored secrets count only when the current
+      master key is the store's (`LemonCore.Secrets.presence/2`), so an
+      undecryptable credential is `:unusable`.
+    * `:resolve` - resolves the credential exactly as a request would (may
+      refresh a token or ask omp); answers `:ready`, `:not_required` or
+      `:missing`.
+  """
+  @spec credential_readiness(atom() | String.t(), map() | nil, keyword()) :: readiness()
+  def credential_readiness(provider, providers_map_or_cfg, opts \\ []) do
+    provider_cfg = provider_config(providers_map_or_cfg, provider, opts)
+    canonical = ProviderNames.canonical_name(provider)
+
+    cond do
+      ProviderNames.keyless?(canonical) or
+          (is_nil(canonical) and CustomProviders.keyless?(provider_cfg)) ->
+        :not_required
+
+      Keyword.get(opts, :mode, :presence) == :resolve ->
+        if pool_credentials_available?(provider, opts) or
+             single_provider_has_credentials?(provider, providers_map_or_cfg, opts),
+           do: :ready,
+           else: :missing
+
+      pool_credentials_present?(provider, opts) ->
+        :ready
+
+      true ->
+        case presence(provider, canonical, provider_cfg) do
+          {:ok, _} -> :ready
+          :miss -> :missing
+          :error -> :unusable
+        end
+    end
+  end
+
+  @doc """
+  Whether `credential_readiness/3` reports a usable (or unneeded) credential.
+  Takes the same options, including `:mode`.
   """
   @spec provider_has_credentials?(atom() | String.t(), map() | nil, keyword()) :: boolean()
   def provider_has_credentials?(provider, providers_map_or_cfg, opts \\ []) do
-    pool_credentials_available?(provider, opts) or
-      single_provider_has_credentials?(provider, providers_map_or_cfg, opts)
+    credential_readiness(provider, providers_map_or_cfg, opts) in [:ready, :not_required]
   end
+
+  # ---- Presence mode ----
+
+  # Each candidate answers `{:ok, :present}`, `:miss` or `:error` and walks
+  # through `first_credential/1`, so an unusable configured credential stops
+  # the walk exactly as it stops resolution.
+  defp presence(provider, canonical, provider_cfg) do
+    source = normalize_auth_source(provider_cfg)
+
+    cond do
+      source == :omp_broker -> omp_broker_presence(provider, provider_cfg)
+      canonical == "openai_codex" -> openai_codex_presence(provider_cfg, source)
+      canonical == "anthropic" -> anthropic_presence(provider_cfg, source)
+      canonical == "kimi_coding" and source == :omp -> omp_presence(provider_cfg)
+      canonical == "google_vertex" -> vertex_presence(provider_cfg)
+      canonical in ["amazon_bedrock", "bedrock_converse_stream"] -> bedrock_presence(provider_cfg)
+      canonical == "omp_gateway" -> omp_gateway_presence(provider_cfg, source)
+      is_binary(canonical) -> generic_presence(canonical, provider_cfg, source)
+      true -> custom_presence(provider_cfg)
+    end
+  end
+
+  defp omp_broker_presence(provider, provider_cfg) do
+    cond do
+      is_nil(OmpBroker.omp_provider(provider, provider_cfg)) ->
+        :miss
+
+      present_value?(OmpConfig.read_token(:broker)) ->
+        {:ok, :present}
+
+      true ->
+        secret_env_presence("OMP_AUTH_BROKER_TOKEN")
+    end
+  end
+
+  defp omp_presence(provider_cfg) do
+    case OmpToken.discover(provider_config_value(provider_cfg, :omp_path)) do
+      {:ok, _executable} -> {:ok, :present}
+      _ -> :miss
+    end
+  end
+
+  defp omp_gateway_presence(provider_cfg, source) do
+    case generic_presence("omp_gateway", provider_cfg, source) do
+      :miss ->
+        if present_value?(OmpConfig.read_token(:gateway)),
+          do: {:ok, :present},
+          else: :miss
+
+      other ->
+        other
+    end
+  end
+
+  defp openai_codex_presence(provider_cfg, :oauth),
+    do: provider_cfg |> codex_oauth_secret_name() |> stored_presence()
+
+  defp openai_codex_presence(provider_cfg, :api_key) do
+    first_credential([
+      fn -> env_presence("openai_codex") end,
+      fn -> present(provider_config_value(provider_cfg, :api_key)) end,
+      fn -> stored_presence(provider_config_value(provider_cfg, :api_key_secret)) end
+    ])
+  end
+
+  # Without an explicit auth source only the ambient sign-in counts, as in
+  # `openai_codex_ambient_oauth_available?/0`.
+  defp openai_codex_presence(_provider_cfg, :missing) do
+    first_credential([
+      fn -> secret_presence("OPENAI_CODEX_API_KEY", env_fallback: true) end,
+      fn -> secret_presence("CHATGPT_TOKEN", env_fallback: true) end,
+      fn -> stored_presence(ProviderNames.default_secret_name("openai_codex")) end
+    ])
+  end
+
+  defp openai_codex_presence(_provider_cfg, _invalid), do: :miss
+
+  defp anthropic_presence(provider_cfg, :oauth) do
+    named =
+      first_non_empty_binary([
+        provider_config_value(provider_cfg, :oauth_secret),
+        provider_config_value(provider_cfg, :api_key_secret)
+      ])
+
+    if present_value?(named) do
+      stored_presence(named)
+    else
+      case stored_presence(ProviderNames.oauth_default_secret_name("anthropic")) do
+        :miss ->
+          if AmbientCredentials.anthropic_login_present?(),
+            do: {:ok, :present},
+            else: :miss
+
+        other ->
+          other
+      end
+    end
+  end
+
+  defp anthropic_presence(provider_cfg, source) when source in [:api_key, :missing] do
+    first_credential([
+      fn -> env_presence("anthropic") end,
+      fn -> present(provider_config_value(provider_cfg, :api_key)) end,
+      fn -> stored_presence(provider_config_value(provider_cfg, :api_key_secret)) end,
+      fn -> stored_presence(@raw_anthropic_secret) end
+    ])
+  end
+
+  defp anthropic_presence(_provider_cfg, _invalid), do: :miss
+
+  defp vertex_presence(provider_cfg) do
+    case first_credential([
+           fn -> present(provider_config_value(provider_cfg, :api_key)) end,
+           fn ->
+             secret_presence(provider_config_value(provider_cfg, :service_account_json_secret),
+               env_fallback: true
+             )
+           end,
+           fn -> present(provider_config_value(provider_cfg, :service_account_json)) end,
+           fn -> present(System.get_env("GOOGLE_APPLICATION_CREDENTIALS_JSON")) end
+         ]) do
+      :miss -> present(System.get_env("GOOGLE_APPLICATION_CREDENTIALS"))
+      other -> other
+    end
+  end
+
+  defp bedrock_presence(provider_cfg) do
+    key_pair =
+      [
+        {:access_key_id_secret, "AWS_ACCESS_KEY_ID"},
+        {:secret_access_key_secret, "AWS_SECRET_ACCESS_KEY"}
+      ]
+      |> Enum.map(fn {field, ambient} ->
+        first_credential([
+          fn ->
+            secret_presence(provider_config_value(provider_cfg, field), env_fallback: true)
+          end,
+          fn -> secret_presence(ambient, env_fallback: true) end
+        ])
+      end)
+
+    cond do
+      :error in key_pair -> :error
+      Enum.all?(key_pair, &match?({:ok, _}, &1)) -> {:ok, :present}
+      true -> secret_env_presence("AWS_PROFILE")
+    end
+  end
+
+  defp generic_presence(canonical, provider_cfg, :oauth),
+    do: provider_cfg |> generic_secret_name(canonical) |> stored_presence()
+
+  defp generic_presence(canonical, provider_cfg, _source) do
+    first_credential([
+      fn -> env_presence(canonical) end,
+      fn -> present(provider_config_value(provider_cfg, :api_key)) end,
+      fn ->
+        case provider_config_value(provider_cfg, :api_key_secret) do
+          name when is_binary(name) and name != "" -> secret_presence(name, env_fallback: true)
+          _ -> secret_presence(ProviderNames.default_secret_name(canonical), env_fallback: true)
+        end
+      end
+    ])
+  end
+
+  defp custom_presence(provider_cfg) do
+    first_credential([
+      fn -> present(provider_env_value(provider_cfg, :api_key_env)) end,
+      fn -> present(provider_config_value(provider_cfg, :api_key)) end,
+      fn ->
+        secret_presence(provider_config_value(provider_cfg, :api_key_secret), env_fallback: true)
+      end
+    ])
+  end
+
+  defp pool_credentials_present?(provider, opts) do
+    case Keyword.get(opts, :provider_routing) do
+      routing when is_map(routing) ->
+        routing
+        |> selected_pool(opts)
+        |> pool_refs_for_provider(provider)
+        |> Enum.any?(&match?({:ok, _}, credential_ref_presence(&1)))
+
+      _ ->
+        false
+    end
+  end
+
+  defp credential_ref_presence(%{source: :env, name: name}) when is_binary(name),
+    do: present(System.get_env(name))
+
+  defp credential_ref_presence(%{source: :secret, name: name}) when is_binary(name),
+    do: stored_presence(name)
+
+  defp credential_ref_presence(%{"source" => source, "name" => name}) when is_binary(name),
+    do: credential_ref_presence(%{source: ref_source(source), name: name})
+
+  defp credential_ref_presence(ref) when is_binary(ref) do
+    case parse_credential_ref(ref) do
+      nil -> :miss
+      parsed -> credential_ref_presence(parsed)
+    end
+  end
+
+  defp credential_ref_presence(_), do: :miss
+
+  defp env_presence(canonical) do
+    canonical
+    |> ProviderNames.env_vars()
+    |> Enum.map(fn name -> fn -> secret_env_presence(name) end end)
+    |> first_credential()
+  end
+
+  # Mirrors `secret_env_credential/1`: a set environment value answers (a
+  # blank one is a miss), otherwise the store and external sources.
+  defp secret_env_presence(name) do
+    case System.get_env(name) do
+      value when is_binary(value) and value != "" -> present(value)
+      _ -> secret_presence(name, env_fallback: true)
+    end
+  end
+
+  # Mirrors the store-only reads of selected logins and raw secrets.
+  defp stored_presence(name), do: secret_presence(name, env_fallback: false)
+
+  defp secret_presence(name, opts) when is_binary(name) and name != "" do
+    case Secrets.presence(name, opts) do
+      :present -> {:ok, :present}
+      :missing -> :miss
+      {:unusable, _reason} -> :error
+    end
+  end
+
+  defp secret_presence(_name, _opts), do: :miss
 
   defp pool_credentials_available?(provider, opts) do
     case Keyword.get(opts, :provider_routing) do
@@ -1017,7 +1300,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   defp vertex_credentials_available?(provider_cfg, opts) do
     resolved =
-      ProviderConfigResolver.resolve_for_provider(:google_vertex, %{
+      ProviderSettings.resolve(:google_vertex, %{
         cwd: Keyword.get(opts, :cwd),
         provider_config: provider_cfg
       })
@@ -1029,7 +1312,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   defp resolve_vertex_access_token(provider_cfg) do
     resolved =
-      ProviderConfigResolver.resolve_for_provider(:google_vertex, %{
+      ProviderSettings.resolve(:google_vertex, %{
         provider_config: provider_cfg
       })
 
@@ -1049,9 +1332,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   defp bedrock_credentials_available?(provider_cfg, opts) do
     resolved =
       :bedrock_converse_stream
-      |> ProviderConfigResolver.resolve_for_provider(
-        bedrock_stream_provider_input(provider_cfg, opts)
-      )
+      |> ProviderSettings.resolve(bedrock_stream_provider_input(provider_cfg, opts))
 
     headers = Map.get(resolved, :headers, %{})
 

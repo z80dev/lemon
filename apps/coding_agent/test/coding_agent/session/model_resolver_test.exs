@@ -11,7 +11,7 @@ Code.require_file(
 defmodule CodingAgent.Session.ModelResolverTest do
   use ExUnit.Case, async: false
 
-  alias CodingAgent.Session.ModelResolver
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias CodingAgent.SettingsManager
 
   setup do

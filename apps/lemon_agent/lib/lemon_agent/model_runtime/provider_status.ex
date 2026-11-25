@@ -1,6 +1,11 @@
 defmodule LemonAgent.ModelRuntime.ProviderStatus do
   @moduledoc """
   Redacted provider credential readiness diagnostics.
+
+  Credential readiness is `Credentials.credential_readiness/3` in presence
+  mode, the predicate doctor, setup readiness and the CLI share: building a
+  snapshot never decrypts a value, refreshes a login, runs an external secret
+  source or omp, or discovers remote models.
   """
 
   alias LemonAgent.ModelRuntime.Credentials
@@ -38,6 +43,73 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
       }
     }
   end
+
+  @doc """
+  Compact per-provider credential summary for the control-plane status RPC.
+
+  Lists configured providers, the catalog providers with a credential and the
+  default provider. `"credential"` is `"present"`, `"missing"`, `"unusable"`
+  (configured but fails closed, for example an undecryptable secret) or
+  `"not_required"` (keyless).
+  """
+  @spec summary(Config.t() | map()) :: [map()]
+  def summary(config \\ Config.load()) do
+    providers = config.providers || %{}
+    routing = provider_routing(config)
+
+    default =
+      summary_id(config.agent.default_provider || model_prefix(config.agent.default_model))
+
+    ids =
+      (Map.keys(providers) ++ LemonAi.Models.get_providers() ++ [default])
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&summary_id/1)
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    Enum.flat_map(ids, fn id ->
+      cfg = ProviderNames.provider_config(providers, id) || Map.get(providers, id, %{})
+
+      credential =
+        case Credentials.credential_readiness(id, providers, provider_routing: routing) do
+          :ready -> "present"
+          :not_required -> "not_required"
+          :missing -> "missing"
+          :unusable -> "unusable"
+        end
+
+      configured =
+        id == default or credential in ["present", "unusable"] or
+          Enum.any?(cfg, fn {_key, value} -> value not in [nil, "", false, [], %{}] end)
+
+      if configured do
+        [
+          %{
+            "id" => id,
+            "configured" => true,
+            "credential" => credential,
+            "default" => id == default,
+            "circuit" => circuit(id),
+            "lastError" =>
+              LemonAi.CallDispatcher.last_error(ProviderNames.canonical_name(id) || id)
+          }
+        ]
+      else
+        []
+      end
+    end)
+  end
+
+  defp summary_id(id), do: ProviderNames.config_name(id) || to_string(id)
+
+  defp model_prefix(model) when is_binary(model) do
+    case String.split(model, "/", parts: 2) do
+      [provider, _model] -> provider
+      _ -> nil
+    end
+  end
+
+  defp model_prefix(_), do: nil
 
   @doc "Read-only circuit diagnostics shared by provider status projections."
   def circuit(provider) do
@@ -143,28 +215,13 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
       "configured" => map_size(provider_cfg) > 0,
       "circuit" => circuit(canonical || custom_id(custom) || normalize_provider(provider)),
       "credentialReady" =>
-        cond do
-          canonical ->
-            credential_ready?(
-              canonical,
-              config.providers,
-              provider_cfg,
-              env_configured?,
-              cwd,
-              routing
-            )
-
-          custom ->
-            Credentials.provider_has_credentials?(
-              custom_id(custom),
-              config.providers,
-              cwd: cwd,
-              provider_routing: routing
-            )
-
-          true ->
-            false
-        end,
+        (is_binary(canonical) or not is_nil(custom)) and
+          Credentials.provider_has_credentials?(
+            canonical || custom_id(custom),
+            config.providers,
+            cwd: cwd,
+            provider_routing: routing
+          ),
       "config" => %{
         "apiKeyConfigured" => present?(provider_config_value(provider_cfg, :api_key)),
         "apiKeySecretConfigured" =>
@@ -186,41 +243,10 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
     Map.get(map, key) || Map.get(map, to_string(key))
   end
 
-  defp credential_ready?("openai_codex", providers, provider_cfg, env_configured?, cwd, routing) do
-    Credentials.provider_has_credentials?("openai_codex", providers,
-      cwd: cwd,
-      provider_routing: routing
-    ) or
-      (is_nil(
-         LemonCore.Config.Providers.normalize_auth_source(
-           provider_config_value(provider_cfg, :auth_source)
-         )
-       ) && not env_configured? &&
-         Credentials.provider_has_credentials?(
-           "openai_codex",
-           %{"openai-codex" => %{"auth_source" => "oauth"}},
-           cwd: cwd
-         ))
-  end
-
-  defp credential_ready?("anthropic", providers, _provider_cfg, _env_configured?, cwd, routing) do
-    Credentials.provider_has_credentials?("anthropic", providers,
-      cwd: cwd,
-      provider_routing: routing
-    )
-  end
-
-  defp credential_ready?(canonical, providers, _provider_cfg, _env_configured?, cwd, routing) do
-    Credentials.provider_has_credentials?(canonical, providers,
-      cwd: cwd,
-      provider_routing: routing
-    )
-  end
-
   # Normalized routing config so pool-only credentials
   # (`provider_routing.credential_pools.<pool>.credentials`) count toward
   # `credentialReady` the same way ModelResolver's readiness gate counts them.
-  defp provider_routing(%Config{agent: agent}) when is_map(agent) do
+  defp provider_routing(%{agent: agent}) when is_map(agent) do
     Map.get(agent, :provider_routing) || Map.get(agent, "provider_routing") || %{}
   end
 

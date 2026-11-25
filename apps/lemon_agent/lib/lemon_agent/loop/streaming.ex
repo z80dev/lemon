@@ -8,6 +8,7 @@ defmodule LemonAgent.Loop.Streaming do
   alias LemonAgent.Loop.ToolStream
   alias LemonAgent.Loop.TranscriptValidator
   alias LemonAgent.Security.UntrustedToolBoundary
+  alias LemonAgent.ModelRuntime.ProviderFailover
   alias LemonAgent.Types.{AgentLoopConfig, AgentTool}
 
   alias LemonAi.Retry
@@ -24,6 +25,7 @@ defmodule LemonAgent.Loop.Streaming do
   @max_retry_after_ms 120_000
   @max_continuations 3
   @continuation_key {__MODULE__, :continuation}
+  @attempts_key {__MODULE__, :attempts}
 
   defp continuation_state(stream) do
     case Process.get(@continuation_key) do
@@ -31,6 +33,28 @@ defmodule LemonAgent.Loop.Streaming do
       _ -> 0
     end
   end
+
+  # One upstream-attempt budget per request, shared by the loop's retries and
+  # every provider/credential candidate failover tries: `max_retries + 1`
+  # attempts, and at least two so disabling retries keeps one failover
+  # attempt. The loop's own retries still stop at `max_retries`. The counter
+  # is an atomics cell so the failover task can charge it.
+  defp attempt_counter do
+    case Process.get(@attempts_key) do
+      nil ->
+        counter = :atomics.new(1, [])
+        Process.put(@attempts_key, counter)
+        counter
+
+      counter ->
+        counter
+    end
+  end
+
+  defp attempt_limit(config), do: max(config.max_retries, 1) + 1
+
+  defp attempts_spent?(config),
+    do: :atomics.get(attempt_counter(), 1) >= attempt_limit(config)
 
   @spec stream_assistant_response(
           LemonAgent.Types.AgentContext.t(),
@@ -41,6 +65,7 @@ defmodule LemonAgent.Loop.Streaming do
         ) :: {:ok, AssistantMessage.t(), LemonAgent.Types.AgentContext.t()} | {:error, term()}
   def stream_assistant_response(context, config, signal, stream_fn, stream) do
     AbortSignal.subscribe(signal)
+    Process.put(@attempts_key, :atomics.new(1, []))
 
     try do
       system_prompt = context.system_prompt
@@ -51,6 +76,7 @@ defmodule LemonAgent.Loop.Streaming do
         other -> other
       end
     after
+      Process.delete(@attempts_key)
       AbortSignal.unsubscribe(signal)
     end
   end
@@ -236,6 +262,8 @@ defmodule LemonAgent.Loop.Streaming do
 
       context = %{context | system_prompt: prompt}
 
+      # A continuation is a new request with its own attempt budget.
+      :atomics.put(attempt_counter(), 1, 0)
       result = retry_response(context, config, signal, stream_fn, stream, retries_done)
 
       finish_retry(
@@ -340,7 +368,8 @@ defmodule LemonAgent.Loop.Streaming do
       })
       |> Retry.policy()
 
-    if Retry.retry_allowed?(retries_done, policy) and LemonAi.Error.retryable?(error) do
+    if Retry.retry_allowed?(retries_done, policy) and LemonAi.Error.retryable?(error) and
+         not attempts_spent?(config) do
       case Retry.retry_delay_ms(error, retries_done, policy, retry_after_ms(error)) do
         :give_up -> :stop
         delay -> {:ok, delay}
@@ -404,8 +433,10 @@ defmodule LemonAgent.Loop.Streaming do
         }
 
         with {:ok, config} <- route_model(config, llm_context) do
-          # Resolve stream function
-          stream_function = stream_fn || config.stream_fn || (&default_stream_fn/3)
+          # Resolve stream function. Every upstream invocation is charged to the
+          # request's attempt budget, including provider failover candidates.
+          stream_function =
+            budgeted_stream_fn(config, stream_fn || config.stream_fn || (&default_stream_fn/3))
 
           # Resolve API key (important for expiring tokens)
           api_key =
@@ -482,6 +513,20 @@ defmodule LemonAgent.Loop.Streaming do
       updated = Loop.refresh_model(%{config | model: model, get_model: nil})
       {:ok, %{updated | get_model: config.get_model}}
     end
+  end
+
+  defp budgeted_stream_fn(config, stream_function) do
+    counter = attempt_counter()
+
+    counted = fn model, context, options ->
+      :atomics.add(counter, 1, 1)
+      stream_function.(model, context, options)
+    end
+
+    ProviderFailover.wrap(counted, config.provider_failover,
+      budget: {counter, attempt_limit(config)},
+      check_model_cost: config.check_model_cost
+    )
   end
 
   defp request_with_budget(config, context, options, stream_fn, stream) do

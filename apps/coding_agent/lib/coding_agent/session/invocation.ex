@@ -1,7 +1,8 @@
 defmodule CodingAgent.Session.Invocation do
   @moduledoc false
 
-  alias CodingAgent.Session.{Lifecycle, ModelResolver}
+  alias CodingAgent.Session.Lifecycle
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias CodingAgent.SessionManager
 
   # A live root keeps its agent, journal handle and captured environment. Only

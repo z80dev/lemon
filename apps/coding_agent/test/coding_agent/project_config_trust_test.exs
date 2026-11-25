@@ -8,7 +8,7 @@ defmodule CodingAgent.ProjectConfigTrustTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.{ExtensionLifecycle, Extensions, SettingsManager}
-  alias CodingAgent.Session.ModelResolver
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias CodingAgent.Tools.{WebFetch, WebSearch}
   alias LemonAi.Types.{Context, StreamOptions, UserMessage}
 

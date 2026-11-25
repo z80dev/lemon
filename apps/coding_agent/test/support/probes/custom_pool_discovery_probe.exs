@@ -249,7 +249,7 @@ defmodule CodingAgent.TestSupport.CustomPoolDiscoveryProbe do
 
   defp check_native!(settings, provider, context) do
     for selector <- [nil, "#{provider}:shared", "#{provider}/shared"] do
-      model = CodingAgent.Session.ModelResolver.resolve_session_model(selector, settings)
+      model = LemonAgent.ModelRuntime.ModelResolver.resolve_session_model(selector, settings)
 
       check!(
         model.provider == provider and model.context_window == context,

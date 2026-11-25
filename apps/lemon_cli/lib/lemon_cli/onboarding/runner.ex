@@ -187,9 +187,11 @@ defmodule LemonCli.Onboarding.Runner do
 
     base_url = cli_opts[:region_base_url] || provider_cfg["base_url"]
 
-    unless Credentials.provider_has_credentials?(spec.id, %{
-             spec.id => %{"auth_source" => "omp", "omp_path" => omp_path, "base_url" => base_url}
-           }) do
+    unless Credentials.provider_has_credentials?(
+             spec.id,
+             %{spec.id => %{"auth_source" => "omp", "omp_path" => omp_path, "base_url" => base_url}},
+             mode: :resolve
+           ) do
       fail!(
         "omp could not provide a usable Kimi Code token. Run `omp` and `/login #{KimiCodeOAuth.omp_provider(base_url)}`, then retry `lemon model kimi_coding --auth omp`."
       )

@@ -162,42 +162,18 @@ defmodule LemonSkills.Audit.LlmReviewer do
     end
   end
 
+  # The runtime model resolver owns selector syntax, provider aliases and
+  # presets; the reviewer only reports what it could not resolve.
   defp resolve_model(model_spec) when is_binary(model_spec) do
     trimmed = String.trim(model_spec)
 
-    case String.split(trimmed, ":", parts: 2) do
-      [model_id] ->
-        case LemonAi.Models.find_by_id(model_id) do
-          nil -> {:error, {:unknown_model, trimmed}}
-          model -> {:ok, model}
-        end
-
-      [provider, model_id] ->
-        case provider_to_atom(provider) do
-          nil ->
-            {:error, {:unknown_provider, provider}}
-
-          provider_atom ->
-            case LemonAi.Models.get_model(provider_atom, String.trim(model_id)) do
-              nil -> {:error, {:unknown_model, trimmed}}
-              model -> {:ok, model}
-            end
-        end
+    case LemonAgent.ModelRuntime.ModelResolver.resolve_explicit_model(trimmed) do
+      %LemonAi.Types.Model{} = model -> {:ok, model}
+      _ -> {:error, {:unknown_model, trimmed}}
     end
   end
 
   defp resolve_model(_), do: {:error, :missing_model}
-
-  defp provider_to_atom(provider) when is_binary(provider) do
-    normalized = provider |> String.trim() |> String.downcase()
-
-    Enum.find(LemonAi.Models.get_providers(), fn known ->
-      known_str = Atom.to_string(known)
-      known_str == normalized or String.replace(known_str, "_", "-") == normalized
-    end)
-  end
-
-  defp provider_to_atom(_), do: nil
 
   defp verdict_from_string(nil), do: :pass
   defp verdict_from_string(:pass), do: :pass

@@ -1,7 +1,7 @@
 defmodule CodingAgent.Session.CustomProviderResolutionTest do
   use ExUnit.Case, async: false
 
-  alias CodingAgent.Session.ModelResolver
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias CodingAgent.SettingsManager
   alias LemonAi.Types.Model
 

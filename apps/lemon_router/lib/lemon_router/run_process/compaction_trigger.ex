@@ -387,18 +387,15 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
   defp resolve_context_window_from_model(_), do: nil
 
+  # The runtime model resolver owns selector syntax (`provider:id`,
+  # `provider/id`, aliases, presets); only wrapper prefixes are peeled here.
   defp model_context_window(model) when is_binary(model) do
     model
     |> model_lookup_candidates()
     |> Enum.find_value(fn candidate ->
-      if Code.ensure_loaded?(LemonAi.Models) and
-           function_exported?(LemonAi.Models, :find_by_id, 1) do
-        case LemonAi.Models.find_by_id(candidate) do
-          %{context_window: cw} when is_integer(cw) and cw > 0 -> cw
-          _ -> nil
-        end
-      else
-        nil
+      case LemonAgent.ModelRuntime.ModelResolver.resolve_explicit_model(candidate) do
+        %{context_window: cw} when is_integer(cw) and cw > 0 -> cw
+        _ -> nil
       end
     end)
   end

@@ -307,30 +307,197 @@ defmodule LemonCore.Doctor.SupportBundle do
     LemonCore.TerminalBackends.diagnostics()
   end
 
-  # Raw names stay inside the diagnostics; the shareable projection is
-  # applied here, at the output boundary.
+  # Provider configuration shape plus the runtime's presence-mode credential
+  # readiness (`LemonCore.CredentialReadiness`). Comparisons use raw names;
+  # every rendered provider name goes through `ProviderIdentity.public_name/1`.
+  @provider_secret_fields ~w(
+    access_key_id_secret api_key_secret location_secret oauth_secret project_secret
+    secret_access_key_secret service_account_json_secret session_token_secret
+  )a
+  @provider_inline_fields ~w(api_key service_account_json)a
+  @provider_endpoint_fields ~w(
+    api_version base_url deployment_name_map location project project_id region resource_name
+  )a
+
   defp provider_diagnostics(opts) do
-    [project_dir: Keyword.get(opts, :project_dir, File.cwd!())]
-    |> LemonCore.Doctor.ProviderDiagnostics.status()
-    |> LemonCore.Doctor.ProviderDiagnostics.public_status()
+    project_dir = Keyword.get(opts, :project_dir, File.cwd!())
+    config = LemonCore.Config.load(project_dir, cache: false)
+    agent = config.agent || %{}
+    providers = config.providers || %{}
+    routing = map_value(agent, :provider_routing) || %{}
+    default_provider = map_value(agent, :default_provider)
+
+    statuses =
+      (Map.keys(providers) ++ [default_provider])
+      |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+      |> Enum.uniq_by(&provider_key/1)
+      |> Enum.sort()
+      |> Enum.map(&provider_status(&1, providers, routing, project_dir))
+
+    references = Enum.flat_map(statuses, & &1.secret_references)
+
+    %{
+      default_provider: LemonCore.ProviderIdentity.public_name(default_provider),
+      default_model_configured: present_string?(map_value(agent, :default_model)),
+      providers: Enum.map(statuses, &Map.delete(&1, :raw)),
+      count: length(statuses),
+      configured_count: Enum.count(statuses, & &1.configured),
+      ready_count: Enum.count(statuses, & &1.credential_ready),
+      credential_reference_count: length(references),
+      credential_reference_present_count: Enum.count(references, & &1.present),
+      routing: provider_routing_status(routing, statuses),
+      cleanup: %{
+        includes_raw_api_keys: false,
+        includes_secret_names: false,
+        includes_raw_base_urls: false,
+        includes_env_var_names: false,
+        includes_provider_responses: false,
+        includes_model_prompts: false
+      }
+    }
   end
+
+  defp provider_status(provider, providers, routing, project_dir) do
+    cfg =
+      Enum.find_value(providers, %{}, fn {name, cfg} ->
+        if provider_key(name) == provider_key(provider) and is_map(cfg), do: cfg
+      end)
+
+    auth_source =
+      case LemonCore.Config.Providers.normalize_auth_source(map_value(cfg, :auth_source)) do
+        value when value in ["api_key", "oauth", "omp", "omp_broker"] -> value
+        _ -> nil
+      end
+
+    %{
+      raw: provider_key(provider),
+      provider: LemonCore.ProviderIdentity.public_name(provider),
+      configured: map_size(cfg) > 0,
+      credential_ready:
+        LemonCore.CredentialReadiness.ready?(provider, providers,
+          provider_routing: routing,
+          cwd: project_dir
+        ),
+      auth_source: auth_source,
+      inline_credentials: configured_fields(cfg, @provider_inline_fields),
+      endpoint_shape: configured_fields(cfg, @provider_endpoint_fields),
+      secret_references:
+        for field <- @provider_secret_fields, present_string?(map_value(cfg, field)) do
+          %{
+            field: Atom.to_string(field),
+            configured: true,
+            present:
+              LemonCore.Secrets.presence(map_value(cfg, field),
+                env_fallback: false,
+                external_fallback: false
+              ) == :present
+          }
+        end
+    }
+  end
+
+  defp configured_fields(cfg, fields) do
+    for field <- fields, map_value(cfg, field) not in [nil, ""] do
+      %{field: Atom.to_string(field), configured: true}
+    end
+  end
+
+  defp provider_routing_status(routing, statuses) do
+    named = fn key ->
+      case map_value(routing, key) do
+        configs when is_map(configs) -> Enum.sort_by(configs, fn {name, _} -> label(name) end)
+        _ -> []
+      end
+    end
+
+    public = fn providers -> Enum.map(providers, &LemonCore.ProviderIdentity.public_name/1) end
+    pools = named.(:credential_pools)
+    profiles = named.(:profiles)
+
+    %{
+      enabled: map_value(routing, :enabled) != false,
+      require_credentials: map_value(routing, :require_credentials) != false,
+      fallback_providers: routing |> map_value(:fallback_providers) |> string_list() |> public.(),
+      default_pool_configured: present_string?(map_value(routing, :default_pool)),
+      default_profile_configured: present_string?(map_value(routing, :default_profile)),
+      credential_pool_count: length(pools),
+      profile_count: length(profiles),
+      credential_pools:
+        Enum.map(pools, fn {name, pool} ->
+          providers = pool |> map_value(:providers) |> string_list()
+
+          %{
+            name_hash: label(name),
+            provider_count: length(providers),
+            providers: public.(providers),
+            strategy:
+              if(map_value(pool, :strategy) in [nil, "priority", "round_robin"],
+                do: map_value(pool, :strategy) || "priority",
+                else: "other"
+              ),
+            credential_reference_count:
+              Enum.sum_by(providers, fn provider ->
+                statuses
+                |> Enum.find(%{secret_references: []}, &(&1.raw == provider_key(provider)))
+                |> Map.fetch!(:secret_references)
+                |> length()
+              end)
+          }
+        end),
+      profiles:
+        Enum.map(profiles, fn {name, profile} ->
+          distribution =
+            case map_value(profile, :distribution) do
+              weights when is_map(weights) ->
+                weights
+                |> Enum.map(fn {provider, weight} ->
+                  %{provider: LemonCore.ProviderIdentity.public_name(provider), weight: weight}
+                end)
+                |> Enum.sort_by(& &1.provider)
+
+              _ ->
+                []
+            end
+
+          %{
+            name_hash: label(name),
+            fallback_providers:
+              profile |> map_value(:fallback_providers) |> string_list() |> public.(),
+            credential_pool_configured: present_string?(map_value(profile, :credential_pool)),
+            distribution: distribution,
+            distribution_count: length(distribution)
+          }
+        end)
+    }
+  end
+
+  defp provider_key(name),
+    do: name |> to_string() |> String.trim() |> String.downcase() |> String.replace("-", "_")
+
+  defp string_list(values) when is_list(values),
+    do: values |> Enum.map(&String.trim(to_string(&1))) |> Enum.reject(&(&1 == ""))
+
+  defp string_list(value) when is_binary(value), do: value |> String.split(",") |> string_list()
+  defp string_list(_), do: []
+
+  defp map_value(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, to_string(key))
+  defp map_value(_, _), do: nil
+
+  defp present_string?(value), do: is_binary(value) and String.trim(value) != ""
 
   defp usage_diagnostics do
     LemonCore.UsageDiagnostics.status()
     |> Map.update(:providers, [], fn providers ->
-      Enum.map(
-        providers,
-        &Map.update!(&1, :provider, fn p ->
-          LemonCore.Doctor.ProviderDiagnostics.public_provider(p)
-        end)
-      )
+      Enum.map(providers, &Map.update!(&1, :provider, fn p -> public_provider(p) end))
     end)
   end
+
+  defp public_provider(name), do: LemonCore.ProviderIdentity.public_name(name)
 
   # The config is reported as a diagnostic projection, never its values:
   # booleans and small numbers keep their value; a string keeps its value only
   # when it is a member of that field's explicit enum set (otherwise "other");
-  # provider names use `ProviderDiagnostics.public_provider/1` (custom names
+  # provider names use `ProviderIdentity.public_name/1` (custom names
   # hashed); pool/profile/server/binding names and every reference to them
   # become the same "label:<hash>"; other strings become a presence flag,
   # lists counts, and credential-named fields and header/env containers
@@ -378,8 +545,7 @@ defmodule LemonCore.Doctor.SupportBundle do
         key == "providers" and is_map(value) ->
           {key,
            Map.new(value, fn {name, entry} ->
-             {LemonCore.Doctor.ProviderDiagnostics.public_provider(name),
-              project_value(nil, entry)}
+             {public_provider(name), project_value(nil, entry)}
            end)}
 
         key in @config_label_containers and is_map(value) ->
@@ -399,7 +565,7 @@ defmodule LemonCore.Doctor.SupportBundle do
   defp project_value(_key, value) when is_list(value), do: %{count: length(value)}
 
   defp project_value(key, value) when is_binary(value) and key in @config_provider_keys,
-    do: LemonCore.Doctor.ProviderDiagnostics.public_provider(value)
+    do: public_provider(value)
 
   defp project_value(key, value) when is_binary(value) and key in @config_label_refs,
     do: label(value)

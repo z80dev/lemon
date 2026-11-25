@@ -182,10 +182,10 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
 
   defp provider_enabled?(provider, configured, defaults, routing) do
     Map.has_key?(configured, provider) or provider in defaults or
-      provider_has_credentials?(provider, configured, routing)
+      credential_ready?(provider, configured, routing)
   end
 
-  defp provider_has_credentials?(provider, configured, routing) do
+  defp credential_ready?(provider, configured, routing) do
     LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(provider, configured,
       provider_routing: routing
     )

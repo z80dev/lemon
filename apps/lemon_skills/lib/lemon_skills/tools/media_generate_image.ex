@@ -8,7 +8,7 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
   """
 
   alias LemonAgent.ModelRuntime.ProviderNames
-  alias LemonAgent.ProviderConfigResolver
+  alias LemonAgent.ModelRuntime.StreamOptions.ProviderSettings
   alias LemonAgent.Tools.AbortHelpers
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -263,10 +263,8 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
     provider_cfg = ProviderNames.provider_config(config.providers, :google_vertex) || %{}
 
     resolved =
-      ProviderConfigResolver.resolve_for_provider(
-        :google_vertex,
-        Map.merge(provider_cfg, %{cwd: cwd})
-      )
+      ProviderSettings.resolve(:google_vertex,
+      Map.merge(provider_cfg, %{cwd: cwd}))
 
     %{
       access_token: Keyword.get(opts, :vertex_imagen_access_token),

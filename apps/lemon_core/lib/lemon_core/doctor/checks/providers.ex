@@ -1,11 +1,17 @@
 defmodule LemonCore.Doctor.Checks.Providers do
-  @moduledoc "Checks the effective default model and usable provider credentials."
+  @moduledoc """
+  Checks the effective default model and usable provider credentials.
+
+  Credential readiness comes from the runtime's single presence-mode predicate
+  (`LemonCore.CredentialReadiness`), the same answer setup readiness, provider
+  status and the CLI report. The check never decrypts a value, refreshes a
+  login or makes a request.
+  """
 
   alias LemonCore.Config.Modular
+  alias LemonCore.CredentialReadiness
   alias LemonCore.Doctor.Check
-  alias LemonCore.Doctor.ProviderDiagnostics
-  alias LemonCore.Secrets
-  alias LemonCore.Setup.Readiness
+  alias LemonCore.ProviderIdentity
 
   @doc """
   Returns a list of Check results covering provider configuration.
@@ -13,13 +19,22 @@ defmodule LemonCore.Doctor.Checks.Providers do
   @spec run(keyword()) :: [Check.t()]
   def run(opts \\ []) do
     config = Modular.load(Keyword.take(opts, [:project_dir]))
-    status = ProviderDiagnostics.status(project_dir: Keyword.get(opts, :project_dir, File.cwd!()))
+    providers = (config.providers && config.providers.providers) || %{}
+    routing = Map.get(config.agent || %{}, :provider_routing) || %{}
+
+    ready? = fn provider ->
+      present?(provider) and
+        CredentialReadiness.ready?(provider, providers,
+          provider_routing: routing,
+          cwd: Keyword.get(opts, :project_dir)
+        )
+    end
 
     [
       check_default_provider(config),
       check_default_model(config),
-      check_provider_credentials(config, status),
-      check_provider_routing(status)
+      check_provider_credentials(config, providers, ready?),
+      check_provider_routing(config, routing, ready?)
     ]
   rescue
     _error in LemonCore.Config.ValidationError ->
@@ -33,10 +48,20 @@ defmodule LemonCore.Doctor.Checks.Providers do
   end
 
   defp check_default_provider(config) do
-    Check.pass(
-      "providers.default",
-      "Default provider: #{ProviderDiagnostics.public_provider(config.agent.default_provider)}"
-    )
+    case config.agent.default_provider do
+      nil ->
+        Check.fail(
+          "providers.default",
+          "No default provider is set.",
+          "Run `lemon setup` to sign in and choose a default model."
+        )
+
+      provider ->
+        Check.pass(
+          "providers.default",
+          "Default provider: #{ProviderIdentity.public_name(provider)}"
+        )
+    end
   end
 
   defp check_default_model(config) do
@@ -65,19 +90,12 @@ defmodule LemonCore.Doctor.Checks.Providers do
     end
   end
 
-  defp check_provider_credentials(config, status) do
+  defp check_provider_credentials(config, providers, ready?) do
     provider = config.agent.default_provider
-    providers = config.providers.providers
 
     provider_config =
       Enum.find_value(providers, %{}, fn {name, settings} ->
         if normalize_provider(name) == normalize_provider(provider), do: settings
-      end)
-
-    ambient? =
-      Enum.any?(status.providers, fn entry ->
-        normalize_provider(entry.provider) == normalize_provider(provider) and
-          entry.ambient.provider_env_configured
       end)
 
     auth_source =
@@ -85,23 +103,24 @@ defmodule LemonCore.Doctor.Checks.Providers do
         Map.get(provider_config, :auth_source) || Map.get(provider_config, "auth_source")
       )
 
+    ready = ready?.(provider)
+
     cond do
-      auth_source == "omp_broker" and provider_ready?(status, provider) ->
+      auth_source == "omp_broker" and ready ->
         Check.pass(
           "providers.credentials",
-          "omp_broker (reads omp's auth broker): credential usable."
+          "omp_broker (reads omp's auth broker): broker credential configured (offline check)."
         )
 
       auth_source == "omp_broker" ->
         Check.fail(
           "providers.credentials",
-          "omp's auth broker could not provide a usable credential.",
+          "omp's auth broker is not configured on this host.",
           "Check `omp auth-broker status`, OMP_AUTH_BROKER_URL/OMP_AUTH_BROKER_TOKEN, " <>
             "omp_provider/omp_account, and `omp auth-broker login <provider>`."
         )
 
-      normalize_provider(provider) in ["omp_gateway", "omp_auth_gateway"] and
-          provider_ready?(status, provider) ->
+      normalize_provider(provider) in ["omp_gateway", "omp_auth_gateway"] and ready ->
         Check.pass("providers.credentials", "omp auth gateway bearer is available.")
 
       normalize_provider(provider) in ["omp_gateway", "omp_auth_gateway"] ->
@@ -112,21 +131,20 @@ defmodule LemonCore.Doctor.Checks.Providers do
             "`omp auth-gateway token` on this host."
         )
 
-      auth_source == "omp" and provider_ready?(status, provider) ->
+      auth_source == "omp" and ready ->
         Check.pass(
           "providers.credentials",
-          "omp (reuses omp's Kimi Code login): credentials usable."
+          "omp (reuses omp's Kimi Code login): omp is installed (offline check)."
         )
 
       auth_source == "omp" ->
         Check.fail(
           "providers.credentials",
-          "omp could not provide a usable Kimi Code token.",
+          "omp could not be found for the Kimi Code login.",
           "Check providers.kimi_coding.omp_path; run `omp` and `/login kimi-code`."
         )
 
-      Readiness.keyless_provider?(provider, provider_config) or
-        provider_has_credential?(provider_config) or ambient? ->
+      ready ->
         Check.pass(
           "providers.credentials",
           "Default provider credential is usable (offline check)."
@@ -143,30 +161,12 @@ defmodule LemonCore.Doctor.Checks.Providers do
     end
   end
 
-  defp provider_has_credential?(provider) when is_map(provider) do
-    inline = Map.get(provider, :api_key) || Map.get(provider, "api_key")
-
-    (is_binary(inline) and String.trim(inline) != "") or
-      Enum.any?([:api_key_secret, :oauth_secret, "api_key_secret", "oauth_secret"], fn field ->
-        case Map.get(provider, field) do
-          name when is_binary(name) and name != "" ->
-            match?({:ok, value, _} when is_binary(value) and value != "", Secrets.resolve(name))
-
-          _ ->
-            false
-        end
-      end)
-  end
-
-  defp check_provider_routing(status) do
-    routing = Map.get(status, :routing, %{})
+  defp check_provider_routing(config, routing, ready?) do
     fallback_providers = route_candidate_providers(routing)
-    ready_fallbacks = ready_providers(status, fallback_providers)
-    default_provider = Map.get(status, :default_provider)
-    default_ready? = provider_ready?(status, default_provider)
+    ready_fallbacks = Enum.filter(fallback_providers, ready?)
 
     cond do
-      Map.get(routing, :enabled) == false ->
+      map_value(routing, :enabled) == false ->
         Check.skip("providers.routing", "Provider routing is disabled.")
 
       fallback_providers == [] ->
@@ -179,7 +179,7 @@ defmodule LemonCore.Doctor.Checks.Providers do
           "Configure credentials for at least one fallback provider or remove the fallback route."
         )
 
-      default_ready? ->
+      ready?.(config.agent.default_provider) ->
         Check.pass(
           "providers.routing",
           "Provider routing has #{length(ready_fallbacks)} credential-ready fallback provider(s)."
@@ -189,7 +189,7 @@ defmodule LemonCore.Doctor.Checks.Providers do
         Check.pass(
           "providers.routing",
           "Default provider is not credential-ready; fallback route has ready provider(s): " <>
-            Enum.map_join(ready_fallbacks, ", ", &ProviderDiagnostics.public_provider/1)
+            Enum.map_join(ready_fallbacks, ", ", &ProviderIdentity.public_name/1)
         )
     end
   rescue
@@ -201,44 +201,34 @@ defmodule LemonCore.Doctor.Checks.Providers do
       )
   end
 
+  # Fallback providers, credential-pool providers and profile fallbacks, by
+  # their configured (raw) names.
   defp route_candidate_providers(routing) do
-    fallback_providers = Map.get(routing, :fallback_providers, [])
+    pools = routing |> map_value(:credential_pools) |> map_values()
+    profiles = routing |> map_value(:profiles) |> map_values()
 
-    pool_providers =
-      routing
-      |> Map.get(:credential_pools, [])
-      |> Enum.flat_map(&Map.get(&1, :providers, []))
-
-    profile_fallbacks =
-      routing
-      |> Map.get(:profiles, [])
-      |> Enum.flat_map(&Map.get(&1, :fallback_providers, []))
-
-    (fallback_providers ++ pool_providers ++ profile_fallbacks)
-    |> Enum.map(&normalize_provider/1)
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.uniq()
+    (list(map_value(routing, :fallback_providers)) ++
+       Enum.flat_map(pools, &list(map_value(&1, :providers))) ++
+       Enum.flat_map(profiles, &list(map_value(&1, :fallback_providers))))
+    |> Enum.filter(&present?/1)
+    |> Enum.uniq_by(&normalize_provider/1)
   end
 
-  defp ready_providers(status, providers) do
-    providers
-    |> Enum.filter(&provider_ready?(status, &1))
-  end
+  defp map_values(map) when is_map(map), do: Map.values(map)
+  defp map_values(_), do: []
 
-  defp provider_ready?(_status, provider) when provider in [nil, ""], do: false
+  defp list(values) when is_list(values), do: Enum.map(values, &to_string/1)
+  defp list(value) when is_binary(value), do: String.split(value, ",", trim: true)
+  defp list(_), do: []
 
-  defp provider_ready?(status, provider) do
-    normalized = normalize_provider(provider)
+  defp map_value(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, to_string(key))
+  defp map_value(_, _), do: nil
 
-    status
-    |> Map.get(:providers, [])
-    |> Enum.any?(fn provider_status ->
-      normalize_provider(Map.get(provider_status, :provider)) == normalized and
-        Map.get(provider_status, :credential_ready) == true
-    end)
-  end
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(value) when is_atom(value), do: not is_nil(value)
+  defp present?(_), do: false
 
-  defp normalize_provider(provider) when is_atom(provider),
+  defp normalize_provider(provider) when is_atom(provider) and not is_nil(provider),
     do: provider |> Atom.to_string() |> normalize_provider()
 
   defp normalize_provider(provider) when is_binary(provider) do

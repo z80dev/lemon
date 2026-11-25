@@ -298,9 +298,11 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
                }) == ""
       end
 
-      refute LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(:anthropic, %{
-               "anthropic" => %{auth_source: "oauth"}
-             })
+      refute LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(
+               :anthropic,
+               %{"anthropic" => %{auth_source: "oauth"}},
+               mode: :resolve
+             )
     end
   end
 

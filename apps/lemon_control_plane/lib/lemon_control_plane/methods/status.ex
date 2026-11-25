@@ -67,7 +67,9 @@ defmodule LemonControlPlane.Methods.Status do
     {skills, skills_state} =
       snapshot(%{"installed" => 0, "enabled" => 0}, &skills_status/0)
 
-    {providers, providers_state} = snapshot([], &LemonControlPlane.ProviderStatus.snapshot/0)
+    {providers, providers_state} =
+      snapshot([], fn -> LemonAgent.ModelRuntime.ProviderStatus.summary() end)
+
     browser = LemonCore.BrowserProvider.resolve()
 
     {:ok,
@@ -122,7 +124,8 @@ defmodule LemonControlPlane.Methods.Status do
       "connectedChannelCount" => length(channels["connected"] || []),
       "channelErrorCount" => Enum.count(channels["details"] || [], &(&1["state"] == "error")),
       "providerCount" => length(providers),
-      "providersMissingCredentials" => Enum.count(providers, &(&1["credential"] == "missing")),
+      "providersMissingCredentials" =>
+        Enum.count(providers, &(&1["credential"] in ["missing", "unusable"])),
       "installedSkillCount" => skills["installed"],
       "enabledSkillCount" => skills["enabled"],
       "cleanup" => %{

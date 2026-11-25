@@ -1,7 +1,6 @@
 defmodule LemonCore.Setup.ReadinessTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.Doctor.ProviderDiagnostics
   alias LemonCore.Setup.Readiness
 
   for {provider, config_provider, model, reason} <- [
@@ -83,11 +82,11 @@ defmodule LemonCore.Setup.ReadinessTest do
 
     System.put_env("OPENAI_API_KEY", "test-env-key")
     assert Readiness.status(config_path: path).provider.complete
-    assert ProviderDiagnostics.ambient_configured?("openai")
+    assert LemonCore.CredentialReadiness.ready?("openai", %{})
 
     System.put_env("OPENAI_API_KEY", " \n")
     refute Readiness.status(config_path: path).provider.complete
-    refute ProviderDiagnostics.ambient_configured?("openai")
+    refute LemonCore.CredentialReadiness.ready?("openai", %{})
   end
 
   for {provider, auth, ready?} <- [

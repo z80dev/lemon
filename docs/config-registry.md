@@ -27,7 +27,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 1. `LemonCore.Config.*` modules (`Agent`, `Tools`, `Gateway`, `Logging`, `TUI`) -- already funnel through `LemonCore.Config.Helpers`, so swapping the call site is mechanical and low-risk.
 2. Single-app leaf config (`lemon_browser`, `lemon_skills`, `lemon_evals`, terminal backends) -- self-contained modules with few callers.
 3. `config/runtime.exs` -- the prod endpoint block is dynamic (`<PREFIX>_{HOST,PORT,SECRET_KEY_BASE}`); migrate once `LemonCore.Env` gets a documented pattern for iterating a family of declared names.
-4. Provider credential resolution (`LemonAgent.ProviderConfigResolver`, `LemonAgent.ModelRuntime.Credentials`) -- highest blast radius (every provider call), migrate last and behind the existing `architecture_rules_check.ex` boundary tests.
+4. Provider credential resolution (`LemonAgent.ModelRuntime.Credentials`, `LemonAgent.ModelRuntime.StreamOptions.ProviderSettings`) -- highest blast radius (every provider call), migrate last and behind the existing `architecture_rules_check.ex` boundary tests.
 
 ## Variables by area
 

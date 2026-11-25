@@ -42,6 +42,17 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `list_session_policies/0`, `list_node_policies/0` helpers; `ExecApprovals.request/1`
   ignores `:node_id`. The remaining approval rows are documented as approval
   memory, not policy (#709).
+- **Breaking:** `LemonCore.Doctor.ProviderDiagnostics` (#715). Doctor, setup
+  readiness and the support bundle's provider section ask the runtime's single
+  credential predicate through `LemonCore.CredentialReadiness` (registered as
+  the `:credential_readiness` doctor runtime module); the built-in provider
+  identity table and `public_name/1` move to `LemonCore.ProviderIdentity`.
+  `LemonCore.ProviderManagement.credential_ready?/2` is removed. New
+  `Secrets.presence/2` and `Secrets.External.declared?/2` answer presence
+  without decrypting, running a source or touching usage; a record under
+  another master key is `{:unusable, :master_key_mismatch}`. `lemon doctor`
+  now passes env-configured providers and keys under default secret names or
+  pools, and fails undecryptable ones.
 - **Breaking:** the `controller` and `hybrid` ids from
   `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
 - **Breaking:** `LemonCore.Context`, `LemonCore.Context.Document` and

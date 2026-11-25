@@ -1,7 +1,7 @@
 defmodule CodingAgent.Session.LearningReview do
   @moduledoc false
 
-  alias CodingAgent.Session.ModelResolver
+  alias LemonAgent.ModelRuntime.ModelResolver
 
   # Capture only model configuration, never the live session or its transcript.
   def options(state) do

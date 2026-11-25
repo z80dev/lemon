@@ -118,7 +118,7 @@ defmodule LemonAgent.ModelRuntime.CredentialsSecretSourcesTest do
   end
 
   test "provider config resolver stops at unreadable Google, AWS and Azure secrets" do
-    alias LemonAgent.ProviderConfigResolver
+    alias LemonAgent.ModelRuntime.StreamOptions.ProviderSettings
 
     for name <- ~w(VERTEX_SA_SECRET AWS_KEY_SECRET AZURE_KEY_SECRET), do: corrupt(name)
     System.put_env("GOOGLE_APPLICATION_CREDENTIALS_JSON", @tripwire)
@@ -126,21 +126,21 @@ defmodule LemonAgent.ModelRuntime.CredentialsSecretSourcesTest do
     System.put_env("AZURE_OPENAI_API_KEY", @tripwire)
 
     vertex =
-      ProviderConfigResolver.resolve_for_provider(:google_vertex, %{
+      ProviderSettings.resolve(:google_vertex, %{
         provider_config: %{service_account_json_secret: "VERTEX_SA_SECRET"}
       })
 
     refute Map.has_key?(vertex, :service_account_json)
 
     bedrock =
-      ProviderConfigResolver.resolve_for_provider(:bedrock_converse_stream, %{
+      ProviderSettings.resolve(:bedrock_converse_stream, %{
         provider_config: %{access_key_id_secret: "AWS_KEY_SECRET"}
       })
 
     refute Map.has_key?(bedrock.headers, "aws_access_key_id")
 
     azure =
-      ProviderConfigResolver.resolve_for_provider(:azure_openai_responses, %{
+      ProviderSettings.resolve(:azure_openai_responses, %{
         provider_config: %{api_key_secret: "AZURE_KEY_SECRET"}
       })
 

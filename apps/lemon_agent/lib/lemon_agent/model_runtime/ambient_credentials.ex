@@ -68,6 +68,19 @@ defmodule LemonAgent.ModelRuntime.AmbientCredentials do
     end
   end
 
+  @doc "Whether an ambient Claude Code login is present, without refreshing it."
+  @spec anthropic_login_present?(keyword()) :: boolean()
+  def anthropic_login_present?(opts \\ []) do
+    is_binary(claude_env_token()) or
+      with home when is_binary(home) <- home(opts),
+           {:ok, raw} <- read_bounded(Path.join([home, ".claude", @claude_file])),
+           {:ok, _secret} <- claude_secret(raw) do
+        true
+      else
+        _ -> false
+      end
+  end
+
   defp claude_env_token do
     Enum.find_value(@claude_env_vars, fn name ->
       value = System.get_env(name)

@@ -128,7 +128,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Session.LearningReview
   alias CodingAgent.Session.Lifecycle
   alias CodingAgent.Session.ManualOperation
-  alias CodingAgent.Session.ModelResolver
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias CodingAgent.Session.Notifier
   alias CodingAgent.Session.OverflowRecovery
   alias CodingAgent.Session.Ownership

@@ -28,7 +28,7 @@ Runtime options mark this selection with `api_key_authoritative`. The per-reques
 credential callback supplies the concrete token. A `nil` or empty-string refusal
 cannot revive an earlier authoritative token; ordinary non-authoritative callbacks
 retain their cached-key fallback. The options builder does not fetch the login again.
-API-key fields returned by `ProviderConfigResolver` retain the same authority
+API-key fields returned by `StreamOptions.ProviderSettings` retain the same authority
 marker and use credential-aware secret resolution; project/service-account
 secret fields retain their existing raw-data contract.
 

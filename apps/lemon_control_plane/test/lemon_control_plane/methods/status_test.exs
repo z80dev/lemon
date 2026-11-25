@@ -196,7 +196,7 @@ defmodule LemonControlPlane.Methods.StatusTest do
       providers: %{provider => %{auth: "none"}}
     }
 
-    row = Enum.find(LemonControlPlane.ProviderStatus.snapshot(config), &(&1["id"] == provider))
+    row = Enum.find(LemonAgent.ModelRuntime.ProviderStatus.summary(config), &(&1["id"] == provider))
     assert %{"message" => message, "atMs" => at_ms} = row["lastError"]
     assert is_integer(at_ms)
     assert String.length(message) <= 256
@@ -213,7 +213,7 @@ defmodule LemonControlPlane.Methods.StatusTest do
     }
 
     row = fn ->
-      Enum.find(LemonControlPlane.ProviderStatus.snapshot(config), &(&1["id"] == provider))
+      Enum.find(LemonAgent.ModelRuntime.ProviderStatus.summary(config), &(&1["id"] == provider))
     end
 
     assert row.()["circuit"]["state"] == "not_started"
@@ -283,7 +283,7 @@ defmodule LemonControlPlane.Methods.StatusTest do
       providers: %{provider => %{auth: "none"}}
     }
 
-    row = Enum.find(LemonControlPlane.ProviderStatus.snapshot(config), &(&1["id"] == provider))
+    row = Enum.find(LemonAgent.ModelRuntime.ProviderStatus.summary(config), &(&1["id"] == provider))
     assert row["circuit"]["state"] == "unknown"
   end
 
@@ -297,7 +297,7 @@ defmodule LemonControlPlane.Methods.StatusTest do
       }
     }
 
-    providers = LemonControlPlane.ProviderStatus.snapshot(config)
+    providers = LemonAgent.ModelRuntime.ProviderStatus.summary(config)
     missing = Enum.find(providers, &(&1["id"] == "status-missing"))
 
     assert missing == %{

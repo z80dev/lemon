@@ -11,7 +11,6 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
 
   alias LemonAgent.ModelRuntime.{Credentials, CustomProviders, ProviderNames}
   alias LemonCore.Config
-  alias LemonCore.Secrets
 
   @typedoc "A single selectable model entry."
   @type model_map :: %{provider: String.t(), id: String.t(), name: String.t()}
@@ -362,71 +361,13 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
     _ -> %{}
   end
 
+  # The shared credential-readiness predicate (presence mode), so the picker
+  # offers exactly the providers status, doctor and the CLI report as ready.
   defp provider_enabled?(provider, configured, routing)
-       when is_binary(provider) and is_map(configured) do
-    aliases = provider_aliases(provider)
-
-    provider_has_credentials?(provider, aliases, configured, routing) or
-      provider_special_enabled?(provider)
-  end
+       when is_binary(provider) and is_map(configured),
+       do: Credentials.provider_has_credentials?(provider, configured, provider_routing: routing)
 
   defp provider_enabled?(_provider, _configured, _routing), do: false
-
-  defp provider_has_credentials?(provider, aliases, configured, routing) do
-    opts = [provider_routing: routing]
-
-    Credentials.provider_has_credentials?(provider, configured, opts) or
-      Enum.any?(aliases, &Credentials.provider_has_credentials?(&1, configured, opts))
-  end
-
-  defp provider_special_enabled?("openai-codex"), do: openai_codex_auth_available?()
-
-  defp provider_special_enabled?("amazon-bedrock"),
-    do:
-      (secret_present?("AWS_ACCESS_KEY_ID") and secret_present?("AWS_SECRET_ACCESS_KEY")) or
-        secret_present?("AWS_PROFILE")
-
-  defp provider_special_enabled?(_provider), do: false
-
-  defp provider_aliases(provider) when is_binary(provider) do
-    aliases =
-      case normalize_provider_name(provider) do
-        "google-antigravity" -> [provider, "google"]
-        "google-gemini-cli" -> [provider, "google"]
-        "google-vertex" -> [provider]
-        "kimi-coding" -> [provider, "kimi"]
-        "amazon-bedrock" -> [provider, "bedrock", "aws"]
-        "azure-openai-responses" -> [provider, "azure-openai", "azure-openai-responses"]
-        other -> [other]
-      end
-
-    aliases
-    |> Enum.map(&normalize_provider_name/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.uniq()
-  end
-
-  defp openai_codex_auth_available? do
-    Credentials.provider_has_credentials?("openai_codex", %{
-      "openai-codex" => %{"auth_source" => "oauth"}
-    })
-  end
-
-  defp secret_present?(name) when is_binary(name) and name != "" do
-    present_value?(System.get_env(name)) or
-      present_value?(System.get_env(String.downcase(name))) or
-      Secrets.exists?(name) or
-      Secrets.exists?(String.downcase(name))
-  rescue
-    _ ->
-      present_value?(System.get_env(name)) or
-        present_value?(System.get_env(String.downcase(name)))
-  end
-
-  defp secret_present?(_), do: false
-
-  defp present_value?(value) when is_binary(value), do: String.trim(value) != ""
-  defp present_value?(_), do: false
 
   defp normalize_provider_name(name) do
     name

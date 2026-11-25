@@ -58,7 +58,10 @@ defmodule CodingAgent.Session.ModelRoutingTest do
     assert turn(auto, "hi").model == "gpt-4o-mini"
 
     model =
-      CodingAgent.Session.ModelResolver.resolve_session_model("openai:gpt-4o", context.settings)
+      LemonAgent.ModelRuntime.ModelResolver.resolve_session_model(
+        "openai:gpt-4o",
+        context.settings
+      )
 
     assert :ok = Session.switch_model(auto, model)
     assert turn(auto, "review").model == "gpt-4o"
@@ -171,7 +174,7 @@ defmodule CodingAgent.Session.ModelRoutingTest do
     assert_receive {:provider_call, :openai, "gpt-4o", _}
 
     selected =
-      CodingAgent.Session.ModelResolver.resolve_session_model("openai:gpt-4o", settings)
+      LemonAgent.ModelRuntime.ModelResolver.resolve_session_model("openai:gpt-4o", settings)
 
     assert :ok = Session.switch_model(parent, selected)
     stale_opts = Keyword.put(opts, :model_explicit, false)

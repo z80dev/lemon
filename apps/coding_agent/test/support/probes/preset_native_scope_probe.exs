@@ -1,5 +1,5 @@
 defmodule CodingAgent.TestSupport.PresetNativeScopeProbe do
-  alias CodingAgent.Session.ModelResolver
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias CodingAgent.SettingsManager
   alias LemonAgent.ModelRuntime.{ModelCatalog, ProviderNames}
 

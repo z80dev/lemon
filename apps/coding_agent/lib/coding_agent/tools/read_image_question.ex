@@ -2,7 +2,7 @@ defmodule CodingAgent.Tools.ReadImageQuestion do
   @moduledoc false
 
   alias CodingAgent.Session
-  alias CodingAgent.Session.ModelResolver
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias CodingAgent.SettingsManager
   alias CodingAgent.Tools.{PathHelpers, ReadImage, ReadSqlite, ReadSvg}
   alias LemonAgent.Types.AgentToolResult

@@ -44,6 +44,21 @@ defmodule LemonCore.Secrets.External do
     end
   end
 
+  @doc """
+  Whether an enabled, valid source declares a reference for `name`, without
+  invoking any source. Sources that do not declare per-name references cannot
+  be answered without running them and do not count.
+  """
+  @spec declared?(String.t(), keyword()) :: boolean()
+  def declared?(name, opts \\ []) when is_binary(name) do
+    config = source_config(opts)
+
+    config.errors == [] and
+      Enum.any?(enabled_sources(config), &(&1.valid? and Map.has_key?(&1.refs || %{}, name)))
+  rescue
+    _ -> false
+  end
+
   @doc "Returns redacted readiness metadata without invoking a source."
   @spec status(keyword()) :: map()
   def status(opts \\ []) do

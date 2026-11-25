@@ -313,7 +313,7 @@ defmodule CodingAgent.Session.CompactionManager do
 
   @doc false
   def summary_options(opts, state) do
-    resolver = CodingAgent.Session.ModelResolver
+    resolver = LemonAgent.ModelRuntime.ModelResolver
 
     model =
       resolver.resolve_compaction_model(
