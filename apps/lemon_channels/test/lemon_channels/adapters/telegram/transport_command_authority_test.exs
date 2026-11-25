@@ -59,7 +59,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCommandAuthorityTest do
     end
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
   @owner_id 7_100_001
   @stranger_id 7_100_002
 
@@ -70,7 +70,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCommandAuthorityTest do
 
     stop_transport()
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
-    old_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway_env = Application.get_env(:lemon_core, @gateway_config_key)
 
     :persistent_term.put({TestRouter, :pid}, self())
     MockAPI.register_test(self())
@@ -94,8 +94,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCommandAuthorityTest do
         else: Application.delete_env(:lemon_core, :router_bridge)
 
       if old_gateway_env,
-        do: Application.put_env(:lemon_gateway, @gateway_config_key, old_gateway_env),
-        else: Application.delete_env(:lemon_gateway, @gateway_config_key)
+        do: Application.put_env(:lemon_core, @gateway_config_key, old_gateway_env),
+        else: Application.delete_env(:lemon_core, @gateway_config_key)
     end)
 
     :ok
@@ -243,10 +243,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportCommandAuthorityTest do
       }
       |> Map.merge(Map.new(overrides))
 
-    existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
+    existing = Application.get_env(:lemon_core, @gateway_config_key, %{})
 
     Application.put_env(
-      :lemon_gateway,
+      :lemon_core,
       @gateway_config_key,
       Map.merge(existing, %{telegram: %{bot_token: token, api_mod: MockAPI}, bindings: []})
     )

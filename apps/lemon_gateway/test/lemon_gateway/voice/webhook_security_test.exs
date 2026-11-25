@@ -4,12 +4,12 @@ defmodule LemonGateway.Voice.WebhookSecurityTest do
   alias LemonGateway.Sms.TwilioSignature
   alias LemonGateway.Voice.{RecordingDownloader, WebhookRouter}
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
   @auth_token "test-voice-auth-token"
   @account_sid "ACtestaccount"
 
   setup do
-    old_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway = Application.get_env(:lemon_core, @gateway_config_key)
     old_dir = Application.get_env(:lemon_gateway, :voice_recordings_dir)
 
     tmp =
@@ -18,7 +18,7 @@ defmodule LemonGateway.Voice.WebhookSecurityTest do
     recordings = Path.join(tmp, "recordings")
     File.mkdir_p!(recordings)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       voice: %{
         twilio_auth_token: @auth_token,
         twilio_account_sid: @account_sid,
@@ -29,7 +29,10 @@ defmodule LemonGateway.Voice.WebhookSecurityTest do
     Application.put_env(:lemon_gateway, :voice_recordings_dir, recordings)
 
     on_exit(fn ->
-      restore_env(@gateway_config_key, old_gateway)
+      if old_gateway,
+        do: Application.put_env(:lemon_core, @gateway_config_key, old_gateway),
+        else: Application.delete_env(:lemon_core, @gateway_config_key)
+
       restore_env(:voice_recordings_dir, old_dir)
       File.rm_rf!(tmp)
     end)
@@ -86,7 +89,7 @@ defmodule LemonGateway.Voice.WebhookSecurityTest do
     end
 
     test "callbacks fail closed when no auth token is configured" do
-      Application.put_env(:lemon_gateway, @gateway_config_key, %{
+      Application.put_env(:lemon_core, @gateway_config_key, %{
         voice: %{twilio_auth_token: "", public_url: "https://voice.example.test"}
       })
 
@@ -98,7 +101,7 @@ defmodule LemonGateway.Voice.WebhookSecurityTest do
     end
 
     test "callbacks fail closed when no public_url is configured" do
-      Application.put_env(:lemon_gateway, @gateway_config_key, %{
+      Application.put_env(:lemon_core, @gateway_config_key, %{
         voice: %{twilio_auth_token: @auth_token}
       })
 
@@ -111,7 +114,7 @@ defmodule LemonGateway.Voice.WebhookSecurityTest do
     end
 
     test "an http public_url is rejected even for correctly signed requests" do
-      Application.put_env(:lemon_gateway, @gateway_config_key, %{
+      Application.put_env(:lemon_core, @gateway_config_key, %{
         voice: %{twilio_auth_token: @auth_token, public_url: "http://voice.example.test"}
       })
 
@@ -148,7 +151,7 @@ defmodule LemonGateway.Voice.WebhookSecurityTest do
     end
 
     test "https callback signature ignores a backend port in public_url" do
-      Application.put_env(:lemon_gateway, @gateway_config_key, %{
+      Application.put_env(:lemon_core, @gateway_config_key, %{
         voice: %{twilio_auth_token: @auth_token, public_url: "https://voice.example.test:4047"}
       })
 

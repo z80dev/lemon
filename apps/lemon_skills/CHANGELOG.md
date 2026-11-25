@@ -13,6 +13,10 @@
 
 ### Changed
 
+- **Breaking:** the MCP client library (`LemonMCP.*`, formerly the `lemon_mcp`
+  app) lives in lemon_skills; `McpSource`/`McpSession` call it directly and the
+  `:mcp_*_client_not_available` errors are gone. `mix lemon.update` moved here
+  from lemon_core (#725).
 - **Breaking:** `skills.json` is skill state only. `Config.load_config/1`,
   `save_config/3`, `get_skill_config/1` and `set_skill_config/2` were removed;
   `Config.disabled_keys/1` (global ∪ project) and `Config.read_state/1` return

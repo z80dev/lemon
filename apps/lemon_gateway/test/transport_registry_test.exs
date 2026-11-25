@@ -179,12 +179,11 @@ defmodule LemonGateway.TransportRegistryTest do
 
   setup do
     LemonGateway.Test.AppIsolation.isolate_gateway([
-      LemonGateway.Config,
       :commands,
       :transports
     ])
 
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 1,
       ingress: %{enabled: true},
       enable_telegram: false,
@@ -294,7 +293,7 @@ defmodule LemonGateway.TransportRegistryTest do
       MockTransport
     ])
 
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 1,
       enable_telegram: false
     })
@@ -315,7 +314,7 @@ defmodule LemonGateway.TransportRegistryTest do
       MockTransport
     ])
 
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 1,
       enable_telegram: true
     })
@@ -335,7 +334,7 @@ defmodule LemonGateway.TransportRegistryTest do
       MockTransport
     ])
 
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 1,
       enable_telegram: false,
       enable_discord: true
@@ -365,7 +364,7 @@ defmodule LemonGateway.TransportRegistryTest do
       MockTransport
     ])
 
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 1,
       enable_telegram: false
     })
@@ -387,7 +386,7 @@ defmodule LemonGateway.TransportRegistryTest do
   test "logs warning when webhook is enabled but transport is missing" do
     Application.put_env(:lemon_gateway, :transports, [MockTransport])
 
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 1,
       enable_webhook: true
     })
@@ -409,7 +408,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "telegram disabled when enable_telegram is false" do
       Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransportRegistry])
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         max_concurrent_runs: 1,
         enable_telegram: false
       })
@@ -425,7 +424,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "telegram disabled when enable_telegram key missing from map" do
       Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransportRegistry])
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         max_concurrent_runs: 1
       })
 
@@ -442,7 +441,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "telegram enabled when enable_telegram is true in keyword list" do
       Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransportRegistry])
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config,
+      Application.put_env(:lemon_core, :gateway_test_config,
         max_concurrent_runs: 1,
         enable_telegram: true
       )
@@ -458,7 +457,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "telegram disabled when enable_telegram is false in keyword list" do
       Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransportRegistry])
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config,
+      Application.put_env(:lemon_core, :gateway_test_config,
         max_concurrent_runs: 1,
         enable_telegram: false
       )
@@ -474,7 +473,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "telegram disabled when enable_telegram key missing from keyword list" do
       Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransportRegistry])
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, max_concurrent_runs: 1)
+      Application.put_env(:lemon_core, :gateway_test_config, max_concurrent_runs: 1)
 
       {:ok, _} = restart_registry()
 
@@ -488,7 +487,7 @@ defmodule LemonGateway.TransportRegistryTest do
   describe "transport_enabled? with empty/missing config" do
     test "telegram disabled when config is empty map" do
       Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransportRegistry])
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{})
+      Application.put_env(:lemon_core, :gateway_test_config, %{})
 
       {:ok, _} = restart_registry()
 
@@ -500,7 +499,7 @@ defmodule LemonGateway.TransportRegistryTest do
 
     test "telegram disabled when config is empty keyword list" do
       Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransportRegistry])
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, [])
+      Application.put_env(:lemon_core, :gateway_test_config, [])
 
       {:ok, _} = restart_registry()
 
@@ -612,7 +611,7 @@ defmodule LemonGateway.TransportRegistryTest do
         __MODULE__.MockTelegramTransportRegistry
       ])
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         enable_telegram: false
       })
 
@@ -640,7 +639,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "filters webhook transport when enable_webhook is false" do
       Application.put_env(:lemon_gateway, :transports, [MockWebhookTransport, MockTransport])
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         enable_webhook: false
       })
 
@@ -661,7 +660,7 @@ defmodule LemonGateway.TransportRegistryTest do
         __MODULE__.MockTelegramTransportRegistry
       ])
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         enable_telegram: true
       })
 
@@ -684,7 +683,7 @@ defmodule LemonGateway.TransportRegistryTest do
   describe "non-telegram transports" do
     test "non-telegram transports are always enabled by default" do
       Application.put_env(:lemon_gateway, :transports, [MockTransport])
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{})
+      Application.put_env(:lemon_core, :gateway_test_config, %{})
 
       {:ok, _} = restart_registry()
 
@@ -701,7 +700,7 @@ defmodule LemonGateway.TransportRegistryTest do
         ThirdTransport
       ])
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{})
+      Application.put_env(:lemon_core, :gateway_test_config, %{})
 
       {:ok, _} = restart_registry()
 
@@ -717,7 +716,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "non-telegram transports not affected by enable_telegram setting" do
       Application.put_env(:lemon_gateway, :transports, [MockTransport])
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         enable_telegram: false
       })
 

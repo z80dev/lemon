@@ -24,6 +24,7 @@ defmodule LemonSkills.McpSession do
 
   use GenServer
 
+  alias LemonMCP.HTTP.OriginPolicy
   alias LemonSkills.{Config, McpSource}
 
   @supervisor LemonSkills.McpSession.Supervisor
@@ -151,17 +152,12 @@ defmodule LemonSkills.McpSession do
           {:cont, {:ok, [config | acc]}}
 
         {:ok, policy} ->
-          module = Module.concat(["Lemon" <> "MCP", "HTTP", "OriginPolicy"])
-
-          case apply(module, :pin, [url, policy]) do
+          case OriginPolicy.pin(url, policy) do
             {:ok, pin} ->
               {:cont, {:ok, [{:http, url, Keyword.put(opts, :destination_pin, pin)} | acc]}}
 
-            {:error, reason} when is_atom(reason) ->
+            {:error, reason} ->
               {:halt, {:error, reason}}
-
-            _ ->
-              {:halt, {:error, :destination_not_allowed}}
           end
       end
     end)

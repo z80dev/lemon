@@ -34,33 +34,44 @@ defmodule LemonCore.Quality.ArchitectureDocs do
 
   @spec render_dependency_policy_markdown(String.t()) :: String.t()
   def render_dependency_policy_markdown(root \\ File.cwd!()) do
-    actual = ArchitectureCheck.actual_direct_deps(root)
-    allowed = ArchitecturePolicy.allowed_direct_deps()
-    exceptions = ArchitecturePolicy.reference_only_namespace_exceptions()
+    lib_deps = ArchitectureCheck.lib_dependencies(root)
+    test_deps = ArchitectureCheck.test_dependencies(root)
+    seams = ArchitecturePolicy.reference_only_namespace_exceptions()
 
     header = [
-      "| App | Actual direct deps from `mix.exs` | Allowed direct deps | Reference-only exceptions |",
-      "| --- | --- | --- | --- |"
+      "| App | Role | Lib deps from `mix.exs` | `only: :test` deps | Reference-only seams |",
+      "| --- | --- | --- | --- | --- |"
     ]
 
     rows =
-      allowed
+      ArchitecturePolicy.app_namespaces()
       |> Map.keys()
+      |> Enum.concat(Map.keys(lib_deps))
+      |> Enum.uniq()
       |> Enum.sort()
       |> Enum.map(fn app ->
-        actual_cell =
-          case Map.fetch(actual, app) do
+        lib_cell =
+          case Map.fetch(lib_deps, app) do
             {:ok, deps} -> dependency_cell(deps)
             :error -> "*(missing app)*"
           end
 
-        allowed_cell = allowed |> Map.fetch!(app) |> dependency_cell()
-        exception_cell = exceptions |> Map.get(app, []) |> dependency_cell()
+        test_cell = test_deps |> Map.get(app, []) |> dependency_cell()
+        seam_cell = seams |> Map.get(app, []) |> dependency_cell()
 
-        "| `#{app}` | #{actual_cell} | #{allowed_cell} | #{exception_cell} |"
+        "| `#{app}` | #{role(app)} | #{lib_cell} | #{test_cell} | #{seam_cell} |"
       end)
 
     Enum.join(header ++ rows, "\n")
+  end
+
+  defp role(app) do
+    cond do
+      app in ArchitecturePolicy.foundations() -> "foundation"
+      app in ArchitecturePolicy.satellites() -> "satellite"
+      app in ArchitecturePolicy.test_kits() -> "test kit"
+      true -> "platform"
+    end
   end
 
   @spec render_package_map_markdown(String.t()) :: String.t()

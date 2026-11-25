@@ -196,12 +196,10 @@ defmodule LemonGateway.Health do
     kind, reason -> {:error, {kind, reason}}
   end
 
+  # The channel transport is bound in config (config/config.exs); the gateway
+  # never names a lemon_channels module. Unbound reports :xmtp_module_not_loaded.
   defp xmtp_transport_module do
-    Application.get_env(
-      :lemon_gateway,
-      :xmtp_transport_module,
-      :"Elixir.LemonChannels.Adapters.Xmtp.Transport"
-    )
+    Application.get_env(:lemon_gateway, :xmtp_transport_module)
   end
 
   defp xmtp_enabled? do

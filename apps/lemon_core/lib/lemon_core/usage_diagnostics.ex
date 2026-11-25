@@ -117,11 +117,13 @@ defmodule LemonCore.UsageDiagnostics do
 
   defp token_summary(_), do: %{input: nil, output: nil, total: nil}
 
+  # Usage limits are shared by every usage surface (doctor, CLI, channels and
+  # the control plane), so lemon_core owns their configuration.
   defp quotas do
     %{
-      runs_limit: Application.get_env(:lemon_control_plane, :runs_limit),
-      tokens_limit: Application.get_env(:lemon_control_plane, :tokens_limit),
-      cost_limit: Application.get_env(:lemon_control_plane, :cost_limit)
+      runs_limit: Application.get_env(:lemon_core, :runs_limit),
+      tokens_limit: Application.get_env(:lemon_core, :tokens_limit),
+      cost_limit: Application.get_env(:lemon_core, :cost_limit)
     }
   end
 

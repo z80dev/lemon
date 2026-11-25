@@ -1,9 +1,9 @@
-defmodule LemonMCP.ReleaseCompositionTest do
+defmodule LemonSkills.McpEnabledTest do
   use ExUnit.Case, async: false
 
   alias LemonSkills.McpSource
 
-  test "the assembled library enables MCP feature detection" do
+  test "MCP is enabled unless configuration turns it off" do
     saved_disabled = Application.fetch_env(:lemon_skills, :mcp_disabled)
     saved_disabled_env = System.get_env("LEMON_MCP_DISABLED")
 

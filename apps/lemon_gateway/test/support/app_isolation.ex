@@ -11,7 +11,7 @@ defmodule LemonGateway.Test.AppIsolation do
     end)
 
     env = [
-      app_env: Enum.map(keys, &{:lemon_gateway, &1}),
+      app_env: [{:lemon_core, :gateway_test_config} | Enum.map(keys, &{:lemon_gateway, &1})],
       system_env: Keyword.get(opts, :system_env, [])
     ]
 

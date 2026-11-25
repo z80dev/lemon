@@ -39,25 +39,31 @@ defmodule LemonSkills.McpSourceScopesTest do
     %{root: root, script: script}
   end
 
-  test "ten session cwds keep at most the configured stdio clients and return to baseline",
+  test "ten session cwds keep at most the configured stdio clients and shut them down",
        ctx do
     configure_stdio_server(ctx)
-    baseline = stdio_processes()
 
     source =
       start_supervised!(
         {McpSource, name: nil, max_project_scopes: 3, refresh_interval_ms: 60_000}
       )
 
-    sessions =
-      for n <- 1..10 do
+    {sessions, owned_pids} =
+      Enum.map_reduce(1..10, MapSet.new(), fn n, owned_pids ->
         cwd = project(ctx, "project-#{n}")
         session = start_session(source, cwd)
         assert [%{label: "MCP echo"}] = session_tools(session)
         # At most three project scopes, each with its own stdio client.
         eventually(fn -> length(stdio_clients(source)) <= 3 end)
-        session
-      end
+
+        owned_pids =
+          Enum.reduce(stdio_clients(source), owned_pids, fn client, acc ->
+            %{transport: transport} = :sys.get_state(client)
+            acc |> MapSet.put(client) |> MapSet.put(transport)
+          end)
+
+        {session, owned_pids}
+      end)
 
     # The global scope plus the three most recently used projects.
     assert map_size(:sys.get_state(source).scopes) == 4
@@ -65,7 +71,8 @@ defmodule LemonSkills.McpSourceScopesTest do
 
     eventually(fn -> map_size(:sys.get_state(source).scopes) == 1 end)
     eventually(fn -> stdio_clients(source) == [] end)
-    eventually(fn -> stdio_processes() == baseline end)
+    assert MapSet.size(owned_pids) == 20
+    eventually(fn -> Enum.all?(owned_pids, &(not Process.alive?(&1))) end)
   end
 
   test "a second session opening elsewhere keeps the first session's tool cache", ctx do
@@ -166,12 +173,6 @@ defmodule LemonSkills.McpSourceScopesTest do
   defp stdio_clients(source) do
     {:links, links} = Process.info(source, :links)
     Enum.filter(links, &(initial_call(&1) == {LemonMCP.Client, :init, 1}))
-  end
-
-  defp stdio_processes do
-    Enum.count(Process.list(), fn pid ->
-      initial_call(pid) in [{LemonMCP.Client, :init, 1}, {LemonMCP.Transport.Stdio, :init, 1}]
-    end)
   end
 
   defp initial_call(pid) do

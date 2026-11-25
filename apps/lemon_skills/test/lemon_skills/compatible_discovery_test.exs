@@ -10,7 +10,7 @@ defmodule LemonSkills.CompatibleDiscoveryTest do
   @env_keys ~w(LEMON_AGENT_DIR LEMON_HARNESS_SKILLS_DIR LEMON_OMP_SKILLS_DIR LEMON_CLAUDE_SKILLS_DIR LEMON_CODEX_SKILLS_DIR)
   @app_keys [
     {:lemon_skills, :agent_dir},
-    {:coding_agent, :agent_dir},
+    {:lemon_core, :agent_dir},
     {:lemon_skills, :harness_global_skills_dir},
     {:lemon_skills, :omp_global_skills_dir},
     {:lemon_skills, :claude_global_skills_dir},
@@ -106,7 +106,7 @@ defmodule LemonSkills.CompatibleDiscoveryTest do
                &Path.join(home, &1)
              )
 
-    Application.put_env(:coding_agent, :agent_dir, Path.dirname(roots.lemon))
+    Application.put_env(:lemon_core, :agent_dir, Path.dirname(roots.lemon))
     refute Path.join(home, ".claude/skills") in Config.global_skills_dirs()
     refute Path.join(home, ".omp/agent/skills") in Config.global_skills_dirs()
     refute Path.join(home, ".codex/skills") in Config.global_skills_dirs()

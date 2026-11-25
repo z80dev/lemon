@@ -93,7 +93,7 @@ config :lemon_honcho, client: LemonHoncho.Client.Tripwire
 config :lemon_core, LemonCore.ConfigCache, mtime_check_interval_ms: 0
 
 # Avoid writing dets / sessions / global config under ~/.lemon/agent during tests.
-config :coding_agent,
+config :lemon_core,
        :agent_dir,
        Path.join(
          System.tmp_dir!(),
@@ -167,9 +167,13 @@ Enum.each(
 # bridge.
 config :lemon_computer_use,
   enabled: false,
-  # Browser auto-selection probes LCU on every tool registry build; never run a
-  # developer's installed LCU from unit tests.
+  # Never run a developer's installed LCU from unit tests.
   lcu_root: Path.join(System.tmp_dir!(), "lemon_lcu_test_no_such_dir")
+
+# Browser auto-selection probes LCU (LemonCore.BrowserProvider.LCUProbe) on
+# every tool registry build; keep that probe away from installed LCU too.
+config :lemon_core,
+  lcu_default_roots: [Path.join(System.tmp_dir!(), "lemon_lcu_test_no_such_dir")]
 
 Enum.each(
   ~w(LEMON_COMPUTER_USE_ENABLED LEMON_COMPUTER_USE_LCU_ROOT LEMON_COMPUTER_USE_DECLINED_ORIGINS
@@ -195,8 +199,9 @@ config :lemon_browser, :resolve_host, fn _host -> {:ok, [{93, 184, 215, 14}]} en
 
 # Prevent unit tests from starting real/interactive transports based on a developer's
 # local TOML config. Individual test suites can override these as needed and restart
-# the application under test.
-config :lemon_gateway, LemonGateway.Config,
+# the application under test. `LemonCore.GatewayConfig` honors this replacement
+# only in `config_test_mode`.
+config :lemon_core, :gateway_test_config,
   enable_telegram: false,
   max_concurrent_runs: 1,
   webhook: %{port: 0},

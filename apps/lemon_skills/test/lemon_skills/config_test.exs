@@ -9,28 +9,28 @@ defmodule LemonSkills.ConfigTest do
   setup do
     previous_agent_dir_env = System.get_env("LEMON_AGENT_DIR")
     previous_lemon_skills_agent_dir = capture_app_env(:lemon_skills, :agent_dir)
-    previous_coding_agent_agent_dir = capture_app_env(:coding_agent, :agent_dir)
+    previous_core_agent_dir = capture_app_env(:lemon_core, :agent_dir)
 
     on_exit(fn ->
       restore_env("LEMON_AGENT_DIR", previous_agent_dir_env)
       restore_app_env(:lemon_skills, :agent_dir, previous_lemon_skills_agent_dir)
-      restore_app_env(:coding_agent, :agent_dir, previous_coding_agent_agent_dir)
+      restore_app_env(:lemon_core, :agent_dir, previous_core_agent_dir)
     end)
 
     :ok
   end
 
   describe "agent_dir/0" do
-    test "uses env first, then :lemon_skills app env, then :coding_agent app env", %{
+    test "uses env first, then :lemon_skills app env, then the core agent-dir override", %{
       tmp_dir: tmp_dir
     } do
       env_agent_dir = Path.join(tmp_dir, "env-agent")
       lemon_skills_agent_dir = Path.join(tmp_dir, "lemon-skills-agent")
-      coding_agent_agent_dir = Path.join(tmp_dir, "coding-agent")
+      core_agent_dir = Path.join(tmp_dir, "core-agent")
 
       System.put_env("LEMON_AGENT_DIR", env_agent_dir)
       Application.put_env(:lemon_skills, :agent_dir, lemon_skills_agent_dir)
-      Application.put_env(:coding_agent, :agent_dir, coding_agent_agent_dir)
+      Application.put_env(:lemon_core, :agent_dir, core_agent_dir)
 
       assert Config.agent_dir() == env_agent_dir
 
@@ -38,7 +38,7 @@ defmodule LemonSkills.ConfigTest do
       assert Config.agent_dir() == lemon_skills_agent_dir
 
       Application.delete_env(:lemon_skills, :agent_dir)
-      assert Config.agent_dir() == coding_agent_agent_dir
+      assert Config.agent_dir() == core_agent_dir
     end
   end
 

@@ -64,10 +64,10 @@ defmodule LemonCore.Runtime.ReleaseProfileTest do
       end
     end
 
-    test "the MCP client library is loaded, never started" do
+    test "MCP ships with the skills application, not a separate OTP app" do
       for name <- Profile.names() do
-        assert {:lemon_mcp, :load} in Profile.get(name).applications
-        refute :lemon_mcp in Profile.running_apps(name)
+        assert {:lemon_skills, :permanent} in Profile.get(name).applications
+        refute :lemon_mcp in Profile.app_list(name)
       end
     end
 

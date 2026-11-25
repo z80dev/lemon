@@ -6,15 +6,16 @@ defmodule LemonCore.Quality.ArchitectureDocsTest do
   @repo_root Path.expand("../../../../..", __DIR__)
 
   describe "render_dependency_policy_markdown/1" do
-    test "renders actual, allowed, and reference-only dependency columns" do
-      assert ArchitectureDocs.render_dependency_policy_markdown(@repo_root) =~
-               "| App | Actual direct deps from `mix.exs` | Allowed direct deps | Reference-only exceptions |"
+    test "renders roles, lib and test-only edges, and reference-only seams" do
+      rendered = ArchitectureDocs.render_dependency_policy_markdown(@repo_root)
 
-      assert ArchitectureDocs.render_dependency_policy_markdown(@repo_root) =~
-               "| `lemon_core` | *(none)* | *(none)* | *(none)* |"
+      assert rendered =~
+               "| App | Role | Lib deps from `mix.exs` | `only: :test` deps | Reference-only seams |"
 
-      assert ArchitectureDocs.render_dependency_policy_markdown(@repo_root) =~
-               "| `lemon_gateway` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_ai` |"
+      assert rendered =~ "| `lemon_core` | foundation | *(none)* | *(none)* | *(none)* |"
+
+      assert rendered =~
+               "| `lemon_gateway` | platform | `lemon_agent`, `lemon_core`, `lemon_media` | *(none)* | `lemon_ai` |"
     end
 
     test "renders rows in sorted app order" do

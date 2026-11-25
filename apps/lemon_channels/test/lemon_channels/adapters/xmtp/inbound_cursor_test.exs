@@ -9,7 +9,7 @@ defmodule LemonChannels.Adapters.Xmtp.InboundCursorTest do
   alias LemonChannels.Adapters.Xmtp.CursorStore
   alias LemonChannels.Adapters.Xmtp.Transport
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
   @inbox "inbox-cursor-friend"
 
   defmodule CursorRouter do
@@ -38,11 +38,11 @@ defmodule LemonChannels.Adapters.Xmtp.InboundCursorTest do
   setup do
     stop_transport()
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
-    old_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway_env = Application.get_env(:lemon_core, @gateway_config_key)
     :persistent_term.put({CursorRouter, :pid}, self())
     :ok = LemonCore.RouterBridge.configure(router: CursorRouter, run_orchestrator: CursorRouter)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       enable_xmtp: true,
       xmtp: %{require_live: false, poll_interval_ms: 30_000, allowed_inboxes: [@inbox]}
     })
@@ -51,7 +51,7 @@ defmodule LemonChannels.Adapters.Xmtp.InboundCursorTest do
       stop_transport()
       :persistent_term.erase({CursorRouter, :pid})
       restore_env(:lemon_core, :router_bridge, old_router_bridge)
-      restore_env(:lemon_gateway, @gateway_config_key, old_gateway_env)
+      restore_env(:lemon_core, @gateway_config_key, old_gateway_env)
     end)
 
     {:ok, account: "cursor-#{System.unique_integer([:positive])}"}

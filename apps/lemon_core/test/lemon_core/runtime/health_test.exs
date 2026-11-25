@@ -91,7 +91,6 @@ defmodule LemonCore.Runtime.HealthTest do
 
       assert missing -- LemonCore.Runtime.Profile.running_apps(:runtime_full) == []
       assert ok == (missing == [])
-      refute :lemon_mcp in missing
     end
 
     test "the :apps option names the expected applications" do

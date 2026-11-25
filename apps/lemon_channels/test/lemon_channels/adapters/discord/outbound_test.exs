@@ -31,14 +31,14 @@ defmodule LemonChannels.Adapters.Discord.OutboundTest do
     end
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   setup do
-    old = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old = Application.get_env(:lemon_core, @gateway_config_key)
     old_config_test_mode = Application.get_env(:lemon_core, :config_test_mode)
     Application.put_env(:lemon_core, :config_test_mode, true)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       enable_discord: true,
       discord: %{account_id: "acct", api_mod: MockMessageApi}
     })
@@ -47,9 +47,9 @@ defmodule LemonChannels.Adapters.Discord.OutboundTest do
       restore_env(:lemon_core, :config_test_mode, old_config_test_mode)
 
       if old == nil do
-        Application.delete_env(:lemon_gateway, @gateway_config_key)
+        Application.delete_env(:lemon_core, @gateway_config_key)
       else
-        Application.put_env(:lemon_gateway, @gateway_config_key, old)
+        Application.put_env(:lemon_core, @gateway_config_key, old)
       end
     end)
 

@@ -30,7 +30,7 @@ defmodule LemonChannels.Adapters.Xmtp.TransportAuthorizationTest do
     end
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
   @dedupe_table :lemon_channels_xmtp_dedupe
   @allowed_inbox "inbox-allowed-1"
   @other_inbox "inbox-stranger-2"
@@ -42,14 +42,14 @@ defmodule LemonChannels.Adapters.Xmtp.TransportAuthorizationTest do
     stop_transport()
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
-    old_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway_env = Application.get_env(:lemon_core, @gateway_config_key)
 
     :persistent_term.put({AuthTestRouter, :pid}, self())
 
     :ok =
       LemonCore.RouterBridge.configure(router: AuthTestRouter, run_orchestrator: AuthTestRouter)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       enable_xmtp: true,
       xmtp: %{require_live: false, poll_interval_ms: 30_000, connect_timeout_ms: 5_000}
     })
@@ -58,7 +58,7 @@ defmodule LemonChannels.Adapters.Xmtp.TransportAuthorizationTest do
       stop_transport()
       :persistent_term.erase({AuthTestRouter, :pid})
       restore_env(:lemon_core, :router_bridge, old_router_bridge)
-      restore_env(:lemon_gateway, @gateway_config_key, old_gateway_env)
+      restore_env(:lemon_core, @gateway_config_key, old_gateway_env)
     end)
 
     :ok
@@ -246,7 +246,7 @@ defmodule LemonChannels.Adapters.Xmtp.TransportAuthorizationTest do
   end
 
   defp put_xmtp_policy(policy) do
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       enable_xmtp: true,
       xmtp:
         Map.merge(

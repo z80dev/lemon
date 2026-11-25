@@ -1,38 +1,36 @@
 # Architecture Boundaries
 
-Lemon enforces an exact direct umbrella dependency graph by app. The generated
-table distinguishes dependencies parsed from `mix.exs`, direct edges permitted
-by policy, and source-reference exceptions that do not permit a Mix dependency.
-This keeps the harness modular and prevents deleted edges from remaining as
-silent permissions.
+Lemon enforces architecture rules over the umbrella dependency graph declared in
+`apps/*/mix.exs`, which is the only authority for that graph. The generated
+table shows each app's role, its lib and `only: :test` edges, and the
+reference-only seams that permit runtime dispatch without a Mix dependency.
 
 ## Direct Dependency Policy
 
 <!-- architecture_policy:start -->
-| App | Actual direct deps from `mix.exs` | Allowed direct deps | Reference-only exceptions |
-| --- | --- | --- | --- |
-| `coding_agent` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_lsp`, `lemon_mcp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_lsp`, `lemon_mcp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | *(none)* |
-| `lemon_agent` | `lemon_ai`, `lemon_core` | `lemon_ai`, `lemon_core` | *(none)* |
-| `lemon_ai` | *(none)* | *(none)* | *(none)* |
-| `lemon_automation` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_mcp`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_mcp`, `lemon_router`, `lemon_skills` | *(none)* |
-| `lemon_browser` | `lemon_core` | `lemon_core` | *(none)* |
-| `lemon_channels` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core`, `lemon_media` | *(none)* |
-| `lemon_cli` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_mcp`, `lemon_memory`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_mcp`, `lemon_memory`, `lemon_skills` | `lemon_channels`, `lemon_media` |
-| `lemon_computer_use` | `lemon_agent`, `lemon_ai`, `lemon_core` | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* |
-| `lemon_control_plane` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_mcp`, `lemon_media`, `lemon_memory`, `lemon_omp`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_mcp`, `lemon_media`, `lemon_memory`, `lemon_omp`, `lemon_router`, `lemon_skills` | *(none)* |
-| `lemon_core` | *(none)* | *(none)* | *(none)* |
-| `lemon_evals` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* |
-| `lemon_gateway` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core` | `lemon_ai` |
-| `lemon_honcho` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_platform_test` | *(none)* |
-| `lemon_lsp` | `lemon_core` | `lemon_core` | *(none)* |
-| `lemon_mcp` | `lemon_core`, `lemon_skills` | `lemon_core`, `lemon_skills` | *(none)* |
-| `lemon_media` | `lemon_core` | `lemon_core` | *(none)* |
-| `lemon_memory` | `lemon_core` | `lemon_core` | *(none)* |
-| `lemon_omp` | `lemon_agent`, `lemon_ai`, `lemon_core` | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* |
-| `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_memory` | *(none)* |
-| `lemon_router` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_mcp`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_mcp`, `lemon_media`, `lemon_memory` | *(none)* |
-| `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* |
-| `lemon_web` | `lemon_agent`, `lemon_automation`, `lemon_control_plane`, `lemon_core`, `lemon_memory`, `lemon_router` | `lemon_agent`, `lemon_automation`, `lemon_control_plane`, `lemon_core`, `lemon_memory`, `lemon_router` | *(none)* |
+| App | Role | Lib deps from `mix.exs` | `only: :test` deps | Reference-only seams |
+| --- | --- | --- | --- | --- |
+| `coding_agent` | platform | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_lsp`, `lemon_memory`, `lemon_skills` | `lemon_platform_test` | *(none)* |
+| `lemon_agent` | platform | `lemon_ai`, `lemon_core` | *(none)* | *(none)* |
+| `lemon_ai` | foundation | *(none)* | *(none)* | *(none)* |
+| `lemon_automation` | platform | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_router`, `lemon_skills` | *(none)* | *(none)* |
+| `lemon_browser` | platform | `lemon_core` | *(none)* | *(none)* |
+| `lemon_channels` | platform | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media` | *(none)* | *(none)* |
+| `lemon_cli` | satellite | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* | `coding_agent`, `lemon_channels`, `lemon_media`, `lemon_router` |
+| `lemon_computer_use` | satellite | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* | *(none)* |
+| `lemon_control_plane` | platform | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_memory`, `lemon_omp`, `lemon_router`, `lemon_skills` | *(none)* | *(none)* |
+| `lemon_core` | foundation | *(none)* | *(none)* | *(none)* |
+| `lemon_evals` | satellite | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* | *(none)* |
+| `lemon_gateway` | platform | `lemon_agent`, `lemon_core`, `lemon_media` | *(none)* | `lemon_ai` |
+| `lemon_honcho` | satellite | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory` | `lemon_platform_test` | *(none)* |
+| `lemon_lsp` | platform | `lemon_core` | *(none)* | *(none)* |
+| `lemon_media` | platform | `lemon_core` | *(none)* | *(none)* |
+| `lemon_memory` | platform | `lemon_core` | *(none)* | *(none)* |
+| `lemon_omp` | platform | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* | *(none)* |
+| `lemon_platform_test` | test kit | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_memory` | *(none)* | *(none)* |
+| `lemon_router` | platform | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_media`, `lemon_memory`, `lemon_skills` | *(none)* | *(none)* |
+| `lemon_skills` | platform | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* | *(none)* |
+| `lemon_web` | satellite | `lemon_agent`, `lemon_automation`, `lemon_control_plane`, `lemon_core`, `lemon_memory`, `lemon_router` | *(none)* | *(none)* |
 <!-- architecture_policy:end -->
 
 ## Package Map
@@ -62,7 +60,6 @@ only inside the product releases.
 | `lemon_gateway` | 0.1.0 | no |
 | `lemon_honcho` | 0.1.0 | no |
 | `lemon_lsp` | 0.1.0 | no |
-| `lemon_mcp` | 0.1.0 | no |
 | `lemon_media` | 0.1.0 | no |
 | `lemon_memory` | 0.3.0 | yes |
 | `lemon_omp` | 0.1.0 | no |
@@ -82,26 +79,32 @@ mix lemon.architecture.docs          # regenerate the generated tables above
 mix lemon.architecture.docs --check  # fail if a table is stale
 ```
 
-The policy lives in `LemonCore.Quality.ArchitecturePolicy`
-(`apps/lemon_core/lib/lemon_core/quality/architecture_policy.ex`); the tables
-between the `architecture_policy` and `package_map` markers are generated from
-it and from `apps/*/mix.exs`, and must not be edited by hand. `mix lemon.quality`
-runs the docs link check (local Markdown links in `docs/**/*.md` must resolve),
-the generated-table freshness and publish-set checks, the architecture check and
-the duplicate test-module and layered test-family guard.
+The rules live in `LemonCore.Quality.ArchitecturePolicy`
+(`apps/lemon_core/lib/lemon_core/quality/architecture_policy.ex`), which names
+roles (namespace ownership, foundations, satellites, test kits, reference-only
+seams and config bindings) and never restates `mix.exs`. The tables between the
+`architecture_policy` and `package_map` markers are generated from it and from
+`apps/*/mix.exs`, and must not be edited by hand. `mix lemon.quality` runs the
+docs link check (local Markdown links in `docs/**/*.md` must resolve), the
+generated-table freshness and publish-set checks, the architecture check and the
+duplicate test-module and layered test-family guard.
 
-The architecture checker enforces all of the following:
+The architecture checker fails when:
 
-- direct umbrella dependencies parsed from complete `deps/0` bodies in `apps/*/mix.exs`, including lists wrapped by package helpers
-- removal of stale direct-dependency permissions after a Mix edge is deleted
-- namespace references in `apps/*/lib/**/*.ex`, including the separately listed reference-only exceptions
-
-It fails if an app introduces an out-of-policy dependency, retains a policy
-permission after deleting the dependency, or references a cross-app namespace
-outside its direct dependencies and explicit exceptions. Reference-only
-exceptions permit source use but cannot authorize a new `mix.exs` edge. When an
-explicit target policy differs from the current policy, target drift remains a
-non-failing migration report.
+- a foundation (`lemon_ai`, `lemon_core`) declares any umbrella dependency
+- any app depends on a satellite, or on a test kit outside `only: :test`
+- declared edges plus reference-only seams and config bindings form a cycle
+- a lib edge has no reference from the app's `lib/`, or `lib/` reaches an
+  `only: :test` dependency
+- code under `apps/*/lib` reaches another app outside its lib dependencies, by
+  alias, quoted `:"Elixir.Module"` atom, `Module.concat` with literal namespace
+  segments (including `"Lemon" <> "X"`), or `Application`/`:application` env
+  access naming another umbrella app; quoted atoms and literal `Module.concat`
+  are rejected even toward a dependency, because they hide the edge from xref
+- `config :app` in `config/*.exs` names a module of an app that `app` neither
+  depends on nor is depended on by, unless the policy lists that config binding
+- a reference-only seam or config binding is unused, or a seam duplicates a
+  declared edge
 
 ## Runtime Ownership Rules
 
@@ -122,10 +125,10 @@ the dependency policy above, not these source-level rules:
   execution use authority intersection; named nodes transport and revalidate
   only the versioned context rather than independently normalizing policy.
 - Shared domains in `lemon_core` / `lemon_control_plane` must use typed wrappers such as `RunStore`, `ChatStateStore`, `PolicyStore`, and `ProjectBindingStore` instead of bypassing them with raw store helpers.
+- The shared CLI registry dispatches Mix-free command modules in their owning apps. Its `coding_agent`, `lemon_channels`, `lemon_media` and `lemon_router` references are reference-only seams so setup and other one-shot commands do not start those services through an application dependency. Source Mix tasks are thin adapters; packaged runtime profiles include the same handlers.
+- The MCP client library (`LemonMCP.*`) ships inside `lemon_skills`, which owns its only source consumer, `LemonSkills.McpSource`, and calls the clients directly. `coding_agent` uses it for native MCP capability discovery; `lemon_router` reuses `LemonMCP.HTTP.OriginPolicy` during native follow-up admission, `lemon_automation` for cron admission, and `lemon_cli` and `lemon_control_plane` so local and remote `lemon doctor` runs compare Lemon Bot admission origins with that same canonicalization. All of them declare an ordinary `lemon_skills` edge. Consuming apps supervise any clients and transports they create; origin validation is not duplicated or moved into dependency-free `lemon_core` / `lemon_ai`.
 - Agent runtime registration and required callback contracts live in `LemonCore.AgentRuntime`. Coding products register a complete provider at boot. Consumers use `query/3` for reads and `mutate/2` for changes. Missing callbacks are unavailable; a mutation that raises, exits or throws after dispatch has an unknown outcome and must be reconciled, not retried. Registry configuration belongs to `:lemon_core`; no consumer depends on the control plane to discover the running agent.
 - Goal and kanban state (`GoalStore`, `KanbanStore` and their authority/lease rules), the `goal`, `kanban` and `cron` agent tools and the `/goal`, `/kanban` and `/remind` chat commands are owned by `lemon_automation`. The tools register through `LemonAgent.ToolRegistry` at boot; channel transports reach the chat commands through `LemonCore.AutomationCommands`, the provider automation registers at boot. Control-plane methods and Web projections call `lemon_automation` directly through their declared dependency. `lemon_skills` and `lemon_channels` name no `lemon_automation` or `lemon_router` module.
-- The shared CLI registry dispatches Mix-free command modules in their owning apps. Its `lemon_channels` and `lemon_media` references are runtime-only so setup and other one-shot commands do not start channel services through an application dependency. Source Mix tasks are thin adapters; packaged runtime profiles include the same handlers.
-- `coding_agent` declares a direct `lemon_mcp` dependency for native MCP capability discovery; `lemon_router` declares the same edge to reuse MCP HTTP origin validation during native follow-up admission, `lemon_automation` declares it for the same validation in cron admission, and `lemon_cli` and `lemon_control_plane` declare it so local and remote `lemon doctor` runs compare Lemon Bot admission origins with that same canonicalization. All five use `runtime: false`: the minimal and full runtime releases explicitly include `lemon_mcp: :load`, making these library modules available without starting an application callback. Consuming apps supervise any clients and transports they create. Origin validation stays in `lemon_mcp`, not duplicated in router or moved into dependency-free `lemon_core` / `lemon_ai`.
 
 ### Shared mechanisms without foundation dependencies
 

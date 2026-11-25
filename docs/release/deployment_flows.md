@@ -151,10 +151,10 @@ MIX_ENV=prod mix do --app lemon_web phx.digest
 MIX_ENV=prod mix release lemon_runtime_full
 ```
 
-Both full and minimal runtime compositions assemble `lemon_mcp` with release
-mode `:load`. The library has no application callback and starts no processes;
-this entry makes its client modules available to `LemonSkills.McpSource` while
-the consuming application remains responsible for supervising each connection.
+The MCP client library ships inside `lemon_skills` (`LemonMCP.*`), so both full
+and minimal runtime compositions include it through that application. The
+clients start no processes on their own; `LemonSkills.McpSource` and other
+consumers supervise each connection they open.
 
 Both runtime profiles also bundle the local browser driver. A release step runs
 `npm ci` and `npm run build` in `clients/lemon-browser-node`, then stages `dist/`
@@ -283,13 +283,12 @@ profile in `apps/lemon_core/priv/runtime_profiles.exs`. The source launcher
 `lemon setup runtime` read the same file, and
 `LemonCore.Runtime.ReleaseProfileTest` fails when the releases, the profiles or
 this table drift apart. Both profiles also start `exqlite`, `sentry` and `finch`
-(optional dependencies of `lemon_core`) and load `lemon_mcp` without starting
-it.
+(optional dependencies of `lemon_core`). The MCP client modules ship with `lemon_skills`.
 
 | Profile | Apps | Use case |
 |---|---|---|
-| `lemon_runtime_min` | `lemon_browser`, `lemon_media`, `lemon_lsp`, `lemon_omp`, `lemon_computer_use`, `lemon_skills`, `coding_agent`, `lemon_gateway`, `lemon_cli`, `lemon_router`, `lemon_honcho`, `lemon_channels`, `lemon_automation`, `lemon_control_plane`; `lemon_mcp` loaded | Headless / API-only server: the full runtime without the web UI |
-| `lemon_runtime_full` | the minimal runtime plus the web UI: `lemon_browser`, `lemon_media`, `lemon_lsp`, `lemon_omp`, `lemon_computer_use`, `lemon_skills`, `coding_agent`, `lemon_gateway`, `lemon_cli`, `lemon_router`, `lemon_honcho`, `lemon_channels`, `lemon_automation`, `lemon_control_plane`, `lemon_web`; `lemon_mcp` loaded | Full local runtime with UI |
+| `lemon_runtime_min` | `lemon_browser`, `lemon_media`, `lemon_lsp`, `lemon_omp`, `lemon_computer_use`, `lemon_skills`, `coding_agent`, `lemon_gateway`, `lemon_cli`, `lemon_router`, `lemon_honcho`, `lemon_channels`, `lemon_automation`, `lemon_control_plane` | Headless / API-only server: the full runtime without the web UI |
+| `lemon_runtime_full` | the minimal runtime plus the web UI: `lemon_browser`, `lemon_media`, `lemon_lsp`, `lemon_omp`, `lemon_computer_use`, `lemon_skills`, `coding_agent`, `lemon_gateway`, `lemon_cli`, `lemon_router`, `lemon_honcho`, `lemon_channels`, `lemon_automation`, `lemon_control_plane`, `lemon_web` | Full local runtime with UI |
 | `lemon_tui` | `tui/bin/lemon-tui` | Bun-compiled client pseudo-profile, not a BEAM release |
 | `lemon_bot` | `bot/bin/lemon-bot`, packaged web build | Standalone Bun-compiled backend; not a BEAM release (see `docs/release/versioning_and_channels.md`) |
 

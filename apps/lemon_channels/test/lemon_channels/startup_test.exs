@@ -38,7 +38,7 @@ defmodule LemonChannels.StartupTest do
     def answer_callback_query(_token, _cb_id, _opts), do: {:ok, %{"ok" => true}}
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   setup do
     lock_dir =
@@ -48,14 +48,14 @@ defmodule LemonChannels.StartupTest do
       ])
 
     env = LemonPlatformTest.Testing.HermeticEnv.snapshot_env(["LEMON_LOCK_DIR"])
-    gateway = Application.fetch_env(:lemon_gateway, @gateway_config_key)
+    gateway = Application.fetch_env(:lemon_core, @gateway_config_key)
     adapters = Application.fetch_env(:lemon_channels, :adapters)
     running? = List.keymember?(Application.started_applications(), :lemon_channels, 0)
 
     on_exit(fn ->
       Application.stop(:lemon_channels)
       StartupMockTelegramAPI.stop()
-      restore_env(:lemon_gateway, @gateway_config_key, gateway)
+      restore_env(:lemon_core, @gateway_config_key, gateway)
       restore_env(:lemon_channels, :adapters, adapters)
       LemonPlatformTest.Testing.HermeticEnv.restore_env(env)
       File.rm_rf!(lock_dir)
@@ -70,7 +70,7 @@ defmodule LemonChannels.StartupTest do
     StartupMockTelegramAPI.stop()
     {:ok, _} = StartupMockTelegramAPI.start_link()
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       max_concurrent_runs: 1,
       enable_telegram: true,
       bindings: [],

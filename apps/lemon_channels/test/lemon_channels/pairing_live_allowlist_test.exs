@@ -55,20 +55,20 @@ defmodule LemonChannels.PairingLiveAllowlistTest do
     def answer_callback_query(_token, _callback_id, _opts \\ %{}), do: {:ok, %{"ok" => true}}
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   setup do
     stop_transport()
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
-    old_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway_env = Application.get_env(:lemon_core, @gateway_config_key)
 
     :persistent_term.put({Router, :pid}, self())
     API.register_test(self())
     :ok = LemonCore.RouterBridge.configure(router: Router, run_orchestrator: Router)
 
-    existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
-    Application.put_env(:lemon_gateway, @gateway_config_key, Map.put(existing, :bindings, []))
+    existing = Application.get_env(:lemon_core, @gateway_config_key, %{})
+    Application.put_env(:lemon_core, @gateway_config_key, Map.put(existing, :bindings, []))
 
     on_exit(fn ->
       stop_transport()
@@ -81,8 +81,8 @@ defmodule LemonChannels.PairingLiveAllowlistTest do
         else: Application.delete_env(:lemon_core, :router_bridge)
 
       if old_gateway_env,
-        do: Application.put_env(:lemon_gateway, @gateway_config_key, old_gateway_env),
-        else: Application.delete_env(:lemon_gateway, @gateway_config_key)
+        do: Application.put_env(:lemon_core, @gateway_config_key, old_gateway_env),
+        else: Application.delete_env(:lemon_core, @gateway_config_key)
     end)
 
     :ok
@@ -159,16 +159,16 @@ defmodule LemonChannels.PairingLiveAllowlistTest do
     # The persisted policy is the canonical gateway config the transport reads on
     # every start; the operator CLI writes it before calling Pairing.allow/revoke.
     defp persist_allowlist(ids) do
-      env = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
+      env = Application.get_env(:lemon_core, @gateway_config_key, %{})
       telegram = env |> Map.get(:telegram, %{}) |> Map.put(:allowed_chat_ids, ids)
-      Application.put_env(:lemon_gateway, @gateway_config_key, Map.put(env, :telegram, telegram))
+      Application.put_env(:lemon_core, @gateway_config_key, Map.put(env, :telegram, telegram))
     end
 
     defp start_supervised_transport(allowed_chat_ids) do
       token = "pairing-test-#{System.pid()}-#{System.unique_integer([:positive])}"
 
       persist_allowlist(allowed_chat_ids)
-      env = Application.get_env(:lemon_gateway, @gateway_config_key)
+      env = Application.get_env(:lemon_core, @gateway_config_key)
 
       telegram =
         Map.merge(env.telegram, %{
@@ -178,7 +178,7 @@ defmodule LemonChannels.PairingLiveAllowlistTest do
           debounce_ms: 10
         })
 
-      Application.put_env(:lemon_gateway, @gateway_config_key, %{env | telegram: telegram})
+      Application.put_env(:lemon_core, @gateway_config_key, %{env | telegram: telegram})
       start_supervised!(LemonChannels.Adapters.Telegram.Supervisor)
       Process.whereis(Transport)
     end

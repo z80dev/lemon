@@ -9,8 +9,8 @@ defmodule LemonCore.GatewayConfig do
   raises `LemonCore.Config.ValidationError`; it is never read as empty.
 
   In test mode (`config_test_mode`), a full-replacement app env layer
-  (`Application.get_env(:lemon_gateway, :"Elixir.LemonGateway.Config")`, a
-  test-only key) replaces the TOML section for test isolation.
+  (`Application.get_env(:lemon_core, :gateway_test_config)`, a test-only key)
+  replaces the TOML section for test isolation; outside test mode it is ignored.
   """
 
   @doc """
@@ -47,7 +47,7 @@ defmodule LemonCore.GatewayConfig do
   defp toml_base(cwd), do: LemonCore.Config.cached(cwd).gateway
 
   defp full_replacement_config do
-    case Application.get_env(:lemon_gateway, :"Elixir.LemonGateway.Config") do
+    case Application.get_env(:lemon_core, :gateway_test_config) do
       nil ->
         :none
 

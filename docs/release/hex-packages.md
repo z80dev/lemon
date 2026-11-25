@@ -163,8 +163,8 @@ build ("Dependencies excluded from the package"). `scripts/verify_packages` and
 `lemon_core`'s package `exclude_patterns` leave this repository's tooling
 out of the tarball: `LemonCore.Quality.*`, `LemonCore.Update.*`, and the
 `lemon.quality`, `lemon.architecture.docs`, `lemon.check_duplicate_tests`,
-`lemon.update`, `lemon.bench` and `lemon.help`
-tasks. The build identity the doctor reports (`LemonCore.BuildInfo.version/0`,
+`lemon.bench` and `lemon.help` tasks. `mix lemon.update` lives in `lemon_skills`.
+The build identity the doctor reports (`LemonCore.BuildInfo.version/0`,
 `identity/0`, `describe/0`) ships; the Lemon application's Elixir floor is a
 `lemon doctor` check in `lemon_cli` (`LemonCli.Doctor.Toolchain`), so the packaged
 runtime check passes on every Elixir the packages admit.

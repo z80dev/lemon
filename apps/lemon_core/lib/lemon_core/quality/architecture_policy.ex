@@ -1,166 +1,119 @@
 defmodule LemonCore.Quality.ArchitecturePolicy do
   @moduledoc """
-  Canonical source of truth for architecture dependency policy.
+  Architecture rules for the umbrella dependency graph.
 
-  This module defines which umbrella apps may directly depend on which other
-  umbrella apps. The direct-dependency policy is exact: permissions that no
-  longer appear in `mix.exs` are stale and fail the architecture check.
+  `apps/*/mix.exs` is the only source of the declared graph; this module never
+  restates it. Instead it names the roles the graph must respect:
 
-  Cross-app source references that intentionally do not create a direct Mix
-  dependency are listed separately as reference-only exceptions. An exception
-  permits namespace use; it never permits adding a dependency to `mix.exs`.
+    * namespaces - the module prefixes each app owns, so a source reference can
+      be attributed to the app that defines it
+    * foundations - apps with no umbrella dependencies at all
+    * satellites - apps nothing else may depend on; they register themselves
+      through platform seams at boot
+    * test kits - apps other apps may only depend on with `only: :test`
+    * reference-only seams - cross-app namespaces an app may name without a
+      Mix edge, because they are dispatched at runtime by an entrypoint that
+      nothing depends on. A seam never authorizes a `mix.exs` edge and must
+      still be used.
+    * config bindings - modules `config/*.exs` hands to an app that neither
+      depends on the module's owner nor is depended on by it (composition-root
+      wiring). Bindings join the cycle check and must still appear in config.
+
+  `LemonCore.Quality.ArchitectureCheck` derives every other rule (acyclic
+  graph, referenced edges, hidden reference forms) from these roles and the
+  sources.
   """
 
   @type app :: atom()
   @type dependency_map :: %{optional(app()) => [app()]}
 
-  @current_allowed_direct_deps %{
-    lemon_agent: [:lemon_ai, :lemon_core],
-    lemon_ai: [],
-    coding_agent: [
-      :lemon_agent,
-      :lemon_ai,
-      :lemon_browser,
-      :lemon_core,
-      :lemon_gateway,
-      :lemon_mcp,
-      :lemon_lsp,
-      :lemon_memory,
-      # test-only: shared platform compliance cases
-      :lemon_platform_test,
-      :lemon_skills
-    ],
-    lemon_automation: [
-      :lemon_agent,
-      :lemon_ai,
-      :lemon_core,
-      :lemon_mcp,
-      :lemon_router,
-      :lemon_skills
-    ],
-    lemon_channels: [:lemon_agent, :lemon_core, :lemon_media],
-    lemon_control_plane: [
-      :lemon_ai,
-      :lemon_agent,
-      :lemon_automation,
-      :lemon_browser,
-      :lemon_channels,
-      :lemon_core,
-      :lemon_lsp,
-      :lemon_media,
-      :lemon_mcp,
-      :lemon_memory,
-      :lemon_omp,
-      :lemon_router,
-      :lemon_skills
-    ],
-    lemon_cli: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_mcp, :lemon_memory, :lemon_skills],
-    lemon_browser: [:lemon_core],
-    lemon_core: [],
-    lemon_memory: [:lemon_core],
-    lemon_evals: [
-      :lemon_agent,
-      :lemon_ai,
-      :coding_agent,
-      :lemon_core,
-      :lemon_memory,
-      :lemon_skills
-    ],
-    # Native app control through LCU. A satellite: its `cua_js`/`cua_js_reset`
-    # tools and instructions section register through the platform registries
-    # at boot, and nothing in the platform names it.
-    lemon_computer_use: [:lemon_agent, :lemon_ai, :lemon_core],
-    lemon_gateway: [:lemon_agent, :lemon_core, :lemon_media],
-    # A satellite: it implements platform contracts (a memory provider, a
-    # context contributor, agent tools) and registers itself on the way up, so
-    # it depends on the platform while nothing in the platform names it.
-    # test-only: proves its provider against the published contract kit.
-    lemon_honcho: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_memory, :lemon_platform_test],
-    lemon_lsp: [:lemon_core],
-    lemon_media: [:lemon_core],
-    # test-only: lemon_skills hosts the moved LemonSkills.McpSource suite.
-    lemon_mcp: [:lemon_core, :lemon_skills],
-    # The omp delegate driver implements the agent tool contract and registers
-    # its `omp` tool at boot; the coding product never names it. The control
-    # plane depends on it directly to expose `omp.*` methods.
-    lemon_omp: [:lemon_agent, :lemon_ai, :lemon_core],
-    # The contract-test kit is a leaf: one (optional) dep per behaviour it
-    # tests, and nothing in the platform depends on it outside test code. ai +
-    # agent_core back the FakeLLM double, which drives a real agent loop.
-    lemon_platform_test: [
-      :lemon_agent,
-      :lemon_ai,
-      :lemon_channels,
-      :lemon_core,
-      :lemon_memory
-    ],
-    lemon_router: [
-      :lemon_agent,
-      :lemon_ai,
-      :lemon_channels,
-      :lemon_core,
-      :lemon_mcp,
-      :lemon_media,
-      :lemon_memory
-    ],
-    lemon_skills: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_media, :lemon_memory],
-    # The web UI is an in-process client of the control-plane method registry
-    # and event projection (the same contract as the TUI), and consumes
-    # agent-owned provider configuration, automation-owned blueprint catalog,
-    # and memory-owned lifecycle boundaries; mutation, confirmation, and
-    # redaction semantics stay centralized in their domain services.
-    lemon_web: [
-      :lemon_agent,
-      :lemon_automation,
-      :lemon_control_plane,
-      :lemon_core,
-      :lemon_memory,
-      :lemon_router
-    ]
+  @app_namespaces %{
+    coding_agent: ["CodingAgent"],
+    lemon_agent: ["LemonAgent"],
+    lemon_ai: ["LemonAi"],
+    lemon_automation: ["LemonAutomation"],
+    lemon_browser: ["LemonBrowser"],
+    lemon_channels: ["LemonChannels"],
+    lemon_cli: ["LemonCli"],
+    lemon_computer_use: ["LemonComputerUse"],
+    lemon_control_plane: ["LemonControlPlane"],
+    lemon_core: ["LemonCore"],
+    lemon_evals: ["LemonEvals"],
+    lemon_gateway: ["LemonGateway"],
+    lemon_honcho: ["LemonHoncho"],
+    lemon_lsp: ["LemonLsp"],
+    lemon_media: ["LemonMedia"],
+    lemon_memory: ["LemonMemory"],
+    lemon_omp: ["LemonOmp"],
+    lemon_platform_test: ["LemonPlatformTest"],
+    lemon_router: ["LemonRouter"],
+    # The MCP client library ships inside lemon_skills, its only owner.
+    lemon_skills: ["LemonSkills", "LemonMCP"],
+    lemon_web: ["LemonWeb"]
   }
 
-  # Gateway tools still use LemonAi content structs without making it a direct
-  # dependency. Keeping these exceptions separate prevents them from silently
-  # authorizing a future mix.exs edge.
-  @reference_only_namespace_exceptions %{
-    # The shared CLI registry invokes these bundled runtime command handlers
-    # dynamically; setup must not start channel services through a Mix edge.
-    lemon_cli: [:lemon_channels, :lemon_media],
+  # Published foundations: neither may acquire an umbrella dependency merely to
+  # share a mechanism (docs/architecture_boundaries.md).
+  @foundations [:lemon_ai, :lemon_core]
+
+  # Satellites implement platform contracts and register on the way up, and
+  # product entrypoints sit on top of the graph; nothing may depend on them.
+  @satellites [:lemon_cli, :lemon_computer_use, :lemon_evals, :lemon_honcho, :lemon_web]
+
+  # Contract-test kits back test suites only; a lib edge would ship test code.
+  @test_kits [:lemon_platform_test]
+
+  @reference_only_seams %{
+    # The shared CLI registry dispatches Mix-free runtime command handlers in
+    # their owning apps; one-shot commands such as setup must not start those
+    # applications through a Mix edge.
+    lemon_cli: [:coding_agent, :lemon_channels, :lemon_media, :lemon_router],
+    # Gateway tools build LemonAi content structs; lemon_agent already brings
+    # lemon_ai into every gateway build.
     lemon_gateway: [:lemon_ai]
   }
 
-  @target_allowed_direct_deps @current_allowed_direct_deps
+  @config_bindings %{
+    # LemonCore.Env aggregates the environment declarations of every loaded
+    # app (`config :lemon_core, :env_registries`); lemon_ai is the one
+    # declaring app that does not depend on lemon_core.
+    lemon_core: [:lemon_ai],
+    # Gateway health reports the XMTP channel transport when XMTP is enabled
+    # (`config :lemon_gateway, :xmtp_transport_module`).
+    lemon_gateway: [:lemon_channels],
+    # The router submits ExecutionCommands to the gateway's EngineRuntime
+    # implementation (`config :lemon_router, :engine_runtime`).
+    lemon_router: [:lemon_gateway]
+  }
 
-  @spec current_allowed_direct_deps() :: dependency_map()
-  def current_allowed_direct_deps do
-    normalize_dependency_map(@current_allowed_direct_deps)
-  end
+  @doc "Namespace prefixes owned by each umbrella app."
+  @spec app_namespaces() :: %{optional(app()) => [String.t()]}
+  def app_namespaces, do: @app_namespaces
 
-  @spec allowed_direct_deps() :: dependency_map()
-  def allowed_direct_deps do
-    current_allowed_direct_deps()
-  end
+  @doc "Apps that must not declare any umbrella dependency."
+  @spec foundations() :: [app()]
+  def foundations, do: @foundations
 
-  @spec target_allowed_direct_deps() :: dependency_map()
-  def target_allowed_direct_deps do
-    normalize_dependency_map(@target_allowed_direct_deps)
-  end
+  @doc "Apps no other app may depend on or reference."
+  @spec satellites() :: [app()]
+  def satellites, do: @satellites
+
+  @doc "Apps other apps may only depend on with `only: :test`."
+  @spec test_kits() :: [app()]
+  def test_kits, do: @test_kits
 
   @doc """
   Returns namespace owners that an app may reference without declaring a direct
-  umbrella dependency.
-
-  These are source-reference exceptions only. They are deliberately excluded
-  from `allowed_direct_deps/0`.
+  umbrella dependency. These never authorize a `mix.exs` edge.
   """
   @spec reference_only_namespace_exceptions() :: dependency_map()
   def reference_only_namespace_exceptions do
-    normalize_dependency_map(@reference_only_namespace_exceptions)
+    Map.new(@reference_only_seams, fn {app, owners} -> {app, Enum.sort(owners)} end)
   end
 
-  defp normalize_dependency_map(deps) do
-    deps
-    |> Enum.map(fn {app, deps} -> {app, Enum.sort(deps)} end)
-    |> Map.new()
+  @doc "Owners whose modules `config :app` may name although the apps are unrelated."
+  @spec config_bindings() :: dependency_map()
+  def config_bindings do
+    Map.new(@config_bindings, fn {app, owners} -> {app, Enum.sort(owners)} end)
   end
 end

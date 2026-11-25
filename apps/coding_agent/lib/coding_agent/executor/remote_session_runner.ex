@@ -445,12 +445,9 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
 
   defp merge_node_meta(_meta, node), do: %{node: node}
 
-  defp protocol_max_payload do
-    case Application.get_env(:lemon_control_plane, :max_payload) do
-      value when is_integer(value) and value > 0 -> value
-      _ -> LemonCore.ToolPolicy.execution_max_bytes()
-    end
-  end
+  # The shared execution JSON bound; the control plane enforces its own frame
+  # limit on the wire and rejects anything larger.
+  defp protocol_max_payload, do: LemonCore.ToolPolicy.execution_max_bytes()
 
   # Keep the public GenServer call deadline above every registry acknowledgement
   # deadline so callers receive the registry's explicit timeout result.

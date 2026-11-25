@@ -5,8 +5,8 @@ defmodule LemonCore.EngineInfoBridge do
   Channels and the control plane use the gateway runtime
   (`:lemon_gateway` in the reference runtime) for transport-registry ops
   introspection and SMS inbox operations. Before this
-  bridge each caller reached back with a hardcoded `:"Elixir.LemonGateway.*"`
-  atom; now the gateway configures itself here at boot and callers ask core.
+  bridge each caller reached back with a hardcoded quoted gateway module atom;
+  now the gateway configures itself here at boot and callers ask core.
 
   This is `LemonCore.RouterBridge`'s pattern pointed the other way: a
   configured implementation module per capability, runtime dispatch, and a

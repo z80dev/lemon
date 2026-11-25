@@ -81,6 +81,16 @@ defmodule LemonCore.Paths do
   end
 
   @doc """
+  The operator's agent-directory override shared by every app that resolves
+  `~/.lemon/agent`: `LEMON_AGENT_DIR`, then `config :lemon_core, :agent_dir`.
+  Returns nil when neither is set; callers apply their own default.
+  """
+  @spec agent_dir_override() :: String.t() | nil
+  def agent_dir_override do
+    System.get_env("LEMON_AGENT_DIR") || Application.get_env(:lemon_core, :agent_dir)
+  end
+
+  @doc """
   A path inside a project's state directory.
 
       iex> LemonCore.Paths.project_path("/srv/app", ["extensions"])

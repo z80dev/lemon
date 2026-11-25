@@ -12,7 +12,7 @@ defmodule LemonChannels.Adapters.Discord.ComponentAuthorityTest do
   @guild_id 1_475_727_417_372_049_000
   @owner 1_476_753_643_834_183_691
   @stranger 1_476_753_643_834_183_692
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   defmodule Router do
     use LemonCore.RouterBridge.Router
@@ -57,13 +57,13 @@ defmodule LemonChannels.Adapters.Discord.ComponentAuthorityTest do
     :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
 
     previous_bridge = Application.get_env(:lemon_core, :router_bridge)
-    previous_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous_gateway = Application.get_env(:lemon_core, @gateway_config_key)
     previous_test_mode = Application.get_env(:lemon_core, :config_test_mode)
     :persistent_term.put({Router, :pid}, parent)
     :ok = LemonCore.RouterBridge.configure(router: Router, run_orchestrator: Router)
     Application.put_env(:lemon_core, :config_test_mode, true)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       enable_discord: true,
       discord: %{api_mod: Api}
     })
@@ -81,7 +81,7 @@ defmodule LemonChannels.Adapters.Discord.ComponentAuthorityTest do
       :persistent_term.erase({Router, :pid})
       :persistent_term.erase({Router, :owner})
       restore(:lemon_core, :router_bridge, previous_bridge)
-      restore(:lemon_gateway, @gateway_config_key, previous_gateway)
+      restore(:lemon_core, @gateway_config_key, previous_gateway)
       restore(:lemon_core, :config_test_mode, previous_test_mode)
     end)
 

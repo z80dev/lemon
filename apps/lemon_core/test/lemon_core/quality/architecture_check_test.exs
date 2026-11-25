@@ -5,695 +5,305 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
 
   @repo_root Path.expand("../../../../..", __DIR__)
 
-  describe "run/1" do
-    test "architecture dependency check passes for umbrella apps" do
+  describe "repository" do
+    test "satisfies every architecture rule" do
       assert {:ok, report} = ArchitectureCheck.run(root: @repo_root)
       assert report.issue_count == 0
-      assert report.apps_checked >= 1
-      assert is_binary(report.root)
-      assert is_map(report.actual_dependencies)
+      assert report.apps_checked == map_size(ArchitecturePolicy.app_namespaces())
     end
 
-    test "returns error report when issues are found" do
-      # Create a temporary umbrella with violations
-      tmp_dir = create_tmp_umbrella_with_violation()
+    test "declares the MCP client inside lemon_skills with no lemon_mcp app" do
+      deps = ArchitectureCheck.actual_direct_deps(@repo_root)
 
-      try do
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-        assert report.issue_count > 0
-        assert report.issues != []
-      after
-        File.rm_rf!(tmp_dir)
-      end
+      refute Map.has_key?(deps, :lemon_mcp)
+      refute Enum.any?(deps, fn {_app, targets} -> :lemon_mcp in targets end)
+      refute :lemon_skills in Map.get(deps, :lemon_mcp, [])
+      assert "LemonMCP" in ArchitecturePolicy.app_namespaces().lemon_skills
+      assert ArchitectureCheck.owner_for_module("LemonMCP.Client") == :lemon_skills
     end
   end
 
-  describe "allowed_direct_deps/0" do
-    test "lemon_core has no allowed dependencies" do
-      deps = ArchitectureCheck.allowed_direct_deps()
-      assert deps.lemon_core == []
-    end
-
-    test "all known apps have dependency policies" do
-      deps = ArchitectureCheck.allowed_direct_deps()
-      known_apps = Map.keys(deps)
-
-      assert :lemon_core in known_apps
-      assert :lemon_ai in known_apps
-      assert :lemon_agent in known_apps
-    end
-
-    test "dependency lists are sorted deterministically" do
-      deps = ArchitecturePolicy.allowed_direct_deps()
-
-      assert Enum.all?(deps, fn {_app, allowed} ->
-               allowed == Enum.sort(allowed)
-             end)
-    end
-
-    test "direct policy excludes reference-only exceptions and stale permissions" do
-      current = ArchitecturePolicy.current_allowed_direct_deps()
-      target = ArchitecturePolicy.target_allowed_direct_deps()
-      exceptions = ArchitecturePolicy.reference_only_namespace_exceptions()
-
-      refute :lemon_gateway in target.lemon_router
-      refute :lemon_gateway in current.lemon_router
-      refute :lemon_gateway in current.lemon_control_plane
-
-      assert current.lemon_gateway == [:lemon_agent, :lemon_core, :lemon_media]
-      assert exceptions.lemon_gateway == [:lemon_ai]
-      refute :lemon_gateway in current.lemon_platform_test
-
-      assert target.lemon_ai == []
-      assert target == current
+  describe "policy" do
+    test "names roles instead of restating mix.exs" do
+      refute function_exported?(ArchitecturePolicy, :allowed_direct_deps, 0)
+      refute function_exported?(ArchitecturePolicy, :target_allowed_direct_deps, 0)
+      assert ArchitecturePolicy.foundations() == [:lemon_ai, :lemon_core]
+      assert :lemon_platform_test in ArchitecturePolicy.test_kits()
+      assert :lemon_honcho in ArchitecturePolicy.satellites()
     end
   end
 
-  describe "target dependency drift" do
-    test "current repository has converged to the target dependency policy" do
-      assert {:ok, report} = ArchitectureCheck.run(root: @repo_root)
-      assert report.issue_count == 0
-      assert report.target_dependency_drifts == []
-      assert report.target_drift_count == 0
-    end
+  describe "mix.exs parsing" do
+    test "reads dependency literals with options and splits test-only edges" do
+      root = tmp_umbrella()
 
-    test "actual and allowed dependency graphs are identical in the repository" do
-      assert {:ok, report} = ArchitectureCheck.run(root: @repo_root)
-      assert report.actual_dependencies == report.allowed_dependencies
-    end
-  end
-
-  describe "dependency violation detection" do
-    test "parses umbrella deps that include extra tuple options" do
-      tmp_dir = create_tmp_umbrella()
-
-      create_app_with_dep_literals(tmp_dir, :lemon_core, [])
-
-      create_app_with_dep_literals(tmp_dir, :lemon_gateway, [
+      write_mix(root, :lemon_gateway, [
         "{:lemon_channels, in_umbrella: true, runtime: false}",
         "{:lemon_core, in_umbrella: true}",
+        "{:lemon_platform_test, in_umbrella: true, only: :test, runtime: false}",
         "{:external_dep, \"~> 1.0\"}",
         "{:path_dep, path: \"../path_dep\"}"
       ])
 
-      create_app_with_dep_literals(tmp_dir, :lemon_channels, [
-        "{:lemon_core, in_umbrella: true, runtime: false}"
-      ])
+      assert ArchitectureCheck.actual_direct_deps(root).lemon_gateway ==
+               [:lemon_channels, :lemon_core, :lemon_platform_test]
 
-      try do
-        {status, report} = ArchitectureCheck.run(root: tmp_dir)
-        assert status in [:ok, :error]
+      assert ArchitectureCheck.lib_dependencies(root).lemon_gateway ==
+               [:lemon_channels, :lemon_core]
 
-        assert Map.get(report.actual_dependencies, :lemon_gateway) == [
-                 :lemon_channels,
-                 :lemon_core
-               ]
-
-        assert Map.get(report.actual_dependencies, :lemon_channels) == [:lemon_core]
-      after
-        File.rm_rf!(tmp_dir)
-      end
+      assert ArchitectureCheck.test_dependencies(root).lemon_gateway == [:lemon_platform_test]
     end
 
-    test "parses umbrella deps wrapped by a package helper" do
-      tmp_dir = create_tmp_umbrella()
+    test "reads dependency lists wrapped by a package helper" do
+      root = tmp_umbrella()
 
-      create_app_with_wrapped_deps(tmp_dir, :lemon_core, [])
-      create_app_with_wrapped_deps(tmp_dir, :lemon_gateway, [:lemon_agent, :lemon_core])
-
-      try do
-        {_status, report} = ArchitectureCheck.run(root: tmp_dir)
-
-        assert report.actual_dependencies.lemon_gateway == [:lemon_agent, :lemon_core]
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "fails when a direct dependency permission outlives the mix.exs edge" do
-      tmp_dir = create_tmp_umbrella()
-
-      ArchitecturePolicy.allowed_direct_deps()
-      |> Enum.each(fn {app, deps} -> create_app(tmp_dir, app, deps) end)
-
-      create_app(tmp_dir, :lemon_gateway, [:lemon_agent])
-
-      try do
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-
-        assert Enum.any?(report.issues, fn issue ->
-                 issue.code == :stale_dependency_permission and issue.app == :lemon_gateway and
-                   issue.path == "apps/lemon_gateway/mix.exs" and
-                   issue.message =~ "lemon_core"
-               end)
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "reference-only exceptions permit source use without permitting a mix dependency" do
-      tmp_dir = create_tmp_umbrella()
-
-      ArchitecturePolicy.allowed_direct_deps()
-      |> Enum.each(fn {app, deps} -> create_app(tmp_dir, app, deps) end)
-
-      create_app_with_code(
-        tmp_dir,
+      write_mix(
+        root,
         :lemon_gateway,
-        "LemonGateway",
-        """
-        defmodule LemonGateway.ReferenceExceptionProbe do
-          alias LemonAi.Types.TextContent
-
-          def content(text), do: %TextContent{text: text}
-        end
-        """,
-        [:lemon_agent, :lemon_core, :lemon_media]
+        [
+          "{:lemon_agent, in_umbrella: true}",
+          "{:lemon_core, in_umbrella: true}"
+        ],
+        wrap: true
       )
 
-      try do
-        assert {:ok, report} = ArchitectureCheck.run(root: tmp_dir)
-        assert report.actual_dependencies == report.allowed_dependencies
-
-        refute Enum.any?(report.issues, fn issue ->
-                 issue.code == :forbidden_namespace_reference and issue.app == :lemon_gateway
-               end)
-
-        create_app_with_code(
-          tmp_dir,
-          :lemon_gateway,
-          "LemonGateway",
-          """
-          defmodule LemonGateway.ReferenceExceptionProbe do
-            alias LemonAi.Types.TextContent
-
-            def content(text), do: %TextContent{text: text}
-          end
-          """,
-          [:lemon_agent, :lemon_ai, :lemon_core, :lemon_media]
-        )
-
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-
-        assert Enum.any?(report.issues, fn issue ->
-                 issue.code == :forbidden_dependency and issue.app == :lemon_gateway and
-                   issue.message =~ "lemon_ai"
-               end)
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "detects forbidden umbrella dependencies" do
-      tmp_dir = create_tmp_umbrella()
-
-      # Create an app with a forbidden dependency
-      create_app(tmp_dir, :test_app_a, [:lemon_core])
-      # test_app_a is not in allowed deps
-      create_app(tmp_dir, :test_app_b, [:lemon_core, :test_app_a])
-
-      # Add test_app_a to allowed deps by creating a minimal policy
-      # This test will actually check unknown_app detection instead
-      try do
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-
-        # Should have unknown_app issues since our test apps aren't in the policy
-        unknown_app_issues = Enum.filter(report.issues, &(&1.code == :unknown_app))
-        assert length(unknown_app_issues) >= 2
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "detects unknown apps not in policy" do
-      tmp_dir = create_tmp_umbrella()
-      create_app(tmp_dir, :unknown_app, [])
-
-      try do
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-
-        unknown_app_issues = Enum.filter(report.issues, &(&1.code == :unknown_app))
-        assert unknown_app_issues != []
-
-        issue = hd(unknown_app_issues)
-        assert issue.app == :unknown_app
-        assert issue.message =~ "No boundary policy configured"
-      after
-        File.rm_rf!(tmp_dir)
-      end
+      assert ArchitectureCheck.actual_direct_deps(root).lemon_gateway ==
+               [:lemon_agent, :lemon_core]
     end
   end
 
-  describe "namespace violation detection" do
-    test "uses namespace prefix ownership for normal namespaces" do
-      tmp_dir = create_tmp_umbrella()
+  describe "hidden reference forms" do
+    setup do
+      root = tmp_umbrella()
+      write_app(root, :lemon_core, [])
+      write_app(root, :lemon_agent, [:lemon_core])
+      %{root: root}
+    end
 
-      create_app_with_namespace(tmp_dir, :lemon_core, "LemonCore", [])
+    test "flags a quoted atom naming a non-dependency", %{root: root} do
+      write_source(root, :lemon_agent, ~S|def m, do: :"Elixir.LemonRouter.Policy"|)
 
-      create_app_with_code(
-        tmp_dir,
-        :lemon_agent,
-        "LemonAgent",
-        """
-        defmodule LemonAgent.NamespaceReference do
-          def test do
-            LemonCore.Bus.topic(:system)
-          end
-        end
-        """,
-        [:lemon_core]
+      assert issue?(
+               root,
+               :forbidden_namespace_reference,
+               ~s(Quoted atom :"Elixir.LemonRouter.Policy")
+             )
+    end
+
+    test "flags Module.concat with concatenated namespace literals", %{root: root} do
+      write_source(root, :lemon_agent, ~S|def m, do: Module.concat(["Lemon" <> "MCP", "Client"])|)
+
+      assert issue?(
+               root,
+               :forbidden_namespace_reference,
+               "Module.concat building LemonMCP.Client"
+             )
+    end
+
+    test "flags app-env access to a non-dependency", %{root: root} do
+      write_source(root, :lemon_agent, ~S|def m, do: Application.get_env(:lemon_gateway, :port)|)
+      write_app(root, :lemon_gateway, [:lemon_core])
+
+      assert issue?(
+               root,
+               :forbidden_namespace_reference,
+               "Application env access to :lemon_gateway"
+             )
+    end
+
+    test "flags Erlang app-env access to a non-dependency", %{root: root} do
+      write_source(root, :lemon_agent, ~S|def m, do: :application.get_env(:lemon_gateway, :port)|)
+      write_app(root, :lemon_gateway, [:lemon_core])
+
+      assert issue?(
+               root,
+               :forbidden_namespace_reference,
+               "Application env access to :lemon_gateway"
+             )
+    end
+
+    test "rejects hidden forms even toward a dependency", %{root: root} do
+      write_source(root, :lemon_agent, """
+      def a, do: :"Elixir.LemonCore.Bus"
+      def b, do: Module.concat([LemonCore, "Store"])
+      """)
+
+      assert issue?(root, :hidden_module_reference, ~s(Quoted atom :"Elixir.LemonCore.Bus"))
+      assert issue?(root, :hidden_module_reference, "Module.concat building LemonCore.Store")
+    end
+
+    test "accepts aliases and app env of the app itself and its dependencies", %{root: root} do
+      write_source(root, :lemon_agent, """
+      def a, do: LemonCore.Bus.topic(:system)
+      def b, do: Application.get_env(:lemon_agent, :x)
+      def c, do: Application.get_env(:lemon_core, :y)
+      """)
+
+      {_status, report} = ArchitectureCheck.run(root: root)
+
+      refute Enum.any?(report.issues, &(&1.app == :lemon_agent))
+    end
+  end
+
+  describe "config/*.exs" do
+    setup do
+      root = tmp_umbrella()
+      write_app(root, :lemon_core, [])
+      write_app(root, :lemon_agent, [:lemon_core], source: "def a, do: LemonCore.Bus")
+      write_app(root, :lemon_memory, [:lemon_core], source: "def a, do: LemonCore.Bus")
+      %{root: root}
+    end
+
+    test "flags a module handed to an unrelated app", %{root: root} do
+      write_config(root, "config :lemon_memory, :provider, LemonAgent.Provider\n")
+
+      assert issue?(
+               root,
+               :config_module_reference,
+               "config :lemon_memory names LemonAgent.Provider (owned by lemon_agent)"
+             )
+    end
+
+    test "accepts a provider registered with an app it depends on", %{root: root} do
+      write_config(root, "config :lemon_core, :providers, [LemonAgent.Provider]\n")
+
+      {_status, report} = ArchitectureCheck.run(root: root)
+      refute Enum.any?(report.issues, &(&1.code == :config_module_reference))
+    end
+  end
+
+  describe "graph rules" do
+    test "a foundation may not declare an umbrella dependency" do
+      root = tmp_umbrella()
+      write_app(root, :lemon_core, [])
+      write_app(root, :lemon_ai, [:lemon_core], source: "def a, do: LemonCore.Bus")
+
+      assert issue?(root, :foundation_dependency, "Foundation lemon_ai")
+    end
+
+    test "nothing may depend on a satellite" do
+      root = tmp_umbrella()
+      write_app(root, :lemon_honcho, [])
+      write_app(root, :lemon_agent, [:lemon_honcho], source: "def a, do: LemonHoncho.X")
+
+      assert issue?(root, :satellite_dependent, "lemon_agent depends on satellite lemon_honcho")
+    end
+
+    test "a test kit may only be an `only: :test` dependency" do
+      root = tmp_umbrella()
+      write_app(root, :lemon_platform_test, [])
+
+      write_app(root, :lemon_agent, [:lemon_platform_test],
+        source: "def a, do: LemonPlatformTest.X"
       )
 
-      try do
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-
-        refute Enum.any?(report.issues, fn issue ->
-                 issue.code == :forbidden_namespace_reference and issue.app == :lemon_agent
-               end)
-      after
-        File.rm_rf!(tmp_dir)
-      end
+      assert issue?(root, :test_kit_runtime_dependency, "test kit lemon_platform_test")
     end
 
-    test "detects forbidden namespace references" do
-      tmp_dir = create_tmp_umbrella()
+    test "a lib edge needs a lib reference" do
+      root = tmp_umbrella()
+      write_app(root, :lemon_core, [])
+      write_app(root, :lemon_agent, [:lemon_core])
 
-      # Create an app that references a forbidden namespace
-      create_app_with_namespace(tmp_dir, :lemon_core, "LemonCore", [])
-      create_app_with_namespace(tmp_dir, :lemon_ai, "LemonAi", [:lemon_core])
-
-      # Now create an app that references LemonAi but doesn't depend on it
-      create_app_with_code(
-        tmp_dir,
-        :test_app,
-        "LemonCore",
-        "
-        defmodule TestApp.Module do
-          def test do
-            LemonAi.SomeModule.call()
-          end
-        end
-      ",
-        # Only depends on lemon_core, not ai
-        [:lemon_core]
-      )
-
-      try do
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-
-        namespace_issues =
-          Enum.filter(report.issues, &(&1.code == :forbidden_namespace_reference))
-
-        assert namespace_issues != []
-      after
-        File.rm_rf!(tmp_dir)
-      end
+      assert issue?(
+               root,
+               :unreferenced_dependency,
+               "lemon_agent declares lib dependency lemon_core"
+             )
     end
 
-    test "allows references to own namespace" do
-      tmp_dir = create_tmp_umbrella()
+    test "lib code may not reach an `only: :test` dependency" do
+      root = tmp_umbrella()
+      write_app(root, :lemon_core, [])
 
-      # Create an app that references its own namespace
-      create_app_with_code(tmp_dir, :lemon_core, "LemonCore", "
-        defmodule LemonCore.Module do
-          def test do
-            LemonCore.OtherModule.call()
-          end
-        end
-      ", [])
+      write_mix(root, :lemon_agent, ["{:lemon_core, in_umbrella: true, only: :test}"])
+      write_source(root, :lemon_agent, "def a, do: LemonCore.Bus")
 
-      try do
-        # lemon_core is in the policy, but missing from actual scan
-        # So we'll get a missing_app issue, not a namespace violation
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-
-        # Should not have namespace violations for self-references
-        namespace_issues =
-          Enum.filter(report.issues, &(&1.code == :forbidden_namespace_reference))
-
-        assert namespace_issues == []
-      after
-        File.rm_rf!(tmp_dir)
-      end
+      assert issue?(root, :test_dependency_in_lib, "an `only: :test` dependency of lemon_agent")
     end
 
-    test "allows references to allowed dependency namespaces" do
-      tmp_dir = create_tmp_umbrella()
+    test "declared edges must be acyclic" do
+      root = tmp_umbrella()
+      write_app(root, :lemon_media, [:lemon_memory], source: "def a, do: LemonMemory.X")
+      write_app(root, :lemon_memory, [:lemon_media], source: "def a, do: LemonMedia.X")
 
-      # Create apps with proper dependency
-      create_app_with_namespace(tmp_dir, :lemon_core, "LemonCore", [])
-      create_app_with_namespace(tmp_dir, :lemon_agent, "LemonAgent", [:lemon_core])
+      assert issue?(root, :dependency_cycle, "lemon_media -> lemon_memory -> lemon_media")
+    end
 
-      # LemonAgent depends on lemon_core, so it should be allowed to reference LemonCore
-      create_app_with_code(tmp_dir, :lemon_agent, "LemonAgent", "
-        defmodule LemonAgent.Module do
-          def test do
-            LemonCore.OtherModule.call()
-          end
-        end
-      ", [:lemon_core])
+    test "unused reference seams and config bindings are stale" do
+      root = tmp_umbrella()
+      write_app(root, :lemon_gateway, [])
+      write_app(root, :lemon_router, [])
 
-      try do
-        # LemonAi is allowed to depend on lemon_core, so no namespace violation
-        # But we will have unknown_app issues for our test setup
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
+      assert issue?(root, :stale_reference_exception, "lemon_gateway -> lemon_ai")
+      assert issue?(root, :stale_config_binding, "lemon_router -> lemon_gateway")
+    end
 
-        namespace_issues =
-          Enum.filter(report.issues, &(&1.code == :forbidden_namespace_reference))
+    test "apps without namespace ownership are unknown" do
+      root = tmp_umbrella()
+      write_app(root, :mystery_app, [])
 
-        assert namespace_issues == []
-      after
-        File.rm_rf!(tmp_dir)
-      end
+      assert issue?(root, :unknown_app, "mystery_app")
+      assert issue?(root, :missing_app, "lemon_core")
+    end
+
+    test "unparseable sources are reported" do
+      root = tmp_umbrella()
+      write_app(root, :lemon_core, [], source: "def invalid end")
+
+      assert issue?(root, :source_parse_error, "apps/lemon_core/lib/lemon_core.ex")
     end
   end
 
-  describe "missing app detection" do
-    test "detects missing expected apps" do
-      # Run against an empty directory
-      tmp_dir = System.tmp_dir!() |> Path.join("arch_check_test_#{System.unique_integer()}")
-      File.mkdir_p!(Path.join(tmp_dir, "apps"))
+  # ---------------------------------------------------------------------------
 
-      try do
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-
-        missing_app_issues = Enum.filter(report.issues, &(&1.code == :missing_app))
-        # Should report all expected apps as missing
-        assert missing_app_issues != []
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
+  defp issue?(root, code, fragment) do
+    assert {:error, report} = ArchitectureCheck.run(root: root)
+    Enum.any?(report.issues, &(&1.code == code and &1.message =~ fragment))
   end
 
-  describe "policy coverage" do
-    test "does not flag lemon_mcp as unknown app in the repository" do
-      {status, report} = ArchitectureCheck.run(root: @repo_root)
-      assert status in [:ok, :error]
-
-      refute Enum.any?(report.issues, fn issue ->
-               issue.code == :unknown_app and issue.app == :lemon_mcp
-             end)
-    end
+  defp tmp_umbrella do
+    root = Path.join(System.tmp_dir!(), "arch_check_test_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(Path.join(root, "apps"))
+    on_exit(fn -> File.rm_rf!(root) end)
+    root
   end
 
-  describe "source parsing" do
-    test "handles syntax errors in source files" do
-      tmp_dir = create_tmp_umbrella()
-
-      # Create an app with invalid syntax
-      app_dir = Path.join([tmp_dir, "apps", "bad_syntax_app"])
-      File.mkdir_p!(Path.join(app_dir, "lib"))
-
-      mix_exs = """
-      defmodule BadSyntaxApp.MixProject do
-        use Mix.Project
-
-        def project do
-          [
-            app: :bad_syntax_app,
-            version: "0.1.0",
-            deps: deps()
-          ]
-        end
-
-        defp deps do
-          []
-        end
-      end
-      """
-
-      File.write!(Path.join(app_dir, "mix.exs"), mix_exs)
-
-      # Write a file with invalid syntax
-      File.write!(
-        Path.join(app_dir, "lib/bad_syntax.ex"),
-        "defmodule BadSyntax do def invalid end"
-      )
-
-      try do
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-
-        # Should have unknown_app and possibly source_parse_error
-        assert report.issue_count > 0
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "handles empty source files" do
-      tmp_dir = create_tmp_umbrella()
-
-      # Create an app with empty source file
-      app_dir = Path.join([tmp_dir, "apps", "empty_app"])
-      File.mkdir_p!(Path.join(app_dir, "lib"))
-
-      mix_exs = """
-      defmodule EmptyApp.MixProject do
-        use Mix.Project
-
-        def project do
-          [
-            app: :empty_app,
-            version: "0.1.0",
-            deps: deps()
-          ]
-        end
-
-        defp deps do
-          []
-        end
-      end
-      """
-
-      File.write!(Path.join(app_dir, "mix.exs"), mix_exs)
-      File.write!(Path.join(app_dir, "lib/empty.ex"), "")
-
-      try do
-        # Should not crash on empty files
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-        assert is_integer(report.apps_checked)
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
+  defp write_app(root, app, deps, opts \\ []) do
+    write_mix(root, app, Enum.map(deps, &"{:#{&1}, in_umbrella: true}"))
+    write_source(root, app, Keyword.get(opts, :source, ""))
   end
 
-  describe "edge cases" do
-    test "handles apps with no dependencies" do
-      tmp_dir = create_tmp_umbrella()
-      create_app(tmp_dir, :standalone_app, [])
+  defp write_mix(root, app, dep_literals, opts \\ []) do
+    dir = Path.join([root, "apps", to_string(app)])
+    File.mkdir_p!(Path.join(dir, "lib"))
+    list = "[" <> Enum.join(dep_literals, ", ") <> "]"
+    body = if opts[:wrap], do: "lemon_deps(#{list})", else: list
 
-      try do
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-
-        # Should have unknown_app issue but no dependency violations
-        unknown_issues = Enum.filter(report.issues, &(&1.code == :unknown_app))
-        assert unknown_issues != []
-
-        forbidden_issues = Enum.filter(report.issues, &(&1.code == :forbidden_dependency))
-        assert forbidden_issues == []
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "handles apps with multiple dependencies" do
-      tmp_dir = create_tmp_umbrella()
-
-      # Create apps with multiple deps
-      create_app(tmp_dir, :base_app, [])
-      create_app(tmp_dir, :middle_app, [:base_app])
-      create_app(tmp_dir, :top_app, [:base_app, :middle_app])
-
-      try do
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-
-        # All apps are unknown, so we should have those issues
-        unknown_issues = Enum.filter(report.issues, &(&1.code == :unknown_app))
-        assert length(unknown_issues) >= 3
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-  end
-
-  # Helper functions
-
-  defp create_tmp_umbrella do
-    tmp_dir = System.tmp_dir!() |> Path.join("arch_check_test_#{System.unique_integer()}")
-    File.mkdir_p!(Path.join(tmp_dir, "apps"))
-    tmp_dir
-  end
-
-  defp create_tmp_umbrella_with_violation do
-    tmp_dir = create_tmp_umbrella()
-
-    # Create two apps where one violates dependency rules
-    create_app(tmp_dir, :app_a, [])
-    # app_b depends on app_a
-    create_app(tmp_dir, :app_b, [:app_a])
-
-    # app_a is not in allowed_direct_deps, so this creates a violation
-    tmp_dir
-  end
-
-  defp create_app(root, app_name, deps) when is_atom(app_name) and is_list(deps) do
-    app_dir = Path.join([root, "apps", to_string(app_name)])
-    File.mkdir_p!(Path.join(app_dir, "lib"))
-
-    dep_strings = Enum.map(deps, fn dep -> "{:#{dep}, in_umbrella: true}" end)
-    deps_block = if dep_strings == [], do: "[]", else: "[#{Enum.join(dep_strings, ", ")}]"
-
-    mix_exs = """
-    defmodule #{Macro.camelize(to_string(app_name))}.MixProject do
+    File.write!(Path.join(dir, "mix.exs"), """
+    defmodule #{Macro.camelize(to_string(app))}.MixProject do
       use Mix.Project
 
-      def project do
-        [
-          app: :#{app_name},
-          version: "0.1.0",
-          deps: deps()
-        ]
-      end
+      def project, do: [app: :#{app}, version: "0.1.0", deps: deps()]
 
       defp deps do
-        #{deps_block}
+        #{body}
       end
     end
-    """
-
-    File.write!(Path.join(app_dir, "mix.exs"), mix_exs)
-
-    # Create a basic module file
-    module_name = Macro.camelize(to_string(app_name))
-
-    module_content = """
-    defmodule #{module_name} do
-      @moduledoc "Test module"
-    end
-    """
-
-    File.write!(Path.join(app_dir, "lib/#{app_name}.ex"), module_content)
-
-    app_dir
+    """)
   end
 
-  defp create_app_with_dep_literals(root, app_name, dep_literals)
-       when is_atom(app_name) and is_list(dep_literals) do
-    app_dir = Path.join([root, "apps", to_string(app_name)])
-    File.mkdir_p!(Path.join(app_dir, "lib"))
+  defp write_source(root, app, body) do
+    module =
+      ArchitecturePolicy.app_namespaces() |> Map.get(app, [Macro.camelize("#{app}")]) |> hd()
 
-    deps_block =
-      case dep_literals do
-        [] -> "[]"
-        literals -> "[\n      #{Enum.join(literals, ",\n      ")}\n    ]"
-      end
-
-    mix_exs = """
-    defmodule #{Macro.camelize(to_string(app_name))}.MixProject do
-      use Mix.Project
-
-      def project do
-        [
-          app: :#{app_name},
-          version: "0.1.0",
-          deps: deps()
-        ]
-      end
-
-      defp deps do
-        #{deps_block}
-      end
-    end
-    """
-
-    File.write!(Path.join(app_dir, "mix.exs"), mix_exs)
-
-    module_name = Macro.camelize(to_string(app_name))
-
-    module_content = """
-    defmodule #{module_name} do
-      @moduledoc "Test module"
-    end
-    """
-
-    File.write!(Path.join(app_dir, "lib/#{app_name}.ex"), module_content)
-
-    app_dir
+    path = Path.join([root, "apps", to_string(app), "lib", "#{app}.ex"])
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "defmodule #{module}.Probe do\n#{body}\nend\n")
   end
 
-  defp create_app_with_wrapped_deps(root, app_name, deps)
-       when is_atom(app_name) and is_list(deps) do
-    app_dir = create_app(root, app_name, deps)
-    dep_strings = Enum.map(deps, fn dep -> "{:#{dep}, in_umbrella: true}" end)
-    deps_block = if dep_strings == [], do: "[]", else: "[#{Enum.join(dep_strings, ", ")}]"
-
-    mix_exs = """
-    defmodule #{Macro.camelize(to_string(app_name))}.MixProject do
-      use Mix.Project
-
-      def project do
-        [
-          app: :#{app_name},
-          version: "0.1.0",
-          deps: deps()
-        ]
-      end
-
-      defp deps do
-        lemon_deps(#{deps_block})
-      end
-    end
-    """
-
-    File.write!(Path.join(app_dir, "mix.exs"), mix_exs)
-    app_dir
-  end
-
-  defp create_app_with_namespace(root, app_name, namespace, deps) do
-    app_dir = create_app(root, app_name, deps)
-
-    # Update the module to use the specified namespace
-    module_content = """
-    defmodule #{namespace} do
-      @moduledoc "Test module with namespace"
-    end
-    """
-
-    File.write!(Path.join(app_dir, "lib/#{app_name}.ex"), module_content)
-
-    app_dir
-  end
-
-  defp create_app_with_code(root, app_name, _namespace, code, deps) do
-    app_dir = Path.join([root, "apps", to_string(app_name)])
-    File.mkdir_p!(Path.join(app_dir, "lib"))
-
-    dep_strings = Enum.map(deps, fn dep -> "{:#{dep}, in_umbrella: true}" end)
-    deps_block = if dep_strings == [], do: "[]", else: "[#{Enum.join(dep_strings, ", ")}]"
-
-    mix_exs = """
-    defmodule #{Macro.camelize(to_string(app_name))}.MixProject do
-      use Mix.Project
-
-      def project do
-        [
-          app: :#{app_name},
-          version: "0.1.0",
-          deps: deps()
-        ]
-      end
-
-      defp deps do
-        #{deps_block}
-      end
-    end
-    """
-
-    File.write!(Path.join(app_dir, "mix.exs"), mix_exs)
-    File.write!(Path.join(app_dir, "lib/#{app_name}.ex"), code)
-
-    app_dir
+  defp write_config(root, source) do
+    File.mkdir_p!(Path.join(root, "config"))
+    File.write!(Path.join(root, "config/config.exs"), "import Config\n" <> source)
   end
 end

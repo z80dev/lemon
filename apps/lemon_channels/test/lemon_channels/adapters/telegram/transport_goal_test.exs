@@ -47,7 +47,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportGoalTest do
         )
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
   @chat 555_101
   @user 555_101
 
@@ -62,12 +62,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportGoalTest do
     File.mkdir_p!(root)
 
     {:ok, _} = Application.ensure_all_started(:lemon_automation)
-    previous_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous_gateway = Application.get_env(:lemon_core, @gateway_config_key)
     previous_commands = LemonCore.AutomationCommands.provider()
     :persistent_term.put({BlockingLoop, :pid}, self())
     :ok = LemonCore.AutomationCommands.register(Commands)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       telegram: %{bot_token: "fake-token", api_mod: FakeAPI},
       bindings: [%{transport: :telegram, chat_id: @chat, project: "goal-chat"}],
       projects: %{"goal-chat" => %{root: root}}
@@ -77,7 +77,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportGoalTest do
       stop_transport()
       FakeAPI.reset()
       :persistent_term.erase({BlockingLoop, :pid})
-      restore_env(:lemon_gateway, @gateway_config_key, previous_gateway)
+      restore_env(:lemon_core, @gateway_config_key, previous_gateway)
       :ok = LemonCore.AutomationCommands.register(previous_commands)
       File.rm_rf!(root)
     end)

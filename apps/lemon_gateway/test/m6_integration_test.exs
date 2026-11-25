@@ -13,14 +13,14 @@ defmodule LemonGateway.M6IntegrationTest do
       )
 
     on_exit(fn -> File.rm_rf!(test_toml_dir) end)
-    isolate_gateway([LemonGateway.Config, :config_path], system_env: ["HOME"])
+    isolate_gateway([:config_path], system_env: ["HOME"])
 
     # Set up test directories
     File.mkdir_p!(test_toml_dir)
     System.put_env("HOME", test_toml_dir)
 
     # Clean up any existing config
-    Application.delete_env(:lemon_gateway, LemonGateway.Config)
+    Application.delete_env(:lemon_core, :gateway_test_config)
     Application.delete_env(:lemon_gateway, :config_path)
 
     on_exit(fn -> LemonCore.ConfigCache.clear() end)

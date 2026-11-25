@@ -28,9 +28,9 @@ defmodule LemonChannels.VoiceProjectConfigTrustTest do
     File.mkdir_p!(Path.dirname(global))
     File.mkdir_p!(Path.join(project, ".lemon"))
     saved_paths = Application.get_env(:lemon_core, :paths)
-    saved_gateway = Application.get_env(:lemon_gateway, LemonGateway.Config)
+    saved_gateway = Application.get_env(:lemon_core, :gateway_test_config)
     Application.put_env(:lemon_core, :paths, global_config: global)
-    Application.delete_env(:lemon_gateway, LemonGateway.Config)
+    Application.delete_env(:lemon_core, :gateway_test_config)
 
     on_exit(fn ->
       if saved_paths,
@@ -38,8 +38,8 @@ defmodule LemonChannels.VoiceProjectConfigTrustTest do
         else: Application.delete_env(:lemon_core, :paths)
 
       if saved_gateway,
-        do: Application.put_env(:lemon_gateway, LemonGateway.Config, saved_gateway),
-        else: Application.delete_env(:lemon_gateway, LemonGateway.Config)
+        do: Application.put_env(:lemon_core, :gateway_test_config, saved_gateway),
+        else: Application.delete_env(:lemon_core, :gateway_test_config)
     end)
 
     %{global: global, project: project}

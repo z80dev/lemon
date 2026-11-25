@@ -47,15 +47,15 @@ defmodule LemonChannels.TypingIndicatorTest do
   end
 
   test "Discord refreshes its thread endpoint through the injected API", %{server: server} do
-    key = :"Elixir.LemonGateway.Config"
-    previous = Application.get_env(:lemon_gateway, key)
+    key = :gateway_test_config
+    previous = Application.get_env(:lemon_core, key)
     previous_test_mode = Application.get_env(:lemon_core, :config_test_mode)
     :persistent_term.put({DiscordAPI, :test_pid}, self())
     Application.put_env(:lemon_core, :config_test_mode, true)
-    Application.put_env(:lemon_gateway, key, %{discord: %{api_mod: DiscordAPI}})
+    Application.put_env(:lemon_core, key, %{discord: %{api_mod: DiscordAPI}})
 
     on_exit(fn ->
-      restore_env(:lemon_gateway, key, previous)
+      restore_env(:lemon_core, key, previous)
       restore_env(:lemon_core, :config_test_mode, previous_test_mode)
       :persistent_term.erase({DiscordAPI, :test_pid})
     end)

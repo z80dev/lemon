@@ -277,14 +277,14 @@ defmodule CodingAgent.Tools.SendFileTest do
 
   # The test-mode full-replacement layer read by `LemonCore.GatewayConfig`.
   defp put_config(key, value) do
-    env_key = :"Elixir.LemonGateway.Config"
-    previous = Application.get_env(:lemon_gateway, env_key)
-    Application.put_env(:lemon_gateway, env_key, Map.put(Map.new(previous || []), key, value))
+    env_key = :gateway_test_config
+    previous = Application.get_env(:lemon_core, env_key)
+    Application.put_env(:lemon_core, env_key, Map.put(Map.new(previous || []), key, value))
 
     on_exit(fn ->
       if previous,
-        do: Application.put_env(:lemon_gateway, env_key, previous),
-        else: Application.delete_env(:lemon_gateway, env_key)
+        do: Application.put_env(:lemon_core, env_key, previous),
+        else: Application.delete_env(:lemon_core, env_key)
     end)
   end
 

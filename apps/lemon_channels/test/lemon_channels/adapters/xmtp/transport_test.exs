@@ -49,20 +49,20 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     end
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   setup do
     stop_transport()
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
-    old_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway_env = Application.get_env(:lemon_core, @gateway_config_key)
 
     :persistent_term.put({XmtpTestRouter, :pid}, self())
 
     :ok =
       LemonCore.RouterBridge.configure(router: XmtpTestRouter, run_orchestrator: XmtpTestRouter)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       enable_xmtp: true,
       xmtp: %{
         require_live: false,
@@ -77,7 +77,7 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
       :persistent_term.erase({XmtpTestRouter, :pid})
       :persistent_term.erase({XmtpTestRouter, :submit_result})
       restore_env(:lemon_core, :router_bridge, old_router_bridge)
-      restore_env(:lemon_gateway, @gateway_config_key, old_gateway_env)
+      restore_env(:lemon_core, @gateway_config_key, old_gateway_env)
     end)
 
     :ok
@@ -313,7 +313,7 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     secret_env = "XMTP_TEST_WALLET_KEY_#{System.unique_integer([:positive])}"
     System.put_env(secret_env, "0xsecret-wallet-key")
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       enable_xmtp: true,
       xmtp: %{wallet_key_secret: secret_env}
     })
@@ -326,7 +326,7 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
   test "config resolves ${ENV_VAR} interpolation for xmtp values" do
     System.put_env("XMTP_TEST_WALLET_ADDRESS", "0x1111111111111111111111111111111111111111")
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       enable_xmtp: true,
       xmtp: %{wallet_address: "${XMTP_TEST_WALLET_ADDRESS}"}
     })

@@ -20,7 +20,7 @@ LOCKFILE_NAMES = {
     "yarn.lock", "pnpm-lock.yaml", "uv.lock", "poetry.lock", "Gemfile.lock", "go.sum",
 }
 NOT_SHIPPED = ("apps/lemon_evals/priv/coding_tasks/",)
-PUBLISHED = ("lemon_core", "lemon_ai", "lemon_agent")
+PUBLISHED = ("lemon_core", "lemon_ai", "lemon_agent", "lemon_memory", "lemon_platform_test")
 
 
 def shipped_lockfiles():
@@ -101,6 +101,15 @@ class DialyzerGateTest(unittest.TestCase):
                 result = self.gate(report)
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn(f"{app}: {source}:1:1", result.stderr)
+
+    def test_the_folded_mcp_library_is_still_gated(self):
+        for source in ("lib/lemon_mcp.ex", "lib/lemon_mcp/client.ex"):
+            report = ("Total errors: 1, Skipped: 0, Unnecessary Skips: 0\n"
+                      f"{source}:1:1: The call 'Elixir.Fixture':f(1) breaks the contract (binary()) -> 'ok'\n")
+            with self.subTest(source=source):
+                result = self.gate(report)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(f"lemon_skills/lib/lemon_mcp: {source}:1:1", result.stderr)
 
     def test_a_clean_report_passes_and_an_unusable_one_is_refused(self):
         clean = self.gate("Total errors: 0, Skipped: 0, Unnecessary Skips: 0\ndone\n")

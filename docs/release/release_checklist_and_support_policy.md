@@ -72,9 +72,8 @@ steps.
 - [ ] Confirm `release-smoke.yml` builds both runtime profiles and evaluates the
       packaged releases directly, while `scripts/verify_release_runtime_boot`
       repeats the same check on each min/full release tarball. Each release must
-      load `LemonMCP.Client`, report `LemonSkills.McpSource.mcp_enabled?/0`, keep
-      `:lemon_mcp` loaded but not started, expose no application callback, and
-      contain no `LemonMCP.Application` module.
+      load `LemonMCP.Client` and `LemonSkills.McpSource` and report
+      `LemonSkills.McpSource.mcp_enabled?/0`.
 - [ ] Build and package the `clients/tui` Bun binary for
       `linux-x86_64`, `linux-arm64`, and `darwin-arm64` as the `lemon_tui`
       artifacts.
@@ -98,7 +97,7 @@ steps.
       `scripts/live_discord_matrix.py`, `scripts/live_provider_fallback_smoke.exs`,
       `scripts/live_provider_ownership_smoke.exs` (loopback fixtures only), or
       `scripts/live_cron_runtime_restart_smoke.exs`. MCP has no live smoke
-      script; its client and transports are covered by `apps/lemon_mcp/test`.
+      script; its client and transports are covered by `apps/lemon_skills/test/lemon_mcp`.
 - [ ] Run `scripts/verify_docs_site`. It installs docs dependencies in a temp
       copy, builds the VitePress site, and
       checks markdown links without leaving generated artifacts in the repo.

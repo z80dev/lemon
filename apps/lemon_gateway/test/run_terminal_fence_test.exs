@@ -27,8 +27,8 @@ defmodule LemonGateway.RunTerminalFenceTest do
   end
 
   setup do
-    LemonGateway.Test.AppIsolation.isolate_gateway([LemonGateway.Config, :executor])
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{max_concurrent_runs: 1})
+    LemonGateway.Test.AppIsolation.isolate_gateway([:executor])
+    Application.put_env(:lemon_core, :gateway_test_config, %{max_concurrent_runs: 1})
     Application.put_env(:lemon_gateway, :executor, ObservedExecutor)
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 

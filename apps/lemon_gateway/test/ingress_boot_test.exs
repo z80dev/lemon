@@ -22,8 +22,12 @@ defmodule LemonGateway.IngressBootTest do
     saved_env = Enum.map(@env_vars, &{&1, System.get_env(&1)})
 
     saved_app_env =
-      [:"Elixir.LemonGateway.Config", :transports, :voice_ip]
-      |> Enum.map(&{&1, Application.fetch_env(:lemon_gateway, &1)})
+      [
+        {:lemon_core, :gateway_test_config},
+        {:lemon_gateway, :transports},
+        {:lemon_gateway, :voice_ip}
+      ]
+      |> Enum.map(fn {app, key} -> {app, key, Application.fetch_env(app, key)} end)
 
     home = Path.join(System.tmp_dir!(), "lemon_ingress_#{System.unique_integer([:positive])}")
     path = Path.join(home, ".lemon/config.toml")
@@ -33,8 +37,8 @@ defmodule LemonGateway.IngressBootTest do
       _ = Application.stop(:lemon_gateway)
 
       Enum.each(saved_app_env, fn
-        {key, {:ok, value}} -> Application.put_env(:lemon_gateway, key, value)
-        {key, :error} -> Application.delete_env(:lemon_gateway, key)
+        {app, key, {:ok, value}} -> Application.put_env(app, key, value)
+        {app, key, :error} -> Application.delete_env(app, key)
       end)
 
       Enum.each(saved_env, fn
@@ -49,7 +53,7 @@ defmodule LemonGateway.IngressBootTest do
 
     _ = Application.stop(:lemon_gateway)
     Enum.each(@env_vars, &System.delete_env/1)
-    Enum.each(saved_app_env, fn {key, _} -> Application.delete_env(:lemon_gateway, key) end)
+    Enum.each(saved_app_env, fn {app, key, _} -> Application.delete_env(app, key) end)
     System.put_env("HOME", home)
     LemonCore.ConfigCache.clear()
 

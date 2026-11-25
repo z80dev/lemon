@@ -97,9 +97,9 @@ defmodule LemonGateway.RunTransportAgnosticTest do
   end
 
   setup do
-    LemonGateway.Test.AppIsolation.isolate_gateway([LemonGateway.Config, :executor])
+    LemonGateway.Test.AppIsolation.isolate_gateway([:executor])
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 10
     })
 

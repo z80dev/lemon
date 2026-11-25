@@ -12,7 +12,7 @@ defmodule LemonGatewayTest do
       Path.join(System.tmp_dir!(), "lemon_test_locks_#{System.unique_integer([:positive])}")
 
     on_exit(fn -> File.rm_rf(lock_dir) end)
-    isolate_gateway([LemonGateway.Config, :executor], system_env: ["LEMON_LOCK_DIR"])
+    isolate_gateway([:executor], system_env: ["LEMON_LOCK_DIR"])
 
     System.put_env("LEMON_LOCK_DIR", lock_dir)
 
@@ -286,7 +286,7 @@ defmodule LemonGatewayTest do
   end
 
   setup do
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 1,
       enable_telegram: false
     })

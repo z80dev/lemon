@@ -24,7 +24,7 @@ defmodule LemonGateway.TransportSupervisorTest do
   alias Elixir.LemonGateway.TransportSupervisor
 
   setup_all do
-    LemonGateway.Test.AppIsolation.isolate_gateway([LemonGateway.Config, :transports])
+    LemonGateway.Test.AppIsolation.isolate_gateway([:transports])
 
     on_exit(fn ->
       stop_if_running(TransportSupervisor)
@@ -207,11 +207,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       enable_telegram: false
     }
 
-    Application.put_env(
-      :lemon_gateway,
-      Elixir.LemonGateway.Config,
-      Map.merge(base_config, config)
-    )
+    Application.put_env(:lemon_core, :gateway_test_config, Map.merge(base_config, config))
 
     Application.put_env(:lemon_gateway, :transports, transports)
 
@@ -459,7 +455,7 @@ defmodule LemonGateway.TransportSupervisorTest do
     test "terminated transports are no longer registered" do
       # Start unsupervised here so stopping the supervisor doesn't immediately
       # get restarted by the test supervisor (which would re-register children).
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{enable_telegram: false})
+      Application.put_env(:lemon_core, :gateway_test_config, %{enable_telegram: false})
       Application.put_env(:lemon_gateway, :transports, [MockTransportA])
 
       {:ok, _} = TransportRegistry.start_link([])

@@ -61,9 +61,9 @@ defmodule LemonSkills.Config do
   - `LEMON_AGENT_DIR` environment variable
   - `config :lemon_skills, :agent_dir, "/path"`
 
-  If `:lemon_skills` doesn't specify `:agent_dir`, this module will fall back to
-  `config :coding_agent, :agent_dir, ...` so the skill registry and coding agent
-  share a single on-disk location by default.
+  If `:lemon_skills` doesn't specify `:agent_dir`, this module falls back to
+  `LemonCore.Paths.agent_dir_override/0` (`config :lemon_core, :agent_dir`) so
+  the skill registry and coding agent share a single on-disk location.
   """
 
   alias LemonCore.TrustedRoot
@@ -95,7 +95,7 @@ defmodule LemonSkills.Config do
   def agent_dir do
     System.get_env("LEMON_AGENT_DIR") ||
       Application.get_env(:lemon_skills, :agent_dir) ||
-      Application.get_env(:coding_agent, :agent_dir) ||
+      LemonCore.Paths.agent_dir_override() ||
       Path.join(System.user_home!(), ".lemon/agent")
   end
 
@@ -206,7 +206,7 @@ defmodule LemonSkills.Config do
         System.get_env("LEMON_AGENT_DIR"),
         System.get_env("LEMON_HARNESS_SKILLS_DIR"),
         Application.get_env(:lemon_skills, :agent_dir),
-        Application.get_env(:coding_agent, :agent_dir),
+        Application.get_env(:lemon_core, :agent_dir),
         Application.get_env(:lemon_skills, :harness_global_skills_dir)
       ],
       &(&1 != nil)

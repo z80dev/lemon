@@ -24,7 +24,7 @@ defmodule LemonGateway.WebhookFlagResolutionTest do
   alias Plug.Test
 
   @token "flag-test-token"
-  @config_key :"Elixir.LemonGateway.Config"
+  @config_key :gateway_test_config
 
   setup do
     {:ok, _} = Application.ensure_all_started(:lemon_core)
@@ -40,10 +40,10 @@ defmodule LemonGateway.WebhookFlagResolutionTest do
         router: original_bridge && original_bridge[:router]
       )
 
-    original_config = Application.get_env(:lemon_gateway, @config_key)
+    original_config = Application.get_env(:lemon_core, @config_key)
 
     on_exit(fn ->
-      Application.put_env(:lemon_gateway, @config_key, original_config)
+      Application.put_env(:lemon_core, @config_key, original_config)
 
       if original_bridge,
         do: Application.put_env(:lemon_core, :router_bridge, original_bridge),
@@ -61,7 +61,7 @@ defmodule LemonGateway.WebhookFlagResolutionTest do
     integration =
       Map.merge(%{agent_id: "webhook-test", mode: "async", token: @token}, integration)
 
-    Application.put_env(:lemon_gateway, @config_key, %{
+    Application.put_env(:lemon_core, @config_key, %{
       webhook: Map.put(global, :integrations, %{integration_id => integration})
     })
   end

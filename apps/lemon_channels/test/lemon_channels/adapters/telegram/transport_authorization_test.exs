@@ -89,7 +89,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
     end
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   setup do
     unless Process.whereis(LemonChannels.Adapters.Telegram.AsyncSupervisor) do
@@ -99,7 +99,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
     stop_transport()
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
-    old_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway_env = Application.get_env(:lemon_core, @gateway_config_key)
 
     :persistent_term.put({AuthTestRouter, :pid}, self())
     AuthMockAPI.register_test(self())
@@ -337,21 +337,17 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
   end
 
   defp set_bindings(bindings) do
-    existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
+    existing = Application.get_env(:lemon_core, @gateway_config_key, %{})
 
-    Application.put_env(
-      :lemon_gateway,
-      @gateway_config_key,
-      Map.put(existing, :bindings, bindings)
-    )
+    Application.put_env(:lemon_core, @gateway_config_key, Map.put(existing, :bindings, bindings))
   end
 
   defp restore_gateway_env(nil) do
-    Application.delete_env(:lemon_gateway, @gateway_config_key)
+    Application.delete_env(:lemon_core, @gateway_config_key)
   end
 
   defp restore_gateway_env(env) do
-    Application.put_env(:lemon_gateway, @gateway_config_key, env)
+    Application.put_env(:lemon_core, @gateway_config_key, env)
   end
 
   defp restore_router_bridge(nil), do: Application.delete_env(:lemon_core, :router_bridge)

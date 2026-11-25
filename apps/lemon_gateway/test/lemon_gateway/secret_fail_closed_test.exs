@@ -7,7 +7,7 @@ defmodule LemonGateway.SecretFailClosedTest do
 
   alias LemonGateway.Sms.TwilioSignature
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
   @env_vars ~w(LEMON_SECRETS_MASTER_KEY TWILIO_AUTH_TOKEN TWILIO_VALIDATE_WEBHOOK
                TWILIO_WEBHOOK_URL OPENAI_API_KEY)
   @ambient_token "ambient-tripwire-token"
@@ -17,7 +17,7 @@ defmodule LemonGateway.SecretFailClosedTest do
     Enum.each(@env_vars, &System.delete_env/1)
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-    old_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway = Application.get_env(:lemon_core, @gateway_config_key)
     old_openai = Application.get_env(:lemon_gateway, :openai_api_key)
     Application.delete_env(:lemon_gateway, :openai_api_key)
     clear_secrets()
@@ -30,7 +30,10 @@ defmodule LemonGateway.SecretFailClosedTest do
         {k, v} -> System.put_env(k, v)
       end)
 
-      restore_app_env(@gateway_config_key, old_gateway)
+      if old_gateway,
+        do: Application.put_env(:lemon_core, @gateway_config_key, old_gateway),
+        else: Application.delete_env(:lemon_core, @gateway_config_key)
+
       restore_app_env(:openai_api_key, old_openai)
     end)
 
@@ -53,16 +56,16 @@ defmodule LemonGateway.SecretFailClosedTest do
     System.put_env("TWILIO_AUTH_TOKEN", @ambient_token)
     start_supervised!(LemonGateway.Sms.Inbox)
 
-    env_key = :"Elixir.LemonGateway.Config"
-    original = Application.get_env(:lemon_gateway, env_key)
+    env_key = :gateway_test_config
+    original = Application.get_env(:lemon_core, env_key)
 
     Application.put_env(
-      :lemon_gateway,
+      :lemon_core,
       env_key,
       Map.put(Map.new(original || []), :sms, %{auth_token_secret: "sms_tripwire_token"})
     )
 
-    on_exit(fn -> Application.put_env(:lemon_gateway, env_key, original) end)
+    on_exit(fn -> Application.put_env(:lemon_core, env_key, original) end)
 
     url = "http://www.example.com/webhooks/twilio/sms"
     sid = "SMtrip-#{System.unique_integer([:positive])}"
@@ -84,7 +87,7 @@ defmodule LemonGateway.SecretFailClosedTest do
     corrupt_secret("voice_tripwire_token")
     System.put_env("TWILIO_AUTH_TOKEN", @ambient_token)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       voice: %{
         twilio_auth_token_secret: "voice_tripwire_token",
         public_url: "https://voice.example.test"

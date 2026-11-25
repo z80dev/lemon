@@ -36,6 +36,9 @@ defmodule LemonSkills.MixProject do
       {:yaml_elixir, "~> 2.9"},
       {:phoenix_pubsub, "~> 2.1"},
       {:req, "~> 0.6.0"},
+      # LemonMCP clients: IDNA origin canonicalization and pinned HTTP/SSE.
+      {:idna, "~> 7.1"},
+      {:mint, "~> 1.8"},
       {:bandit, "~> 1.0", only: :test},
       {:plug, "~> 1.14", only: :test}
     ]

@@ -25,7 +25,7 @@ defmodule LemonChannels.OutboxAdapterContractTest do
   alias LemonChannels.{DeliveryError, OutboundPayload}
 
   @adapters [Telegram, Discord, Email, Xmtp]
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   defmodule TelegramApi do
     def send_message(_token, _chat_id, _text, _opts, _parse_mode), do: Process.get(:api_result)
@@ -54,11 +54,11 @@ defmodule LemonChannels.OutboxAdapterContractTest do
   end
 
   setup do
-    old_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway = Application.get_env(:lemon_core, @gateway_config_key)
     old_email = Application.get_env(:lemon_channels, Email)
 
     Application.put_env(
-      :lemon_gateway,
+      :lemon_core,
       @gateway_config_key,
       Map.merge(old_gateway || %{}, %{
         enable_discord: true,
@@ -73,7 +73,7 @@ defmodule LemonChannels.OutboxAdapterContractTest do
 
     on_exit(fn ->
       stop(XmtpTransport)
-      restore(:lemon_gateway, @gateway_config_key, old_gateway)
+      restore(:lemon_core, @gateway_config_key, old_gateway)
       restore(:lemon_channels, Email, old_email)
     end)
 

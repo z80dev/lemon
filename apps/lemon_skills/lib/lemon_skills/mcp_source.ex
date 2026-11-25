@@ -77,6 +77,7 @@ defmodule LemonSkills.McpSource do
   alias LemonAi.Types.TextContent
   alias LemonCore.OAuth.LocalCallbackListener
   alias LemonCore.Secrets
+  alias LemonMCP.Client
 
   @default_cache_ttl_ms :timer.minutes(5)
   @default_refresh_interval_ms :timer.minutes(1)
@@ -369,23 +370,15 @@ defmodule LemonSkills.McpSource do
   @doc """
   True when MCP tools can be used in this runtime.
 
-  False when `config :lemon_skills, :mcp_disabled` is true, when
-  `LEMON_MCP_DISABLED` is `1`/`true`/`yes` (any case), or when no MCP stdio
-  client module is loaded. Read at boot to decide how the GenServer starts, and
-  safe to call from anywhere afterwards — it consults configuration, not the
-  server's state.
+  False when `config :lemon_skills, :mcp_disabled` is true or when
+  `LEMON_MCP_DISABLED` is `1`/`true`/`yes` (any case). Read at boot to decide
+  how the GenServer starts, and safe to call from anywhere afterwards — it
+  consults configuration, not the server's state.
   """
   @spec mcp_enabled?() :: boolean()
   def mcp_enabled? do
-    disabled =
-      Application.get_env(:lemon_skills, :mcp_disabled, false) ||
-        System.get_env("LEMON_MCP_DISABLED") in ["1", "true", "TRUE", "yes", "YES"]
-
-    if disabled do
-      false
-    else
-      match?({:ok, _client_mod}, stdio_client_module())
-    end
+    not (Application.get_env(:lemon_skills, :mcp_disabled, false) ||
+           System.get_env("LEMON_MCP_DISABLED") in ["1", "true", "TRUE", "yes", "YES"])
   end
 
   # ============================================================================
@@ -2093,12 +2086,12 @@ defmodule LemonSkills.McpSource do
         timeout_ms: Keyword.get(source_opts, :timeout_ms, @client_request_timeout_ms)
       ] ++ notification_opts(server)
 
-    with {:ok, client_mod} <- stdio_client_module(),
-         executable when is_binary(executable) <- System.find_executable(command) do
-      start_ready_client(client_mod, opts, client_ready_timeout_ms(source_opts), server.source)
-    else
-      nil -> {:error, :executable_not_found}
-      error -> error
+    case System.find_executable(command) do
+      executable when is_binary(executable) ->
+        start_ready_client(Client, opts, client_ready_timeout_ms(source_opts), server.source)
+
+      nil ->
+        {:error, :executable_not_found}
     end
   end
 
@@ -2117,9 +2110,7 @@ defmodule LemonSkills.McpSource do
         Keyword.take(opts, [:origin_policy, :destination_pin]) ++
         oauth_token_cache_opts(url, opts) ++ notification_opts(server)
 
-    with {:ok, client_mod} <- http_client_module() do
-      start_ready_client(client_mod, client_opts, client_ready_timeout_ms(opts), server.source)
-    end
+    start_ready_client(Client.HTTP, client_opts, client_ready_timeout_ms(opts), server.source)
   end
 
   defp start_client(%{config: config} = server, :sse) do
@@ -2134,9 +2125,7 @@ defmodule LemonSkills.McpSource do
         timeout_ms: Keyword.get(opts, :timeout_ms, @client_request_timeout_ms)
       ] ++ Keyword.take(opts, [:origin_policy]) ++ notification_opts(server)
 
-    with {:ok, client_mod} <- sse_client_module() do
-      start_ready_client(client_mod, client_opts, ready_timeout_ms, server.source)
-    end
+    start_ready_client(Client.SSE, client_opts, ready_timeout_ms, server.source)
   end
 
   defp start_ready_client(client_mod, opts, timeout, source) do
@@ -2584,39 +2573,9 @@ defmodule LemonSkills.McpSource do
     :exit, _ -> {:error, :not_connected}
   end
 
-  defp stdio_client_module do
-    client_mod = Module.concat(["Lemon" <> "MCP", "Client"])
-
-    if Code.ensure_loaded?(client_mod) do
-      {:ok, client_mod}
-    else
-      {:error, :mcp_client_not_available}
-    end
-  end
-
-  defp http_client_module do
-    client_mod = Module.concat(["Lemon" <> "MCP", "Client", "HTTP"])
-
-    if Code.ensure_loaded?(client_mod) do
-      {:ok, client_mod}
-    else
-      {:error, :mcp_http_client_not_available}
-    end
-  end
-
-  defp sse_client_module do
-    client_mod = Module.concat(["Lemon" <> "MCP", "Client", "SSE"])
-
-    if Code.ensure_loaded?(client_mod) do
-      {:ok, client_mod}
-    else
-      {:error, :mcp_sse_client_not_available}
-    end
-  end
-
-  defp server_client_module(:stdio), do: elem(stdio_client_module(), 1)
-  defp server_client_module(:http), do: elem(http_client_module(), 1)
-  defp server_client_module(:sse), do: elem(sse_client_module(), 1)
+  defp server_client_module(:stdio), do: Client
+  defp server_client_module(:http), do: Client.HTTP
+  defp server_client_module(:sse), do: Client.SSE
 
   defp await_ready(client_mod, client, timeout_ms) do
     case await_ready_until(client_mod, client, System.monotonic_time(:millisecond) + timeout_ms) do

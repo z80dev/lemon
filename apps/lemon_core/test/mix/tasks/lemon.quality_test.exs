@@ -173,9 +173,8 @@ defmodule Mix.Tasks.Lemon.QualityTest do
   end
 
   describe "architecture dependency reporting" do
-    test "passes without target drift after current and target policies converge" do
-      tmp_dir =
-        create_tmp_quality_repo(ArchitectureDocs.render_dependency_policy_markdown(@repo_root))
+    test "passes when the architecture rules and generated docs are satisfied" do
+      tmp_dir = create_tmp_quality_repo(:current)
 
       try do
         output =
@@ -185,7 +184,6 @@ defmodule Mix.Tasks.Lemon.QualityTest do
             end)
           end)
 
-        refute output =~ "[warn] architecture target drift"
         assert output =~ "All quality checks passed."
       after
         File.rm_rf!(tmp_dir)
@@ -196,7 +194,7 @@ defmodule Mix.Tasks.Lemon.QualityTest do
   describe "docs link check" do
     test "a broken local docs link fails the quality run" do
       tmp_dir =
-        create_tmp_quality_repo(ArchitectureDocs.render_dependency_policy_markdown(@repo_root))
+        create_tmp_quality_repo(:current)
 
       File.write!(Path.join(tmp_dir, "docs/README.md"), "# Docs\n\n[gone](missing.md)\n")
 
@@ -274,12 +272,36 @@ defmodule Mix.Tasks.Lemon.QualityTest do
     File.write!(Path.join(tmp_dir, "docs/README.md"), "# Docs\n")
     File.write!(Path.join(tmp_dir, "scripts/verify_packages"), "PACKAGES=()\n")
 
-    ArchitecturePolicy.allowed_direct_deps()
-    |> Enum.each(fn {app, deps} ->
+    # Leaf apps with no umbrella edges, plus the lib references and config
+    # bindings that keep every policy seam in use.
+    for {app, [namespace | _]} <- ArchitecturePolicy.app_namespaces() do
       app_dir = Path.join(tmp_dir, "apps/#{app}")
-      File.mkdir_p!(app_dir)
-      File.write!(Path.join(app_dir, "mix.exs"), mix_file_for(app, deps))
-    end)
+      File.mkdir_p!(Path.join(app_dir, "lib"))
+      File.write!(Path.join(app_dir, "mix.exs"), mix_file_for(app, []))
+
+      seams =
+        ArchitecturePolicy.reference_only_namespace_exceptions()
+        |> Map.get(app, [])
+        |> Enum.map_join(", ", &hd(ArchitecturePolicy.app_namespaces()[&1]))
+
+      File.write!(
+        Path.join(app_dir, "lib/#{app}.ex"),
+        "defmodule #{namespace}.Seams do\n  def all, do: [#{seams}]\nend\n"
+      )
+    end
+
+    bindings =
+      for {app, owners} <- ArchitecturePolicy.config_bindings(), owner <- owners do
+        "config :#{app}, :binding, #{hd(ArchitecturePolicy.app_namespaces()[owner])}.Bound\n"
+      end
+
+    File.mkdir_p!(Path.join(tmp_dir, "config"))
+    File.write!(Path.join(tmp_dir, "config/config.exs"), ["import Config\n" | bindings])
+
+    architecture_policy_section =
+      if architecture_policy_section == :current,
+        do: ArchitectureDocs.render_dependency_policy_markdown(tmp_dir),
+        else: architecture_policy_section
 
     File.write!(
       Path.join(tmp_dir, "docs/architecture_boundaries.md"),

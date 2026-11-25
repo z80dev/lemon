@@ -17,7 +17,7 @@ defmodule LemonChannels.Adapters.Xmtp.BridgeConsentTest do
   @consent_denied 2
 
   @bridge %{label: "xmtp", event_tag: :xmtp_bridge_event, script_filename: "xmtp_bridge.mjs"}
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   defmodule ConsentRouter do
     use LemonCore.RouterBridge.Router
@@ -76,17 +76,17 @@ defmodule LemonChannels.Adapters.Xmtp.BridgeConsentTest do
     sdk = write_fake_sdk(tmp_dir)
     stop_transport()
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
-    old_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway_env = Application.get_env(:lemon_core, @gateway_config_key)
     :persistent_term.put({ConsentRouter, :pid}, self())
     :ok = LemonCore.RouterBridge.configure(router: ConsentRouter, run_orchestrator: ConsentRouter)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{enable_xmtp: true, xmtp: %{}})
+    Application.put_env(:lemon_core, @gateway_config_key, %{enable_xmtp: true, xmtp: %{}})
 
     on_exit(fn ->
       stop_transport()
       :persistent_term.erase({ConsentRouter, :pid})
       restore_env(:lemon_core, :router_bridge, old_router_bridge)
-      restore_env(:lemon_gateway, @gateway_config_key, old_gateway_env)
+      restore_env(:lemon_core, @gateway_config_key, old_gateway_env)
     end)
 
     {:ok, _pid} =

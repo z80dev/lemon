@@ -8,6 +8,66 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- Writable client stores (`defer_to_runtime: true`) write only while the
+  client's supervised `RuntimeOwner` (`client: true`) holds
+  `<db>.client.lock` and the runtime lock for the VM's lifetime; beside a
+  running runtime they refuse every mutation with `{:error, :runtime_owned}`,
+  and a runtime booting while a client holds them waits its lock deadline,
+  then refuses to start (`:store_held_by_client`) instead of writing.
+  `Store.write_access/1` reports it. `Secrets.list/1` on a client store hides
+  expired rows without pruning them (#667).
+
+### Removed
+
+- `mix lemon.update` moved to lemon_skills, which owns the bundled-skill sync
+  it runs (#725).
+- **Breaking:** retired WASM tool support (#707): `LemonCore.Config.Tools`
+  has no `wasm` field and no longer reads `[runtime.tools.wasm]`, the
+  `LEMON_WASM_*` declarations and the `:tools_wasm` area are gone, extension
+  manifests reject a `wasm` host type, doctor diagnostics report no `wasm`
+  host, `tool_auth` is no longer a catalogued tool, and the optional
+  `AgentRuntime.Provider.wasm_sidecar_running?/0` callback is removed.
+- `LemonCore.Store` no longer sweeps the `:openai_compat_run_owners` table; its
+  only owner, the control plane's OpenAI-compatible API, was removed (#711).
+- **Breaking:** the `feature_progress/1` agent-runtime provider callback and the
+  `report_issue`, `todoread` and `todowrite` tool-catalogue entries (#706).
+
+- **Breaking:** the `mix lemon.secrets.*` tasks; `lemon secrets` is the only
+  secrets command-line interface (#717).
+- **Breaking:** `LemonCore.PolicyStore` agent, channel and runtime scopes
+  (`fetch_agent/1`, `put_agent/2`, `fetch_channel/1`, `put_channel/2`,
+  `fetch_runtime/0`, `put_runtime/1`, `delete_runtime/0`): they had no writer.
+  `LemonCore.ExecApprovalStore` node grants (`get_node_policy/3`,
+  `put_node_policy/4`), the policy maps (`fetch_global_policy_map/0`,
+  `put_global_policy_map/1`, `get_node_policy_map/1`, `put_node_policy_map/2`)
+  and the `list_global_policies/0`, `list_agent_policies/0`,
+  `list_session_policies/0`, `list_node_policies/0` helpers; `ExecApprovals.request/1`
+  ignores `:node_id`. The remaining approval rows are documented as approval
+  memory, not policy (#709).
+- **Breaking:** the `controller` and `hybrid` ids from
+  `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
+- **Breaking:** `LemonCore.Context`, `LemonCore.Context.Document` and
+  `LemonCore.Context.URLFetcher` no longer ship in `lemon_core`. Their only
+  consumers were the `lemon context` command and `LemonSkills.Learn`, so they
+  moved unchanged to `lemon_skills` as `LemonSkills.Context`,
+  `LemonSkills.Context.Document` and `LemonSkills.Context.URLFetcher`. URL
+  references still fetch through `LemonCore.Net.HTTP` (#724).
+
+### Changed
+
+- **Breaking:** `LemonCore.Quality.ArchitecturePolicy` names roles (namespaces,
+  foundations, satellites, test kits, reference-only seams, config bindings)
+  instead of restating `mix.exs`; `allowed_direct_deps/0`,
+  `current_allowed_direct_deps/0`, `target_allowed_direct_deps/0` and the
+  target-drift report are removed. `ArchitectureCheck` adds
+  `lib_dependencies/1`, `test_dependencies/1` and `owner_for_module/1` (#725).
+- **Breaking:** lemon_core no longer reads other apps' env:
+  `LemonCore.Paths.agent_dir_override/0` reads `config :lemon_core, :agent_dir`,
+  usage quotas read `:lemon_core` keys, the gateway test replacement reads
+  `:lemon_core, :gateway_test_config`, the LCU probe ignores
+  `:lemon_computer_use` env (`:lcu_default_roots` isolates tests), browser
+  provider selection ignores `:lemon_browser, :backend`, and the control-plane
+  port is applied through `config :lemon_core, :runtime_port_settings` (#725).
 - Dialyzer-clean (#734): `Lemon.Reload` no longer reports a successful
   code change as an error; extension manifests that are valid JSON but not an
   object are rejected as such instead of as oversized; several public typespecs

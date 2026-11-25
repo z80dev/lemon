@@ -59,7 +59,7 @@ defmodule LemonGateway.ApplicationTest do
   end
 
   defp configure_minimal_app do
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 2,
       enable_telegram: false
     })
@@ -86,7 +86,7 @@ defmodule LemonGateway.ApplicationTest do
   # ---------------------------------------------------------------------
 
   setup do
-    isolate_gateway([LemonGateway.Config, :executor, :transports])
+    isolate_gateway([:executor, :transports])
   end
 
   describe "Application startup sequence" do
@@ -190,11 +190,11 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "ingress children start when explicitly enabled" do
-      config = Application.fetch_env!(:lemon_gateway, Elixir.LemonGateway.Config)
+      config = Application.fetch_env!(:lemon_core, :gateway_test_config)
 
       Application.put_env(
-        :lemon_gateway,
-        Elixir.LemonGateway.Config,
+        :lemon_core,
+        :gateway_test_config,
         Map.put(config, :ingress, %{enabled: true})
       )
 
@@ -254,7 +254,7 @@ defmodule LemonGateway.ApplicationTest do
 
   describe "configuration loading on startup" do
     test "loads configuration from Application env" do
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         max_concurrent_runs: 10,
         enable_telegram: false
       })
@@ -265,7 +265,7 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "gateway settings use defaults and configured overrides" do
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{})
+      Application.put_env(:lemon_core, :gateway_test_config, %{})
       Application.put_env(:lemon_gateway, :transports, [])
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -273,7 +273,7 @@ defmodule LemonGateway.ApplicationTest do
 
       stop_application()
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         max_concurrent_runs: 7,
         enable_telegram: true
       })
@@ -293,7 +293,7 @@ defmodule LemonGateway.ApplicationTest do
 
   describe "environment-based configuration" do
     test "enable_telegram: false disables telegram transport in TransportRegistry" do
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         max_concurrent_runs: 1,
         ingress: %{enabled: true},
         enable_telegram: false
@@ -439,11 +439,11 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "TransportSupervisor is registered when ingress is enabled" do
-      config = Application.fetch_env!(:lemon_gateway, Elixir.LemonGateway.Config)
+      config = Application.fetch_env!(:lemon_core, :gateway_test_config)
 
       Application.put_env(
-        :lemon_gateway,
-        Elixir.LemonGateway.Config,
+        :lemon_core,
+        :gateway_test_config,
         Map.put(config, :ingress, %{enabled: true})
       )
 

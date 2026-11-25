@@ -3,15 +3,15 @@ defmodule LemonGateway.Voice.ConfigTest do
 
   alias LemonGateway.Voice.Config
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   setup do
-    old_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway_env = Application.get_env(:lemon_core, @gateway_config_key)
     old_voice_enabled = Application.get_env(:lemon_gateway, :voice_enabled)
     old_voice_timeout = Application.get_env(:lemon_gateway, :voice_silence_timeout_ms)
 
     on_exit(fn ->
-      restore_env(:lemon_gateway, @gateway_config_key, old_gateway_env)
+      restore_env(:lemon_core, @gateway_config_key, old_gateway_env)
       restore_env(:lemon_gateway, :voice_enabled, old_voice_enabled)
       restore_env(:lemon_gateway, :voice_silence_timeout_ms, old_voice_timeout)
     end)
@@ -20,7 +20,7 @@ defmodule LemonGateway.Voice.ConfigTest do
   end
 
   test "reads canonical gateway voice config" do
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       voice: %{
         enabled: true,
         websocket_port: 4101,
@@ -37,7 +37,7 @@ defmodule LemonGateway.Voice.ConfigTest do
 
   # #697: voice reads only [gateway.voice]; the old app-env keys are ignored.
   test "legacy application env keys are not read" do
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{voice: %{}})
+    Application.put_env(:lemon_core, @gateway_config_key, %{voice: %{}})
     Application.put_env(:lemon_gateway, :voice_enabled, true)
     Application.put_env(:lemon_gateway, :voice_silence_timeout_ms, 9999)
 
@@ -53,7 +53,7 @@ defmodule LemonGateway.Voice.ConfigTest do
       """)
 
     assert {:ok, config} = LemonCore.Config.Modular.validate_settings(settings)
-    Application.put_env(:lemon_gateway, @gateway_config_key, config.gateway)
+    Application.put_env(:lemon_core, @gateway_config_key, config.gateway)
 
     assert Config.public_url() == "https://voice.example.com/base/"
     assert String.starts_with?(Config.public_url(), "https://")

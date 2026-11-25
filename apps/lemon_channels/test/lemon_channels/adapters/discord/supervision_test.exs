@@ -3,7 +3,7 @@ defmodule LemonChannels.Adapters.Discord.Supervision581Test do
 
   alias LemonChannels.Adapters.Discord.Transport
 
-  @config_key :"Elixir.LemonGateway.Config"
+  @config_key :gateway_test_config
 
   defmodule BlockingAPI do
     def create(_channel_id, params) do
@@ -16,16 +16,16 @@ defmodule LemonChannels.Adapters.Discord.Supervision581Test do
   end
 
   setup context do
-    old_config = Application.get_env(:lemon_gateway, @config_key)
+    old_config = Application.get_env(:lemon_core, @config_key)
     old_mode = Application.get_env(:lemon_core, :config_test_mode)
     old_health = :sys.get_state(LemonChannels.Registry).health
     :persistent_term.put({BlockingAPI, :owner}, self())
     Application.put_env(:lemon_core, :config_test_mode, true)
-    Application.put_env(:lemon_gateway, @config_key, %{discord: %{api_mod: BlockingAPI}})
+    Application.put_env(:lemon_core, @config_key, %{discord: %{api_mod: BlockingAPI}})
 
     on_exit(fn ->
       :persistent_term.erase({BlockingAPI, :owner})
-      restore(:lemon_gateway, @config_key, old_config)
+      restore(:lemon_core, @config_key, old_config)
       restore(:lemon_core, :config_test_mode, old_mode)
 
       :sys.replace_state(LemonChannels.Registry, fn state ->

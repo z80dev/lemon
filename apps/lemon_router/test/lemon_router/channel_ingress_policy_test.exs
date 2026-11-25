@@ -11,7 +11,7 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
   alias LemonCore.RouterBridge
   alias LemonRouter.SubmissionBuilder
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   defmodule CapturingOrchestrator do
     @behaviour LemonCore.RouterBridge.RunOrchestrator
@@ -25,7 +25,7 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
 
   setup do
     previous_bridge = Application.get_env(:lemon_core, :router_bridge)
-    previous_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous_gateway = Application.get_env(:lemon_core, @gateway_config_key)
     previous_agent_dir = System.get_env("LEMON_AGENT_DIR")
 
     agent_dir =
@@ -34,12 +34,12 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
     :ok = RouterBridge.configure([run_orchestrator: CapturingOrchestrator], mode: :merge)
     Application.put_env(:lemon_router, :channel_ingress_test_pid, self())
     # No configured gateway.default_cwd: channel runs must fall back to the assistant home.
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{default_cwd: nil})
+    Application.put_env(:lemon_core, @gateway_config_key, %{default_cwd: nil})
     System.put_env("LEMON_AGENT_DIR", agent_dir)
 
     on_exit(fn ->
       restore_app_env(:lemon_core, :router_bridge, previous_bridge)
-      restore_app_env(:lemon_gateway, @gateway_config_key, previous_gateway)
+      restore_app_env(:lemon_core, @gateway_config_key, previous_gateway)
       Application.delete_env(:lemon_router, :channel_ingress_test_pid)
 
       if previous_agent_dir,

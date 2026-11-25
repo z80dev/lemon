@@ -46,7 +46,7 @@ defmodule CodingAgent.Config do
   Returns the path to `~/.lemon/agent` where global agent configuration is stored.
   This can be overridden with:
   - `LEMON_AGENT_DIR` environment variable
-  - `config :coding_agent, :agent_dir, "/path"`
+  - `config :lemon_core, :agent_dir, "/path"` (`LemonCore.Paths.agent_dir_override/0`)
 
   ## Examples
 
@@ -55,9 +55,7 @@ defmodule CodingAgent.Config do
   """
   @spec agent_dir() :: String.t()
   def agent_dir do
-    System.get_env("LEMON_AGENT_DIR") ||
-      Application.get_env(:coding_agent, :agent_dir) ||
-      Path.join(System.user_home!(), ".lemon/agent")
+    LemonCore.Paths.agent_dir_override() || Path.join(System.user_home!(), ".lemon/agent")
   end
 
   @doc """

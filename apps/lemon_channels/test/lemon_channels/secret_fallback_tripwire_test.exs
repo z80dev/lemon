@@ -10,7 +10,7 @@ defmodule LemonChannels.SecretFallbackTripwireTest do
   alias LemonCore.Doctor.LiveChecks
   alias LemonCore.{Secrets, Store}
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
   @tripwire "tripwire-credential-must-not-be-used"
 
   setup do
@@ -22,7 +22,7 @@ defmodule LemonChannels.SecretFallbackTripwireTest do
     name = "T07C_SECRET_#{System.unique_integer([:positive])}"
     env_keys = ["LEMON_SECRETS_MASTER_KEY", "DISCORD_BOT_TOKEN", "XMTP_T07C_KEY", name]
     original_env = Map.new(env_keys, &{&1, System.get_env(&1)})
-    old_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway = Application.get_env(:lemon_core, @gateway_config_key)
     old_token = Application.get_env(:nostrum, :token)
 
     System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
@@ -39,7 +39,7 @@ defmodule LemonChannels.SecretFallbackTripwireTest do
         {key, value} -> System.put_env(key, value)
       end)
 
-      restore(:lemon_gateway, @gateway_config_key, old_gateway)
+      restore(:lemon_core, @gateway_config_key, old_gateway)
       restore(:nostrum, :token, old_token)
     end)
 
@@ -83,7 +83,7 @@ defmodule LemonChannels.SecretFallbackTripwireTest do
 
   test "XMTP config drops alternate wallet keys when the wallet secret is unreadable",
        %{name: name} do
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       enable_xmtp: true,
       xmtp: %{
         wallet_key_secret: name,

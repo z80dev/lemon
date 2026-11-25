@@ -24,8 +24,6 @@
 #     and nothing depends on them; every registration they perform happens in
 #     their `start/2`, so a runtime that does not name them silently never
 #     starts them. An unconfigured satellite registers nothing.
-#   * :lemon_mcp is a library: it is loaded so LemonSkills.McpSource can
-#     discover the client modules, and callers supervise every MCP process.
 #   * :lemon_automation and :lemon_skills are runtime dependencies of
 #     lemon_control_plane and coding_agent, so every runtime starts them; they
 #     are named so this list is the complete set the runtime starts.
@@ -41,7 +39,6 @@ headless = [
   lemon_lsp: :permanent,
   lemon_omp: :permanent,
   lemon_computer_use: :permanent,
-  lemon_mcp: :load,
   lemon_skills: :permanent,
   coding_agent: :permanent,
   lemon_gateway: :permanent,

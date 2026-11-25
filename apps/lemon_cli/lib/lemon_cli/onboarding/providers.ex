@@ -3,6 +3,7 @@ defmodule LemonCli.Onboarding.Providers do
 
   alias LemonCli.Onboarding.Provider
   alias LemonAgent.ModelRuntime.ProviderNames
+  alias LemonAi.Auth
 
   # Input conveniences for onboarding only, not runtime provider identities.
   # Always persist the canonical id returned by find/1, never these spellings:
@@ -41,7 +42,7 @@ defmodule LemonCli.Onboarding.Providers do
       },
       api_key_secret_provider: "onboarding_anthropic",
       oauth_secret_provider: "onboarding_anthropic_oauth",
-      oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :AnthropicOAuth]),
+      oauth_module: Auth.AnthropicOAuth,
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
       preferred_models: [
@@ -80,7 +81,7 @@ defmodule LemonCli.Onboarding.Providers do
       default_secret_name: "llm_openai_codex_api_key",
       api_key_secret_provider: "onboarding_openai_codex",
       oauth_secret_provider: "onboarding_openai_codex_oauth",
-      oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :OpenAICodexOAuth]),
+      oauth_module: Auth.OpenAICodexOAuth,
       # New modes go last so existing menu numbers keep their meaning.
       auth_modes: [:oauth, :api_key, :codex_cli, :device],
       default_auth_mode: :oauth,
@@ -112,7 +113,7 @@ defmodule LemonCli.Onboarding.Providers do
       default_secret_name: "llm_github_copilot_api_key",
       api_key_secret_provider: "onboarding_copilot",
       oauth_secret_provider: "onboarding_copilot_oauth",
-      oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :GitHubCopilotOAuth]),
+      oauth_module: Auth.GitHubCopilotOAuth,
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
       preferred_models: ["gpt-6.1-sol", "claude-sonnet-5.5", "gpt-5"],
@@ -131,7 +132,7 @@ defmodule LemonCli.Onboarding.Providers do
       default_secret_name: "llm_google_antigravity_api_key",
       api_key_secret_provider: "onboarding_google_antigravity",
       oauth_secret_provider: "onboarding_google_antigravity_oauth",
-      oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :GoogleAntigravityOAuth]),
+      oauth_module: Auth.GoogleAntigravityOAuth,
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
       preferred_models: ["gemini-4-argon-high", "gemini-pro-agent", "gemini-3-pro-high"],
@@ -149,7 +150,7 @@ defmodule LemonCli.Onboarding.Providers do
       default_secret_name: "llm_zai_api_key",
       api_key_secret_provider: "onboarding_zai",
       oauth_secret_provider: "onboarding_zai_oauth",
-      oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :ZaiOAuth]),
+      oauth_module: Auth.ZaiOAuth,
       oauth_result: :api_key,
       auth_modes: [:api_key, :oauth],
       default_auth_mode: :api_key,
@@ -226,7 +227,7 @@ defmodule LemonCli.Onboarding.Providers do
       default_secret_name: "llm_google_gemini_cli_api_key",
       api_key_secret_provider: "onboarding_google_gemini_cli",
       oauth_secret_provider: "onboarding_google_gemini_cli_oauth",
-      oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :GoogleGeminiCliOAuth]),
+      oauth_module: Auth.GoogleGeminiCliOAuth,
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
       preferred_models: [
@@ -253,7 +254,7 @@ defmodule LemonCli.Onboarding.Providers do
       default_secret_name: "llm_openrouter_api_key",
       api_key_secret_provider: "onboarding_openrouter",
       oauth_secret_provider: "onboarding_openrouter_oauth",
-      oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :OpenRouterOAuth]),
+      oauth_module: Auth.OpenRouterOAuth,
       oauth_result: :api_key,
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
@@ -273,7 +274,7 @@ defmodule LemonCli.Onboarding.Providers do
       default_secret_name: "llm_xai_api_key",
       api_key_secret_provider: "onboarding_xai",
       oauth_secret_provider: "onboarding_xai_oauth",
-      oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :XAIOAuth]),
+      oauth_module: Auth.XAIOAuth,
       auth_modes: [:api_key, :oauth],
       default_auth_mode: :api_key,
       preferred_models: ["grok-4.7", "grok-4.6", "grok-code-fast-1"],
@@ -292,7 +293,7 @@ defmodule LemonCli.Onboarding.Providers do
       default_secret_name: "llm_kimi_coding_api_key",
       api_key_secret_provider: "onboarding_kimi_coding",
       oauth_secret_provider: "onboarding_kimi_coding_oauth",
-      oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :KimiCodeOAuth]),
+      oauth_module: Auth.KimiCodeOAuth,
       auth_modes: [:oauth, :api_key, :omp],
       default_auth_mode: :oauth,
       preferred_models: ["k3", "kimi-for-coding", "kimi-k2.5-coding"],

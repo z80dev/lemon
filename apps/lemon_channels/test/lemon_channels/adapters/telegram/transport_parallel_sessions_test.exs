@@ -465,12 +465,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         thread_id: Integer.to_string(topic_id)
       })
 
-    config_key = :"Elixir.LemonGateway.Config"
-    previous_config = Application.get_env(:lemon_gateway, config_key)
+    config_key = :gateway_test_config
+    previous_config = Application.get_env(:lemon_core, config_key)
     previous_test_mode = Application.get_env(:lemon_core, :config_test_mode)
     Application.put_env(:lemon_core, :config_test_mode, true)
 
-    Application.put_env(:lemon_gateway, config_key, %{
+    Application.put_env(:lemon_core, config_key, %{
       telegram: %{
         bot_token: "fake-approval-token",
         api_mod: ParallelMockAPI,
@@ -489,8 +489,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
     on_exit(fn ->
       if is_nil(previous_config),
-        do: Application.delete_env(:lemon_gateway, config_key),
-        else: Application.put_env(:lemon_gateway, config_key, previous_config)
+        do: Application.delete_env(:lemon_core, config_key),
+        else: Application.put_env(:lemon_core, config_key, previous_config)
 
       if is_nil(previous_test_mode),
         do: Application.delete_env(:lemon_core, :config_test_mode),

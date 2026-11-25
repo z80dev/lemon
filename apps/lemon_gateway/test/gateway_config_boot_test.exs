@@ -8,10 +8,10 @@ defmodule LemonGateway.GatewayConfigBootTest do
 
   alias LemonGateway.Slots
 
-  @replacement_key :"Elixir.LemonGateway.Config"
+  @replacement_key :gateway_test_config
 
   setup do
-    previous_replacement = Application.get_env(:lemon_gateway, @replacement_key)
+    previous_replacement = Application.get_env(:lemon_core, @replacement_key)
     previous_home = System.get_env("HOME")
 
     home =
@@ -19,11 +19,11 @@ defmodule LemonGateway.GatewayConfigBootTest do
 
     File.mkdir_p!(Path.join(home, ".lemon"))
     System.put_env("HOME", home)
-    Application.delete_env(:lemon_gateway, @replacement_key)
+    Application.delete_env(:lemon_core, @replacement_key)
     LemonCore.ConfigCache.clear()
 
     on_exit(fn ->
-      Application.put_env(:lemon_gateway, @replacement_key, previous_replacement)
+      Application.put_env(:lemon_core, @replacement_key, previous_replacement)
       if previous_home, do: System.put_env("HOME", previous_home), else: System.delete_env("HOME")
       LemonCore.ConfigCache.clear()
       File.rm_rf!(home)

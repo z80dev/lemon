@@ -40,15 +40,13 @@ defmodule LemonCore.Cwd do
   @doc """
   The assistant home directory: `<agent_dir>/workspace`.
 
-  `agent_dir` follows the agent's own resolution order: `LEMON_AGENT_DIR`,
-  then `config :coding_agent, :agent_dir`, then `~/.lemon/agent`.
+  `agent_dir` follows the agent's own resolution order:
+  `LemonCore.Paths.agent_dir_override/0`, then `~/.lemon/agent`.
   """
   @spec assistant_home() :: String.t()
   def assistant_home do
     agent_dir =
-      non_blank(System.get_env("LEMON_AGENT_DIR")) ||
-        non_blank(Application.get_env(:coding_agent, :agent_dir)) ||
-        LemonCore.Paths.home_path("agent")
+      non_blank(LemonCore.Paths.agent_dir_override()) || LemonCore.Paths.home_path("agent")
 
     agent_dir
     |> Path.join("workspace")
