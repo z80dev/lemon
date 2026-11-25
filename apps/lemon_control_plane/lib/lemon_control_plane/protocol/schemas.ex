@@ -40,6 +40,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
 
     # Channel methods
     "commands.catalog" => %{optional: %{}},
+    "commands.list" => %{required: %{"cwd" => :string}},
     "channels.pairing" => %{
       required: %{"action" => :string},
       optional: %{"platform" => :string, "pairing_code" => :string}
@@ -1125,19 +1126,6 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "node.invoke.active" => %{
       required: %{
         "invokeIds" => :list
-      }
-    },
-
-    # Config methods
-    "config.get" => %{
-      optional: %{
-        "key" => :string
-      }
-    },
-    "config.set" => %{
-      required: %{
-        "key" => :string,
-        "value" => :any
       }
     },
 

@@ -94,12 +94,15 @@ Named-node steering/redirect currently carries text without the incoming
 submission's origin. Such text stays literal; Lemon never reads the
 controller's command files to expand a prompt destined for another machine.
 
-The TUI discovers the same roots locally so `/name` autocompletes, appears in
-the palette and `/help`, and is sent verbatim; new command files are picked up
-the next time an unknown name is typed or the palette opens. Namespaced names
-such as `/git:commit` are sent as prompt text and expanded by the daemon. When
-the TUI is attached to a daemon with a different working directory, the
-daemon's files decide what expands.
+The TUI does not scan these roots itself. It asks the daemon through the
+read-scoped `commands.list` control-plane method (with the TUI's working
+directory as `cwd`), which returns exactly the commands the daemon would
+expand — including those under a custom agent directory — so `/name`
+autocompletes, appears in the palette and `/help`, and is sent verbatim. The
+list is read fresh the next time an unknown name is typed or the palette opens,
+so added and deleted command files show up without restarting the TUI.
+Namespaced names such as `/git:commit` are sent as prompt text and expanded by
+the daemon.
 File commands use the normal submission mode, including the one-shot Alt+Enter
 override; submitting one consumes that override just like ordinary prompt text.
 

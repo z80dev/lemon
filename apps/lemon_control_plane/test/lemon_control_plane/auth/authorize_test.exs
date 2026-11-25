@@ -287,8 +287,8 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
     test "returns generic insufficient-permissions forbidden error" do
       ctx = %{role: :operator, scopes: [:read]}
 
-      assert {:error, {:forbidden, "Insufficient permissions for config.get"}} =
-               Authorize.authorize(ctx, "config.get", [:admin])
+      assert {:error, {:forbidden, "Insufficient permissions for cron.add"}} =
+               Authorize.authorize(ctx, "cron.add", [:admin])
     end
   end
 

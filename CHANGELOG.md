@@ -10,6 +10,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Read-scoped control-plane method `commands.list(cwd)` returns the file slash
+  commands the daemon would expand for a directory, advertised in `hello-ok`.
+  The TUI palette, `/help` and autocomplete now use it and `skills.list`
+  instead of scanning command, prompt and skill directories locally, so they
+  follow the daemon's configured agent directory and drop a deleted command
+  file on the next refresh. The palette no longer lists local prompt templates
+  (#718).
 - Gateway-native webhook, Twilio SMS and voice can now start from global
   `[gateway.ingress]` TOML and per-surface settings, with
   `LEMON_GATEWAY_INGRESS_ENABLED` as the startup override. The generic webhook
@@ -894,6 +901,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   built-in > extension > MCP. OSV no longer scans the deleted `native/` Cargo
   lockfiles, and their three accepted RUSTSEC findings are removed from
   `osv-scanner.toml`.
+- **Breaking:** the `config.get` and `config.set` control-plane methods and
+  their `:system_config` store. Nothing read the stored values (setting
+  `logLevel` changed only what `config.get` reported); configuration lives in
+  `config.toml` (#712).
+
 - **Breaking:** the opt-in session advisor (#600) is retired: `CodingAgent.Advisor`,
   its `AdvisorSupervisor` child and the `advisor:` session option are removed.
   No shipped caller enabled it; `start_session(advisor: ...)` now fails with

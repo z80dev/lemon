@@ -145,13 +145,14 @@ All other `operator.read` methods were audited and return metadata only:
 `usage.status`, `blueprints.*`, `mcp.execution_names`, `models.list`,
 `profiles.sync.status`, `node.capabilities.get`, `node.host.info`,
 `node.profile.paths`, `node.runtime.features`, `setup.status`, `status`,
-`skills.hermes.catalog`, `skills.list` and `commands.catalog`.
+`skills.hermes.catalog`, `skills.list`, `commands.catalog` and `commands.list`.
 
 Two deliberate distinctions:
 
 - Published discovery descriptions stay readable: blueprint names and
   descriptions (bundle-authored catalog text), MCP tool descriptions (published
-  by the server) and skill manifest descriptions are bounded discovery metadata,
+  by the server), skill manifest descriptions and file slash command
+  descriptions and argument hints are bounded discovery metadata,
   not transcripts. The exception covers only those fields; MCP command and
   configuration previews are gated as above.
 - Session identity labels stay readable: user-set session titles
@@ -167,12 +168,14 @@ output is JSON-safe. Scrubbing only removes recognisable credentials; it is not
 what keeps ordinary prose away from read-only callers. Task `cleanup` flags
 report the content actually returned, not the options requested.
 
-`config.get` returns, for read scope, only the public fields `logLevel`, `env`,
-`maxPayload`, `tickIntervalMs`, `heartbeatEnabled`, `heartbeatIntervalMs`,
-`cronEnabled`, `skillsPath`, `routerModel` and `routerThinkingLevel`, and only
-scalar values. Any other key (stored through `config.set`) needs
-`operator.admin` and is returned through `LemonCore.Redact.operator/2`; a
-read-scope request for it returns `value: null` with `summary.adminRequired`.
+`commands.list` takes a required absolute `cwd` and returns the file slash
+commands the agent runtime would expand there (its `slash_commands/1`
+projection: `name`, `description`, `argumentHint`), read from disk on every
+call, at most 1,000 entries with `truncated`. Names are verbatim; descriptions
+and hints are single-line and bounded; command paths, sources and templates
+are never returned. Clients list file commands through it instead of scanning
+command roots themselves. Lemon has no control-plane configuration store:
+configuration lives in `config.toml`.
 
 WebSocket events are authorized per recipient (see `LemonControlPlane.EventBridge`):
 approval events need `operator.approvals`, pairing events `operator.pairing`,
@@ -237,7 +240,7 @@ A missing runtime is `UNAVAILABLE`, never an empty roster.
 
 A read whose store or runtime cannot answer returns `UNAVAILABLE`; it never
 reports empty, idle, disabled or not-found state it did not read. This covers
-`exec.approvals.get`, `config.get`, `logs.tail`, `sessions.preview`,
+`exec.approvals.get`, `commands.list`, `logs.tail`, `sessions.preview`,
 `chat.history`, `session.detail`, `cron.runs`, `tasks.active.list` and
 `tasks.recent.list`, ACP `session/list` and session lookup, and A2A task reads
 (JSON-RPC `-32603`). An execution node whose durable registry entry cannot be

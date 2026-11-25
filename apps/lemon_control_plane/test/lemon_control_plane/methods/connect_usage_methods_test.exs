@@ -1,134 +1,13 @@
-defmodule LemonControlPlane.Methods.ConfigUsageMethodsTest do
+defmodule LemonControlPlane.Methods.ConnectUsageMethodsTest do
   use ExUnit.Case, async: true
 
   alias LemonControlPlane.Methods.{
-    ConfigGet,
-    ConfigSet,
     ConnectChallenge,
     UsageStatus,
     UsageCost
   }
 
-  alias LemonControlPlane.ConfigStore
-  alias LemonCore.Store
-
   @ctx %{conn_id: "test-conn", auth: %{role: :operator}}
-  @admin_ctx %{conn_id: "test-conn", auth: %{role: :operator, scopes: [:read, :admin]}}
-
-  describe "ConfigGet" do
-    test "returns config for specific key" do
-      {:ok, result} = ConfigGet.handle(%{"key" => "logLevel"}, @ctx)
-
-      assert result["key"] == "logLevel"
-      assert result["summary"]["requestedKey"] == "logLevel"
-      assert result["summary"]["keyCount"] == 1
-      assert result["summary"]["sensitive"] == false
-      assert result["summary"]["cleanup"]["includesSensitiveValues"] == false
-      assert result["summary"]["cleanup"]["includesCredentialValues"] == false
-      assert result["summary"]["cleanup"]["includesSecretValues"] == false
-    end
-
-    test "returns all config when no key specified" do
-      {:ok, result} = ConfigGet.handle(%{}, @ctx)
-
-      assert is_map(result)
-      assert result["summary"]["keyCount"] == map_size(Map.delete(result, "summary"))
-      assert is_integer(result["summary"]["sensitiveKeyCount"])
-      assert result["summary"]["cleanup"]["includesSensitiveValues"] == false
-      assert result["summary"]["cleanup"]["includesCredentialValues"] == false
-      assert result["summary"]["cleanup"]["includesSecretValues"] == false
-    end
-
-    test "redacts sensitive stored config values" do
-      key = "openai_api_key"
-      {:ok, previous} = ConfigStore.fetch(key)
-
-      on_exit(fn ->
-        case previous do
-          nil -> Store.delete(:system_config, key)
-          value -> ConfigStore.put(key, value)
-        end
-      end)
-
-      :ok = ConfigStore.put(key, "sk-private-test-value")
-
-      {:ok, single} = ConfigGet.handle(%{"key" => key}, @admin_ctx)
-      {:ok, all_config} = ConfigGet.handle(%{}, @admin_ctx)
-
-      assert single["value"] == "[REDACTED]"
-      assert all_config[key] == "[REDACTED]"
-      refute inspect(single) =~ "sk-private-test-value"
-      refute inspect(all_config) =~ "sk-private-test-value"
-
-      # Read scope sees only public fields, so the key is absent altogether.
-      {:ok, read_single} = ConfigGet.handle(%{"key" => key}, @ctx)
-      {:ok, read_all} = ConfigGet.handle(%{}, @ctx)
-      assert read_single["value"] == nil
-      assert read_single["summary"]["adminRequired"] == true
-      refute Map.has_key?(read_all, key)
-      assert single["summary"]["sensitive"] == true
-      assert single["summary"]["valueReturned"] == false
-      assert all_config["summary"]["sensitiveKeyCount"] >= 1
-      refute inspect(single["summary"]) =~ "sk-private-test-value"
-      refute inspect(all_config["summary"]) =~ "sk-private-test-value"
-    end
-
-    test "has correct method name and scopes" do
-      assert ConfigGet.name() == "config.get"
-      assert ConfigGet.scopes() == [:read]
-    end
-  end
-
-  describe "ConfigSet" do
-    test "requires key and value" do
-      {:error, error1} = ConfigSet.handle(%{}, @ctx)
-      assert error1 == {:invalid_request, "key is required"}
-
-      {:error, error2} = ConfigSet.handle(%{"key" => "test"}, @ctx)
-      assert error2 == {:invalid_request, "value is required"}
-    end
-
-    test "sets config value" do
-      {:ok, result} = ConfigSet.handle(%{"key" => "testKey", "value" => "testValue"}, @ctx)
-
-      assert result["key"] == "testKey"
-      assert result["value"] == "testValue"
-      assert result["success"] == true
-      assert result["summary"]["key"] == "testKey"
-      assert result["summary"]["valueStored"] == true
-      assert result["summary"]["sensitive"] == false
-      assert result["summary"]["cleanup"]["includesValue"] == true
-      assert result["summary"]["cleanup"]["includesCredentialValues"] == false
-      assert result["summary"]["cleanup"]["includesSecretValues"] == false
-    end
-
-    test "redacts sensitive config value in response" do
-      key = "provider_secret_token"
-      {:ok, previous} = ConfigStore.fetch(key)
-
-      on_exit(fn ->
-        case previous do
-          nil -> Store.delete(:system_config, key)
-          value -> ConfigStore.put(key, value)
-        end
-      end)
-
-      {:ok, result} = ConfigSet.handle(%{"key" => key, "value" => "private-token"}, @ctx)
-
-      assert result["key"] == key
-      assert result["value"] == %{"redacted" => true, "kind" => "secret"}
-      assert result["summary"]["sensitive"] == true
-      assert result["summary"]["cleanup"]["includesValue"] == false
-      assert result["summary"]["cleanup"]["includesCredentialValues"] == false
-      assert result["summary"]["cleanup"]["includesSecretValues"] == false
-      assert ConfigStore.fetch(key) == {:ok, "private-token"}
-    end
-
-    test "has correct method name and scopes" do
-      assert ConfigSet.name() == "config.set"
-      assert ConfigSet.scopes() == [:admin]
-    end
-  end
 
   describe "ConnectChallenge" do
     test "requires challenge" do
