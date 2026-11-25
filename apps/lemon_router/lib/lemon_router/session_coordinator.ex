@@ -448,7 +448,9 @@ defmodule LemonRouter.SessionCoordinator do
              table,
              run_id,
              row,
-             %{row | handoff: {epoch, attempt, sender, self()}}, durable: true) do
+             %{row | handoff: {epoch, attempt, sender, self()}},
+             durable: true
+           ) do
       :ok
     else
       {:aborted, reason} -> {:error, {:run_aborted, reason}}
