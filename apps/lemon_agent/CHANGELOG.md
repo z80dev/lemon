@@ -161,6 +161,15 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   agent or continue a completed, failed or cancelled run automatically; normal
   in-loop follow-ups retain the ordinary single terminal lifecycle.
 
+### Removed
+
+- **Breaking:** `LemonAgent.Proxy` (and `ProxyStreamOptions`) and
+  `LemonAgent.Context` are deleted; neither had a runtime consumer. The `req`
+  dependency is dropped. The loop no longer calls `Context.check_size/2` (a
+  full-history JSON encode per request) and the
+  `[:lemon_agent, :context, :size | :warning | :truncated]` events are gone.
+  Bound context with your own `transform_context` (#708).
+
 ## [0.2.0] - 2026-10-13
 
 First release as a standalone package. `lemon_agent` is the `:lemon_agent`

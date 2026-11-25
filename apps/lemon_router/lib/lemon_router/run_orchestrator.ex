@@ -226,11 +226,14 @@ defmodule LemonRouter.RunOrchestrator do
 
   A run ID fenced by an abort tombstone before it crossed dispatch reports
   `state: :aborted`: it never executed and can never execute.
+  `:rejected` is a point-in-time definite rejection; a deliberate same-ID
+  submission may reopen it. `:terminal` is completion evidence without an
+  accepted receipt; execution may already have had effects.
   """
   def run_receipt(run_id) when is_binary(run_id) and run_id != "" do
     case LemonRouter.RunReceiptStore.fetch(run_id) do
       {:ok, %{} = receipt} ->
-        {:ok, receipt}
+        {:ok, project_terminal_receipt(receipt)}
 
       {:ok, nil} ->
         # Read the permanent tombstone before the admission; see aborted_before_dispatch?/2.
@@ -238,10 +241,13 @@ defmodule LemonRouter.RunOrchestrator do
              {:ok, admission} <- Store.fetch(@run_admission_table, run_id) do
           cond do
             aborted_before_dispatch?(admission, tombstone) ->
-              {:ok, unresolved_receipt(run_id, admission_session_key(admission), :aborted)}
+              confirmed_receipt(run_id, admission, :aborted)
+
+            match?(%{state: "rejected"}, admission) ->
+              confirmed_receipt(run_id, admission, :rejected)
 
             is_map(admission) ->
-              {:ok, unresolved_receipt(run_id, nil, :outcome_unknown)}
+              read_unresolved_admission(run_id, admission, tombstone)
 
             true ->
               {:error, :not_found}
@@ -255,6 +261,113 @@ defmodule LemonRouter.RunOrchestrator do
     end
   catch
     :exit, _ -> {:error, :unavailable}
+  end
+
+  defp confirmed_receipt(run_id, admission, state) do
+    case Store.confirm_durable() do
+      :ok -> {:ok, unresolved_receipt(run_id, admission_session_key(admission), state)}
+      _ -> {:error, :unavailable}
+    end
+  end
+
+  defp project_terminal_receipt(%{state: :outcome_unknown, terminal: true} = receipt),
+    do: %{receipt | state: :terminal}
+
+  defp project_terminal_receipt(receipt), do: receipt
+
+  defp read_unresolved_admission(run_id, %{terminal: true} = admission, _tombstone),
+    do: confirmed_receipt(run_id, admission, :terminal)
+
+  defp read_unresolved_admission(run_id, admission, tombstone) do
+    session_key = admission_session_key(admission)
+
+    case RunStore.fetch(run_id) do
+      {:ok, %{summary: %{}}} ->
+        {:ok, unresolved_receipt(run_id, session_key, :terminal)}
+
+      {:ok, run} ->
+        reconcile_handoff(run_id, admission, tombstone, run)
+
+      {:error, _} ->
+        {:error, :unavailable}
+    end
+  end
+
+  # Reconcile only attempts with local ownership evidence from this router
+  # incarnation. Legacy and previous-boot rows remain the boot replayer's job.
+  # The receiver must claim the exact handoff via CAS before any queue effect.
+  defp reconcile_handoff(
+         run_id,
+         %{state: "submitting", handoff: {_, _, sender, recipient}} = admission,
+         tombstone,
+         run
+       ) do
+    unknown =
+      {:ok, unresolved_receipt(run_id, admission_session_key(admission), :outcome_unknown)}
+
+    cond do
+      not current_handoff?(admission) ->
+        unknown
+
+      is_nil(recipient) and is_nil(run) and inactive_sender?(sender) ->
+        reject_unclaimed_handoff(run_id, admission, tombstone, unknown)
+
+      is_pid(recipient) and not Process.alive?(recipient) and inactive_sender?(sender) and
+          Registry.lookup(LemonRouter.RunRegistry, run_id) == [] ->
+        settle_lost_recipient(run_id, admission)
+
+      true ->
+        unknown
+    end
+  end
+
+  defp reconcile_handoff(run_id, _admission, _tombstone, _run),
+    do: {:ok, unresolved_receipt(run_id, nil, :outcome_unknown)}
+
+  defp current_handoff?(%{handoff: {epoch, _, _, _}}),
+    do: Registry.meta(LemonRouter.ConversationRegistry, :admission_epoch) == {:ok, epoch}
+
+  defp current_handoff?(_admission), do: false
+
+  defp inactive_sender?(sender), do: sender == self() or not Process.alive?(sender)
+
+  defp reject_unclaimed_handoff(run_id, admission, tombstone, unknown) do
+    rejected = rejected_admission(Map.delete(admission, :handoff), :not_started)
+
+    case Store.compare_and_swap(Store, @run_admission_table, run_id, admission, rejected,
+           durable: true
+         ) do
+      :ok ->
+        state = if is_map(tombstone), do: :aborted, else: :rejected
+        {:ok, unresolved_receipt(run_id, admission_session_key(admission), state)}
+
+      {:error, :mismatch} ->
+        unknown
+
+      _error ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp settle_lost_recipient(run_id, admission) do
+    # The recipient might have committed a receipt before exiting, after the
+    # initial read. A live run or accepted receipt must not be abandoned here.
+    case LemonRouter.RunReceiptStore.fetch(run_id) do
+      {:ok, %{} = receipt} ->
+        {:ok, project_terminal_receipt(receipt)}
+
+      {:ok, nil} ->
+        case abandon_crashed_admission(run_id, admission, :recipient_lost, %{}) do
+          {{:ok, _}, _} ->
+            {:ok, unresolved_receipt(run_id, admission_session_key(admission), :terminal)}
+
+          _ ->
+            {:error, :unavailable}
+        end
+
+      {:error, _} ->
+        {:error, :unavailable}
+    end
   end
 
   @doc """
@@ -796,9 +909,18 @@ defmodule LemonRouter.RunOrchestrator do
         coordinator = session_coordinator_mod()
 
         submitted =
-          if mode == :recovery,
-            do: coordinator.submit_recovered(submission.conversation_key, submission),
-            else: coordinator.submit(submission.conversation_key, submission)
+          case mode do
+            :recovery ->
+              coordinator.submit_recovered(submission.conversation_key, submission)
+
+            {:handoff, attempt} ->
+              coordinator.submit(submission.conversation_key, submission,
+                admission_attempt: attempt
+              )
+
+            :new ->
+              coordinator.submit(submission.conversation_key, submission)
+          end
 
         case submitted do
           :ok ->
@@ -901,7 +1023,7 @@ defmodule LemonRouter.RunOrchestrator do
             _ -> {{:error, :outcome_unknown}, state}
           end
 
-        recovery_live?(run_id, state) ->
+        current_handoff?(current) or recovery_live?(run_id, state) ->
           {{:ok, :skipped}, state}
 
         is_map(tombstone) ->
@@ -913,7 +1035,8 @@ defmodule LemonRouter.RunOrchestrator do
         is_map(receipt) and receipt[:target_run_id] not in [nil, run_id] ->
           abandon_crashed_admission(run_id, current, :joined_run, state)
 
-        MapHelpers.get_key(current, :state) == "claimed" ->
+        MapHelpers.get_key(current, :state) == "claimed" or
+            match?(%{handoff: {_, _, _, nil}}, current) ->
           abandon_crashed_admission(run_id, current, :not_started, state)
 
         not state.admission_settings.crash_resume ->
@@ -1422,6 +1545,21 @@ defmodule LemonRouter.RunOrchestrator do
     # fence, including when dispatch's outcome cannot be established.
     submitting = compact_admission("submitting", identity, reopen_rejected(admission))
 
+    {submitting, mode} =
+      if session_coordinator_mod() == SessionCoordinator do
+        {:ok, epoch} = Registry.meta(LemonRouter.ConversationRegistry, :admission_epoch)
+        attempt = :crypto.strong_rand_bytes(16)
+
+        submitting =
+          submitting
+          |> Map.merge(Map.take(admission, [:claimed_at_ms, :expires_at_ms, :retention_ms]))
+          |> Map.put(:handoff, {epoch, attempt, self(), nil})
+
+        {submitting, {:handoff, attempt}}
+      else
+        {submitting, :new}
+      end
+
     case Store.compare_and_swap(
            Store,
            @run_admission_table,
@@ -1431,7 +1569,7 @@ defmodule LemonRouter.RunOrchestrator do
            durable: true
          ) do
       :ok ->
-        case do_submit(attach_request_identity(params, identity), state) do
+        case do_submit(attach_request_identity(params, identity), state, mode) do
           {:ok, run_id} ->
             case persist_accepted_admission(
                    run_id,
@@ -1447,6 +1585,9 @@ defmodule LemonRouter.RunOrchestrator do
             end
 
           {:error, :outcome_unknown} ->
+            # The coordinator may still have this timed-out call in its mailbox.
+            # CAS either fences that specific attempt or loses to its recipient.
+            if match?({:handoff, _}, mode), do: run_receipt(params.run_id)
             {{:error, :outcome_unknown}, state}
 
           {:error, reason} = error ->
@@ -1455,14 +1596,7 @@ defmodule LemonRouter.RunOrchestrator do
             # Otherwise, only an unchanged pre-enqueue claim records the definite
             # rejection: terminal, never executed, so it proves nothing is running
             # while still allowing the same request to be resubmitted.
-            case Store.compare_and_swap(
-                   Store,
-                   @run_admission_table,
-                   params.run_id,
-                   submitting,
-                   rejected_admission(admission, reason),
-                   durable: true
-                 ) do
+            case persist_rejected_admission(params.run_id, submitting, admission, reason) do
               :ok ->
                 if state.admission_settings.crash_resume,
                   do: CrashRecovery.settle(Store, params.run_id)
@@ -1489,6 +1623,34 @@ defmodule LemonRouter.RunOrchestrator do
   catch
     :exit, _ -> {{:error, :outcome_unknown}, state}
   end
+
+  defp persist_rejected_admission(run_id, submitting, admission, reason) do
+    with {:ok, current} <- Store.fetch(@run_admission_table, run_id),
+         true <- unchanged_handoff?(submitting, current) do
+      Store.compare_and_swap(
+        Store,
+        @run_admission_table,
+        run_id,
+        current,
+        rejected_admission(admission, reason),
+        durable: true
+      )
+    else
+      false -> {:error, :mismatch}
+      error -> error
+    end
+  end
+
+  defp unchanged_handoff?(expected, current) when expected == current, do: true
+
+  defp unchanged_handoff?(
+         %{handoff: {epoch, attempt, sender, nil}} = expected,
+         %{handoff: {epoch, attempt, sender, recipient}} = current
+       )
+       when is_pid(recipient),
+       do: %{current | handoff: expected.handoff} == expected
+
+  defp unchanged_handoff?(_expected, _current), do: false
 
   defp accept_terminal_replay(run_id, identity, admission, state) do
     case persist_accepted_admission(
@@ -1637,19 +1799,29 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp compact_admission(state, identity, entry) when state in ["submitting", "accepted"] do
-    %{state: state, identity: identity}
-    |> Map.merge(
-      Map.take(entry, [
-        :scope,
-        :terminal,
-        :native_source,
-        :native_followup,
-        :native_root_binding,
-        :restart_attempt,
-        :restart_boot_id,
-        :native_failure
-      ])
-    )
+    compacted =
+      Map.merge(
+        %{state: state, identity: identity},
+        Map.take(entry, [
+          :scope,
+          :terminal,
+          :native_source,
+          :native_followup,
+          :native_root_binding,
+          :restart_attempt,
+          :restart_boot_id,
+          :native_failure
+        ])
+      )
+
+    if state == "submitting" and Map.has_key?(entry, :handoff) do
+      Map.merge(
+        compacted,
+        Map.take(entry, [:handoff, :claimed_at_ms, :expires_at_ms, :retention_ms])
+      )
+    else
+      compacted
+    end
   end
 
   # A definite pre-dispatch rejection (lifecycle fence, unknown agent, invalid

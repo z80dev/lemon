@@ -19,19 +19,47 @@ defmodule LemonCore.ProviderManagement do
   and durably consumes delayed authorization, including after expiry or re-pair.
   Revocation never waits for completion. Unknown outcomes retain their fixed
   completion identity for non-writing settlement, never write retries.
+
+  Reads (`list`, `check`, `device.poll`) report a failed or malformed
+  destination call as `{:error, :unavailable}`. Mutations, including issuing a
+  device challenge, may already have applied after a dispatch failure or an
+  ambiguous acknowledgement, so the result is `{:error, :outcome_unknown}` and is
+  never retried automatically.
   """
   @setting :provider_management_service
   @device_operations ~w(device.start device.poll device.challenge device.cancel device.complete)
   @operations ~w(list api_key.set disconnect default.set check import) ++ @device_operations
+  @queries ~w(list check device.poll)
   @device_statuses ~w(starting pending completed denied expired cancelled lost failed)
   @device_fields Enum.map(
                    ~w(loginId targetId providerId status verificationUrl userCode expiresAtMs pollIntervalMs)a,
                    &{Atom.to_string(&1), &1}
                  )
   @verification_url "https://auth.openai.com/codex/device"
-  @errors ~w(invalid_provider unsupported_method invalid_api_key invalid_model invalid_target invalid_request forbidden provider_binding_rejected config_read_failed invalid_config config_write_failed secret_read_failed secret_write_failed secret_delete_failed shared_credential rollback_failed reload_failed unavailable busy login_not_found login_unusable)a
+  @errors ~w(invalid_provider unsupported_method invalid_api_key invalid_model invalid_target invalid_request forbidden provider_binding_rejected config_read_failed invalid_config config_write_failed secret_read_failed secret_write_failed secret_delete_failed shared_credential reload_failed busy login_not_found login_unusable outcome_unknown)a
 
   def operations, do: @operations
+  @doc false
+  def query?(operation), do: operation in @queries
+
+  @doc false
+  def destination_result(operation, result, params) do
+    projected =
+      cond do
+        operation == "device.challenge" -> device_challenge_result(result, params)
+        operation in @device_operations -> device_result(result, params)
+        is_map(result) -> {:ok, result}
+        true -> {:error, :unavailable}
+      end
+
+    case projected do
+      {:ok, _} -> projected
+      {:error, :unavailable} -> failed_destination(operation)
+    end
+  end
+
+  defp failed_destination(operation) when operation in @queries, do: {:error, :unavailable}
+  defp failed_destination(_operation), do: {:error, :outcome_unknown}
 
   @doc "Registers the destination-local implementation at application startup."
   def register(service) when is_atom(service) and not is_nil(service) do
@@ -48,16 +76,11 @@ defmodule LemonCore.ProviderManagement do
 
   @doc "Checks externally managed credential readiness without returning credentials."
   def credential_ready?(provider, provider_config) do
-    implementation = service()
-
-    is_atom(implementation) and not is_nil(implementation) and
-      Code.ensure_loaded?(implementation) and
-      function_exported?(implementation, :credential_ready?, 2) and
-      apply(implementation, :credential_ready?, [provider, provider_config]) == true
-  rescue
-    _ -> false
-  catch
-    _, _ -> false
+    LemonCore.RuntimeSeam.invoke(service(), :credential_ready?, [provider, provider_config],
+      unavailable: false,
+      log: "ProviderManagement readiness",
+      log_level: :warning
+    ) == true
   end
 
   def target(node_id \\ nil) do
@@ -238,10 +261,6 @@ defmodule LemonCore.ProviderManagement do
          :ok <- exact_target(operation, params, target) do
       call(operation, params, Keyword.put(opts, :target, target))
     end
-  rescue
-    _ -> {:error, :unavailable}
-  catch
-    _, _ -> {:error, :unavailable}
   end
 
   defp exact_target("list", _, _), do: :ok
@@ -351,26 +370,29 @@ defmodule LemonCore.ProviderManagement do
 
     args = List.replace_at(args, -1, forward_opts)
 
-    if is_atom(service) and not is_nil(service) and Code.ensure_loaded?(service) and
-         function_exported?(service, function, length(args)) do
-      case apply(service, function, args) do
-        {:ok, result} when operation == "device.challenge" ->
-          device_challenge_result(result, params)
+    failed = failed_destination(operation)
 
-        {:ok, result} when operation in @device_operations ->
-          device_result(result, params)
+    case LemonCore.RuntimeSeam.invoke(service, function, args,
+           unavailable: :not_dispatched,
+           exception: failed,
+           exit: failed,
+           throw: failed,
+           log: "ProviderManagement #{operation}"
+         ) do
+      :not_dispatched ->
+        {:error, :unavailable}
 
-        {:ok, listing} when is_map(listing) ->
-          {:ok, listing}
+      {:ok, result} ->
+        destination_result(operation, result, params)
 
-        {:error, reason} when reason in @errors ->
-          {:error, reason}
+      {:error, :unavailable} ->
+        failed
 
-        _ ->
-          {:error, :unavailable}
-      end
-    else
-      {:error, :unavailable}
+      {:error, reason} when reason in @errors ->
+        {:error, reason}
+
+      _unrecognized ->
+        failed
     end
   end
 end

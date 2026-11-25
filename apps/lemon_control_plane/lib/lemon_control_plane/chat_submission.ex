@@ -214,7 +214,7 @@ defmodule LemonControlPlane.ChatSubmission do
       "state" => to_string(receipt.state),
       "effectiveMode" => if(receipt.effective_mode, do: to_string(receipt.effective_mode)),
       "targetRunId" => receipt.target_run_id,
-      "retrySafe" => false
+      "retrySafe" => receipt.state == :rejected
     }
   end
 

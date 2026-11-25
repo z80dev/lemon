@@ -16,8 +16,11 @@ defmodule LemonCore.RunStore do
 
   @doc """
   Fetch a run without treating an unavailable store as a missing record.
+
+  `{:error, :evicted}` is a run that was finalized and whose record has since
+  passed its retention: treat it as finished, never as absent.
   """
-  @spec fetch(binary()) :: {:ok, map() | nil} | {:error, :store_unavailable}
+  @spec fetch(binary()) :: {:ok, map() | nil} | {:error, :evicted | :store_unavailable}
   def fetch(run_id), do: Store.fetch_run(run_id)
 
   @doc "Fetch one durable session index without confusing owner failure with absence."
@@ -94,6 +97,10 @@ defmodule LemonCore.RunStore do
   @spec fetch_history(term(), keyword()) :: {:ok, list()} | {:error, term()}
   def fetch_history(session_key, opts \\ []), do: RunHistoryStore.fetch(session_key, opts)
 
+  @doc "Count retained run-history rows for a session, failing closed on owner error."
+  @spec fetch_history_count(term()) :: {:ok, non_neg_integer()} | {:error, atom()}
+  def fetch_history_count(session_key), do: RunHistoryStore.fetch_count(session_key)
+
   @doc "Session index rows for display; `[]` when the Store cannot answer."
   @spec list_sessions(Store.server()) :: [{term(), map()}]
   def list_sessions(server \\ Store) do
@@ -110,6 +117,13 @@ defmodule LemonCore.RunStore do
       {:ok, Enum.map(entries, fn {key, entry} -> {key, public_session_entry(entry)} end)}
     end
   end
+
+  @doc """
+  Every indexed session key, strictly. Served from the session index's read
+  cache (or a key read of the backend) without copying the rows.
+  """
+  @spec fetch_session_keys(Store.server()) :: {:ok, [term()]} | {:error, :store_unavailable}
+  def fetch_session_keys(server \\ Store), do: Store.fetch_keys(server, :sessions_index)
 
   @doc "Create an empty durable session index without manufacturing a completed run."
   @spec create_session_index(String.t(), String.t(), atom()) :: :ok | {:error, term()}

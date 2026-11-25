@@ -120,13 +120,16 @@ runner ever selects or replaces the Gateway executor.
 | Voice | `Voice.*` | Real-time phone calls via Twilio + Deepgram STT + ElevenLabs TTS |
 | SMS | `Sms.*` | Twilio SMS webhooks with verification code tools |
 
-Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link/1`). They are registered in `TransportRegistry` and started under `TransportSupervisor` only when gateway ingress is explicitly enabled with `config :lemon_gateway, gateway_ingress_enabled: true`. Telegram, Discord, XMTP and email are owned by the `lemon_channels` sibling app. Voice and SMS are not registry transports; they are dedicated Twilio support services included in the same explicit ingress startup.
+Set `[gateway.ingress] enabled = true` in global `~/.lemon/config.toml` to
+allow the three gateway-owned listeners to start. Each requires its own
+enable flag below. The generic webhook is registered by default; there is
+no `:transports` app-env setting required. Voice and SMS are dedicated Twilio
+services, not registry transports. Channel adapters are unaffected.
 
 `TransportRegistry` publishes the transport map and enabled-transport list as one
 immutable persistent-term snapshot at startup. All lookups, including enabled
-transport enumeration, are process-call-free. Restart the registry after changing
-transport configuration; restart ingress to apply that configuration to running
-transport children. A stopped registry exposes no stale registrations.
+transport enumeration, are process-call-free. Restart the runtime to apply
+listener changes. A stopped registry exposes no stale registrations.
 
 Webhook, SMS, and voice are gateway-owned by design, not pending migration: `LemonChannels.Plugin.deliver/1` is fire-and-forget, so it cannot serve webhook's synchronous response, SMS has no reply path at all, and voice needs a live bidirectional session. Email was the one surface that genuinely was a channel, and it moved to `lemon_channels` in phase 2.4 — `LemonChannels.Adapters.Email`. See decision D2 in `docs/platform-split.md`.
 
@@ -253,7 +256,7 @@ in-process subagents.
 |--------|------|---------|
 | `LemonGateway.Voice.CallSession` | `voice/call_session.ex` | Per-call state machine owning supervised, deadline-bound LLM/TTS work |
 | `LemonGateway.Voice.TwilioWebSocket` | `voice/twilio_websocket.ex` | WebSocket handler for Twilio Media Streams |
-| `LemonGateway.Voice.DeepgramClient` | `voice/deepgram_client.ex` | WebSocket client for Deepgram STT |
+| `LemonGateway.Voice.DeepgramCall` | `voice/deepgram_call.ex` | Per-call lifecycle and transcript routing for `LemonMedia.Providers.DeepgramStream` |
 | `LemonGateway.Voice.WebhookRouter` | `voice/webhook_router.ex` | Voice webhook HTTP routing |
 | `LemonGateway.Voice.RecordingManager` | `voice/recording_manager.ex` | Starts dual-channel call recording via Twilio REST API |
 | `LemonGateway.Voice.RecordingDownloader` | `voice/recording_downloader.ex` | Downloads and saves Twilio recordings locally |
@@ -333,7 +336,7 @@ Incoming Call -> Twilio -> Voice.WebhookRouter -> CallSession state machine
                                                TwilioWebSocket
                                             (mulaw audio frames)
                                                       |
-                                               DeepgramClient
+                                               DeepgramStream
                                             (raw audio -> text)
                                                       |
                                                LemonGateway.AI
@@ -431,7 +434,7 @@ Configuration is the `[gateway]` section of `~/.lemon/config.toml`, read live th
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `gateway_ingress_enabled` | `false` | Start gateway-owned transports, SMS inbox/webhook server, and voice supervisors. Default gateway startup is execution-only. |
+| `[gateway.ingress] enabled` | `false` | Allow gateway-owned webhook, SMS, and voice listeners to start. `LEMON_GATEWAY_INGRESS_ENABLED` overrides this boolean; restart to apply. |
 
 ### Transport Enable Flags
 
@@ -440,7 +443,12 @@ Configuration is the `[gateway]` section of `~/.lemon/config.toml`, read live th
 | `enable_telegram` | `false` | Enable Telegram adapter (via `lemon_channels`) |
 | `enable_discord` | `false` | Enable Discord adapter (via `lemon_channels`) |
 | `enable_xmtp` | `false` | Enable XMTP transport |
-| `enable_webhook` | `false` | Enable webhook transport |
+| `enable_webhook` | `false` | Enable the built-in webhook listener (`LEMON_GATEWAY_ENABLE_WEBHOOK`) |
+| `[gateway.sms] webhook_enabled` | `false` | Enable the SMS listener and inbox when a Twilio auth token is configured (`LEMON_SMS_WEBHOOK_ENABLED`) |
+| `[gateway.voice] enabled` | `false` | Enable the voice listener; requests need an HTTPS `public_url` and Twilio auth token |
+
+All three gateway listeners bind to loopback by default; use a TLS proxy or
+tunnel for external callbacks. See [Gateway ingress](../../docs/config.md#gateway-ingress).
 
 There is no `enable_email` gate. The `[gateway] email` block itself is still meaningful — the
 channel adapter reads it, so existing relay credentials, sender address and webhook token keep
@@ -473,9 +481,14 @@ project = "myproject"
 agent_id = "coder"
 queue_mode = "steer"
 
+[gateway.ingress]
+enabled = true
+
 [gateway.sms]
-inbox_number = "+1234567890"
-webhook_port = 4045
+webhook_enabled = true
+webhook_port = 4041
+webhook_url = "https://sms.example.com/webhooks/twilio/sms"
+auth_token_secret = "twilio_auth_token"
 
 ```
 
@@ -526,7 +539,7 @@ Custom health checks can be registered via the `:health_checks` application envi
 | `plug` + `bandit` | HTTP servers (health port 4042, SMS webhooks, voice webhooks) |
 | `gen_smtp` + `mail` | SMTP email handling |
 | `earmark_parser` | Markdown-to-Telegram entity rendering |
-| `websockex` + `websock_adapter` | WebSocket clients (Deepgram STT, Twilio Media Streams) |
+| `websock_adapter` | Twilio Media Streams WebSocket ingress |
 
 ## Testing
 

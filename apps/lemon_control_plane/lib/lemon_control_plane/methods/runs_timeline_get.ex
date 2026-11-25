@@ -133,7 +133,7 @@ defmodule LemonControlPlane.Methods.RunsTimelineGet do
   end
 
   defp children(run_id) do
-    case AgentRuntime.call(:list_tasks, [], {:error, :unavailable}) do
+    case AgentRuntime.query(:list_tasks, []) do
       tasks when is_list(tasks) ->
         {:ok,
          for {id, record} <- tasks,

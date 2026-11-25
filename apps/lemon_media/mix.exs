@@ -28,7 +28,8 @@ defmodule LemonMedia.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       {:jason, "~> 1.4"},
-      {:req, "~> 0.6.0"}
+      {:req, "~> 0.6.0"},
+      {:websockex, "~> 0.5"}
     ]
   end
 end

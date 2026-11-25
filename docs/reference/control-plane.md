@@ -103,7 +103,6 @@ sizes, token usage and timings), ignore include flags that would add content
 | Method | Read-only response |
 |---|---|
 | `tasks.active.list`, `tasks.recent.list` | No `description`, `result`, `error`, `latestReasoning`, `events` or `record`. |
-| `session.detail` | Runs keep `ok`, `hasError`, counts, `tokens`; tool calls keep `kind`/`ok`/`phase`; event digests have no `preview`; no prompt, answer, error, raw maps, events or run record. |
 | `cron.runs` | No `output`, `outputPreview`, `error`, `meta`, `runRecord` or `introspection`; byte counts remain. |
 | `cron.list` | No `prompt`, `command` or `meta`; byte counts remain. |
 | `chat.history` | Rows keep `id`, `role`, `timestampMs`, `ok`, `toolCallId`, `toolName`, `phase`, `cancelled`, `durationMs`. |
@@ -283,10 +282,12 @@ daily totals are unknown because complete history cannot be established.
   `LemonCore.BuildInfo`; status reads environment/stamped commit metadata only,
   never launches git on each poll.
 - `channels.configured` and `channels.connected` retain their existing meanings
-  (registered adapters and running adapter processes). `channels.details` adds
-  one `{id,state,lastError}` per configured adapter. State is `connected`,
+  (registered adapters and running adapter processes). The built-in adapter
+  list registers only channels that canonical config can start, so
+  `configured` never names a channel without a config path. `channels.details`
+  adds one `{id,state,lastError}` per configured adapter. State is `connected`,
   `configured`, or `error`; Telegram polling, Discord READY/RESUMED events, and
-  XMTP/WhatsApp bridge transitions distinguish an observed live connection from
+  XMTP bridge transitions distinguish an observed live connection from
   merely starting a process. Startup failures are retained too. Errors contain
   only a fixed sanitized `message` (at most 256 characters, no tokens or paths)
   and the observed wall-clock `atMs`. A successful connection/poll clears the

@@ -31,7 +31,8 @@ defmodule LemonLsp.Session do
         next_request_id: 0,
         sessions: %{},
         recent_sessions: [],
-        manager: manager
+        manager: manager,
+        last_used: System.unique_integer([:monotonic])
       })
 
     {:reply, {:ok, _info}, state} =
@@ -45,7 +46,8 @@ defmodule LemonLsp.Session do
     {:ok, state}
   end
 
-  def handle_call(message, from, state), do: finish(session_call(message, from, state))
+  def handle_call(message, from, state),
+    do: finish(session_call(message, from, touch(message, state)))
 
   def handle_info({:forward, :acquired_info, from}, state) do
     [session] = Map.values(state.sessions)
@@ -55,7 +57,7 @@ defmodule LemonLsp.Session do
   end
 
   def handle_info({:forward, message, from}, state) do
-    case session_call(message, from, state) do
+    case session_call(message, from, touch(message, state)) do
       {:reply, reply, state} ->
         publish(state)
         GenServer.reply(from, reply)
@@ -106,8 +108,15 @@ defmodule LemonLsp.Session do
     if map_size(state.sessions) == 0, do: {:stop, :normal, state}, else: {:noreply, state}
   end
 
+  # The manager evicts the least-recently-used session when the live cap is
+  # reached; status reads and eviction probes are not uses.
   defp publish(state),
-    do: send(state.manager, {:session_status, self(), status_from_state(state)})
+    do: send(state.manager, {:session_status, self(), status_from_state(state), state.last_used})
+
+  defp touch(:status, state), do: state
+  defp touch(:refresh, state), do: state
+  defp touch({:evict_if_idle, _expires_at}, state), do: state
+  defp touch(_message, state), do: %{state | last_used: System.unique_integer([:monotonic])}
 
   defp session_call(:status, _from, state) do
     {:reply, status_from_state(state), state}
@@ -116,6 +125,32 @@ defmodule LemonLsp.Session do
   defp session_call(:refresh, _from, state) do
     state = refresh_state(state)
     {:reply, status_from_state(state), state}
+  end
+
+  # Decided here, not from the manager's last published status, so a request
+  # dispatched since then keeps its session alive. A probe read after its
+  # monotonic expiry (the session was suspended or backlogged) is refused: the
+  # manager has stopped waiting for it and may already have freed a slot elsewhere.
+  defp session_call({:evict_if_idle, expires_at}, _from, state) do
+    cond do
+      System.monotonic_time(:millisecond) >= expires_at ->
+        {:reply, {:error, :expired}, state}
+
+      pending_request_count(state.sessions) > 0 ->
+        {:reply, {:error, :busy}, state}
+
+      true ->
+        state =
+          Enum.reduce(state.sessions, state, fn {session_id, session}, state ->
+            info = stopped_session_info(session, :evicted)
+
+            state
+            |> update_in([:sessions], &Map.delete(&1, session_id))
+            |> remember_session(Map.delete(info, :session_id))
+          end)
+
+        {:reply, :ok, state}
+    end
   end
 
   defp session_call({:start_session, server_id, opts}, {caller, _}, state) do
@@ -225,40 +260,36 @@ defmodule LemonLsp.Session do
 
               # The RPC client owns the deadline and transport request. The session
               # retains LSP policy (initialization waiters and edit receipts).
-              :ok =
-                LemonCore.Rpc.Client.dispatch(
-                  session.rpc,
-                  request_id,
-                  payload,
-                  {self(), {:rpc_reply, request_id}},
-                  timeout_ms,
-                  self()
-                )
+              case dispatch(session, request_id, payload, timeout_ms) do
+                :ok ->
+                  pending =
+                    Map.put(session.pending, request_id, %{
+                      from: from,
+                      method: method,
+                      document_uri: pending_document_uri(method, params),
+                      on_timeout: request_opts.on_timeout,
+                      capture_edits: request_opts.capture_edits,
+                      caller_ref: Process.monitor(elem(from, 0)),
+                      waiters: [],
+                      edits: [],
+                      started_at: now_iso8601()
+                    })
 
-              pending =
-                Map.put(session.pending, request_id, %{
-                  from: from,
-                  method: method,
-                  document_uri: pending_document_uri(method, params),
-                  on_timeout: request_opts.on_timeout,
-                  capture_edits: request_opts.capture_edits,
-                  caller_ref: Process.monitor(elem(from, 0)),
-                  waiters: [],
-                  edits: [],
-                  started_at: now_iso8601()
-                })
+                  session =
+                    session
+                    |> Map.put(:pending, pending)
+                    |> Map.update(:request_count, 1, &(&1 + 1))
 
-              session =
-                session
-                |> Map.put(:pending, pending)
-                |> Map.update(:request_count, 1, &(&1 + 1))
+                  state =
+                    state
+                    |> put_in([:sessions, session_id], session)
+                    |> Map.put(:next_request_id, request_id)
 
-              state =
-                state
-                |> put_in([:sessions, session_id], session)
-                |> Map.put(:next_request_id, request_id)
+                  {:noreply, state}
 
-              {:noreply, state}
+                {:error, reason} ->
+                  {:reply, {:error, reason}, Map.put(state, :next_request_id, request_id)}
+              end
           end
       end
     else
@@ -294,30 +325,26 @@ defmodule LemonLsp.Session do
   defp session_call({:notify_session, session_id, method, params}, _from, state) do
     with {:ok, session} <- fetch_session(state, session_id),
          :ok <- validate_method(method),
-         {:ok, params} <- validate_params(params) do
-      session =
-        if method == "initialized" and session.initialized do
-          session
-        else
-          session
-          |> send_lsp_notification(method, params)
-          |> maybe_mark_initialized(method)
-        end
-
+         {:ok, params} <- validate_params(params),
+         {:ok, session} <- notify_once(session, method, params) do
       {:reply, :ok, put_in(state, [:sessions, session_id], session)}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
+  # Document text is sent to the server as JSON, which carries only UTF-8: a
+  # file in another encoding is refused here rather than failing in transport.
   defp session_call({:sync_file, session_id, path, language_id}, {owner, _}, state) do
     # Document text goes to a project-run server: never a Lemon credential.
     with {:ok, session} <- fetch_session(state, session_id),
          {:credential, :ok} <- {:credential, LemonCore.CredentialPaths.check_read(path)},
-         {:ok, text} <- File.read(path) do
-      uri = "file://" <> URI.encode(Path.expand(path), &(URI.char_unreserved?(&1) or &1 == ?/))
-      seq = session.diagnostic_seq
-      {session, synced} = sync_document(session, owner, uri, language_id, text, 1)
+         {:ok, text} <- File.read(path),
+         {:ok, text} <- validate_document_text(text),
+         {:ok, language_id} <- validate_language_id(language_id),
+         uri = "file://" <> URI.encode(Path.expand(path), &(URI.char_unreserved?(&1) or &1 == ?/)),
+         seq = session.diagnostic_seq,
+         {:ok, session, synced} <- sync_document(session, owner, uri, language_id, text, 1) do
       info = Map.merge(document_info(session, uri), %{synced: synced, diagnostics_seq: seq})
       {:reply, {:ok, info}, put_in(state.sessions[session_id], session)}
     else
@@ -335,9 +362,9 @@ defmodule LemonLsp.Session do
          {:ok, uri} <- validate_document_uri(uri),
          {:ok, language_id} <- validate_language_id(language_id),
          {:ok, text} <- validate_document_text(text),
-         {:ok, version} <- validate_document_version(version) do
-      {session, synced} = sync_document(session, owner, uri, language_id, text, version)
-
+         {:ok, version} <- validate_document_version(version),
+         {:ok, session, synced} <-
+           sync_document(session, owner, uri, language_id, text, version) do
       {:reply, {:ok, Map.put(document_info(session, uri), :synced, synced)},
        put_in(state, [:sessions, session_id], session)}
     else
@@ -349,10 +376,10 @@ defmodule LemonLsp.Session do
     with {:ok, session} <- fetch_session(state, session_id),
          {:ok, uri} <- validate_document_uri(uri),
          {:ok, text} <- validate_document_text(text),
-         {:ok, version} <- validate_document_version(version) do
-      language_id = get_in(session.documents, [hash_value(uri), :language_id]) || "plaintext"
-      {session, synced} = sync_document(session, owner, uri, language_id, text, version)
-
+         {:ok, version} <- validate_document_version(version),
+         language_id = get_in(session.documents, [hash_value(uri), :language_id]) || "plaintext",
+         {:ok, session, synced} <-
+           sync_document(session, owner, uri, language_id, text, version) do
       {:reply, {:ok, Map.put(document_info(session, uri), :synced, synced)},
        put_in(state, [:sessions, session_id], session)}
     else
@@ -362,9 +389,8 @@ defmodule LemonLsp.Session do
 
   defp session_call({:close_document, session_id, uri}, {owner, _}, state) do
     with {:ok, session} <- fetch_session(state, session_id),
-         {:ok, uri} <- validate_document_uri(uri) do
-      session = close_owned_document(session, uri, owner)
-
+         {:ok, uri} <- validate_document_uri(uri),
+         {:ok, session} <- close_owned_document(session, uri, owner) do
       {:reply, {:ok, document_info(session, uri)},
        put_in(state, [:sessions, session_id], session)}
     else
@@ -495,7 +521,7 @@ defmodule LemonLsp.Session do
             session =
               session
               |> Map.put(:pending, remaining_pending)
-              |> send_lsp_notification("$/cancelRequest", %{"id" => request_id})
+              |> notify_server("$/cancelRequest", %{"id" => request_id})
               |> expire_edits(request_id)
 
             {:noreply, put_in(state, [:sessions, session_id], session)}
@@ -580,7 +606,6 @@ defmodule LemonLsp.Session do
       recent_sessions: state.recent_sessions,
       planned_capabilities: [
         :json_rpc_diagnostics,
-        :workspace_root_detection,
         :restart_policy,
         :semantic_diagnostic_streaming
       ],
@@ -597,7 +622,9 @@ defmodule LemonLsp.Session do
         :launcher_child_cleanup,
         :server_request_responses,
         :owner_scoped_sessions,
-        :redacted_health_status
+        :redacted_health_status,
+        :workspace_root_detection,
+        :live_session_cap
       ],
       cleanup: %{
         includes_executable_paths: false,
@@ -873,20 +900,25 @@ defmodule LemonLsp.Session do
   defp validate_timeout(_timeout_ms), do: {:error, :invalid_timeout}
 
   defp validate_document_uri(uri) when is_binary(uri) do
-    if String.trim(uri) == "", do: {:error, :invalid_document_uri}, else: {:ok, uri}
+    if String.trim(uri) == "" or not String.valid?(uri),
+      do: {:error, :invalid_document_uri},
+      else: {:ok, uri}
   end
 
   defp validate_document_uri(_uri), do: {:error, :invalid_document_uri}
 
   defp validate_language_id(language_id) when is_binary(language_id) do
-    if String.trim(language_id) == "",
+    if String.trim(language_id) == "" or not String.valid?(language_id),
       do: {:error, :invalid_language_id},
       else: {:ok, language_id}
   end
 
   defp validate_language_id(_language_id), do: {:error, :invalid_language_id}
 
-  defp validate_document_text(text) when is_binary(text), do: {:ok, text}
+  defp validate_document_text(text) when is_binary(text) do
+    if String.valid?(text), do: {:ok, text}, else: {:error, :invalid_document_encoding}
+  end
+
   defp validate_document_text(_text), do: {:error, :invalid_document_text}
 
   defp validate_document_version(version) when is_integer(version) and version >= 0,
@@ -896,9 +928,55 @@ defmodule LemonLsp.Session do
 
   defp send_lsp_notification(session, method, params) do
     payload = %{"jsonrpc" => "2.0", "method" => method, "params" => params}
-    :ok = LemonCore.Rpc.Client.send_message(session.rpc, payload)
-    Map.update(session, :notification_count, 1, &(&1 + 1))
+
+    with :ok <- transmit(session, payload),
+         do: {:ok, Map.update(session, :notification_count, 1, &(&1 + 1))}
   end
+
+  # Bookkeeping notifications (`$/cancelRequest`, releases) answer no caller.
+  # They carry only ids and validated URIs, so a failure means the transport is
+  # closing and the port exit that follows cleans up the session.
+  defp notify_server(session, method, params) do
+    case send_lsp_notification(session, method, params) do
+      {:ok, session} -> session
+      {:error, _reason} -> session
+    end
+  end
+
+  defp notify_once(%{initialized: true} = session, "initialized", _params), do: {:ok, session}
+
+  defp notify_once(session, method, params) do
+    with {:ok, session} <- send_lsp_notification(session, method, params),
+         do: {:ok, maybe_mark_initialized(session, method)}
+  end
+
+  defp dispatch(session, request_id, payload, timeout_ms) do
+    session.rpc
+    |> LemonCore.Rpc.Client.dispatch(
+      request_id,
+      payload,
+      {self(), {:rpc_reply, request_id}},
+      timeout_ms,
+      self()
+    )
+    |> transport_result()
+  catch
+    :exit, _reason -> {:error, :transport_closed}
+  end
+
+  defp transmit(session, payload) do
+    session.rpc
+    |> LemonCore.Rpc.Client.send_message(payload)
+    |> transport_result()
+  catch
+    :exit, _reason -> {:error, :transport_closed}
+  end
+
+  # Encoder errors embed the payload bytes: only their class leaves here.
+  defp transport_result(:ok), do: :ok
+  defp transport_result({:error, %{__exception__: true}}), do: {:error, :invalid_message_encoding}
+  defp transport_result({:error, :duplicate_id}), do: {:error, :duplicate_request_id}
+  defp transport_result({:error, _reason}), do: {:error, :transport_closed}
 
   defp handle_messages(session, messages) do
     Enum.reduce(messages, session, fn
@@ -997,10 +1075,20 @@ defmodule LemonLsp.Session do
     |> Enum.max_by(fn {id, _pending} -> id end, fn -> nil end)
   end
 
+  # Answers to server-initiated requests have no caller to report to. A result
+  # that cannot be encoded (for example a non-UTF-8 edit failure reason) is
+  # answered with an internal error so the server is not left waiting; a closed
+  # transport is followed by the port exit that cleans up the session.
   defp send_lsp_response(session, request_id, result) do
     payload = %{"jsonrpc" => "2.0", "id" => request_id, "result" => result}
-    :ok = LemonCore.Rpc.Client.send_message(session.rpc, payload)
-    session
+
+    case transmit(session, payload) do
+      {:error, :invalid_message_encoding} ->
+        send_lsp_error(session, request_id, -32_603, "Response could not be encoded")
+
+      _sent_or_closed ->
+        session
+    end
   end
 
   defp send_lsp_error(session, request_id, code, message) do
@@ -1010,7 +1098,7 @@ defmodule LemonLsp.Session do
       "error" => %{"code" => code, "message" => message}
     }
 
-    :ok = LemonCore.Rpc.Client.send_message(session.rpc, payload)
+    _ = transmit(session, payload)
     session
   end
 
@@ -1134,32 +1222,32 @@ defmodule LemonLsp.Session do
         do: previous_version,
         else: max(requested_version, previous_version + 1)
 
-    session = send_document_sync(session, synced, uri, language_id, text, version)
+    with {:ok, session} <- send_document_sync(session, synced, uri, language_id, text, version) do
+      document =
+        Map.merge(document || %{}, %{
+          uri: uri,
+          uri_hash: hash_value(uri),
+          owners: MapSet.put(if(document, do: document.owners, else: MapSet.new()), owner),
+          digest: digest,
+          version: version,
+          language_id: language_id,
+          status:
+            if(synced == :unchanged,
+              do: document.status,
+              else: if(synced == :opened, do: :open, else: :changed)
+            ),
+          opened_at: if(document, do: document.opened_at, else: now_iso8601()),
+          updated_at: now_iso8601(),
+          text_bytes: byte_size(text),
+          change_count:
+            Map.get(document || %{}, :change_count, 0) + if(synced == :changed, do: 1, else: 0),
+          notification_count:
+            Map.get(document || %{}, :notification_count, 0) +
+              if(synced == :unchanged, do: 0, else: 1)
+        })
 
-    document =
-      Map.merge(document || %{}, %{
-        uri: uri,
-        uri_hash: hash_value(uri),
-        owners: MapSet.put(if(document, do: document.owners, else: MapSet.new()), owner),
-        digest: digest,
-        version: version,
-        language_id: language_id,
-        status:
-          if(synced == :unchanged,
-            do: document.status,
-            else: if(synced == :opened, do: :open, else: :changed)
-          ),
-        opened_at: if(document, do: document.opened_at, else: now_iso8601()),
-        updated_at: now_iso8601(),
-        text_bytes: byte_size(text),
-        change_count:
-          Map.get(document || %{}, :change_count, 0) + if(synced == :changed, do: 1, else: 0),
-        notification_count:
-          Map.get(document || %{}, :notification_count, 0) +
-            if(synced == :unchanged, do: 0, else: 1)
-      })
-
-    {put_in(session.documents[hash_value(uri)], document), synced}
+      {:ok, put_in(session.documents[hash_value(uri)], document), synced}
+    end
   end
 
   defp send_document_sync(session, :opened, uri, language_id, text, version) do
@@ -1180,41 +1268,47 @@ defmodule LemonLsp.Session do
     })
   end
 
-  defp send_document_sync(session, :unchanged, _uri, _language_id, _text, _version), do: session
+  defp send_document_sync(session, :unchanged, _uri, _language_id, _text, _version),
+    do: {:ok, session}
 
   defp close_owned_document(session, uri, owner) do
     case Map.get(session.documents, hash_value(uri)) do
       nil ->
-        session
+        {:ok, session}
 
       document ->
         owners = MapSet.delete(document.owners, owner)
         document = %{document | owners: owners}
 
         if MapSet.size(owners) == 0 and document.status != :closed do
-          session =
-            send_lsp_notification(session, "textDocument/didClose", %{
-              "textDocument" => %{"uri" => uri}
-            })
+          with {:ok, session} <-
+                 send_lsp_notification(session, "textDocument/didClose", %{
+                   "textDocument" => %{"uri" => uri}
+                 }) do
+            document =
+              Map.merge(document, %{
+                status: :closed,
+                closed_at: now_iso8601(),
+                updated_at: now_iso8601(),
+                notification_count: document.notification_count + 1
+              })
 
-          document =
-            Map.merge(document, %{
-              status: :closed,
-              closed_at: now_iso8601(),
-              updated_at: now_iso8601(),
-              notification_count: document.notification_count + 1
-            })
-
-          put_in(session.documents[hash_value(uri)], document)
+            {:ok, put_in(session.documents[hash_value(uri)], document)}
+          end
         else
-          put_in(session.documents[hash_value(uri)], document)
+          {:ok, put_in(session.documents[hash_value(uri)], document)}
         end
     end
   end
 
+  # A released owner's documents close best-effort: their URIs were validated
+  # when opened, so a failed didClose means the transport is already closing.
   defp release_documents(session, owner) do
     Enum.reduce(session.documents, session, fn {_hash, document}, session ->
-      close_owned_document(session, document.uri, owner)
+      case close_owned_document(session, document.uri, owner) do
+        {:ok, session} -> session
+        {:error, _reason} -> session
+      end
     end)
   end
 
@@ -1449,13 +1543,19 @@ defmodule LemonLsp.Session do
         put_in(session.pending[id], request)
 
       true ->
-        :ok = LemonCore.Rpc.Client.cancel(session.rpc, id)
+        cancel_dispatch(session, id)
 
         session
         |> update_in([:pending], &Map.delete(&1, id))
-        |> send_lsp_notification("$/cancelRequest", %{"id" => id})
+        |> notify_server("$/cancelRequest", %{"id" => id})
         |> expire_edits(id)
     end
+  end
+
+  defp cancel_dispatch(session, id) do
+    LemonCore.Rpc.Client.cancel(session.rpc, id)
+  catch
+    :exit, _reason -> :ok
   end
 
   defp pending_request_count(sessions) do

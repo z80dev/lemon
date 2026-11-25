@@ -70,11 +70,7 @@ defmodule LemonControlPlane.Methods.SystemReloadCode do
        "reloadedCount" => length(reloaded),
        "inUseCount" => length(in_use),
        "failedCount" => length(failed),
-       "sessions" => %{
-         "refreshed" => sessions.refreshed,
-         "busy" => sessions.busy,
-         "failed" => sessions.failed
-       }
+       "sessions" => sessions_payload(sessions)
      }}
   rescue
     _ ->
@@ -83,6 +79,14 @@ defmodule LemonControlPlane.Methods.SystemReloadCode do
     _, _ ->
       {:error, {:unavailable, "Code reload failed; some changes may already have been applied."}}
   end
+
+  defp sessions_payload(%{refreshed: refreshed, busy: busy, failed: failed}),
+    do: %{"refreshed" => refreshed, "busy" => busy, "failed" => failed}
+
+  # The refresher failed after it was reached: some sessions may already be
+  # rebuilt, so counts are unknown and the refresh must not be retried blindly.
+  defp sessions_payload(_outcome_unknown),
+    do: %{"refreshed" => nil, "busy" => nil, "failed" => nil, "outcomeUnknown" => true}
 
   defp module_names(modules) do
     modules |> Enum.take(@max_modules) |> Enum.map(&Atom.to_string/1)

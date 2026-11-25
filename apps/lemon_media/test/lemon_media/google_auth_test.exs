@@ -27,20 +27,74 @@ defmodule LemonMedia.GoogleAuthTest do
     end
   end
 
-  test "a second call reuses the cached service-account token", %{json: json} do
+  @tag :tmp_dir
+  test "Imagen and Google TTS jobs reuse the same service-account token", %{
+    json: json,
+    tmp_dir: dir
+  } do
     post =
       token_post(
         self(),
         {:ok, %{status: 200, body: %{"access_token" => "tok-1", "expires_in" => 3600}}}
       )
 
-    runtime = %{service_account_json: json, token_http_post: post}
+    owner = self()
 
-    assert {:ok, "tok-1"} = GoogleAuth.access_token(runtime, :vertex_imagen)
+    runtime = %{
+      service_account_json: json,
+      token_http_post: post,
+      project: "test-project",
+      location: "us-central1",
+      base_url: "https://speech.test/v1",
+      http_post: fn url, opts ->
+        send(owner, {:provider_request, url, opts[:headers]})
+
+        body =
+          if String.ends_with?(url, ":predict"),
+            do: %{"predictions" => [%{"bytesBase64Encoded" => Base.encode64("image")}]},
+            else: %{"audioContent" => Base.encode64("audio")}
+
+        {:ok, %{status: 200, body: body}}
+      end
+    }
+
+    assert {:ok, %{mime_type: "image/png", bytes: 5}} =
+             LemonMedia.Providers.run(%{
+               provider: "vertex_imagen",
+               attrs: %{prompt: "image prompt"},
+               artifact_path: Path.join(dir, "image.png"),
+               generation: %{
+                 model: "imagen",
+                 mime_type: "image/png",
+                 aspect_ratio: "1:1",
+                 max_retries: 0
+               },
+               runtime: runtime
+             })
+
     assert_received {:token_exchange, "https://oauth2.test/token", opts}
     assert opts[:body] =~ "grant_type=urn"
 
-    assert {:ok, "tok-1"} = GoogleAuth.access_token(runtime, :google_tts)
+    assert_received {:provider_request, "https://us-central1-aiplatform.googleapis.com/" <> _,
+                     [{"authorization", "Bearer tok-1"}]}
+
+    assert {:ok, %{mime_type: "audio/mpeg", bytes: 5}} =
+             LemonMedia.Providers.run(%{
+               provider: "google_tts",
+               attrs: %{prompt: "speak"},
+               artifact_path: Path.join(dir, "speech.mp3"),
+               generation: %{
+                 voice: "en-US-Neural2-C",
+                 language_code: "en-US",
+                 mime_type: "audio/mpeg",
+                 max_retries: 0
+               },
+               runtime: runtime
+             })
+
+    assert_received {:provider_request, "https://speech.test/v1/text:synthesize",
+                     [{"authorization", "Bearer tok-1"}]}
+
     refute_received {:token_exchange, _, _}
   end
 

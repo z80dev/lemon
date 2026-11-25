@@ -82,11 +82,14 @@ defmodule LemonCore.PlatformPackagingContractTest do
     end
   end
 
-  test "runtime profiles start only umbrella apps, never a published package" do
+  test "runtime profiles start only umbrella apps and dependencies, never a published package" do
     published = MapSet.new(published_packages())
+    deps = Mix.Project.deps_paths()
 
     for name <- Profile.names(), app <- Profile.app_list(name) do
-      assert File.dir?(Path.join(@repo_root, "apps/#{app}")), "#{name} names unknown app #{app}"
+      assert File.dir?(Path.join(@repo_root, "apps/#{app}")) or Map.has_key?(deps, app),
+             "#{name} names unknown app #{app}"
+
       refute MapSet.member?(published, app), "#{name} starts published package #{app}"
     end
   end

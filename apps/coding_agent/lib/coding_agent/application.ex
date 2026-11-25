@@ -76,7 +76,6 @@ defmodule CodingAgent.Application do
         {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
         CodingAgent.SessionSupervisor
       ]),
-      {DynamicSupervisor, name: CodingAgent.AdvisorSupervisor, strategy: :one_for_one},
       LemonCore.Supervision.subtree(CodingAgent.BackgroundRun.Tree, [
         {Registry, keys: :unique, name: CodingAgent.BackgroundRun.Registry},
         CodingAgent.BackgroundRun.Supervisor
@@ -111,8 +110,8 @@ defmodule CodingAgent.Application do
       :ok ->
         :ok
 
-      other ->
-        Logger.debug("agent runtime provider not registered: #{inspect(other)}")
+      {:error, reason} ->
+        Logger.error("agent runtime provider not registered: #{reason}")
         :ok
     end
   end

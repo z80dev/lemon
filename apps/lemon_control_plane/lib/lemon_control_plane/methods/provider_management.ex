@@ -5,11 +5,19 @@ defmodule LemonControlPlane.Methods.ProviderManagementSupport do
   def handle(operation, params, ctx, node?) do
     with :ok <- LemonCore.ProviderManagement.validate(operation, params, node?),
          {:ok, result} <- dispatch(operation, params, ctx, node?),
-         {:ok, result} <- project(operation, result, params) do
+         {:ok, result} <-
+           LemonCore.ProviderManagement.destination_result(operation, result, params) do
       {:ok, result}
     else
       {:error, {:unavailable, _}} ->
         unavailable(operation)
+
+      {:error, :outcome_unknown} ->
+        outcome_unknown()
+
+      # Only the local core boundary can prove no implementation was reached.
+      {:error, :unavailable} when not node? ->
+        {:error, Errors.error(:unavailable, "Provider management unavailable")}
 
       {:error, {_, _, _} = error} ->
         {:error, error}
@@ -63,25 +71,22 @@ defmodule LemonControlPlane.Methods.ProviderManagementSupport do
     _, _ -> unavailable(operation)
   end
 
-  defp project("device.challenge", result, params),
-    do: LemonCore.ProviderManagement.device_challenge_result(result, params)
+  defp unavailable(operation) do
+    if LemonCore.ProviderManagement.query?(operation) do
+      {:error, Errors.error(:unavailable, "Provider management unavailable")}
+    else
+      outcome_unknown()
+    end
+  end
 
-  defp project("device." <> _, result, params),
-    do: LemonCore.ProviderManagement.device_result(result, params)
-
-  defp project(_, result, _), do: {:ok, result}
-
-  defp unavailable(operation) when operation in ["list", "check"],
-    do: {:error, Errors.error(:unavailable, "Provider management unavailable")}
-
-  defp unavailable(_),
-    do:
-      {:error,
-       Errors.error(
-         :unavailable,
-         "Provider management unavailable; reconcile before another mutation",
-         %{"retrySafe" => false, "mutationMayHaveApplied" => true}
-       )}
+  defp outcome_unknown do
+    {:error,
+     Errors.error(
+       :unavailable,
+       "Provider management unavailable; reconcile before another mutation",
+       %{"retrySafe" => false, "mutationMayHaveApplied" => true}
+     )}
+  end
 
   defp dispatch("device.complete", %{"commit" => false} = params, ctx, true) do
     LemonControlPlane.NodeIO.invoke(

@@ -243,7 +243,10 @@ defmodule LemonCore.ExecApprovalExpiry do
   # Runtime lookup never calls a session process; native registries belong to
   # the provider registered through the shared core seam.
   defp registered_session(id) when is_binary(id) do
-    LemonCore.AgentRuntime.call(:native_session_owner, [id], nil)
+    case LemonCore.AgentRuntime.query(:native_session_owner, [id]) do
+      pid when is_pid(pid) -> pid
+      _ -> nil
+    end
   end
 
   defp registered_session(_id), do: nil

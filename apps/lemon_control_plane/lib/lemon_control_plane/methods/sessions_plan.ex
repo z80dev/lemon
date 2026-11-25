@@ -18,16 +18,21 @@ defmodule LemonControlPlane.Methods.SessionsPlan do
   def handle(params, _ctx) do
     with {:ok, key, cwd} <- NativeSessions.target(params),
          {:ok, action} <- action(params) do
-      case AgentRuntime.call(:session_plan, [key, cwd, action, []], {:error, :unavailable}) do
+      args = [key, cwd, action, []]
+
+      # `status` only reads the plan; `enter` and `exit` change the session.
+      result =
+        if action == :status,
+          do: AgentRuntime.query(:session_plan, args),
+          else: AgentRuntime.mutate(:session_plan, args)
+
+      case result do
         {:ok, plan} when is_map(plan) -> {:ok, %{"sessionKey" => key, "plan" => plan}}
         {:error, reason} -> NativeSessions.failure(reason)
-        _ -> NativeSessions.failure(:unavailable)
+        _ when action == :status -> NativeSessions.failure(:invalid_response)
+        _ -> NativeSessions.failure(:outcome_unknown)
       end
     end
-  rescue
-    _ -> NativeSessions.failure(:unavailable)
-  catch
-    :exit, _ -> NativeSessions.failure(:unavailable)
   end
 
   defp action(params) do

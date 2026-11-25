@@ -343,6 +343,8 @@ defmodule CodingAgent.Tools.LspDiagnosticsTest do
       assert status.cleanup.includes_file_contents == false
       assert status.cleanup.includes_diagnostics_output == false
       assert status.cleanup.includes_workspace_roots == false
+      assert status.server_manager.max_active_count == 8
+      assert is_integer(status.server_manager.active_count)
     end
   end
 

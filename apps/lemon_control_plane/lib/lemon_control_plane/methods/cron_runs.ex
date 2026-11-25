@@ -148,8 +148,8 @@ defmodule LemonControlPlane.Methods.CronRuns do
         "completedAtMs" => run.completed_at_ms,
         "durationMs" => run.duration_ms,
         "suppressed" => run.suppressed || false,
-        "sessionKey" => get_meta_value(run.meta, "session_key"),
-        "agentId" => get_meta_value(run.meta, "agent_id"),
+        "sessionKey" => get_meta_value(run.meta, :session_key),
+        "agentId" => get_meta_value(run.meta, :agent_id),
         "summary" =>
           run_summary(
             run,
@@ -323,23 +323,10 @@ defmodule LemonControlPlane.Methods.CronRuns do
     :exit, _ -> {:error, :introspection_unavailable}
   end
 
-  defp get_meta_value(meta, key) when is_map(meta) and is_binary(key) do
-    Map.get(meta, key) ||
-      case safe_to_existing_atom(key) do
-        nil -> nil
-        atom_key -> Map.get(meta, atom_key)
-      end
-  rescue
-    _ -> nil
-  end
+  defp get_meta_value(meta, key) when is_map(meta) and is_atom(key),
+    do: Map.get(meta, Atom.to_string(key)) || Map.get(meta, key)
 
   defp get_meta_value(_meta, _key), do: nil
-
-  defp safe_to_existing_atom(value) when is_binary(value) do
-    String.to_existing_atom(value)
-  rescue
-    _ -> nil
-  end
 
   defp maybe_put(map, _key, _value, false), do: map
   defp maybe_put(map, key, value, true), do: Map.put(map, key, value)

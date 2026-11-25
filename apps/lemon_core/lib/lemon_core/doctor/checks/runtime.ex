@@ -6,17 +6,18 @@ defmodule LemonCore.Doctor.Checks.Runtime do
 
   @doc """
   Returns a list of Check results covering runtime readiness.
+
+  Options: `:env` (a `LemonCore.Runtime.Env`, default `Env.resolve/0`) and
+  `:elixir_version` (default `System.version/0`).
   """
   @spec run(keyword()) :: [Check.t()]
   def run(opts \\ []) do
-    env = Env.resolve()
+    env = Keyword.get_lazy(opts, :env, &Env.resolve/0)
 
     [
       Check.pass("runtime.build", LemonCore.Update.Version.describe()),
-      check_elixir(Keyword.get(opts, :elixir_version, System.version())),
-      check_control_port(env),
-      check_lemon_root(System.get_env("LEMON_PATH"))
-    ]
+      check_elixir(Keyword.get(opts, :elixir_version, System.version()))
+    ] ++ check_runtime(env) ++ [check_lemon_root(System.get_env("LEMON_PATH"))]
   end
 
   defp check_elixir(version) do
@@ -37,32 +38,59 @@ defmodule LemonCore.Doctor.Checks.Runtime do
     end
   end
 
-  defp check_control_port(env) do
+  # One /healthz probe yields two checks: whether a Lemon control plane answers
+  # on the port, and whether that runtime runs every application its profile
+  # expects (an application that failed to start or stopped is named).
+  defp check_runtime(env) do
     port = env.control_port
 
-    if Health.running?(port, timeout_ms: 500) do
-      Check.pass(
-        "runtime.control_port",
-        "Control-plane is listening on port #{port}."
-      )
-    else
-      case :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false], 500) do
-        {:ok, socket} ->
-          :gen_tcp.close(socket)
+    case Health.check(port, timeout_ms: 500) do
+      {:ok, :healthy} ->
+        [
+          Check.pass("runtime.control_port", "Control-plane is listening on port #{port}."),
+          Check.pass(
+            "runtime.apps",
+            "The runtime on port #{port} runs every expected application."
+          )
+        ]
 
+      {:error, {:unhealthy, missing}} ->
+        [
+          Check.pass("runtime.control_port", "Control-plane is answering on port #{port}."),
           Check.fail(
-            "runtime.control_port",
-            "Port #{port} is occupied, but no healthy Lemon control-plane answered.",
-            "Inspect the process using this port. Stop the unhealthy runtime with `lemon stop` " <>
-              "or choose another port with `lemon setup runtime --control-port PORT`; do not start another daemon on this port."
+            "runtime.apps",
+            "The runtime on port #{port} is not running expected applications: " <>
+              Enum.join(missing, ", ") <> ".",
+            "An application failed to start or stopped. Check the runtime log for the cause, " <>
+              "then run `lemon restart`."
           )
+        ]
 
-        {:error, _} ->
-          Check.skip(
-            "runtime.control_port",
-            "Control-plane not running on port #{port}. Run `lemon` to start a coding session."
-          )
-      end
+      {:error, _} ->
+        [
+          check_unanswered_port(port),
+          Check.skip("runtime.apps", "No Lemon runtime answered on port #{port}.")
+        ]
+    end
+  end
+
+  defp check_unanswered_port(port) do
+    case :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false], 500) do
+      {:ok, socket} ->
+        :gen_tcp.close(socket)
+
+        Check.fail(
+          "runtime.control_port",
+          "Port #{port} is occupied, but no healthy Lemon control-plane answered.",
+          "Inspect the process using this port. Stop the unhealthy runtime with `lemon stop` " <>
+            "or choose another port with `lemon setup runtime --control-port PORT`; do not start another daemon on this port."
+        )
+
+      {:error, _} ->
+        Check.skip(
+          "runtime.control_port",
+          "Control-plane not running on port #{port}. Run `lemon` to start a coding session."
+        )
     end
   end
 

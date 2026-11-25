@@ -310,7 +310,7 @@ defmodule LemonWeb.Chat.Backend do
   """
   @spec session_meta(String.t()) :: {:ok, map()} | {:error, error()}
   def session_meta(session_key) do
-    case call("session.detail", %{"sessionKey" => session_key, "limit" => 1, "historyLimit" => 1}) do
+    case call("session.detail", %{"sessionKey" => session_key}) do
       {:ok, %{"session" => session}} when is_map(session) ->
         {:ok,
          %{

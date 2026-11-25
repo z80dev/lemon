@@ -97,6 +97,10 @@ defmodule CodingAgent.Session do
   require Logger
 
   @reset_abort_wait_ms 5_000
+  # The caller outlasts the session's own bounded abort wait plus the reset
+  # work after it, so a slow abort returns `:ok` or `{:error, :busy}` instead
+  # of exiting the caller while the reset may still complete.
+  @reset_call_timeout_ms @reset_abort_wait_ms + 10_000
   @todo_call_timeout_ms 30_000
 
   # Calls that report `{:error, :busy}` while a manual compaction/summary runs.
@@ -505,7 +509,17 @@ defmodule CodingAgent.Session do
   end
 
   @doc false
+  # The advisor reviewer was retired (#705); refuse it so a caller never
+  # believes a review is running.
   def validate_execution_options(opts) when is_list(opts) do
+    if Keyword.has_key?(opts, :advisor),
+      do: {:error, {:unsupported_option, :advisor}},
+      else: validate_supported_execution_options(opts)
+  end
+
+  def validate_execution_options(_opts), do: {:error, :invalid_session_options}
+
+  defp validate_supported_execution_options(opts) do
     opts =
       if is_nil(opts[:session_file]) or
            CodingAgent.SessionManager.current_snapshot?(
@@ -522,8 +536,6 @@ defmodule CodingAgent.Session do
 
     validate_execution_authority(opts)
   end
-
-  def validate_execution_options(_opts), do: {:error, :invalid_session_options}
 
   @doc false
   def validate_live_execution_options(
@@ -893,7 +905,7 @@ defmodule CodingAgent.Session do
   """
   @spec reset(GenServer.server()) :: :ok | {:error, :busy}
   def reset(session) do
-    GenServer.call(session, :reset)
+    GenServer.call(session, :reset, @reset_call_timeout_ms)
   end
 
   @doc """
@@ -1225,13 +1237,6 @@ defmodule CodingAgent.Session do
     # Without a recorded owner, approvals of this session could outlive it.
     case LemonCore.ExecApprovalExpiry.watch_session(state.session_manager.header.id, self()) do
       :ok ->
-        advisor = Keyword.get(opts, :advisor, false)
-
-        if is_list(advisor) do
-          cursor = CodingAgent.Session.EventLog.cursor(state.event_log)
-          send(self(), {:start_advisor, Keyword.put(advisor, :initial_cursor, cursor)})
-        end
-
         {:ok, state}
 
       {:error, reason} ->
@@ -1242,10 +1247,6 @@ defmodule CodingAgent.Session do
   @spec handle_call(term(), GenServer.from(), t()) ::
           {:reply, term(), t()} | {:noreply, t()} | {:stop, term(), term(), t()}
   @impl true
-  def handle_call(:advisor_context, _from, state) do
-    {:reply, Map.take(state, [:agent, :model, :cwd, :run_id, :tool_policy]), state}
-  end
-
   def handle_call(request, _from, %{manual_operation: %ManualOperation.State{}} = state)
       when is_tuple(request) and elem(request, 0) in @manual_operation_busy_calls,
       do: {:reply, {:error, :busy}, state}
@@ -2048,16 +2049,6 @@ defmodule CodingAgent.Session do
   def handle_info(:extensions_compromised, state) do
     Logger.error("Aborting session: #{CodingAgent.Extensions.compromised_message()}")
     {:stop, {:shutdown, :extensions_compromised}, state}
-  end
-
-  def handle_info({:start_advisor, opts}, state) do
-    session = self()
-
-    Task.Supervisor.start_child(CodingAgent.TaskSupervisor, fn ->
-      CodingAgent.Advisor.start(session, opts)
-    end)
-
-    {:noreply, state}
   end
 
   def handle_info({:wait_for_idle, ref, :ok}, %{lifecycle_activity: %{waiter: ref}} = state) do

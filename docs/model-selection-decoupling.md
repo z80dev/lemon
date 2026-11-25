@@ -35,10 +35,12 @@ or passes through a `Job` adapter.
   5. config default model (`LemonCore.Config.cached().agent.default_model`,
      backed by `[defaults]`)
 
-`SubmissionBuilder` also stores the resolved `history_model` in submission
-metadata for routing-feedback history when that feature is enabled. Runtime
-modules do not read `Application.get_env(:lemon_router, :default_model)`;
-model defaults come from Lemon config or policy stores.
+With the opt-in `routing_feedback` feature enabled, an un-pinned run may use a
+routing-history model between 4 and 5, but only when the config default has
+been measured in that task context and did worse; `SubmissionBuilder` records
+it as `routing_feedback_model` in submission metadata. Runtime modules do not
+read `Application.get_env(:lemon_router, :default_model)`; model defaults come
+from Lemon config or policy stores.
 
 ### 3) Fixed execution provenance
 

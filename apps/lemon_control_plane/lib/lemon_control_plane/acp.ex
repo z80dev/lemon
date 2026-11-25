@@ -11,8 +11,7 @@ defmodule LemonControlPlane.ACP do
   credential and provider-health constraints, instead of the static registry.
 
   `/compact` invokes native compaction, and `/skill:<key>` asks the agent to
-  load the selected workspace skill. Native resume identities survive the chat
-  cache TTL. Streaming subscriptions precede run submission; uncertain receipts
+  load the selected workspace skill. Streaming subscriptions precede run submission; uncertain receipts
   retain their fixed run ID and explicitly forbid automatic retries.
   Permission requests retain the native tool-call identity and bounded target
   preview; approval summaries never persist raw tool arguments. Client calls
@@ -40,13 +39,12 @@ defmodule LemonControlPlane.ACP do
 
   alias LemonControlPlane.ACP.ContextReport
   alias LemonControlPlane.Methods.{AgentWait, SessionsContext}
-  alias LemonCore.Store
   alias LemonCore.RunRequest
+  alias LemonCore.SessionMetadataStore
 
   @protocol_version 1
   @default_agent_id "default"
   @default_wait_timeout_ms 600_000
-  @session_store_table :acp_sessions
   @max_file_commands 200
 
   def capabilities do
@@ -185,6 +183,7 @@ defmodule LemonControlPlane.ACP do
       now = DateTime.utc_now() |> DateTime.to_iso8601()
 
       session = %{
+        session_id: session_id,
         cwd: cwd,
         session_key: session_key,
         agent_id: agent_id,
@@ -198,9 +197,15 @@ defmodule LemonControlPlane.ACP do
         client_capabilities: client_capabilities
       }
 
-      put_session(session_id, session)
-      bootstrap(session_id, session, opts)
-      {:ok, Map.put(session_response(session), "sessionId", session_id)}
+      case put_session(session_id, session) do
+        :ok ->
+          bootstrap(session_id, session, opts)
+          {:ok, Map.put(session_response(session), "sessionId", session_id)}
+
+        {:error, _reason} ->
+          close_session_mcp(session_id)
+          {:error, -32_000, "failed to persist ACP session"}
+      end
     end
   end
 
@@ -220,11 +225,16 @@ defmodule LemonControlPlane.ACP do
         |> Map.put(:closed, false)
         |> Map.put(:client_capabilities, client_capabilities(params, opts, existing))
 
-      put_session(session_id, session)
-      if Keyword.get(opts, :replay, false), do: replay_history(session_id, session, opts)
-      project_todos(session_id, session, opts)
-      bootstrap(session_id, session, opts)
-      {:ok, session_response(session)}
+      case put_session(session_id, session) do
+        :ok ->
+          if Keyword.get(opts, :replay, false), do: replay_history(session_id, session, opts)
+          project_todos(session_id, session, opts)
+          bootstrap(session_id, session, opts)
+          {:ok, session_response(session)}
+
+        {:error, _reason} ->
+          {:error, -32_000, "failed to persist ACP session"}
+      end
     else
       false -> {:error, -32_602, "cwd must match the stored session"}
       error -> error
@@ -259,8 +269,11 @@ defmodule LemonControlPlane.ACP do
          {:ok, session} <- existing_session(session_id),
          :ok <- cancel_last_run(session) do
       close_session_mcp(session_id)
-      put_session(session_id, Map.put(session, :closed, true))
-      {:ok, %{}}
+
+      case put_session(session_id, Map.put(session, :closed, true)) do
+        :ok -> {:ok, %{}}
+        {:error, _reason} -> {:error, -32_000, "failed to persist ACP session"}
+      end
     end
   end
 
@@ -269,21 +282,26 @@ defmodule LemonControlPlane.ACP do
   def cancel_session(params) when is_map(params) do
     with {:ok, session_id} <- required_string(params, "sessionId"),
          {:ok, session} <- existing_session(session_id) do
-      put_session(session_id, Map.put(session, :cancelled_run_id, session.last_run_id))
-
-      case cancel_last_run(session) do
+      case put_session(session_id, Map.put(session, :cancelled_run_id, session.last_run_id)) do
         :ok ->
-          {:ok, %{}}
+          case cancel_last_run(session) do
+            :ok ->
+              {:ok, %{}}
 
-        error ->
-          current = get_session(session_id) || session
+            error ->
+              current = get_session(session_id) || session
 
-          put_session(
-            session_id,
-            Map.put(current, :cancelled_run_id, Map.get(session, :cancelled_run_id))
-          )
+              _ =
+                put_session(
+                  session_id,
+                  Map.put(current, :cancelled_run_id, Map.get(session, :cancelled_run_id))
+                )
 
-          error
+              error
+          end
+
+        {:error, _reason} ->
+          {:error, -32_000, "failed to persist ACP session"}
       end
     end
   end
@@ -323,11 +341,7 @@ defmodule LemonControlPlane.ACP do
        when rest == "" or binary_part(rest, 0, 1) in [" ", "\n", "\t"] do
     compact_opts = [cwd: session.cwd, custom_instructions: String.trim(rest)]
 
-    case AgentRuntime.call(
-           :compact_session,
-           [session.session_key, compact_opts],
-           {:error, :unavailable}
-         ) do
+    case AgentRuntime.mutate(:compact_session, [session.session_key, compact_opts]) do
       :ok ->
         emit(
           session_id,
@@ -339,6 +353,9 @@ defmodule LemonControlPlane.ACP do
         )
 
         {:ok, %{"stopReason" => "end_turn"}}
+
+      {:error, :outcome_unknown} ->
+        outcome_unknown("compaction")
 
       _ ->
         {:error, -32_000, "session context could not be compacted"}
@@ -660,16 +677,22 @@ defmodule LemonControlPlane.ACP do
          {:ok, key, stored} <- config_value(id, value),
          :ok <- authorize_config(key, stored, opts) do
       session = Map.put(session, key, stored)
-      put_session(session_id, session)
-      options = config_options(session)
 
-      emit(
-        session_id,
-        %{"sessionUpdate" => "config_option_update", "configOptions" => options},
-        opts
-      )
+      case put_session(session_id, session) do
+        :ok ->
+          options = config_options(session)
 
-      {:ok, %{"configOptions" => options}}
+          emit(
+            session_id,
+            %{"sessionUpdate" => "config_option_update", "configOptions" => options},
+            opts
+          )
+
+          {:ok, %{"configOptions" => options}}
+
+        {:error, _reason} ->
+          {:error, -32_000, "failed to persist ACP session"}
+      end
     end
   end
 
@@ -684,16 +707,22 @@ defmodule LemonControlPlane.ACP do
   defp authorize_config(_key, _value, _opts), do: :ok
 
   defp native_plan(session, action, opts \\ []) do
-    case AgentRuntime.call(
-           :session_plan,
-           [session.session_key, session.cwd, action, opts],
-           {:error, :unavailable}
-         ) do
+    args = [session.session_key, session.cwd, action, opts]
+
+    result =
+      if action == :status,
+        do: AgentRuntime.query(:session_plan, args),
+        else: AgentRuntime.mutate(:session_plan, args)
+
+    case result do
       {:ok, %{"mode" => mode} = plan} when mode in ["code", "plan"] ->
         {:ok, plan}
 
       {:error, :busy} ->
         {:error, -32_000, "session is busy; wait for the active turn"}
+
+      {:error, :outcome_unknown} ->
+        outcome_unknown("plan mode change")
 
       _ ->
         {:error, -32_000, "native session planning is unavailable"}
@@ -719,11 +748,10 @@ defmodule LemonControlPlane.ACP do
   defp session_tool_policy(session) do
     cond do
       Map.get(session, :approval_mode) == "never" ->
-        AgentRuntime.call(:tool_policy, [:read_only], %{
-          allow: [],
-          deny: [],
-          profile: :unavailable
-        })
+        case AgentRuntime.query(:tool_policy, [:read_only]) do
+          policy when is_map(policy) -> policy
+          _ -> %{allow: [], deny: [], profile: :unavailable}
+        end
 
       # Canonical mode: every non-read tier, including eval, debug, LSP
       # execution and unclassified satellite tools, needs review.
@@ -782,7 +810,7 @@ defmodule LemonControlPlane.ACP do
   # File-defined slash commands are listed but expanded server-side by the
   # native executor, so `/name args` is submitted verbatim like any prompt.
   defp file_commands(cwd) do
-    case AgentRuntime.call(:slash_commands, [cwd], []) do
+    case AgentRuntime.query(:slash_commands, [cwd]) do
       commands when is_list(commands) ->
         commands
         |> Enum.reject(
@@ -822,11 +850,7 @@ defmodule LemonControlPlane.ACP do
   defp expand_skill_command(prompt, _session), do: {:ok, prompt}
 
   defp project_todos(session_id, session, opts) do
-    case AgentRuntime.call(
-           :session_todos,
-           [session.session_key, session.cwd],
-           {:error, :unavailable}
-         ) do
+    case AgentRuntime.query(:session_todos, [session.session_key, session.cwd]) do
       {:ok, todos, _revision} when is_list(todos) ->
         state = LemonControlPlane.ACP.SessionUpdates.new(session_id, cwd: session.cwd)
         replay_event(state, {:todos_changed, todos}, opts)
@@ -1043,11 +1067,7 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp native_history(session) do
-    case AgentRuntime.call(
-           :session_history,
-           [session.session_key, session.cwd],
-           {:error, :unavailable}
-         ) do
+    case AgentRuntime.query(:session_history, [session.session_key, session.cwd]) do
       {:ok, entries} when is_list(entries) -> {:ok, entries}
       _ -> :unavailable
     end
@@ -1067,17 +1087,24 @@ defmodule LemonControlPlane.ACP do
         session =
           source
           |> Map.merge(%{
+            session_id: id,
             session_key: key,
             last_run_id: nil,
             closed: false,
             updated_at: DateTime.utc_now() |> DateTime.to_iso8601()
           })
+          |> Map.delete(:cancelled_run_id)
 
-        put_session(id, session)
-        remember_native_resume(id)
-        project_todos(id, session, opts)
-        bootstrap(id, session, opts)
-        {:ok, Map.put(session_response(session), "sessionId", id)}
+        case put_session(id, session) do
+          :ok ->
+            project_todos(id, session, opts)
+            bootstrap(id, session, opts)
+            {:ok, Map.put(session_response(session), "sessionId", id)}
+
+          {:error, _reason} ->
+            close_session_mcp(id)
+            {:error, -32_000, "failed to persist ACP session"}
+        end
       else
         error ->
           close_session_mcp(id)
@@ -1093,15 +1120,17 @@ defmodule LemonControlPlane.ACP do
     if is_nil(source.last_run_id) and is_nil(LemonCore.ChatStateStore.get(source.session_key)) do
       :ok
     else
-      case AgentRuntime.call(
-             :session_fork,
-             [source.session_key, source.cwd, destination_key],
-             {:error, :unavailable}
-           ) do
+      case AgentRuntime.mutate(:session_fork, [source.session_key, source.cwd, destination_key]) do
         :ok -> :ok
+        {:error, :outcome_unknown} -> outcome_unknown("session fork")
         _ -> {:error, -32_000, "could not fork the persisted native session"}
       end
     end
+  end
+
+  # A reached runtime mutation that failed may already have applied.
+  defp outcome_unknown(operation) do
+    {:error, -32_000, "#{operation} outcome is unknown; reconcile before retrying"}
   end
 
   defp submit_prompt(session_id, session, params, prompt, run_id) do
@@ -1141,25 +1170,33 @@ defmodule LemonControlPlane.ACP do
 
     case submitter().(request) do
       {:ok, run_id} when is_binary(run_id) and byte_size(run_id) > 0 ->
-        put_session(session_id, %{
+        updated = %{
           session
           | updated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
             last_run_id: run_id,
             title: session.title || title_from_prompt(prompt)
-        })
+        }
 
-        {:ok,
-         %{
-           run_id: run_id,
-           session_id: session_id,
-           session_key: session.session_key,
-           client_capabilities: client_capabilities,
-           status: if(queue_only?, do: "queued", else: "submitted"),
-           wait?: not queue_only?
-         }}
+        case put_session(session_id, updated) do
+          :ok ->
+            {:ok,
+             %{
+               run_id: run_id,
+               session_id: session_id,
+               session_key: session.session_key,
+               client_capabilities: client_capabilities,
+               status: if(queue_only?, do: "queued", else: "submitted"),
+               wait?: not queue_only?
+             }}
+
+          {:error, _reason} ->
+            {:error, -32_000,
+             "run was submitted, but persisting ACP session state failed; do not retry automatically",
+             %{"runId" => run_id, "retrySafe" => false, "mutationMayHaveApplied" => true}}
+        end
 
       {:error, :outcome_unknown} ->
-        put_session(session_id, %{session | last_run_id: run_id})
+        _ = put_session(session_id, %{session | last_run_id: run_id})
 
         {:error, -32_000, "run submission outcome is unknown; do not retry automatically",
          %{"runId" => run_id, "retrySafe" => false}}
@@ -1725,8 +1762,6 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp prompt_response(result) do
-    remember_native_resume(result.session_id)
-
     %{
       "stopReason" => stop_reason(result),
       "usage" => prompt_usage(result[:usage]),
@@ -1827,9 +1862,6 @@ defmodule LemonControlPlane.ACP do
         {:error, -32_602, "session not found"}
 
       {:ok, session} ->
-        restore_native_resume(session)
-        # Pre-native ACP sessions stored a selected Code/Plan mode; plan state is
-        # native now, so the stale field is dropped on the next write.
         {:ok, Map.delete(session, :mode)}
 
       {:error, _, _} = unavailable ->
@@ -1862,35 +1894,11 @@ defmodule LemonControlPlane.ACP do
 
   defp prompt_usage(_), do: nil
 
-  defp remember_native_resume(session_id) do
-    with session when is_map(session) <- get_session(session_id),
-         %{last_engine: "lemon", last_resume_token: token} when is_binary(token) <-
-           LemonCore.ChatStateStore.get(session.session_key) do
-      put_session(session_id, Map.put(session, :native_resume, token))
-    else
-      _ -> :ok
-    end
-  end
-
-  defp restore_native_resume(session) do
-    if is_nil(LemonCore.ChatStateStore.get(session.session_key)) and
-         is_binary(Map.get(session, :native_resume)) do
-      LemonCore.ChatStateStore.put(session.session_key, %LemonCore.ChatState{
-        last_engine: "lemon",
-        last_resume_token: session.native_resume,
-        updated_at: System.system_time(:millisecond)
-      })
-    end
-
-    :ok
-  end
-
   # Admission and listing read strictly: an unreadable session store is an
   # error, never an unknown session or an empty list.
   defp fetch_session(session_id) do
-    case Store.fetch(@session_store_table, session_id) do
-      {:ok, session} when is_map(session) -> {:ok, session}
-      {:ok, _absent} -> {:ok, nil}
+    case SessionMetadataStore.fetch_acp_by_id(session_id) do
+      {:ok, session} -> {:ok, session}
       {:error, _reason} -> session_store_unavailable()
     end
   end
@@ -1904,20 +1912,14 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
-  defp put_session(session_id, session) do
-    :ok = Store.put(@session_store_table, session_id, session)
+  defp put_session(session_id, %{session_key: session_key} = session) do
+    SessionMetadataStore.put_acp(session_key, Map.put(session, :session_id, session_id))
   end
 
   defp fetch_all_sessions do
-    case Store.fetch_all(@session_store_table) do
-      {:ok, entries} ->
-        {:ok,
-         entries
-         |> Enum.filter(fn {session_id, session} -> is_binary(session_id) and is_map(session) end)
-         |> Map.new()}
-
-      {:error, _reason} ->
-        session_store_unavailable()
+    case SessionMetadataStore.list_acp() do
+      {:ok, entries} -> {:ok, Map.new(entries)}
+      {:error, _reason} -> session_store_unavailable()
     end
   end
 

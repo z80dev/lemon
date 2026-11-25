@@ -37,8 +37,7 @@ defmodule LemonChannels.Outbox do
   deliberately exempts outbox message delivery from the repository rule that an
   `:outcome_unknown` mutation is never automatically retried. The shapes the
   outbox treats as unknown live in `LemonChannels.DeliveryError.outcome_unknown?/1`.
-  SMTP reports a lost connection once DATA was issued, and the WhatsApp bridge
-  reports an exception thrown by its send call, as unknown.
+  SMTP reports a lost connection once DATA was issued as unknown.
 
   Retries are bounded by `max_attempts` (default 3 retries), one budget shared
   by all retryable failures, with `LemonCore.Retry.Policy` exponential backoff

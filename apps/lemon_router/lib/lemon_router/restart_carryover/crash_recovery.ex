@@ -134,7 +134,7 @@ defmodule LemonRouter.RestartCarryover.CrashRecovery do
   defp unknown_calls(%RunRequest{resume: nil}), do: {:ok, []}
 
   defp unknown_calls(%RunRequest{cwd: cwd, resume: resume}) do
-    LemonCore.AgentRuntime.call(:interrupted_tool_calls, [cwd, resume], {:error, :unavailable})
+    LemonCore.AgentRuntime.query(:interrupted_tool_calls, [cwd, resume])
   end
 
   @doc false

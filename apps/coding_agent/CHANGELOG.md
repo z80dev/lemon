@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- `CodingAgent.SessionSupervisor.start_session/1` takes `:supervisor` (and the
+  session's `:registry`); `stop_session/2`, `lookup/2` and `list_sessions/1`
+  take the same targets, defaulting to the application's tree. The supervisor
+  suites now exercise the real module instead of an in-file copy (#733).
+
 ### Changed
 
 - Journal format: assistant entries' `system-prompt-digest` is now version 2, a
@@ -12,6 +19,9 @@
 
 ### Removed
 
+- **Breaking:** removed `CodingAgent.Advisor`, the `CodingAgent.AdvisorSupervisor`
+  child and the session's internal `:advisor_context` call; `advisor:` session
+  options are refused with `{:error, {:unsupported_option, :advisor}}` (#705).
 - **Breaking:** removed `CodingAgent.SessionIndex`, `SessionManager.list_sessions/1`
   and `SessionEntry.session_info/2`; journal appends, checkpoints and
   `save_to_file/2` take no lock and write no `.index.sqlite3`. Older journals'
@@ -120,6 +130,14 @@
   accepted during recovery waits for it. Agent events before the accepted
   prompt's `{:agent_start}` are fenced off, and `prompt/3` is busy while a
   prompt is pending dispatch.
+- A parent's redirect signal (Redirect or stream-rule injection) no longer
+  cancels its task children or ends their joins; only an abort does (#633).
+- `CodingAgent.Session.reset/1` waits longer than the session's own 5-second
+  abort wait, so a slow abort returns `:ok` or `{:error, :busy}` instead of
+  exiting the caller with a call timeout while the reset may still finish (#499).
+- Execution nodes advertise `memory.transfer.release`, bound to the source node,
+  so the controller deletes a node's frozen memory-transfer snapshot once the
+  destination receipt is recorded rather than waiting for the Store TTL (#623).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller
