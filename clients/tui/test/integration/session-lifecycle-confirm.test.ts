@@ -33,10 +33,41 @@ afterEach(() => {
 	invalidateThemeAdapters();
 });
 
-const VERIFIED_RESET = {
+const PREVIEW_TOKEN = "reset-preview-token-1";
+const PREVIEW_RESET = {
+	dryRun: true,
 	success: true,
 	sessionKey: SESSION,
-	summary: { sessionKey: SESSION, reset: true, cleanup: { deletedRunHistory: true } },
+	confirmToken: PREVIEW_TOKEN,
+	digest: "deadbeef12345678",
+	preview: {
+		sessionKey: SESSION,
+		digest: "deadbeef12345678",
+		runHistoryCount: 2,
+		hasChatState: true,
+		hasSessionPolicy: true,
+		hasAcpMetadata: false,
+		hasAcpRunState: false,
+	},
+	summary: {
+		sessionKey: SESSION,
+		reset: false,
+		verified: false,
+		requiresConfirmation: true,
+	},
+};
+
+const VERIFIED_RESET = {
+	dryRun: false,
+	success: true,
+	sessionKey: SESSION,
+	digest: "deadbeef12345678",
+	summary: {
+		sessionKey: SESSION,
+		reset: true,
+		verified: true,
+		cleanup: { deletedRunHistory: true },
+	},
 };
 
 async function boot(
@@ -59,7 +90,17 @@ async function boot(
 	server.onMethod("sessions.get", (params: { sessionKey: string }) => ({
 		session: { sessionKey: params.sessionKey, runCount: 3, pinned: false, archived: false },
 	}));
-	server.respondWith("sessions.reset", VERIFIED_RESET);
+	server.onMethod(
+		"sessions.reset",
+		(params: { sessionKey: string; dryRun?: boolean; confirmToken?: string }) =>
+			params.dryRun !== false
+				? { ...PREVIEW_RESET, sessionKey: params.sessionKey }
+				: {
+						...VERIFIED_RESET,
+						sessionKey: params.sessionKey,
+						summary: { ...VERIFIED_RESET.summary, sessionKey: params.sessionKey },
+					},
+	);
 	const app = new AppShell({
 		url: server.url,
 		sessionKey: options.sessionKey ?? SESSION,
@@ -88,27 +129,49 @@ function seed(app: AppShell, key = SESSION): void {
 }
 
 describe("/reset", () => {
+	function confirmResetModal(app: AppShell): void {
+		const modal = app.selectors.current as PickerOverlay;
+		expect(modal).toBeDefined();
+		modal.handleInput("\x1b[B"); // Move from Cancel to Reset
+		modal.handleInput("\r");
+	}
+
 	test.each(["/reset", "/session reset"])(
-		"%s previews and sends nothing until the exact key confirms it",
+		"%s previews via daemon dryRun and resets only when interactively confirmed",
 		async (command) => {
 			const { app, server } = await boot();
 			seed(app);
 			await app.submit(command);
-			expect(server.requestsFor("sessions.reset")).toHaveLength(0);
-			expect(chat(app)).toContain(`reset preview · ${SESSION}`);
-			expect(chat(app)).toContain(`--confirm ${SESSION}`);
-			expect(chat(app)).toContain("keep me");
+			expect(server.requestsFor("sessions.reset")).toHaveLength(1);
+			expect(server.requestsFor("sessions.reset")[0]!.params).toEqual({
+				sessionKey: SESSION,
+				dryRun: true,
+			});
+			expect(app.selectors.isOpen).toBe(true);
+			const modal = app.selectors.current as PickerOverlay;
+			const rendered = renderPlain(modal.render(120));
+			expect(rendered).toContain("Confirm session reset?");
+			expect(rendered).toContain("2 runs of history");
 
-			// A confirmation for another key is a cancel, not a reset.
-			await app.submit(`${command} --confirm other-session`);
-			expect(server.requestsFor("sessions.reset")).toHaveLength(0);
+			// Stray typing must not filter away Cancel; pressing Enter on default Cancel does nothing.
+			modal.handleInput("reset");
+			modal.handleInput("\r");
+			expect(app.selectors.isOpen).toBe(false);
+			expect(server.requestsFor("sessions.reset")).toHaveLength(1);
 			expect(app.store.focused.blocks.some((b) => b.kind === "user")).toBe(true);
 
-			await app.submit(`${command} --confirm ${SESSION}`);
-			await waitFor(() => server.requestsFor("sessions.reset").length === 1, {
-				what: "sessions.reset",
+			// Reopen and explicitly select Reset.
+			await app.submit(command);
+			expect(server.requestsFor("sessions.reset")).toHaveLength(2);
+			confirmResetModal(app);
+			await waitFor(() => server.requestsFor("sessions.reset").length === 3, {
+				what: "confirmed sessions.reset",
 			});
-			expect(server.requestsFor("sessions.reset")[0]!.params).toEqual({ sessionKey: SESSION });
+			expect(server.requestsFor("sessions.reset")[2]!.params).toEqual({
+				sessionKey: SESSION,
+				dryRun: false,
+				confirmToken: PREVIEW_TOKEN,
+			});
 			await waitFor(() => !app.store.focused.blocks.some((b) => b.kind === "user"), {
 				what: "the local reset",
 			});
@@ -117,10 +180,13 @@ describe("/reset", () => {
 
 	test("an unverified reset keeps the local transcript and says the outcome is unknown", async () => {
 		const { app, server } = await boot();
-		server.respondWith("sessions.reset", { ok: true });
+		server.onMethod("sessions.reset", (params: { dryRun?: boolean }) =>
+			params.dryRun !== false ? PREVIEW_RESET : { ok: true },
+		);
 		seed(app);
-		await app.submit(`/reset --confirm ${SESSION}`);
-		await waitFor(() => server.requestsFor("sessions.reset").length === 1, {
+		await app.submit("/reset");
+		confirmResetModal(app);
+		await waitFor(() => server.requestsFor("sessions.reset").length === 2, {
 			what: "sessions.reset",
 		});
 		await waitFor(() => chat(app).includes("unknown"), { what: "the unknown outcome" });
@@ -132,33 +198,35 @@ describe("/reset", () => {
 		const { app, server } = await boot();
 		app.store.focused.busy = true;
 		app.store.focused.activeRunId = "run-live";
-		await app.submit(`/reset --confirm ${SESSION}`);
+		await app.submit("/reset");
 		expect(server.requestsFor("sessions.reset")).toHaveLength(0);
 		expect(chat(app)).toContain("running");
 	});
 
-	/** Hold `sessions.reset` until the test releases it with a verified receipt. */
-	function holdReset(server: FakeControlPlane) {
+	/** Hold confirmed `sessions.reset` until the test releases it with a verified receipt. */
+	function holdConfirmedReset(server: FakeControlPlane) {
 		const { promise, resolve } = Promise.withResolvers<typeof VERIFIED_RESET>();
-		server.onMethod("sessions.reset", () => promise);
+		server.onMethod("sessions.reset", (params: { dryRun?: boolean }) =>
+			params.dryRun !== false ? PREVIEW_RESET : promise,
+		);
 		return () => resolve(VERIFIED_RESET);
 	}
 
 	test("prompts are refused while the reset is in flight", async () => {
 		const { app, server } = await boot();
 		seed(app);
-		const release = holdReset(server);
-		const resetting = app.submit(`/reset --confirm ${SESSION}`);
-		await waitFor(() => server.requestsFor("sessions.reset").length === 1, {
-			what: "sessions.reset",
+		const release = holdConfirmedReset(server);
+		await app.submit("/reset");
+		confirmResetModal(app);
+		await waitFor(() => server.requestsFor("sessions.reset").length === 2, {
+			what: "confirmed sessions.reset",
 		});
 		expect(app.store.focused.resetPending).toBe(true);
 		expect(await app.sendPrompt("sneak this in")).toBe("rejected");
 		expect(server.requestsFor("chat.send")).toHaveLength(0);
 		expect(chat(app)).toContain("reset of this session is in flight");
 		release();
-		await resetting;
-		expect(app.store.focused.resetPending).toBe(false);
+		await waitFor(() => !app.store.focused.resetPending, { what: "reset settles" });
 		// The refusal notice is itself a change after the confirmed generation.
 		expect(chat(app)).toContain("outcome unknown");
 		expect(app.store.focused.blocks.some((b) => b.kind === "user")).toBe(true);
@@ -167,10 +235,11 @@ describe("/reset", () => {
 	test("a run that starts before the verified reply lands is not wiped", async () => {
 		const { app, server } = await boot();
 		seed(app);
-		const release = holdReset(server);
-		const resetting = app.submit(`/reset --confirm ${SESSION}`);
-		await waitFor(() => server.requestsFor("sessions.reset").length === 1, {
-			what: "sessions.reset",
+		const release = holdConfirmedReset(server);
+		await app.submit("/reset");
+		confirmResetModal(app);
+		await waitFor(() => server.requestsFor("sessions.reset").length === 2, {
+			what: "confirmed sessions.reset",
 		});
 		// Another client starts a run on the same session meanwhile.
 		server.pushEvent("agent", { type: "started", runId: "remote-run", sessionKey: SESSION });
@@ -183,7 +252,6 @@ describe("/reset", () => {
 		});
 		await waitFor(() => chat(app).includes("remote answer"), { what: "the remote run" });
 		release();
-		await resetting;
 		await waitFor(() => chat(app).includes("outcome unknown"), { what: "the unknown outcome" });
 		expect(chat(app)).toContain("remote answer");
 		expect(app.store.focused.activeRunId).toBe("remote-run");
@@ -217,7 +285,7 @@ describe("/reset against submissions still being prepared", () => {
 			await waitFor(() => server.requestsFor(method).length === 1, { what: method });
 			expect(app.store.focused.pendingSubmissions).toBe(1);
 
-			await app.submit(`/reset --confirm ${sessionKey}`);
+			await app.submit("/reset");
 			expect(server.requestsFor("sessions.reset")).toHaveLength(0);
 			expect(chat(app)).toContain("a prompt submission is still running");
 

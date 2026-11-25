@@ -1,8 +1,8 @@
 # Adaptive Behavior User Guide
 
-Lemon learns from past runs to make better routing and skill decisions.
-All adaptive features ship enabled by default and are controlled by feature
-flags (each flag is an operator kill switch).
+Lemon can learn from past runs to make routing and skill decisions. Each
+adaptive feature is controlled by a feature flag: skill synthesis ships enabled
+(the flag is a kill switch); routing feedback is off until an operator enables it.
 
 ---
 
@@ -13,14 +13,16 @@ There are three adaptive subsystems:
 | Subsystem | Feature flag | What it does |
 |---|---|---|
 | Routing feedback | `routing_feedback` | Records run outcomes to inform future model selection |
-| History-aware routing | `routing_feedback` | Uses past success/failure signals to break ties in model selection |
+| History-aware routing | `routing_feedback` | Suggests a model that has outperformed the configured default |
 | Skill synthesis | `skill_synthesis_drafts` | Auto-generates draft skills from successful runs |
 
-All adaptive features are on by default. To turn any of them off:
+Routing feedback is off by default; skill synthesis is on. To enable routing
+feedback and turn skill synthesis off, set this in the global config
+(`~/.lemon/config.toml`):
 
 ```toml
 [features]
-routing_feedback       = "off"
+routing_feedback       = "on"
 skill_synthesis_drafts = "off"
 ```
 
@@ -58,14 +60,17 @@ explicit_model
   → meta_model (per-run override)
     → session_model (per-session override)
       → profile_model (config profile)
-        → history_model  ← best model for this task context
+        → history_model  ← only when it beat the default here
           → default_model
 ```
 
-`history_model` is the model with the highest success rate for the current task's
-context (task family + workspace directory). A model only qualifies once it has
-at least 5 samples in that context. It only kicks in when no higher-precedence
-model is set.
+History is advisory and only consulted when the router default would otherwise
+be used. In the current task's context (task family + workspace directory) a
+model is a candidate once it has at least 5 samples and a success rate of at
+least 75%. The best candidate replaces `[defaults] model` only when the default
+has itself been measured there (at least 5 samples) with a lower success rate.
+A default changed after the samples were taken has no samples, so it is used.
+The router reads the flag and the default from the global config only.
 
 ### Viewing feedback data
 
@@ -214,8 +219,8 @@ in the prompt (checked in this order: code, file ops, query, chat):
 
 ```toml
 [features]
-routing_feedback       = "default-on"  # kill switch: set "off" to disable
-skill_synthesis_drafts = "default-on"
+routing_feedback       = "off"         # default; set "on" to record and use routing history
+skill_synthesis_drafts = "default-on"  # kill switch: set "off" to disable
 ```
 
 Each flag can also be set with `LEMON_FEATURE_ROUTING_FEEDBACK` /
@@ -231,4 +236,4 @@ application config; see [Memory](memory.md#retention-and-pruning).
 - [`docs/user-guide/skills.md`](skills.md) — Full skills user guide
 - [`docs/user-guide/rollout.md`](rollout.md) — Feature flag states and rollback
 
-*Last reviewed: 2026-10-15*
+*Last reviewed: 2026-11-23*

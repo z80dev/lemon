@@ -39,7 +39,7 @@ defmodule LemonCore.Store.Hooks do
 
   require Logger
 
-  @type kind :: :finalize_run_hooks | :cached_tables
+  @type kind :: :finalize_run_hooks | :cached_tables | :run_events
   @type hook :: {module(), atom()} | {module(), atom(), [term()]} | (term() -> any())
 
   @doc """

@@ -117,27 +117,82 @@ describe("session commands with the switcher mounted", () => {
 		expect(harness.host.text).toContain("this build cannot create sessions");
 	});
 
-	test("/session reset previews, then clears both copies only after a verified reset", async () => {
-		harness.server.respondWith("sessions.reset", {
-			success: true,
-			sessionKey: "tui-session",
-			summary: { sessionKey: "tui-session", reset: true },
-		});
+	test("/session reset previews, opens confirmation, and clears both copies only after verified reset", async () => {
+		harness.server.onMethod(
+			"sessions.reset",
+			(params: { sessionKey: string; dryRun?: boolean; confirmToken?: string }) => {
+				if (params.dryRun !== false) {
+					return {
+						dryRun: true,
+						success: true,
+						sessionKey: params.sessionKey,
+						confirmToken: "tok-reset-1",
+						digest: "abcdef0123456789",
+						preview: {
+							sessionKey: params.sessionKey,
+							digest: "abcdef0123456789",
+							runHistoryCount: 2,
+							hasChatState: true,
+							hasSessionPolicy: true,
+							hasAcpMetadata: false,
+							hasAcpRunState: false,
+						},
+						summary: { sessionKey: params.sessionKey, reset: false, verified: false },
+					};
+				}
+				return {
+					dryRun: false,
+					success: true,
+					sessionKey: params.sessionKey,
+					digest: "abcdef0123456789",
+					summary: { sessionKey: params.sessionKey, reset: true, verified: true },
+				};
+			},
+		);
 		await runWired("/session reset");
-		expect(harness.server.requestsFor("sessions.reset")).toHaveLength(0);
-		expect(spy.reset).toEqual([]);
-		expect(harness.host.text).toContain("/reset --confirm tui-session");
-		await runWired("/session reset --confirm tui-session");
+		expect(harness.server.requestsFor("sessions.reset")).toHaveLength(1);
 		expect(harness.server.requestsFor("sessions.reset")[0].params).toEqual({
 			sessionKey: "tui-session",
+			dryRun: true,
+		});
+		expect(spy.reset).toEqual([]);
+		const picker = harness.host.pickers.at(-1)!;
+		expect(picker.title).toContain("Confirm session reset");
+		expect(picker.filterable).toBe(false);
+		expect(picker.items[0]!.value).toBe("cancel");
+		expect(picker.detail?.join("\n")).toContain("2 runs of history");
+
+		// Selecting Cancel sends no destructive mutation.
+		await picker.onSelect(picker.items[0]!);
+		expect(harness.server.requestsFor("sessions.reset")).toHaveLength(1);
+		expect(spy.reset).toEqual([]);
+
+		// Confirming sends dryRun: false + confirmToken and clears locally.
+		await picker.onSelect(picker.items[1]!);
+		expect(harness.server.requestsFor("sessions.reset")).toHaveLength(2);
+		expect(harness.server.requestsFor("sessions.reset")[1].params).toEqual({
+			sessionKey: "tui-session",
+			dryRun: false,
+			confirmToken: "tok-reset-1",
 		});
 		expect(spy.reset).toEqual(["tui-session"]);
 	});
 
 	test("/session reset keeps the local copy when the daemon does not verify it", async () => {
-		harness.server.respondWith("sessions.reset", { ok: true });
-		await runWired("/session reset --confirm tui-session");
-		expect(harness.server.requestsFor("sessions.reset")).toHaveLength(1);
+		harness.server.onMethod("sessions.reset", (params: { sessionKey: string; dryRun?: boolean }) =>
+			params.dryRun !== false
+				? {
+						dryRun: true,
+						success: true,
+						sessionKey: params.sessionKey,
+						confirmToken: "tok-unverified",
+					}
+				: { ok: true },
+		);
+		await runWired("/session reset");
+		const picker = harness.host.pickers.at(-1)!;
+		await picker.onSelect(picker.items[1]!);
+		expect(harness.server.requestsFor("sessions.reset")).toHaveLength(2);
 		expect(spy.reset).toEqual([]);
 		expect(harness.host.text).toContain("outcome unknown");
 	});

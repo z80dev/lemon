@@ -352,6 +352,23 @@ defmodule LemonGateway.RunTest do
     refute_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}, 50
   end
 
+  test "a finalized run evicted by :runs retention is never reopened" do
+    request = make_request(make_scope(), meta: %{executor_observer: self()})
+    now = System.system_time(:millisecond)
+
+    # What retention leaves behind: no `:runs` record, only the terminal marker.
+    :ok = LemonCore.Store.put(:run_terminals, request.run_id, %{finalized_at_ms: now})
+
+    on_exit(fn -> LemonCore.Store.delete(:run_terminals, request.run_id) end)
+    assert {:error, :evicted} = LemonCore.RunStore.fetch(request.run_id)
+
+    {:ok, pid} = start_run_direct(request)
+    ref = Process.monitor(pid)
+
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2_000
+    refute_received {:executor_started, _request, _opts}
+  end
+
   describe "initialization" do
     test "starts successfully with a valid execution request" do
       scope = make_scope()
@@ -443,7 +460,7 @@ defmodule LemonGateway.RunTest do
                      2000
 
       # Process should stop after error
-      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_dead(pid)
     end
 
     test "handles executor start_run exception" do
@@ -460,7 +477,7 @@ defmodule LemonGateway.RunTest do
                       }},
                      2000
 
-      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_dead(pid)
     end
 
     test "handles executor start_run exit" do
@@ -477,7 +494,7 @@ defmodule LemonGateway.RunTest do
                       }},
                      2000
 
-      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_dead(pid)
     end
 
     test "sends completion notification with the original submitted request" do
@@ -567,7 +584,7 @@ defmodule LemonGateway.RunTest do
              } = receive_bus_event(:engine_action)
 
       # Run should still be alive (check without timing race)
-      Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_alive(pid)
     end
 
     test "processes Completed event and stops" do
@@ -581,7 +598,7 @@ defmodule LemonGateway.RunTest do
                      2000
 
       # Wait deterministically for the process to stop
-      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_dead(pid)
     end
 
     test "ignores events with wrong run_ref" do
@@ -603,7 +620,7 @@ defmodule LemonGateway.RunTest do
       send(pid, {:engine_event, wrong_ref, completed})
 
       # Run should still be alive (event was ignored)
-      Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_alive(pid)
     end
   end
 
@@ -665,7 +682,7 @@ defmodule LemonGateway.RunTest do
       send(pid, {:unknown_message, "some data"})
 
       # Run should still be alive
-      Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_alive(pid)
     end
   end
 
@@ -836,7 +853,7 @@ defmodule LemonGateway.RunTest do
                      2000
 
       # Process should stop
-      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_dead(pid)
     end
 
     test "cancel is idempotent and emits one terminal completion" do
@@ -944,7 +961,7 @@ defmodule LemonGateway.RunTest do
                       %{__event__: :completed, ok: false, error: :engine_error}},
                      2000
 
-      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_dead(pid)
     end
 
     test "passes executor test scenarios through request metadata" do
@@ -987,7 +1004,7 @@ defmodule LemonGateway.RunTest do
 
       # Should NOT crash
       # Stopped normally
-      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_dead(pid)
     end
   end
 
@@ -1234,7 +1251,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:lemon_gateway_run_completed, ^request, _}, 2000
 
       # Wait for unregistration to complete
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+      LemonCore.Testing.AsyncHelpers.assert_eventually(
         fn -> LemonGateway.ProgressStore.get_run(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed"
       )
@@ -1263,7 +1280,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:lemon_gateway_run_completed, ^request, _}, 2000
 
       # Wait for cleanup to complete
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+      LemonCore.Testing.AsyncHelpers.assert_eventually(
         fn -> LemonGateway.ProgressStore.get_run(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed on completion"
       )
@@ -1284,7 +1301,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Verify mapping exists (stores run_id string, not PID)
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+      LemonCore.Testing.AsyncHelpers.assert_eventually(
         fn ->
           case LemonGateway.ProgressStore.get_run(scope, progress_msg_id) do
             run_id when is_binary(run_id) and run_id != "" -> true
@@ -1300,7 +1317,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:lemon_gateway_run_completed, ^request, _}, 2000
 
       # Wait for cleanup to complete
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+      LemonCore.Testing.AsyncHelpers.assert_eventually(
         fn -> LemonGateway.ProgressStore.get_run(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed on cancellation"
       )
@@ -1393,7 +1410,7 @@ defmodule LemonGateway.RunTest do
       )
 
       # Process should still be running
-      Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_alive(pid)
 
       # Send completion
       completed = Event.completed(%{engine: "controllable", ok: true, answer: "done"})
@@ -1424,7 +1441,7 @@ defmodule LemonGateway.RunTest do
         send(pid, {:engine_event, run_ref, event})
       end
 
-      Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_alive(pid)
 
       # Complete
       completed = Event.completed(%{engine: "controllable", ok: true, answer: "all done"})
@@ -1742,7 +1759,7 @@ defmodule LemonGateway.RunTest do
       send(pid, {:engine_event, run_ref, event})
 
       # Run should still be active
-      Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_alive(pid)
 
       # Send completed action
       completed_event =
@@ -1869,7 +1886,7 @@ defmodule LemonGateway.RunTest do
       run_id = completed.run_id
 
       # Wait for store operations to complete
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+      LemonCore.Testing.AsyncHelpers.assert_eventually(
         fn ->
           match?(%{events: events} when length(events) >= 2, LemonCore.Store.get_run(run_id))
         end,
@@ -1985,7 +2002,7 @@ defmodule LemonGateway.RunTest do
                       %{__event__: :completed, ok: false, error: ^error}},
                      2000
 
-      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_dead(pid)
     end
 
     test "cancel is idempotent - second cancel is ignored" do
@@ -2079,7 +2096,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Verify mapping exists (stores run_id string, not PID)
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+      LemonCore.Testing.AsyncHelpers.assert_eventually(
         fn ->
           case LemonGateway.ProgressStore.get_run(scope, progress_msg_id) do
             run_id when is_binary(run_id) and run_id != "" -> true
@@ -2094,7 +2111,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:lemon_gateway_run_completed, ^request, _}, 2000
 
       # Wait for cleanup to complete
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+      LemonCore.Testing.AsyncHelpers.assert_eventually(
         fn -> LemonGateway.ProgressStore.get_run(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed"
       )
@@ -2360,7 +2377,7 @@ defmodule LemonGateway.RunTest do
                      2000
 
       # Wait for run history to be stored
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+      LemonCore.Testing.AsyncHelpers.assert_eventually(
         fn -> LemonCore.RunHistoryStore.get(scope) != [] end,
         message: "run history was not stored"
       )
@@ -2408,7 +2425,7 @@ defmodule LemonGateway.RunTest do
                      2000
 
       # Should complete without crashing
-      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
+      LemonCore.Testing.AsyncHelpers.assert_process_dead(pid)
     end
   end
 
@@ -2869,7 +2886,7 @@ defmodule LemonGateway.RunTest do
       assert {:ok, record} = LemonCore.RunStore.fetch(run_id)
       refute Map.has_key?(record, :summary)
 
-      LemonGateway.AsyncHelpers.assert_eventually(
+      LemonCore.Testing.AsyncHelpers.assert_eventually(
         fn -> match?({:ok, %{in_flight: 0, waitq: 0}}, LemonGateway.Slots.stats()) end,
         message: "execution slot leaked after a persistence failure"
       )

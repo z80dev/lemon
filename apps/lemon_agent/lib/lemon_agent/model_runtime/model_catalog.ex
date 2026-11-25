@@ -307,8 +307,6 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
     end
   end
 
-  defp parse_version_part(nil), do: 0
-
   defp parse_version_part(value) when is_binary(value) do
     case Integer.parse(value) do
       {parsed, _} -> parsed

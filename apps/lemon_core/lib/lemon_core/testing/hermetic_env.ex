@@ -1,116 +1,11 @@
 defmodule LemonCore.Testing.HermeticEnv do
   @moduledoc """
-  Shared helpers for keeping non-integration tests isolated from ambient machine state.
+  Environment snapshot/restore helpers for tests that mutate process-wide env.
 
-  The default unit-test lane should not accidentally inherit a developer's real
-  provider or platform credentials. Tests that intentionally exercise live
-  integrations must opt in explicitly with `LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1`
-  or by passing `allow_live?: true`.
-
-  The built-in list covers the credentials this library and its providers know
-  about. Applications that own a transport add the variables that transport
-  reads, so the library does not have to name platforms it does not implement:
-
-      config :lemon_core, :test_credential_env_vars, ~w(MY_PLATFORM_BOT_TOKEN)
-
-  `credential_env_vars/0` returns the union, sorted and deduplicated.
+  Ambient provider and platform credentials are scrubbed before the BEAM
+  starts, by the single list in `scripts/test` (`SCRUB_CREDENTIAL_ENV_VARS`);
+  `LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1` keeps them for live runs.
   """
-
-  @credential_env_vars ~w(
-    AI21_API_KEY
-    ANTHROPIC_API_KEY
-    ANTHROPIC_TOKEN
-    AWS_ACCESS_KEY_ID
-    AWS_PROFILE
-    AWS_SECRET_ACCESS_KEY
-    AWS_SESSION_TOKEN
-    AZURE_OPENAI_API_KEY
-    BRAVE_API_KEY
-    EXA_API_KEY
-    BROWSERBASE_API_KEY
-    BROWSERBASE_PROJECT_ID
-    BROWSER_USE_API_KEY
-    CAMOFOX_API_KEY
-    CAMOFOX_URL
-    CHATGPT_TOKEN
-    CLAUDE_CODE_OAUTH_TOKEN
-    DEEPGRAM_API_KEY
-    DINGTALK_BOT_TOKEN
-    ELEVENLABS_API_KEY
-    FEISHU_APP_SECRET
-    FEISHU_BOT_TOKEN
-    FIREWORKS_API_KEY
-    GEMINI_API_KEY
-    GH_TOKEN
-    GITHUB_COPILOT_API_KEY
-    GITHUB_TOKEN
-    GOOGLE_API_KEY
-    GOOGLE_APPLICATION_CREDENTIALS
-    GOOGLE_APPLICATION_CREDENTIALS_JSON
-    GOOGLE_CLOUD_PROJECT
-    GOOGLE_CLOUD_PROJECT_ID
-    GOOGLE_GENERATIVE_AI_API_KEY
-    GOOGLE_GEMINI_CLI_API_KEY
-    GROQ_API_KEY
-    KIMI_API_KEY
-    LEMON_EVAL_API_KEY
-    LEMON_EVAL_API_KEY_SECRET
-    LEMON_SECRETS_MASTER_KEY
-    LEMON_SECRETS_KEYCHAIN_PRELOAD
-    MINIMAX_API_KEY
-    MISTRAL_API_KEY
-    MOONSHOT_API_KEY
-    NOUS_API_KEY
-    OPENAI_API_KEY
-    OPENAI_CODEX_API_KEY
-    OPENCODE_API_KEY
-    OPENROUTER_API_KEY
-    INTEGRATION_API_KEY
-    INTEGRATION_API_KEY_SECRET
-    SLACK_APP_TOKEN
-    SLACK_BOT_TOKEN
-    TWILIO_AUTH_TOKEN
-    XAI_API_KEY
-    ZAI_API_KEY
-  )
-
-  @live_opt_in_env "LEMON_TEST_ALLOW_LIVE_CREDENTIALS"
-
-  @doc """
-  Returns env vars considered live provider/platform credentials in unit tests.
-
-  The built-in list plus anything registered under
-  `config :lemon_core, :test_credential_env_vars`, sorted and deduplicated.
-  """
-  @spec credential_env_vars() :: [String.t()]
-  def credential_env_vars do
-    :lemon_core
-    |> Application.get_env(:test_credential_env_vars, [])
-    |> Enum.map(&to_string/1)
-    |> Enum.concat(@credential_env_vars)
-    |> Enum.uniq()
-    |> Enum.sort()
-  end
-
-  @doc """
-  Scrubs live provider/platform credentials for normal unit-test lanes.
-
-  Set `LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1` or pass `allow_live?: true` for an
-  explicit live/integration run that should inherit credentials.
-
-  Returns `:ok` when credentials are scrubbed, or
-  `{:skipped, :live_credentials_allowed}` when live credentials are explicitly
-  allowed.
-  """
-  @spec scrub_unit_credentials!(keyword()) :: :ok | {:skipped, :live_credentials_allowed}
-  def scrub_unit_credentials!(opts \\ []) do
-    if Keyword.get(opts, :allow_live?, false) or live_credentials_allowed?() do
-      {:skipped, :live_credentials_allowed}
-    else
-      Enum.each(credential_env_vars(), &System.delete_env/1)
-      :ok
-    end
-  end
 
   @doc """
   Runs `fun` and restores the provided env vars afterward.
@@ -148,9 +43,5 @@ defmodule LemonCore.Testing.HermeticEnv do
     end)
 
     :ok
-  end
-
-  defp live_credentials_allowed? do
-    System.get_env(@live_opt_in_env) in ["1", "true", "TRUE", "yes", "YES"]
   end
 end

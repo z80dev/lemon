@@ -1,19 +1,15 @@
-Code.require_file(
-  Path.expand("../../../../../scripts/support/setup_verification_probe.exs", __DIR__)
-)
+Code.require_file(Path.expand("../../support/probes/setup_verification_probe.exs", __DIR__))
 
-Code.require_file(
-  Path.expand("../../../../../scripts/support/setup_onboarding_probe.exs", __DIR__)
-)
+Code.require_file(Path.expand("../../support/probes/setup_onboarding_probe.exs", __DIR__))
 
 defmodule LemonCli.Setup.VerificationWireTest do
   use ExUnit.Case, async: false
 
   alias LemonAi.Models.Presets
   alias LemonCli.Setup.Verification
+  alias LemonCli.TestSupport.SetupOnboardingProbe
+  alias LemonCli.TestSupport.SetupVerificationProbe
   alias LemonCore.Secrets
-  alias LemonScripts.SetupOnboardingProbe
-  alias LemonScripts.SetupVerificationProbe
 
   setup do
     root =

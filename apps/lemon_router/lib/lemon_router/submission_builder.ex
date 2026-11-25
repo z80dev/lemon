@@ -66,11 +66,12 @@ defmodule LemonRouter.SubmissionBuilder do
   @spec admission_settings() :: {:ok, map()} | {:error, :config_unavailable}
   def admission_settings do
     config = LemonCore.Config.cached()
+    operator = operator_config(config)
 
     {:ok,
      %{
-       default_model: operator_default_model(config),
-       routing_feedback: Features.enabled?(config.features, :routing_feedback),
+       default_model: operator.agent.default_model,
+       routing_feedback: Features.enabled?(operator.features, :routing_feedback),
        crash_resume: Features.enabled?(config.features, :crash_resume),
        agent_ids: Map.keys(config.agents || %{})
      }}
@@ -159,20 +160,26 @@ defmodule LemonRouter.SubmissionBuilder do
       profile_system_prompt = MapHelpers.get_key(agent_profile, :system_prompt)
       default_model = settings.default_model
 
-      explicit_model = request_model || MapHelpers.get_key(meta, :model)
       explicit_system_prompt = MapHelpers.get_key(meta, :system_prompt)
 
-      history_model = resolve_history_model(prompt, cwd, explicit_model, settings)
-
-      selection_input = %{
+      configured_selection = %{
         explicit_model: request_model,
         model_explicit: params.model_explicit,
         meta_model: MapHelpers.get_key(meta, :model),
         session_model: session_model,
         profile_model: profile_model,
-        history_model: history_model,
         default_model: default_model
       }
+
+      # History is consulted only when the router default would otherwise win.
+      history_model =
+        if ModelSelection.resolve(%{configured_selection | default_model: nil}).model do
+          nil
+        else
+          resolve_history_model(prompt, cwd, default_model, settings)
+        end
+
+      selection_input = Map.put(configured_selection, :history_model, history_model)
 
       selection = ModelSelection.resolve(selection_input)
       resolved_model = selection.model
@@ -324,7 +331,7 @@ defmodule LemonRouter.SubmissionBuilder do
     with {:ok, base} <- Policy.resolve_validated_for_run(context),
          {:ok, profile} <-
            Policy.merge_validated(base, normalize_profile_tool_policy(agent_profile)) do
-      Policy.merge_validated(profile, override)
+      Policy.restrict_validated(profile, override)
     end
   end
 
@@ -495,12 +502,12 @@ defmodule LemonRouter.SubmissionBuilder do
 
   defp normalize_cwd(_), do: nil
 
-  # The router default is operator configuration: the global layer, never a
-  # project file under the router's working directory.
-  defp operator_default_model(config) do
+  # The router default and the routing-feedback flag are operator configuration:
+  # the global layer, never a project file under the router's working directory.
+  defp operator_config(config) do
     case config.provenance do
-      %{operator: operator} -> operator.agent.default_model
-      _ -> config.agent.default_model
+      %{operator: operator} -> operator
+      _ -> config
     end
   end
 
@@ -512,25 +519,23 @@ defmodule LemonRouter.SubmissionBuilder do
   defp normalize_thinking_level(level) when is_binary(level), do: ThinkingLevel.normalize(level)
   defp normalize_thinking_level(_), do: nil
 
-  defp resolve_history_model(prompt, cwd, explicit_model, _settings)
-       when is_binary(explicit_model) and byte_size(explicit_model) > 0 do
-    _ = {prompt, cwd}
-    nil
-  end
+  # Routing feedback is opt-in and advisory: the store suggests a model only
+  # when the configured default has itself been measured here and done worse.
+  # An unavailable store keeps the configured selection.
+  defp resolve_history_model(prompt, cwd, default_model, %{routing_feedback: true}) do
+    context_key =
+      TaskFingerprint.context_key(%TaskFingerprint{
+        task_family: TaskFingerprint.classify_prompt(prompt),
+        workspace_key: cwd
+      })
 
-  defp resolve_history_model(_prompt, _cwd, _explicit_model, %{routing_feedback: false}), do: nil
-
-  defp resolve_history_model(prompt, cwd, _explicit_model, _settings) do
-    fp = %TaskFingerprint{
-      task_family: TaskFingerprint.classify_prompt(prompt),
-      workspace_key: cwd
-    }
-
-    case RoutingFeedbackStore.best_model_for_context(TaskFingerprint.context_key(fp)) do
+    case RoutingFeedbackStore.best_model_for_context(context_key, default_model) do
       {:ok, model} -> model
-      _ -> nil
+      :keep_default -> nil
     end
   catch
     :exit, _ -> nil
   end
+
+  defp resolve_history_model(_prompt, _cwd, _default_model, _settings), do: nil
 end

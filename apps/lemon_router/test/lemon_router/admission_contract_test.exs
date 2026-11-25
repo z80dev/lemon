@@ -18,9 +18,9 @@ defmodule LemonRouter.AdmissionContractTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonCore.{RouterBridge, RunRequest, RunStore}
+  alias LemonCore.{RouterBridge, RunRequest, RunStore, Store}
   alias LemonGateway.Slots
-  alias LemonRouter.RunOrchestrator
+  alias LemonRouter.{RunOrchestrator, SessionCoordinator}
 
   @test_pid_key :admission_contract_test_pid
 
@@ -65,6 +65,12 @@ defmodule LemonRouter.AdmissionContractTest do
     def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
     @impl true
+    def init(%{lose_recipient: true} = opts) do
+      send(opts[:notify_pid], {:start_attempted, opts[:run_id]})
+      Process.exit(opts[:coordinator_pid], :kill)
+      {:stop, :recipient_lost}
+    end
+
     def init(opts) do
       send(opts[:notify_pid], {:execution_started, opts[:run_id], opts[:execution_request]})
       {:ok, opts}
@@ -79,6 +85,7 @@ defmodule LemonRouter.AdmissionContractTest do
       on_exit(fn ->
         LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id)
         LemonCore.Store.delete(:run_receipts, run_id)
+        RunStore.delete_session("agent:default:test:#{run_id}")
       end)
 
       opts = [
@@ -98,15 +105,17 @@ defmodule LemonRouter.AdmissionContractTest do
 
       # Delayed processing: the runtime cannot answer before the sender's deadline.
       :ok = :sys.suspend(orchestrator)
-      assert {:timeout, _} = catch_exit(submit_with_deadline(orchestrator, intent, 20))
+
+      try do
+        assert {:error, :outcome_unknown} = RunOrchestrator.submit(orchestrator, intent)
+      after
+        :ok = :sys.resume(orchestrator)
+      end
 
       # The sender reconciles by replaying the same fixed ID. The replay is
       # serialized behind the original request that is still in flight.
-      replay = Task.async(fn -> RunOrchestrator.submit_with_receipt(orchestrator, intent) end)
-      :ok = :sys.resume(orchestrator)
-
       assert {:ok, %{run_id: ^run_id, state: :accepted, effective_mode: :new_run} = receipt} =
-               Task.await(replay, 5_000)
+               RunOrchestrator.submit_with_receipt(orchestrator, intent)
 
       assert_receive {:execution_started, ^run_id, _command}, 1_000
       refute_receive {:execution_started, ^run_id, _command}, 100
@@ -126,6 +135,64 @@ defmodule LemonRouter.AdmissionContractTest do
                RunOrchestrator.submit(replacement, %{intent | prompt: "a different command"})
 
       refute_receive {:execution_started, ^run_id, _command}, 100
+    end
+
+    test "a lost admission owner fences a delayed recipient before permitting explicit retry",
+         %{run_id: run_id, opts: opts} do
+      request = intent(run_id, "not yet received")
+
+      coordinator =
+        start_supervised!({SessionCoordinator, conversation_key: {:session, request.session_key}})
+
+      sender = start_supervised!({RunOrchestrator, opts}, restart: :temporary)
+      sender_ref = Process.monitor(sender)
+      :ok = :sys.suspend(coordinator)
+
+      try do
+        caller = Task.async(fn -> RunOrchestrator.submit(sender, request) end)
+
+        assert eventually(fn ->
+                 {:messages, messages} = Process.info(coordinator, :messages)
+
+                 Enum.any?(messages, fn
+                   {:"$gen_call", _, {:submit_with_receipt, %{run_id: ^run_id}, _}} -> true
+                   _ -> false
+                 end)
+               end)
+
+        assert {:ok, %{state: :outcome_unknown}} = RunOrchestrator.run_receipt(run_id)
+        Process.exit(sender, :kill)
+        assert_receive {:DOWN, ^sender_ref, :process, ^sender, :killed}, 1_000
+        assert {:error, :outcome_unknown} = Task.await(caller, 1_000)
+        assert {:ok, %{state: :rejected}} = RunOrchestrator.run_receipt(run_id)
+      after
+        :ok = :sys.resume(coordinator)
+      end
+
+      assert 0 = GenServer.call(coordinator, :pending_count, 1_000)
+      refute_receive {:execution_started, ^run_id, _}, 100
+
+      replacement = start_supervised!({RunOrchestrator, opts}, id: :handoff_replacement)
+      assert {:ok, ^run_id} = RunOrchestrator.submit(replacement, request)
+      assert_receive {:execution_started, ^run_id, _}, 1_000
+      assert {:ok, %{state: :accepted}} = RunOrchestrator.run_receipt(run_id)
+      assert {:ok, ^run_id} = RunOrchestrator.submit(replacement, request)
+      refute_receive {:execution_started, ^run_id, _}, 100
+    end
+
+    test "recipient loss after crossing the handoff never authorizes another start",
+         %{run_id: run_id, opts: opts} do
+      request = intent(run_id, "recipient crashes in start")
+      opts = put_in(opts[:run_process_opts][:lose_recipient], true)
+      sender = start_supervised!({RunOrchestrator, opts})
+
+      assert {:error, :outcome_unknown} = RunOrchestrator.submit(sender, request)
+      assert_receive {:start_attempted, ^run_id}, 1_000
+
+      assert {:ok, %{state: :terminal}} = RunOrchestrator.run_receipt(run_id)
+      assert %{summary: %{completed: %{outcome: :unknown}}} = RunStore.get(run_id)
+      assert {:ok, ^run_id} = RunOrchestrator.submit(sender, request)
+      refute_receive {:start_attempted, ^run_id}, 100
     end
 
     test "concurrent identical and conflicting submissions of one ID start at most once",
@@ -175,6 +242,56 @@ defmodule LemonRouter.AdmissionContractTest do
       end
 
       refute_receive {:execution_started, ^run_id, _command}, 100
+    end
+  end
+
+  test "an evicted run remains terminal without an accepted receipt" do
+    request = intent(unique_id("evicted_receipt"), "completion leaves terminal evidence")
+    run_id = request.run_id
+    table = RunOrchestrator.admission_table()
+
+    on_exit(fn ->
+      Store.delete(table, run_id)
+      Store.delete(:run_terminals, run_id)
+    end)
+
+    assert :ok =
+             Store.put(:run_terminals, run_id, %{
+               finalized_at_ms: System.system_time(:millisecond)
+             })
+
+    assert {:error, :evicted} = RunStore.fetch(run_id)
+
+    assert :ok =
+             Store.put(table, run_id, %{
+               state: "submitting",
+               scope: %{session_key: request.session_key}
+             })
+
+    assert {:ok, %{run_id: ^run_id, state: :terminal, session_key: session_key}} =
+             RunOrchestrator.run_receipt(run_id)
+
+    assert session_key == request.session_key
+  end
+
+  test "a receipt query cannot reconcile ownership while the router is stopped" do
+    run_id = unique_id("stopped_router_receipt")
+    table = RunOrchestrator.admission_table()
+    assert {:ok, epoch} = Registry.meta(LemonRouter.ConversationRegistry, :admission_epoch)
+    admission = %{state: "submitting", handoff: {epoch, "attempt", self(), nil}}
+    assert :ok = Store.put(table, run_id, admission)
+
+    try do
+      assert :ok = Application.stop(:lemon_router)
+      refute Process.whereis(LemonRouter.ConversationRegistry)
+
+      assert {:ok, %{run_id: ^run_id, state: :outcome_unknown}} =
+               RunOrchestrator.run_receipt(run_id)
+
+      assert {:ok, ^admission} = Store.fetch(table, run_id)
+    after
+      Store.delete(table, run_id)
+      {:ok, _started} = Application.ensure_all_started(:lemon_router)
     end
   end
 
@@ -240,68 +357,83 @@ defmodule LemonRouter.AdmissionContractTest do
       refute LemonRouter.run_active?(id)
     end
 
-    test "work cancelled in its conversation backlog never starts after the active run ends" do
-      session_key = "agent:default:test:admission-backlog:#{System.unique_integer([:positive])}"
+    for cancel <- [:cast, :tombstone] do
+      test "work cancelled by #{cancel} in its conversation backlog never starts" do
+        cancel = unquote(cancel)
+        session_key = "agent:default:test:admission-backlog:#{System.unique_integer([:positive])}"
 
-      active = %{
-        intent(unique_id("backlog_active"), "holds the conversation")
-        | session_key: session_key
-      }
+        active = %{
+          intent(unique_id("backlog_active"), "holds the conversation")
+          | session_key: session_key
+        }
 
-      queued = %{
-        intent(unique_id("backlog_queued"), "waits in the backlog")
-        | session_key: session_key
-      }
+        queued = %{
+          intent(unique_id("backlog_queued"), "waits in the backlog")
+          | session_key: session_key
+        }
 
-      active_id = active.run_id
-      queued_id = queued.run_id
-      :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(queued_id))
+        active_id = active.run_id
+        queued_id = queued.run_id
+        :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(queued_id))
 
-      on_exit(fn ->
-        cleanup_run(active_id, session_key)
-        cleanup_run(queued_id, session_key)
-      end)
+        on_exit(fn ->
+          cleanup_run(active_id, session_key)
+          cleanup_run(queued_id, session_key)
+        end)
 
-      assert {:ok, ^active_id} = RouterBridge.submit_run(active)
-      assert_receive {:executor_started, ^active_id, sink, ref}, 2_000
+        assert {:ok, ^active_id} = RouterBridge.submit_run(active)
+        assert_receive {:executor_started, ^active_id, sink, ref}, 2_000
 
-      assert {:ok, ^queued_id} = RouterBridge.submit_run(queued)
+        assert {:ok, ^queued_id} = RouterBridge.submit_run(queued)
 
-      assert {:ok, %{state: :accepted, effective_mode: :queued}} =
-               RouterBridge.run_receipt(queued_id)
+        assert {:ok, %{state: :accepted, effective_mode: :queued}} =
+                 RouterBridge.run_receipt(queued_id)
 
-      assert :ok = RouterBridge.abort_run(queued_id, :user_requested)
+        case cancel do
+          :cast ->
+            assert :ok = RouterBridge.abort_run(queued_id, :user_requested)
 
-      assert_receive %LemonCore.Event{
-                       type: :run_completed,
-                       meta: %{run_id: ^queued_id},
-                       payload: %{completed: %{ok: false}}
-                     },
-                     2_000
+          :tombstone ->
+            # The fence is durable but the recipient never got its cancellation cast.
+            assert :ok =
+                     Store.put(
+                       Store,
+                       RunOrchestrator.abort_tombstone_table(),
+                       queued_id,
+                       %{state: "aborted", reason_code: :user_requested},
+                       durable: true
+                     )
 
-      send(sink, {:engine_event, ref, completed_event()})
+            send(sink, {:engine_event, ref, completed_event()})
+        end
 
-      assert eventually(fn ->
-               not LemonRouter.run_active?(active_id) and
-                 match?(
-                   {:ok, %{presence: %{idle: true}}},
-                   LemonRouter.run_presence(%{session_key: session_key})
-                 )
-             end)
+        assert_receive %LemonCore.Event{
+                         type: :run_completed,
+                         meta: %{run_id: ^queued_id},
+                         payload: %{completed: %{ok: false}}
+                       },
+                       2_000
 
-      refute_receive {:executor_started, ^queued_id, _sink, _ref}, 300
-      refute LemonRouter.run_active?(queued_id)
-      assert %{summary: %{completed: %{ok: false}}} = RunStore.get(queued_id)
+        if cancel == :cast, do: send(sink, {:engine_event, ref, completed_event()})
 
-      assert {:ok, ^queued_id} = RouterBridge.submit_run(queued)
-      refute_receive {:executor_started, ^queued_id, _sink, _ref}, 300
-      refute LemonRouter.run_active?(queued_id)
+        assert eventually(fn ->
+                 not LemonRouter.run_active?(active_id) and
+                   match?(
+                     {:ok, %{presence: %{idle: true}}},
+                     LemonRouter.run_presence(%{session_key: session_key})
+                   )
+               end)
+
+        refute_receive {:executor_started, ^queued_id, _sink, _ref}, 300
+        refute LemonRouter.run_active?(queued_id)
+        assert %{summary: %{completed: %{ok: false}}} = RunStore.get(queued_id)
+
+        assert {:ok, ^queued_id} = RouterBridge.submit_run(queued)
+        refute_receive {:executor_started, ^queued_id, _sink, _ref}, 300
+        refute LemonRouter.run_active?(queued_id)
+      end
     end
   end
-
-  # `RunOrchestrator.submit/2` is this call with the default deadline.
-  defp submit_with_deadline(orchestrator, %RunRequest{} = request, timeout_ms),
-    do: GenServer.call(orchestrator, {:submit, request}, timeout_ms)
 
   defp intent(run_id, prompt) do
     RunRequest.new(%{

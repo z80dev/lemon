@@ -32,7 +32,7 @@ defmodule LemonControlPlane.Methods.SessionsFork do
             do: [source, cwd, destination, [entry_id: entry_id]],
             else: [source, cwd, destination]
 
-        case AgentRuntime.call(:session_fork, args, {:error, :outcome_unknown}) do
+        case AgentRuntime.mutate(:session_fork, args) do
           :ok ->
             case SessionLifecycle.register_fork(source, destination) do
               :ok -> {:ok, %{"sessionKey" => destination, "sourceSessionKey" => source}}

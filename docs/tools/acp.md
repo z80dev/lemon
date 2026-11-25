@@ -36,9 +36,10 @@ and encrypted secret store, not by the spawned stdio process.
 `LEMON_CONTROL_PLANE_PORT` selects the runtime (default `4040`). Managed
 launchers load the port's operator credential; explicitly managed runtimes can
 use `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` or `LEMON_WS_TOKEN`. Credentials are not
-passed in argv or ACP messages. The internal `GET /acp/ws` duplex endpoint
-requires operator read/write/approval authorization. Tokenless access is
-available only under the existing explicit direct-loopback compatibility policy.
+passed in argv or ACP messages. The internal `GET /acp/ws` duplex endpoint is
+loopback-only and requires operator read/write/approval/content authorization.
+Tokenless access is available only under the existing explicit direct-loopback
+compatibility policy.
 
 ## Framing and lifecycle
 
@@ -221,21 +222,12 @@ client capability blobs and editor contents are not copied into management
 projections. Unsupported media or MCP capabilities must not be inferred from
 registration: inspect the negotiated capabilities.
 
-## HTTP integration
+## Transport
 
-`POST /acp` remains a single request/response endpoint for JSON-RPC requests or
-batches. It cannot round-trip client requests or stream notifications; use
-`lemon acp` for interactive integrations.
-
-The HTTP endpoint requires a token by default. Send the configured
-`LEMON_ACP_API_TOKEN` (or application setting `:acp_api_token`) as
-`Authorization: Bearer <token>` or `x-api-key`. When unset, it accepts the
-control-plane operator token instead (managed launcher file:
-`~/.lemon/run/control-plane-<port>.token`). Tokenless direct-loopback access
-requires the explicit compatibility flag and no configured token.
-Off-loopback `/acp` and `/acp/ws` are hidden unless
-`LEMON_CONTROL_PLANE_REMOTE_HTTP=acp` is enabled with a dedicated ACP token.
-Use TLS or an encrypted overlay; keep operator WebSocket proxy paths restricted.
+`lemon acp` is the only supported integration. The single-shot HTTP
+`POST /acp` endpoint and its `LEMON_ACP_API_TOKEN` were removed: they could not
+round-trip client requests or stream notifications. Off-loopback peers cannot
+reach `/acp/ws`.
 
 The obsolete `scripts/lemon_acp_stdio.exs` runtime-boot script is removed. Client
 configurations must use `lemon acp`; there is no second runtime or fake runtime

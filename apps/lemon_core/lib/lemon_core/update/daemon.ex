@@ -215,9 +215,6 @@ defmodule LemonCore.Update.Daemon do
 
           {:error, reason} when is_atom(reason) ->
             {:error, reason}
-
-          _other ->
-            {:error, :unit_inventory_unavailable}
         end
     end
   end

@@ -310,8 +310,6 @@ defmodule LemonCore.Doctor.ProviderDiagnostics do
     Map.get(agent, key) || Map.get(agent, to_string(key))
   end
 
-  defp agent_value(_, _), do: nil
-
   defp map_value(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, to_string(key))
   defp map_value(_, _), do: nil
 

@@ -6,7 +6,6 @@ defmodule LemonControlPlane.Methods.SubagentSupport do
   # rows and fields that do not fit the bounded projection are dropped.
 
   alias LemonControlPlane.Methods.NativeSessions
-  alias LemonCore.AgentRuntime
 
   @statuses ~w(queued running idle parked completed failed cancelled)
   @deliveries ~w(injected woken revived failed outcome_unknown)a
@@ -15,8 +14,6 @@ defmodule LemonControlPlane.Methods.SubagentSupport do
   @max_label_bytes 512
   @max_text_bytes 65_536
   @max_message_bytes 32 * 1024
-
-  def call(function, args), do: AgentRuntime.call(function, args, {:error, :unavailable})
 
   def session_key(params), do: NativeSessions.string(params || %{}, "sessionKey", 1024)
   def task_id(params), do: NativeSessions.string(params || %{}, "taskId", @max_id_bytes)
@@ -104,6 +101,12 @@ defmodule LemonControlPlane.Methods.SubagentSupport do
   end
 
   def project_delivery(_task_id, _delivery), do: {:error, :invalid_runtime_response}
+
+  def error(:outcome_unknown),
+    do:
+      {:error,
+       {:unavailable, "Subagent operation outcome is unknown; reconcile before retrying",
+        %{"code" => "OUTCOME_UNKNOWN", "retrySafe" => false}}}
 
   def error(:not_found),
     do: {:error, {:not_found, "Subagent not found", %{"code" => "SUBAGENT_NOT_FOUND"}}}
@@ -232,7 +235,7 @@ defmodule LemonControlPlane.Methods.SubagentsList do
     content? = Authorize.content?(ctx)
 
     with {:ok, key} <- Support.session_key(params) do
-      case Support.call(:subagents_list, [key]) do
+      case LemonCore.AgentRuntime.query(:subagents_list, [key]) do
         {:ok, agents} ->
           case Support.project_agents(agents, content?) do
             {:ok, projected} ->
@@ -280,7 +283,7 @@ defmodule LemonControlPlane.Methods.SubagentsTranscript do
   def handle(params, ctx) do
     with {:ok, key} <- Support.session_key(params),
          {:ok, task_id} <- Support.task_id(params) do
-      case Support.call(:subagent_transcript, [key, task_id]) do
+      case LemonCore.AgentRuntime.query(:subagent_transcript, [key, task_id]) do
         {:ok, transcript} ->
           case Support.project_transcript(task_id, transcript, Authorize.content?(ctx)) do
             {:ok, payload} -> {:ok, payload}
@@ -320,15 +323,16 @@ defmodule LemonControlPlane.Methods.SubagentsSend do
     with {:ok, key} <- Support.session_key(params),
          {:ok, task_id} <- Support.task_id(params),
          {:ok, message} <- Support.message(params) do
-      # A registered runtime that raises or exits may have delivered before failing.
-      fallback = if AgentRuntime.available?(), do: :outcome_unknown, else: {:error, :unavailable}
-
-      case AgentRuntime.call(:subagent_send, [key, task_id, message], fallback) do
+      case AgentRuntime.mutate(:subagent_send, [key, task_id, message]) do
         {:ok, delivery} ->
           case Support.project_delivery(task_id, delivery) do
             {:ok, payload} -> {:ok, payload}
             {:error, _reason} -> outcome_unknown(task_id)
           end
+
+        # A runtime that raised or exited may have delivered before failing.
+        {:error, :outcome_unknown} ->
+          outcome_unknown(task_id)
 
         {:error, reason} ->
           Support.error(reason)
@@ -361,10 +365,10 @@ defmodule LemonControlPlane.Methods.SubagentsCancel do
   def handle(params, _ctx) do
     with {:ok, key} <- Support.session_key(params),
          {:ok, task_id} <- Support.task_id(params) do
-      case Support.call(:subagent_cancel, [key, task_id]) do
+      case LemonCore.AgentRuntime.mutate(:subagent_cancel, [key, task_id]) do
         :ok -> {:ok, %{"taskId" => task_id, "cancelled" => true}}
         {:error, reason} -> Support.error(reason)
-        _other -> Support.error(:invalid_runtime_response)
+        _other -> Support.error(:outcome_unknown)
       end
     end
   end

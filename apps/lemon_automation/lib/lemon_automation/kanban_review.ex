@@ -70,7 +70,7 @@ defmodule LemonAutomation.KanbanReview do
   def parse(_), do: {:error, :invalid_review_result}
 
   defp resolve(cwd, id) do
-    LemonCore.AgentRuntime.call(:resolve_subagent, [cwd, id], {:error, :reviewer_unavailable})
+    LemonCore.AgentRuntime.query(:resolve_subagent, [cwd, id], {:error, :reviewer_unavailable})
   end
 
   defp role_model(role) when is_binary(role) and role != "", do: "@" <> role

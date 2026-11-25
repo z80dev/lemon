@@ -7,9 +7,11 @@ defmodule LemonCore.ToolPolicy do
   execution authority; `normalize/1` preserves sparse JSON policy projections
   used by durable admission and `to_map/1` encodes a complete policy.
 
-  `restrict/2` computes the intersection of two policies. It is used for
-  delegated work so a child request cannot remove a parent denial or approval
-  requirement.
+  `restrict/2` computes the intersection of a parent and a requested policy. It
+  is used for delegated work so a child request cannot remove a parent denial
+  or approval requirement, or enable a read exemption the parent lacks.
+  `layer/2` intersects trusted operator layers, where an unset read exemption
+  is neutral.
 
   Legacy `sandbox` input (atom or string key) is accepted and ignored, with one
   warning per parsing process. It never changes grants or restrictions. Tool
@@ -235,7 +237,7 @@ defmodule LemonCore.ToolPolicy do
     left = expand(left)
     right = expand(right)
 
-    case restrict(left, right) do
+    case layer(left, right) do
       {:ok, policy} ->
         policy = %{
           policy
@@ -357,9 +359,28 @@ defmodule LemonCore.ToolPolicy do
 
   def resolve(_policy, _default), do: {:error, :invalid_tool_policy}
 
-  @doc "Intersect parent and requested authority without broadening either."
+  @doc """
+  Intersect parent and requested authority without broadening either.
+
+  The requested side may only narrow the parent: it cannot waive an approval
+  gate the parent applies to any tier the tool can reach, and it cannot enable
+  `workspace_read_exempt` unless the parent already does. Use `layer/2` for
+  operator-configured layers.
+  """
   @spec restrict(t() | map(), t() | map()) :: {:ok, t()} | {:error, term()}
-  def restrict(parent, requested) do
+  def restrict(parent, requested), do: combine(parent, requested, &delegated_read_exemption/2)
+
+  @doc """
+  Intersect two operator-configured policy layers.
+
+  Identical to `restrict/2` except that an unset `workspace_read_exempt` is
+  neutral, so either trusted layer may enable it. Never use it for request,
+  child or remote input.
+  """
+  @spec layer(t() | map(), t() | map()) :: {:ok, t()} | {:error, term()}
+  def layer(base, overlay), do: combine(base, overlay, &layered_read_exemption/2)
+
+  defp combine(parent, requested, read_exemption) do
     with {:ok, parent} <- parse(parent),
          {:ok, requested} <- parse(requested) do
       bounded_policy(%__MODULE__{
@@ -375,15 +396,15 @@ defmodule LemonCore.ToolPolicy do
         blocked_commands: union(parent.blocked_commands, requested.blocked_commands),
         max_file_size: minimum_limit(parent.max_file_size, requested.max_file_size),
         workspace_read_exempt:
-          restrict_workspace_read_exempt(
-            parent.workspace_read_exempt,
-            requested.workspace_read_exempt
-          )
+          read_exemption.(parent.workspace_read_exempt, requested.workspace_read_exempt)
       })
     end
   end
 
-  @doc "Returns true only when every effective grant and constraint is within the parent."
+  @doc """
+  Returns true only when every effective grant and constraint is within the
+  parent, including every per-tier approval gate the parent applies.
+  """
   @spec subset?(term(), term()) :: boolean()
   def subset?(child, parent) do
     with {:ok, child} <- parse(child),
@@ -405,7 +426,9 @@ defmodule LemonCore.ToolPolicy do
           union(parent.require_approval, Map.keys(parent.approvals) ++ Map.keys(child.approvals)),
           fn tool ->
             not authorized?(child, tool) or
-              approval_strength(child, tool) >= approval_strength(parent, tool)
+              Enum.all?([:read, :write, :exec], fn tier ->
+                not gates?(parent, tool, tier) or gates?(child, tool, tier)
+              end)
           end
         ) and
         (not parent.no_reply or child.no_reply) and
@@ -453,23 +476,7 @@ defmodule LemonCore.ToolPolicy do
   def requires_approval?(policy, tool_name, args, resolved_tier) when is_binary(tool_name) do
     case parse(policy) do
       {:ok, policy} ->
-        tool_name in policy.require_approval or
-          case Map.get(policy.approvals, tool_name, :inherit) do
-            mode when mode in [:always, :dangerous] ->
-              true
-
-            :never ->
-              false
-
-            :inherit ->
-              tier = resolved_tier || tier(tool_name, args)
-
-              case policy.approval_mode do
-                :ask -> tier != :read
-                :write -> tier == :exec
-                _ -> false
-              end
-          end
+        gates?(policy, tool_name, resolved_tier || tier(tool_name, args))
 
       {:error, _reason} ->
         true
@@ -834,11 +841,32 @@ defmodule LemonCore.ToolPolicy do
     if global_mode_rank(left) > global_mode_rank(right), do: left, else: right || left
   end
 
+  # Approval gate of a parsed policy for one call at `tier`.
+  defp gates?(policy, tool, tier) do
+    tool in policy.require_approval or
+      case Map.get(policy.approvals, tool, :inherit) do
+        mode when mode in [:always, :dangerous] -> true
+        :never -> false
+        :inherit -> mode_gates?(policy.approval_mode, tier)
+      end
+  end
+
+  defp mode_gates?(:ask, tier), do: tier != :read
+  defp mode_gates?(:write, tier), do: tier == :exec
+  defp mode_gates?(_mode, _tier), do: false
+
+  # A merged `never` survives only when neither side gates the tool at any tier:
+  # the tier depends on call arguments and the tool's source, so an
+  # argument-free check would let one side waive the other's gate. A dropped
+  # entry inherits the stricter global mode, which covers each side's own mode.
   defp intersect_approvals(parent, requested) do
-    merge_approvals(parent.approvals, requested.approvals)
-    |> Map.new(fn {tool, mode} ->
-      required = requires_approval?(parent, tool) or requires_approval?(requested, tool)
-      {tool, if(mode == :never and required, do: :always, else: mode)}
+    parent.approvals
+    |> merge_approvals(requested.approvals)
+    |> Map.reject(fn {tool, mode} ->
+      mode == :never and
+        Enum.any?([parent, requested], fn side ->
+          Enum.any?([:read, :write, :exec], &gates?(side, tool, &1))
+        end)
     end)
   end
 
@@ -851,10 +879,20 @@ defmodule LemonCore.ToolPolicy do
   defp parse_workspace_read_exempt(_value),
     do: {:error, {:invalid_policy_field, :workspace_read_exempt}}
 
-  defp restrict_workspace_read_exempt(parent, requested) do
+  # Delegation: a request may withdraw the parent's exemption but never add one.
+  defp delegated_read_exemption(parent, requested) do
     cond do
       parent == false or requested == false -> false
-      parent == true or requested == true -> true
+      parent == true -> true
+      true -> nil
+    end
+  end
+
+  # Operator layering: unset is neutral and an explicit false wins.
+  defp layered_read_exemption(base, overlay) do
+    cond do
+      base == false or overlay == false -> false
+      base == true or overlay == true -> true
       true -> nil
     end
   end
@@ -938,14 +976,6 @@ defmodule LemonCore.ToolPolicy do
   defp approval_rank(:always), do: 3
   defp approval_rank(:dangerous), do: 2
   defp approval_rank(:never), do: 1
-
-  defp approval_strength(policy, tool) do
-    cond do
-      tool in policy.require_approval -> approval_rank(:always)
-      requires_approval?(policy, tool) -> approval_rank(Map.get(policy.approvals, tool, :always))
-      true -> approval_rank(:never)
-    end
-  end
 
   defp grants_subset?(:all, child_denied, :all, parent_denied) do
     Enum.all?(parent_denied, &(&1 in child_denied))

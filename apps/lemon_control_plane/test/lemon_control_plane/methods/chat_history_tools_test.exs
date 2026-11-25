@@ -4,7 +4,6 @@ defmodule LemonControlPlane.Methods.ChatHistoryToolsTest do
   @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
 
   alias LemonControlPlane.Methods.ChatHistory
-  alias LemonCore.AgentRuntime
   alias LemonAi.Types.{AssistantMessage, ToolCall, ToolResultMessage, TextContent}
 
   defmodule Provider do
@@ -13,7 +12,7 @@ defmodule LemonControlPlane.Methods.ChatHistoryToolsTest do
 
   setup do
     previous = Application.get_env(:lemon_core, :agent_runtime_provider)
-    :ok = AgentRuntime.register(Provider)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, Provider)
 
     on_exit(fn ->
       if previous,

@@ -174,7 +174,7 @@ defmodule CodingAgent.InternalReferenceUrlsTest do
 
     authorize_skill!(disabled, {:project, cwd})
     authorize_skill!(not_ready, {:project, cwd})
-    assert :ok = Config.save_config(%{"disabled" => ["disabled"]}, false, cwd)
+    assert :ok = Config.disable("disabled", global: false, cwd: cwd)
     LemonSkills.refresh(cwd: cwd)
 
     assert {:error, "Skill is disabled, blocked or not authorized for its current content"} =

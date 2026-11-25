@@ -135,19 +135,26 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
     end
   end
 
+  # Each progress source that cannot be read is named in `unavailable` rather
+  # than omitted, so a client never mistakes an unreadable source for "none".
   defp harness_snapshot(session_key) when is_binary(session_key) do
-    todos = todo_progress(session_key)
-    checkpoints = checkpoint_progress(session_key)
+    sources = [
+      {"todos", todo_progress(session_key)},
+      {"checkpoints", checkpoint_progress(session_key)},
+      {"requirements", requirements_progress(session_key)}
+    ]
 
-    case requirements_progress(session_key) do
-      {:error, _} = error ->
+    case List.keyfind(sources, "requirements", 0) do
+      {_, {:error, _} = error} ->
         error
 
-      requirements ->
-        %{}
-        |> maybe_put("todos", todos)
-        |> maybe_put("checkpoints", checkpoints)
-        |> maybe_put("requirements", requirements)
+      _ ->
+        unavailable = for {name, :unavailable} <- sources, do: name
+
+        sources
+        |> Enum.reject(fn {_name, value} -> value == :unavailable end)
+        |> Enum.reduce(%{}, fn {name, value}, acc -> maybe_put(acc, name, value) end)
+        |> maybe_put("unavailable", if(unavailable != [], do: unavailable))
         |> case do
           harness when map_size(harness) == 0 -> nil
           harness -> harness
@@ -158,7 +165,7 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
   defp harness_snapshot(_), do: nil
 
   defp todo_progress(session_key) do
-    case AgentRuntime.call(:todo_progress, [session_key], nil) do
+    case AgentRuntime.query(:todo_progress, [session_key]) do
       progress when is_map(progress) ->
         actionable_count = Map.get(progress, :actionable_count, 0)
 
@@ -167,8 +174,11 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
         |> stringify_map_keys()
         |> Map.put("actionableCount", actionable_count)
 
-      _ ->
+      nil ->
         nil
+
+      _unavailable ->
+        :unavailable
     end
   end
 
@@ -177,28 +187,22 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
     |> LemonCore.Checkpoint.stats()
     |> stringify_map_keys()
   rescue
-    _ -> nil
+    _ -> :unavailable
   catch
-    :exit, _ -> nil
+    :exit, _ -> :unavailable
   end
 
   defp requirements_progress(session_key) do
     with {:ok, cwd} <- latest_session_cwd(session_key),
-         {:ok, progress} <- AgentRuntime.call(:feature_progress, [cwd], :unavailable) do
+         {:ok, progress} <- AgentRuntime.query(:feature_progress, [cwd]) do
       progress
       |> stringify_map_keys()
       |> Map.put("cwd", cwd)
     else
-      {:error, :introspection_unavailable} = error ->
-        error
-
-      _ ->
-        nil
+      {:error, :introspection_unavailable} = error -> error
+      {:error, :unavailable} -> :unavailable
+      _no_requirements -> nil
     end
-  rescue
-    _ -> nil
-  catch
-    :exit, _ -> nil
   end
 
   defp latest_session_cwd(session_key) when is_binary(session_key) do

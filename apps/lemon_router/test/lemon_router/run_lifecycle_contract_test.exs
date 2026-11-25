@@ -164,7 +164,7 @@ defmodule LemonRouter.RunLifecycleContractTest do
       meta: %{node: "worker-east"}
     }
 
-    :ok = CrashRecovery.capture(%{request: request, execution_request: command})
+    :ok = CrashRecovery.capture(%{request: request, execution_request: command}, true)
 
     assert {:ok, %{state: :unresumable, reason: :remote_invocation}} =
              Store.fetch(CrashRecovery.table(), run_id)

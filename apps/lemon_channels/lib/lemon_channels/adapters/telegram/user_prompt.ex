@@ -36,6 +36,7 @@ defmodule LemonChannels.Adapters.Telegram.UserPrompt do
         :ok -> "Recorded"
         {:error, :wrong_user} -> "Only the user who started this run may answer here."
         {:error, :empty} -> "Choose at least one option first."
+        {:error, :outcome_unknown} -> "Your answer may not have been recorded; check the run."
         _ -> "expired"
       end
 

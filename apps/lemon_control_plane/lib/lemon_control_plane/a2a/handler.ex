@@ -42,8 +42,8 @@ defmodule LemonControlPlane.A2A.Handler do
         {:stream, task.id}
       else
         case Runner.wait(task.id, Config.current().reply_timeout_ms) do
-          {:ok, final} -> {:ok, %{"task" => TaskView.render(final)}}
-          {:error, :timeout} -> {:ok, %{"task" => TaskView.render(A2AStore.get_task(task.id))}}
+          {:ok, final} -> wrapped(final)
+          {:error, :timeout} -> current_wrapped(task.id)
           {:error, _} -> {:error, -32_603, "Internal error"}
         end
       end
@@ -58,7 +58,7 @@ defmodule LemonControlPlane.A2A.Handler do
 
   defp get_task(params, peer_id) do
     with {:ok, task} <- owned_task(params["id"], peer_id) do
-      {:ok, TaskView.render(task)}
+      render(task)
     end
   end
 
@@ -67,8 +67,18 @@ defmodule LemonControlPlane.A2A.Handler do
 
     case A2AStore.list_tasks(peer_id, limit: limit) do
       {:ok, tasks} ->
-        tasks = tasks |> Enum.map(&Runner.reconcile/1) |> Enum.map(&TaskView.render/1)
-        {:ok, %{"tasks" => tasks, "nextPageToken" => nil}}
+        tasks
+        |> Enum.map(&Runner.reconcile/1)
+        |> Enum.reduce_while({:ok, []}, fn task, {:ok, acc} ->
+          case TaskView.render(task) do
+            {:ok, view} -> {:cont, {:ok, [view | acc]}}
+            {:error, _} -> {:halt, task_store_unavailable()}
+          end
+        end)
+        |> case do
+          {:ok, views} -> {:ok, %{"tasks" => Enum.reverse(views), "nextPageToken" => nil}}
+          error -> error
+        end
 
       {:error, _reason} ->
         task_store_unavailable()
@@ -78,12 +88,12 @@ defmodule LemonControlPlane.A2A.Handler do
   defp cancel_task(params, peer_id) do
     with {:ok, task} <- owned_task(params["id"], peer_id) do
       if Protocol.terminal_state?(task.state) do
-        {:ok, TaskView.render(task)}
+        render(task)
       else
         case RouterBridge.abort_run(task.run_id, :a2a_peer_canceled) do
           :ok ->
             case Runner.mark_canceled(task.id) do
-              {:ok, terminal} -> {:ok, TaskView.render(terminal)}
+              {:ok, terminal} -> render(terminal)
               {:error, reason} -> cancel_store_error(reason)
             end
 
@@ -120,6 +130,24 @@ defmodule LemonControlPlane.A2A.Handler do
   defp owned_task(_, _), do: {:error, -32_602, "task id is required"}
 
   defp task_store_unavailable, do: {:error, -32_603, "Task store is temporarily unavailable"}
+
+  defp render(task) do
+    case TaskView.render(task) do
+      {:ok, view} -> {:ok, view}
+      {:error, _reason} -> task_store_unavailable()
+    end
+  end
+
+  defp wrapped(task) do
+    with {:ok, view} <- render(task), do: {:ok, %{"task" => view}}
+  end
+
+  defp current_wrapped(task_id) do
+    case A2AStore.fetch_task(task_id) do
+      {:ok, %{} = task} -> wrapped(task)
+      _ -> task_store_unavailable()
+    end
+  end
 
   defp normalize_limit(value) when is_integer(value), do: value |> min(100) |> max(1)
   defp normalize_limit(_), do: 50

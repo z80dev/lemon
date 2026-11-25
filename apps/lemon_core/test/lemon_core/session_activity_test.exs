@@ -4,11 +4,13 @@ defmodule LemonCore.SessionActivityTest do
   alias LemonCore.{SessionActivity, Store}
 
   # The test Store's ETS backend, except that listing unresolved presence
-  # pauses (inside the Store) until the test lets it continue.
+  # pauses (inside the Store) until the test lets it continue. It exports no
+  # concurrent reader, so the Store reads through `list/2` in its own process.
   defmodule PausingBackend do
     alias LemonCore.Store.EtsBackend
 
-    for {name, arity} <- EtsBackend.__info__(:functions), {name, arity} != {:list, 2} do
+    for {name, arity} <- EtsBackend.__info__(:functions),
+        {name, arity} not in [{:list, 2}, {:reader, 1}, {:read_list, 2}, {:read_range, 5}] do
       args = Macro.generate_arguments(arity, __MODULE__)
 
       def unquote(name)(unquote_splicing(args)),

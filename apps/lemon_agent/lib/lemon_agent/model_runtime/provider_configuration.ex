@@ -303,7 +303,6 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
   end
 
   defp maybe_write(%{changed: false}, _path, _params), do: :ok
-  defp maybe_write(_mutation, _path, params) when not is_map(params), do: :ok
 
   defp maybe_write(mutation, path, params) do
     if apply?(params), do: atomic_write(path, mutation.content), else: :ok

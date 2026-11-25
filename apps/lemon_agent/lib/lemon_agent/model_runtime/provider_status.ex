@@ -94,8 +94,6 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
   defp config_provider_ids(%Config{providers: providers}) when is_map(providers),
     do: Map.keys(providers)
 
-  defp config_provider_ids(_), do: []
-
   defp catalog_provider_ids do
     if Code.ensure_loaded?(LemonAi.Models) do
       LemonAi.Models.list_models(discover_openai: false)
@@ -181,25 +179,6 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
     }
   end
 
-  defp provider_status(provider, _config, _cwd) do
-    %{
-      "provider" => normalize_provider(provider),
-      "configName" => normalize_provider(provider),
-      "known" => false,
-      "custom" => false,
-      "configured" => false,
-      "credentialReady" => false,
-      "config" => %{
-        "apiKeyConfigured" => false,
-        "apiKeySecretConfigured" => false,
-        "oauthSecretConfigured" => false,
-        "baseUrlConfigured" => false,
-        "authSource" => nil
-      },
-      "ambient" => %{"envConfigured" => false}
-    }
-  end
-
   defp custom_id({id, _cfg}), do: id
   defp custom_id(nil), do: nil
 
@@ -245,8 +224,6 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
     Map.get(agent, :provider_routing) || Map.get(agent, "provider_routing") || %{}
   end
 
-  defp provider_routing(_), do: %{}
-
   defp env_configured?(provider) do
     provider
     |> ProviderNames.env_vars()
@@ -265,8 +242,6 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
   defp default_agent_value(%Config{agent: agent}, key) when is_map(agent) do
     Map.get(agent, key) || Map.get(agent, to_string(key))
   end
-
-  defp default_agent_value(_, _), do: nil
 
   defp model_provider(model) when is_struct(model), do: Map.get(model, :provider)
   defp model_provider(model) when is_map(model), do: model[:provider] || model["provider"]

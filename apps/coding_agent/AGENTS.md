@@ -61,9 +61,11 @@ history, compaction and supervised delegation. The loop/model runtime comes from
 - `task`/`@name` personas launch native in-process sessions via the task lifecycle;
   `agent` delegates through router and can choose a named node. Do not restore
   vendor CLI runners or another agent engine.
-- Async launch receipts are not completed answers. Explicit joins suppress the
-  corresponding followup; `wait_any` suppresses only its completed winner and
-  releases other reservations. Crashed joiners cannot suppress completion forever.
+- Async launch receipts are not completed answers. A join suppresses the followup
+  of every task it returned, whatever its terminal status; `wait_any` suppresses
+  only its winner and releases other reservations. Crashed joiners cannot
+  suppress completion forever. Notices come from the stored terminal record; a
+  child cancelled because its parent aborted sends none.
 - `TaskStoreServer` serializes event/suppression/lifecycle writes. Terminal result
   is first-writer-wins; late running events cannot revive it. RunGraph persistence
   loads before accepting writes, not in a later fold that can overwrite them.

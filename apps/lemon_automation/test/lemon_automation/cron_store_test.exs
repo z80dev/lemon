@@ -202,6 +202,37 @@ defmodule LemonAutomation.CronStoreTest do
       assert Enum.map(CronStore.list_runs(job_id), & &1.id) == [run_4.id, run_3.id, run_1.id]
     end
 
+    test "list_runs_for reads several jobs at once with a per-job limit", %{token: token} do
+      job_a = job_id(token, "batch-a")
+      job_b = job_id(token, "batch-b")
+      job_none = job_id(token, "batch-none")
+      job_other = job_id(token, "batch-other")
+
+      runs =
+        for {job, name, at} <- [
+              {job_a, "a1", 1_000},
+              {job_a, "a2", 2_000},
+              {job_a, "a3", 3_000},
+              {job_b, "b1", 1_500},
+              {job_other, "o1", 9_000}
+            ] do
+          run = build_run(token, name, job, status: :completed, started_at_ms: at)
+          :ok = CronStore.put_run(run)
+          run
+        end
+
+      [_a1, a2, a3, b1, _o1] = runs
+
+      assert {:ok, by_job} = CronStore.list_runs_for([job_a, job_b, job_none], limit: 2)
+      assert Map.keys(by_job) |> Enum.sort() == Enum.sort([job_a, job_b, job_none])
+      assert Enum.map(by_job[job_a], & &1.id) == [a3.id, a2.id]
+      assert Enum.map(by_job[job_b], & &1.id) == [b1.id]
+      assert by_job[job_none] == []
+
+      for job <- [job_a, job_b],
+          do: assert(by_job[job] == CronStore.list_runs(job, limit: 2))
+    end
+
     test "list_all_runs and active_runs respect ordering and filters", %{token: token} do
       job_a = job_id(token, "a")
       job_b = job_id(token, "b")

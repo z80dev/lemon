@@ -78,6 +78,8 @@ defmodule LemonCore.Config.Validator do
         "skills.allowed_private_git_hosts"
       )
 
+    errors = validate_learning_nudge(errors, Map.get(config.skills, :learning_nudge, %{}))
+
     errors = validate_automation(config.automation, errors)
 
     case errors do
@@ -471,6 +473,7 @@ defmodule LemonCore.Config.Validator do
     )
     |> validate_boolean(Map.get(gateway, :auto_resume), "gateway.auto_resume")
     |> validate_boolean(Map.get(gateway, :enable_webhook), "gateway.enable_webhook")
+    |> validate_ingress(Map.get(gateway, :ingress))
     |> validate_channel_flags(gateway)
     |> validate_channel_sections(gateway)
     |> validate_email_config(Map.get(gateway, :email))
@@ -478,6 +481,18 @@ defmodule LemonCore.Config.Validator do
     |> validate_voice_config(Map.get(gateway, :voice))
     |> validate_webhook_section(Map.get(gateway, :webhook))
   end
+
+  defp validate_ingress(errors, nil), do: errors
+
+  defp validate_ingress(errors, ingress) when is_map(ingress) do
+    errors = validate_boolean(errors, toml_value(ingress, :enabled), "gateway.ingress.enabled")
+
+    if Enum.all?(Map.keys(ingress), &(&1 in [:enabled, "enabled"])),
+      do: errors,
+      else: ["gateway.ingress: only the enabled key is supported" | errors]
+  end
+
+  defp validate_ingress(errors, _), do: ["gateway.ingress: must be a table" | errors]
 
   defp validate_webhook_section(errors, webhook) when is_nil(webhook) or is_map(webhook),
     do: errors
@@ -1135,6 +1150,47 @@ defmodule LemonCore.Config.Validator do
 
   defp git_host?(host),
     do: is_binary(host) and Regex.match?(~r/\A[A-Za-z0-9_][A-Za-z0-9_.-]{0,252}\z/, host)
+
+  @learning_nudge_keys ~w(enabled memory_turn_interval skill_tool_threshold background_review)
+  @background_review_keys ~w(enabled model min_interval_ms timeout_ms max_tool_turns max_digest_bytes)
+
+  defp validate_learning_nudge(errors, %{} = nudge) do
+    path = "skills.learning_nudge"
+
+    errors
+    |> validate_known_keys(nudge, @learning_nudge_keys, path)
+    |> validate_boolean(nudge["enabled"], "#{path}.enabled")
+    |> validate_positive_integer(nudge["memory_turn_interval"], "#{path}.memory_turn_interval")
+    |> validate_positive_integer(nudge["skill_tool_threshold"], "#{path}.skill_tool_threshold")
+    |> validate_background_review(nudge["background_review"], "#{path}.background_review")
+  end
+
+  defp validate_learning_nudge(errors, _nudge),
+    do: ["skills.learning_nudge: must be a table" | errors]
+
+  defp validate_background_review(errors, nil, _path), do: errors
+
+  defp validate_background_review(errors, %{} = review, path) do
+    errors
+    |> validate_known_keys(review, @background_review_keys, path)
+    |> validate_boolean(review["enabled"], "#{path}.enabled")
+    |> validate_non_empty_string(review["model"], "#{path}.model")
+    |> validate_positive_integer(review["timeout_ms"], "#{path}.timeout_ms")
+    |> validate_positive_integer(review["max_tool_turns"], "#{path}.max_tool_turns")
+    |> validate_positive_integer(review["max_digest_bytes"], "#{path}.max_digest_bytes")
+    |> validate_positive_integer(review["min_interval_ms"], "#{path}.min_interval_ms")
+  end
+
+  defp validate_background_review(errors, _review, path),
+    do: ["#{path}: must be a table" | errors]
+
+  defp validate_known_keys(errors, table, known, path) do
+    table
+    |> Map.keys()
+    |> Enum.reject(&(&1 in known))
+    |> Enum.sort()
+    |> Enum.reduce(errors, &["#{path}.#{&1}: unknown key" | &2])
+  end
 
   @doc """
   Validates the `[automation]` section.

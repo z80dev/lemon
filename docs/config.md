@@ -54,6 +54,8 @@ Policy that may only be narrowed:
 - `runtime.tools.bash.git_guard`, `runtime.secret_obfuscation.enabled`,
   `memory.write_approval`, `skills.write_approval`: only `true`
 - `memory.auto_recall`: only `false`; `[features]` flags: only `"off"`
+- `skills.learning_nudge.enabled`: only `false`; `memory_turn_interval` and
+  `skill_tool_threshold`: only at or above the global value
 - `runtime.tools.lsp.servers.<id>.disabled`: only `true`
 - `profiles.<id>.tool_policy`: intersected with the effective global profile
   policy, including the inherited `runtime.tools.approval_mode`; a project
@@ -124,7 +126,6 @@ Existing LAN clients must explicitly opt in and restart:
 | `LEMON_WEB_BIND_IP` | `127.0.0.1` | Operator browser interface |
 | `LEMON_CONTROL_PLANE_NODE_BIND_IP` | `127.0.0.1` | Node-only gateway |
 | `LEMON_CONTROL_PLANE_NODE_PORT` | `4044` | Node-only port; `0` disables it |
-| `LEMON_CONTROL_PLANE_REMOTE_HTTP` | empty | Comma-separated subset of `openai,acp` |
 | `LEMON_CONTROL_PLANE_ALLOWED_ORIGINS` | empty | Comma-separated exact browser origins allowed on `/ws` and `/acp/ws` |
 
 Loopback peers of the main and A2A listeners must send a `Host` of `localhost`,
@@ -145,15 +146,14 @@ binds require `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` and refuse
 `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true`. Put TLS in front of
 LemonWeb: an operator login over plaintext LAN HTTP exposes the credential.
 Remote peers on the main listener get only `GET /ws` and `GET /healthz`;
-everything else is 404 unless the corresponding HTTP API is explicitly enabled
-with `LEMON_CONTROL_PLANE_REMOTE_HTTP` and its dedicated
-`LEMON_OPENAI_COMPAT_API_TOKEN` / `LEMON_ACP_API_TOKEN`.
+everything else, including `/acp/ws`, is 404. Lemon has no OpenAI-compatible
+`/v1` API or single-shot `POST /acp` endpoint, and no remote HTTP API opt-in.
 
-OpenAI and ACP require authentication locally too. If their dedicated token is
-unset they accept the operator token, including the launcher's private
+`/acp/ws` requires the operator token, including the launcher's private
 `~/.lemon/run/control-plane-<port>.token` file. The explicit default-off loopback
-compatibility flag permits tokenless local APIs only when no token is configured;
-it also gates tokenless local A2A. Never enable it behind a local reverse proxy.
+compatibility flag permits tokenless local operator access only when no token is
+configured; it also gates tokenless local A2A. Never enable it behind a local
+reverse proxy.
 
 Forward node traffic only to **4044**: its `/ws` accepts node and enrollment
 credentials, never operator or tokenless clients; `/healthz` identifies
@@ -380,6 +380,9 @@ mock_mode = false
 allowed_inboxes = ["<sender inbox id>"]
 # allow_all = true               # explicit opt-out: accept every sender when allowed_inboxes is empty
 
+[gateway.ingress]
+enabled = false
+
 [gateway.voice]
 enabled = false
 websocket_port = 4047
@@ -578,49 +581,6 @@ cause actual usage to exceed a cap. Already-exhausted or zero caps prevent reque
 Tool calls requested by the response that exhausts a cap are recorded as rejected
 error results without executing their side effects. Increase the configured cap
 if you intentionally want to continue an exhausted session.
-
-## Optional session advisor
-
-The native session API accepts `advisor: [...]`; it is **off by default**.
-This is an explicit local session option, not a TOML setting. For example:
-
-```elixir
-CodingAgent.start_session(
-  cwd: cwd,
-  model: primary_model,
-  advisor: [
-    model: reviewer_model,
-    max_notes: 3,
-    max_note_chars: 2000,
-    max_events: 1000,
-    timeout_ms: 30_000,
-    agent_options: [stream_options: reviewer_stream_options, get_api_key: reviewer_credentials]
-  ]
-)
-```
-
-The reviewer inherits the primary model unless `model:` is supplied. Supply
-provider credentials/options through `agent_options`, using the same trusted
-local API as `LemonAgent.Agent`. No paid review runs occur unless enabled.
-Each review starts with only the newly subscribed event delta, at a primary
-tool-turn boundary. Pending deltas wait for the current review, never for the
-primary turn. Subscription overflow, buffer overflow, timeout or reviewer
-failure retires the temporary advisor without restarting or failing the primary.
-
-Its tools are the intersection of primary authority and the built-in `read`,
-`grep`, `find`, `ls` allowlist; extensions and MCP cannot override those tools.
-Inherited denials and approvals remain in force. Tool results are fenced as
-untrusted context. The local `advise` tool normalizes whitespace, deduplicates
-case-insensitively across updates and caps accepted notes per update.
-Oversized/empty notes are suppressed. `critical` notes preempt the primary's
-remaining tool queue; `warning` and `info` notes use non-preempting follow-up
-delivery. Notes are advisory, not new user authority.
-
-The numbers above are caller-policy defaults, not measured tuning results.
-Completed advisor responses charge the primary run's `BudgetTracker`, including
-unknown usage; an already-exhausted budget prevents another review. Concurrent
-primary/reviewer requests can still finish after a limit is reached. No latency
-or quality improvement is claimed; measure before enabling by default.
 
 ## Native Execution and Subagents
 
@@ -1084,8 +1044,8 @@ Environment variables override file values. Common overrides:
   started by `./bin/lemon-tui` is stopped with the TUI. Start a persistent
   source runtime with `./bin/lemon daemon`, then attach with the same token.
 - `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` — explicit legacy
-  compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator,
-  OpenAI/ACP HTTP and A2A access from direct loopback peers. Defaults to `false`; never enable it
+  compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator
+  (including `/acp/ws`) and A2A access from direct loopback peers. Defaults to `false`; never enable it
   for a reverse-proxied control plane.
 
 The browser monitoring client intentionally has no build-time or URL-based
@@ -1528,7 +1488,7 @@ without ad-hoc environment variables.
 ```toml
 [features]
 session_search               = "default-on" # durable memory ingest and search (default)
-routing_feedback             = "default-on" # task fingerprinting + routing feedback (default)
+routing_feedback             = "off"        # task fingerprinting + routing feedback (enable with "on")
 skill_synthesis_drafts       = "default-on" # skill synthesis draft pipeline (default)
 crash_resume                = "off"        # hard-crash continuation is explicitly opt-in
 ```
@@ -1536,8 +1496,11 @@ crash_resume                = "off"        # hard-crash continuation is explicit
 `session_search` defaults to `"default-on"`: durable memory ingest and search
 are active on a stock install (retention 30 days, max 500 documents per scope;
 runs whose summaries look like they contain a secret are dropped entirely, not
-redacted). Set it to `"off"` to disable. The learning-loop flags
-(`routing_feedback`, `skill_synthesis_drafts`) also default to `"default-on"`.
+redacted). Set it to `"off"` to disable. `skill_synthesis_drafts` also defaults
+to `"default-on"`. `routing_feedback` defaults to `"off"`; when enabled, routing
+history only replaces `[defaults] model` for un-pinned runs in a task context
+where the default measured worse (see
+[Adaptive Behavior](user-guide/adaptive.md#how-it-influences-routing)).
 
 Valid rollout states:
 
@@ -1552,7 +1515,7 @@ Each flag can be overridden via an environment variable using the pattern
 
 ```bash
 LEMON_FEATURE_SESSION_SEARCH=off       # kill switch for durable memory
-LEMON_FEATURE_ROUTING_FEEDBACK=default-on
+LEMON_FEATURE_ROUTING_FEEDBACK=on      # record and use routing history
 ```
 
 Config validation fails cleanly if a flag is set to an unrecognised state.
@@ -1806,12 +1769,12 @@ values. `lemon secrets check` reports a resolved credential only as `present`.
 
 ## Dotenv Autoload
 
-Source launchers (`./bin/lemon`, `./bin/lemon-gateway`, `./bin/lemon-control-plane`)
-load one `.env` file at startup, and the config reloader re-reads it when it
-changes:
+Source launchers (`./bin/lemon` and `./bin/lemon-gateway`, which runs
+`./bin/lemon start`) load one `.env` file at startup, and the config reloader
+re-reads it when it changes:
 
 - `$LEMON_DOTENV_DIR/.env` when `LEMON_DOTENV_DIR` is set in the launching
-  environment (or `--dotenv-dir` for `lemon-control-plane`);
+  environment;
 - otherwise `~/.lemon/.env`.
 
 Environment variables override every config file, so this file is operator
@@ -2522,7 +2485,9 @@ an isolated native session and loopback fixture endpoint, rejects the primary
 model with HTTP 503, and verifies the configured alternate model answers and
 the session is persisted. The smoke script is not part of the CI test lane.
 
-`MIX_ENV=test mix run --no-start scripts/live_provider_ownership_smoke.exs`
+`MIX_ENV=test mix run --no-compile --no-start scripts/live_provider_ownership_smoke.exs`
+(or its ExUnit equivalent,
+`scripts/test path apps/coding_agent/test/coding_agent/session/live_provider_ownership_test.exs`)
 exercises public native Session and Agent model switches, missing-selected-login
 refusal (including plan-role selection), successful keyless transitions,
 switch-then-fallback header isolation and same-provider rebinding with no caller
@@ -3359,7 +3324,8 @@ Top-level `[gateway]` keys (defaults from `LemonCore.Config.Gateway`):
 | `max_concurrent_runs` | `2` | Positive gateway-wide execution permit limit (`LEMON_GATEWAY_MAX_CONCURRENT_RUNS`), owned by `LemonGateway.Slots`. |
 | `default_cwd` | unset | Fallback working directory for unbound chats (`LEMON_GATEWAY_DEFAULT_CWD`). |
 | `auto_resume` | `false` | Resume interrupted sessions on start. |
-| `enable_telegram`, `enable_discord`, `enable_xmtp`, `enable_webhook`, `enable_a2a` | `false` | Enable the named channel; `enable_<id>` is read per registered channel (and `LEMON_GATEWAY_ENABLE_<ID>` overrides it). |
+| `enable_telegram`, `enable_discord`, `enable_xmtp`, `enable_a2a` | `false` | Enable the named channel (`LEMON_GATEWAY_ENABLE_<ID>` overrides it). |
+| `enable_webhook` | `false` | Enable the built-in generic webhook listener when gateway ingress is enabled (`LEMON_GATEWAY_ENABLE_WEBHOOK`). |
 
 `enable_webhook` is validated as a boolean. Invalid execution capacity fails
 startup; there is no fallback to 10. Engine-session ownership is always a
@@ -3379,6 +3345,35 @@ RunProcesses, including those waiting for gateway permits. It is independent of
 `max_concurrent_runs`. See the canonical
 [admission inventory](architecture/admission-gates.md) for every gate and
 saturation behavior.
+
+## Gateway ingress
+
+Gateway startup runs execution only by default. In the operator's global
+`~/.lemon/config.toml`, set:
+
+```toml
+[gateway.ingress]
+enabled = true
+```
+
+`enabled` must be a boolean and defaults to `false`.
+`LEMON_GATEWAY_INGRESS_ENABLED=true` or `false` overrides it. Project TOML
+cannot enable ingress. Restart the runtime after changing listener enablement,
+bind addresses or ports. This gate does not affect messaging adapters in
+`lemon_channels`.
+
+If you previously opted in via the `:gateway_ingress_enabled` application
+setting, move that opt-in to `[gateway.ingress]`.
+
+| Surface | Per-surface enablement and authentication | Default listener |
+| --- | --- | --- |
+| Generic webhook | `[gateway] enable_webhook = true`, plus a token in `[gateway.webhook.integrations.<id>]`. Send `Authorization: Bearer <token>` to `POST /webhooks/<id>`. No transport registration is needed. | Loopback, `4046` |
+| Twilio SMS | `[gateway.sms] webhook_enabled = true` (or `LEMON_SMS_WEBHOOK_ENABLED=true`) and a Twilio auth token (`auth_token_secret` or `TWILIO_AUTH_TOKEN`). Set `webhook_url` to the exact public callback URL when behind a proxy. | Loopback, `4041` |
+| Twilio voice | `[gateway.voice] enabled = true`. Configure an HTTPS `public_url` and a Twilio auth token to authenticate requests. | Loopback, `4047` |
+
+Keep the listeners on loopback and forward only the required routes through a
+TLS reverse proxy or tunnel. See the [gateway README](https://github.com/z80dev/lemon/blob/main/apps/lemon_gateway/README.md#transports)
+for webhook policy and SMS behavior, and [Voice](#voice) for signed callbacks.
 
 ## A2A peers
 
@@ -3564,7 +3559,7 @@ Earlier releases accepted every XMTP sender. After upgrading, an XMTP adapter wi
 
 ## Voice
 
-Voice transport is configured under `[gateway.voice]`.
+Voice requires both `[gateway.ingress] enabled = true` and `[gateway.voice] enabled = true`.
 
 ```toml
 [gateway.voice]
@@ -3584,8 +3579,8 @@ max_call_duration_seconds = 600
 silence_timeout_ms = 5000
 ```
 
-Canonical voice settings are loaded from `gateway.voice`. Legacy `:lemon_gateway` app env
-fallbacks remain only as temporary compatibility shims and should not be used for new setup.
+Voice settings are loaded from `[gateway.voice]`; no application environment
+configuration is needed.
 
 Every voice webhook and the media-stream WebSocket handshake must carry a valid
 `X-Twilio-Signature` made with the configured Twilio auth token over the URL derived
@@ -3866,23 +3861,26 @@ slash command. Direct messages always run.
 Forum topic management:
 - `/topic <name>`: create a new topic in the current Telegram forum supergroup.
 
-## Learning Reminders (skills.json)
+## Learning Reminders
 
-Learning reminder settings use the existing skills configuration, **not**
-`config.toml`: global `~/.lemon/agent/skills.json` (or `LEMON_AGENT_DIR/skills.json`)
-and project `<cwd>/.lemon/skills.json`. A project file can only narrow the
-global one: `enabled = false`, or a larger `memory_turn_interval` /
-`skill_tool_threshold`; every other project `learning_nudge` key (including
-`background_review`) is ignored.
+Learning reminder settings live in `config.toml` under `[skills.learning_nudge]`.
+A project `.lemon/config.toml` can only narrow the global table: `enabled = false`,
+or a `memory_turn_interval` / `skill_tool_threshold` at or above the effective
+global value. `[skills.learning_nudge.background_review]` (model, timeouts, turn
+caps) is operator-only; a project value is ignored with a warning.
 
-```json
-{
-  "learning_nudge": {
-    "enabled": true,
-    "memory_turn_interval": 10,
-    "skill_tool_threshold": 15
-  }
-}
+`skills.json` is skill state only (the `disabled` list): a `learning_nudge` object
+left there is no longer read, and `lemon doctor` warns about it. Move it here.
+
+```toml
+[skills.learning_nudge]
+enabled = true
+memory_turn_interval = 10
+skill_tool_threshold = 15
+
+[skills.learning_nudge.background_review]
+enabled = false
+# model = "openai:gpt-4o-mini"
 ```
 
 | Key | Default | Meaning |
@@ -3897,8 +3895,9 @@ global one: `enabled = false`, or a larger `memory_turn_interval` /
 | `background_review.max_tool_turns` | `3` | Maximum assistant tool-use turns (maximum 10). |
 | `background_review.timeout_ms` | `60000` | Review execution timeout (maximum 300000). |
 
-Numeric settings must be positive integers; invalid values use their defaults.
-Configuration is read at the next user turn. With background review disabled,
+Numeric settings must be positive integers and unknown keys are rejected; an
+invalid value is a configuration error reported by config validation and
+`lemon doctor`. Configuration is read at the next user turn. With background review disabled,
 the fixed reminder text is bounded volatile context with no extra model calls,
 memory reads, automatic saves or transcript scans. Enabling background review
 costs **one additional model run per accepted trigger**, using the parent model

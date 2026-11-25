@@ -26,6 +26,13 @@ defmodule LemonRouter.ExecutionPolicyAdmissionTest do
               tool_policy: nil,
               system_prompt: nil,
               model: nil
+            },
+            "policy-exempt" => %{
+              id: "policy-exempt",
+              name: "Policy exempt",
+              tool_policy: %{workspace_read_exempt: true, approval_mode: :write},
+              system_prompt: nil,
+              model: nil
             }
           }
       }
@@ -83,15 +90,42 @@ defmodule LemonRouter.ExecutionPolicyAdmissionTest do
     end
   end
 
+  test "a request override narrows operator authority but cannot add to it" do
+    # The override cannot enable a read exemption no operator layer grants.
+    assert {:ok, submission} = build(%{tool_policy: %{workspace_read_exempt: true}})
+    assert submission.execution_request.tool_policy.workspace_read_exempt == nil
+    assert submission.execution_request.execution_context.tool_policy.workspace_read_exempt == nil
+
+    # An operator profile layer grants it; an absent override inherits it.
+    assert {:ok, submission} = build(%{agent_id: "policy-exempt"})
+    assert submission.execution_request.tool_policy.workspace_read_exempt == true
+
+    # An override cannot waive the profile's argument-dependent approval gate.
+    assert {:ok, submission} =
+             build(%{agent_id: "policy-exempt", tool_policy: %{approvals: %{"write" => "never"}}})
+
+    admitted = submission.execution_request.tool_policy
+    assert admitted.workspace_read_exempt == true
+    assert ToolPolicy.requires_approval?(admitted, "write", %{"diagnostics" => true})
+
+    # An explicit false withdraws the operator grant.
+    assert {:ok, submission} =
+             build(%{agent_id: "policy-exempt", tool_policy: %{workspace_read_exempt: false}})
+
+    assert submission.execution_request.tool_policy.workspace_read_exempt == false
+  end
+
   defp build(attrs) do
-    attrs
-    |> Map.merge(%{
+    agent_id = Map.get(attrs, :agent_id, "policy-admission")
+
+    %{
       origin: :control_plane,
-      agent_id: "policy-admission",
-      session_key: "agent:policy-admission:#{System.unique_integer([:positive])}",
+      agent_id: agent_id,
+      session_key: "agent:#{agent_id}:#{System.unique_integer([:positive])}",
       prompt: "Hello",
       run_id: "run_#{System.unique_integer([:positive])}"
-    })
+    }
+    |> Map.merge(attrs)
     |> RunRequest.new()
     |> SubmissionBuilder.build(%{
       run_supervisor: LemonRouter.RunSupervisor,

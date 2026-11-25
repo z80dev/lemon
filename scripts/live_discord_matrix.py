@@ -1389,28 +1389,45 @@ async def reset_session_ws(ws_url, session_key):
         if hello.get("type") != "hello-ok":
             raise SystemExit(f"control-plane connect failed: {json.dumps(hello)}")
 
-        request_id = str(uuid.uuid4())
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "req",
-                    "id": request_id,
-                    "method": "sessions.reset",
-                    "params": {"sessionKey": session_key},
-                }
+        async def request(params):
+            request_id = str(uuid.uuid4())
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "req",
+                        "id": request_id,
+                        "method": "sessions.reset",
+                        "params": params,
+                    }
+                )
             )
+
+            while True:
+                response = json.loads(await ws.recv())
+
+                if response.get("type") != "res" or response.get("id") != request_id:
+                    continue
+
+                if response.get("ok") is not True:
+                    raise SystemExit(
+                        f"control-plane sessions.reset failed: {json.dumps(response)}"
+                    )
+
+                return response
+
+        # sessions.reset is preview-first: the dry run mutates nothing and issues
+        # a single-use confirmToken bound to the session's current state digest.
+        preview = await request({"sessionKey": session_key, "dryRun": True})
+        confirm_token = (preview.get("payload") or {}).get("confirmToken")
+
+        if not isinstance(confirm_token, str) or not confirm_token:
+            raise SystemExit(
+                f"control-plane sessions.reset preview returned no confirmToken: {json.dumps(preview)}"
+            )
+
+        return await request(
+            {"sessionKey": session_key, "dryRun": False, "confirmToken": confirm_token}
         )
-
-        while True:
-            response = json.loads(await ws.recv())
-
-            if response.get("type") != "res" or response.get("id") != request_id:
-                continue
-
-            if response.get("ok") is not True:
-                raise SystemExit(f"control-plane sessions.reset failed: {json.dumps(response)}")
-
-            return response
 
 
 def maybe_reset_session(args, channel_id, sender, peer_kind="group"):

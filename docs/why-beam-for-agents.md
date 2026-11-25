@@ -77,7 +77,7 @@ a dropped Telegram connection *should* come back, because reconnecting is idempo
 idempotency argument lives in the supervision strategy, where a reviewer can find it.
 
 One level down, each tool call runs as a supervised task with a monitor
-([`start_tool_tasks/10`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) in
+([`start_tool_tasks/9`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) in
 `LemonAgent.Loop.ToolCalls`). If it crashes, the `:DOWN` message is converted into a
 tool result the model can read — an interrupted result with
 `error_type: :tool_task_crashed`, built in

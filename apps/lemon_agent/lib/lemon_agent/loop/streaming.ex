@@ -35,7 +35,7 @@ defmodule LemonAgent.Loop.Streaming do
   @spec stream_assistant_response(
           LemonAgent.Types.AgentContext.t(),
           AgentLoopConfig.t(),
-          reference() | nil,
+          AbortSignal.t() | nil,
           AgentLoopConfig.stream_fn() | nil,
           EventStream.t()
         ) :: {:ok, AssistantMessage.t(), LemonAgent.Types.AgentContext.t()} | {:error, term()}
@@ -385,9 +385,6 @@ defmodule LemonAgent.Loop.Streaming do
       # here — after the drain — could swallow a redirect whose correction is
       # still sitting undrained in the steering queue, silently delaying it a
       # full turn.
-
-      # Surface very large contexts early (telemetry warning only; no truncation here).
-      _ = LemonAgent.Context.check_size(context.messages, context.system_prompt)
 
       # The untrusted fence runs last, on the provider-bound messages that
       # `convert_to_llm` produced, so no caller transform or conversion can
@@ -771,7 +768,7 @@ defmodule LemonAgent.Loop.Streaming do
 
   defp process_stream_event({:canceled, reason}, partial, context, added, stream, config) do
     {final_message, context} =
-      finalize_canceled_message(partial, context, added, stream, config, reason)
+      finalize_canceled_message(partial_snapshot(partial), context, added, stream, config, reason)
 
     {:done, final_message, context}
   end
@@ -876,8 +873,8 @@ defmodule LemonAgent.Loop.Streaming do
 
   defp committed_content?(_), do: false
 
-  defp partial_snapshot(%StreamAccumulator{} = partial), do: StreamAccumulator.snapshot(partial)
-  defp partial_snapshot(partial), do: partial
+  defp partial_snapshot(nil), do: nil
+  defp partial_snapshot(accumulator), do: StreamAccumulator.snapshot(accumulator)
 
   defp default_stream_fn(model, context, options) do
     LemonAi.stream(model, context, options)
@@ -932,12 +929,12 @@ defmodule LemonAgent.Loop.Streaming do
     cond do
       aborted?(signal) ->
         LemonAi.EventStream.cancel(stream, :aborted)
-        :gen_server.receive_response(request, 0)
+        _ = :gen_server.receive_response(request, 0)
         {:event, {:canceled, :aborted}}
 
       redirect_requested?(signal) ->
         LemonAi.EventStream.cancel(stream, :redirected)
-        :gen_server.receive_response(request, 0)
+        _ = :gen_server.receive_response(request, 0)
         {:event, {:canceled, :redirected}}
 
       true ->
@@ -972,15 +969,14 @@ defmodule LemonAgent.Loop.Streaming do
   defp terminal_ai_event?({:canceled, _reason}), do: true
   defp terminal_ai_event?(_event), do: false
 
-  defp reconcile_final_message(%AssistantMessage{content: [_ | _]} = final, %StreamAccumulator{}),
+  defp reconcile_final_message(%AssistantMessage{content: [_ | _]} = final, _partial),
     do: final
 
-  defp reconcile_final_message(final, %StreamAccumulator{} = partial),
-    do: reconcile_final_message(final, StreamAccumulator.snapshot(partial))
+  defp reconcile_final_message(%AssistantMessage{} = final, partial) do
+    snapshot = partial_snapshot(partial)
 
-  defp reconcile_final_message(%AssistantMessage{} = final, %AssistantMessage{} = partial) do
-    if empty_content?(final.content) and not empty_content?(partial.content) do
-      %{final | content: partial.content}
+    if snapshot != nil and empty_content?(final.content) and not empty_content?(snapshot.content) do
+      %{final | content: snapshot.content}
     else
       final
     end
@@ -1078,8 +1074,6 @@ defmodule LemonAgent.Loop.Streaming do
   end
 
   defp finalize_canceled_message(partial, context, added, stream, config, reason) do
-    partial = partial_snapshot(partial)
-
     stop_reason =
       case reason do
         :aborted -> :aborted

@@ -80,7 +80,7 @@ defmodule LemonMedia.MediaJobSupervisor do
 
         {:error, reason}
         when reason in [:task_capacity_reached, :task_supervisor_unavailable] ->
-          record_terminal(worker_attrs, record_opts, :failed, reason)
+          _ = record_terminal(worker_attrs, record_opts, :failed, reason)
           {:error, reason}
       end
     end

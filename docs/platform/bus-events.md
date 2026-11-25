@@ -130,9 +130,14 @@ fails when a registered type has no row, a class is unknown, a durable row's
 authority read is not exported, or a transient row names a recovery method that
 is not registered.
 
-Known gap: several `LemonAutomation.CronManager` paths ignore the result of
-`CronStore.put_job/1` or `CronStore.put_run/1` and still emit the cron event, so
-a failed write can be announced as committed.
+`LemonAutomation.CronManager` publishes a cron job or run event only after
+`CronStore` confirms the write. A failed write emits nothing, leaves the
+manager's state unchanged and replies `{:error, :store_unavailable}`; a write
+whose outcome is unknown replies `{:error, :outcome_unknown}`, and if it did
+land, the stored row is the record. Nothing proceeds from an unconfirmed write:
+a run is never submitted, and a terminal is never delivered, retried or
+reported as an abort. An active run whose terminal write failed is finished by
+recovery. `cron_manager_persistence_test.exs` covers these cases.
 
 ### Remaining best-effort paths
 

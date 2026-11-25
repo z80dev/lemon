@@ -8,7 +8,9 @@ defmodule LemonWeb.WorkManagementLiveTest do
 
   alias LemonAgent.Workspace.{GoalStore, KanbanStore}
   alias LemonAutomation.{CronManager, GoalLoopManager, KanbanDispatcher}
-  alias LemonWeb.CronText
+  alias LemonWeb.{CronText, WorkProjection}
+
+  @idle_proof_ms String.to_integer(System.get_env("WORK_IDLE_PROOF_MS", "3500"))
 
   setup :configure_operator_token
 
@@ -74,6 +76,91 @@ defmodule LemonWeb.WorkManagementLiveTest do
     Process.sleep(300)
     render_async(view)
     assert has_element?(view, "#work-cron-cron_demo", "Renamed cron")
+
+    render_click(view, "tab", %{"tab" => "goals"})
+    refute has_element?(view, "#work-goal-goal_demo", "paused")
+    Agent.update(state, &put_in(&1.goal.status, "paused"))
+
+    LemonCore.Bus.broadcast(
+      "goals",
+      LemonCore.Event.new(
+        :goal_paused,
+        LemonCore.Events.GoalChanged.new(%{
+          goal_id: "goal_demo",
+          session_key: "agent:default:main",
+          status: "paused"
+        }),
+        %{session_key: "agent:default:main", goal_id: "goal_demo"}
+      )
+    )
+
+    Process.sleep(300)
+    render_async(view)
+    assert has_element?(view, "#work-goal-goal_demo", "paused")
+  end
+
+  test "a snapshot makes a fixed number of service calls whatever the row count", %{
+    state: state
+  } do
+    counted = fn rows ->
+      test_pid = self()
+
+      Application.put_env(:lemon_web, :work_service_fun, fn module, function, args ->
+        send(test_pid, {:service_call, self(), module, function})
+        state |> service(module, function, args) |> multiply(module, function, rows)
+      end)
+
+      work = WorkProjection.snapshot()
+      calls = drain_service_calls([])
+      {work, calls}
+    end
+
+    {one, one_calls} = counted.(1)
+    {full, full_calls} = counted.(25)
+
+    assert Enum.map([:boards, :goals, :cron], &length(one[&1].items)) == [1, 1, 1]
+    assert Enum.map([:boards, :goals, :cron], &length(full[&1].items)) == [12, 25, 25]
+    assert Enum.all?(full.boards.items, &(&1.runtime == "idle" and length(&1.cards) == 1))
+    assert Enum.all?(full.goals.items, &(&1.runtime == "idle"))
+    assert Enum.all?(full.cron.items, &(&1.runtime == "ready" and length(&1.runs) == 1))
+
+    # Was 1 + 12 * 2 + 1 + 25 + 1 + 25 = 77 per tick with full sections.
+    assert full_calls == one_calls
+
+    assert Enum.sort(full_calls) ==
+             Enum.sort([
+               {KanbanStore, :list_boards},
+               {KanbanStore, :list_tasks_for},
+               {KanbanDispatcher, :status_many},
+               {GoalStore, :list},
+               {GoalLoopManager, :status_many},
+               {CronManager, :list},
+               {CronManager, :runs_for}
+             ])
+  end
+
+  test "failed batch reads mark rows unavailable, never idle or empty", %{state: state} do
+    Application.put_env(:lemon_web, :work_service_fun, fn
+      module, function, _args
+      when function in [:status_many, :runs_for] and
+             module in [KanbanDispatcher, GoalLoopManager, CronManager] ->
+        exit(:timeout)
+
+      module, function, args ->
+        service(state, module, function, args)
+    end)
+
+    work = WorkProjection.snapshot()
+    assert [%{runtime: "unavailable"}] = work.boards.items
+    assert [%{runtime: "unavailable"}] = work.goals.items
+    assert [%{runtime: "unavailable", runs: []}] = work.cron.items
+
+    Application.put_env(:lemon_web, :work_service_fun, fn
+      KanbanStore, :list_tasks_for, _ -> {:error, :store_unavailable}
+      module, function, args -> service(state, module, function, args)
+    end)
+
+    assert %{state: :unavailable, items: []} = WorkProjection.snapshot().boards
   end
 
   test "dead render and idle page read no services; reads run off the LiveView", %{
@@ -98,8 +185,13 @@ defmodule LemonWeb.WorkManagementLiveTest do
     refute reader == view.pid
     flush_service_calls()
 
-    # No timer: an idle page performs no service calls (the old poll ran every 3 s).
-    refute_receive {:service_call, _, _, _}, 3_500
+    # No timer: an idle page performs no service calls (the old poll ran every
+    # 3 s), and a scheduler tick or stray message with no data change reads
+    # nothing. WORK_IDLE_PROOF_MS=30000 widens the window for the issue's
+    # 30-second measurement.
+    LemonAutomation.Events.emit_tick(System.system_time(:millisecond))
+    send(view.pid, :work_tick)
+    refute_receive {:service_call, _, _, _}, @idle_proof_ms
 
     # A kanban doorbell reloads promptly, again off the LiveView process.
     Agent.update(state, &put_in(&1.card.title, "Doorbell card"))
@@ -276,14 +368,18 @@ defmodule LemonWeb.WorkManagementLiveTest do
     state: state
   } do
     Application.put_env(:lemon_web, :work_service_fun, fn
-      KanbanDispatcher, :status, _ ->
+      KanbanDispatcher, :status_many, [ids] ->
         {:ok,
-         %{
-           running: false,
-           control_revision: "held_revision",
-           dispatcher: nil,
-           reconciling_count: 1
-         }}
+         Map.new(
+           ids,
+           &{&1,
+            %{
+              running: false,
+              control_revision: "held_revision",
+              dispatcher: nil,
+              reconciling_count: 1
+            }}
+         )}
 
       module, function, args ->
         service(state, module, function, args)
@@ -654,8 +750,8 @@ defmodule LemonWeb.WorkManagementLiveTest do
       KanbanStore, :list_boards, _ ->
         {:ok, [KanbanStore.get_board(board.id)]}
 
-      KanbanStore, :list_tasks, args ->
-        apply(KanbanStore, :list_tasks, args)
+      KanbanStore, :list_tasks_for, args ->
+        apply(KanbanStore, :list_tasks_for, args)
 
       GoalStore, :list, _ ->
         {:ok, []}
@@ -663,8 +759,8 @@ defmodule LemonWeb.WorkManagementLiveTest do
       CronManager, :list, _ ->
         []
 
-      KanbanDispatcher, :status, [id] ->
-        KanbanDispatcher.status(id, name: dispatcher)
+      KanbanDispatcher, :status_many, [ids] ->
+        KanbanDispatcher.status_many(ids, name: dispatcher)
 
       KanbanDispatcher, fun, [id, opts] ->
         apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
@@ -740,8 +836,8 @@ defmodule LemonWeb.WorkManagementLiveTest do
       KanbanStore, :list_boards, _ ->
         {:ok, [KanbanStore.get_board(board.id)]}
 
-      KanbanStore, :list_tasks, args ->
-        apply(KanbanStore, :list_tasks, args)
+      KanbanStore, :list_tasks_for, args ->
+        apply(KanbanStore, :list_tasks_for, args)
 
       GoalStore, :list, _ ->
         {:ok, []}
@@ -749,8 +845,8 @@ defmodule LemonWeb.WorkManagementLiveTest do
       CronManager, :list, _ ->
         []
 
-      KanbanDispatcher, :status, [id] ->
-        KanbanDispatcher.status(id, name: dispatcher)
+      KanbanDispatcher, :status_many, [ids] ->
+        KanbanDispatcher.status_many(ids, name: dispatcher)
 
       KanbanDispatcher, fun, [id, opts] ->
         apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
@@ -800,8 +896,8 @@ defmodule LemonWeb.WorkManagementLiveTest do
       KanbanStore, :list_boards, _ ->
         {:ok, [KanbanStore.get_board(board.id)]}
 
-      KanbanStore, :list_tasks, args ->
-        apply(KanbanStore, :list_tasks, args)
+      KanbanStore, :list_tasks_for, args ->
+        apply(KanbanStore, :list_tasks_for, args)
 
       GoalStore, :list, _ ->
         {:ok, []}
@@ -809,8 +905,8 @@ defmodule LemonWeb.WorkManagementLiveTest do
       CronManager, :list, _ ->
         []
 
-      KanbanDispatcher, :status, [id] ->
-        KanbanDispatcher.status(id, name: dispatcher)
+      KanbanDispatcher, :status_many, [ids] ->
+        KanbanDispatcher.status_many(ids, name: dispatcher)
 
       KanbanDispatcher, fun, [id, opts] ->
         apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
@@ -865,8 +961,8 @@ defmodule LemonWeb.WorkManagementLiveTest do
       KanbanStore, :list_boards, _ ->
         {:ok, [KanbanStore.get_board(board.id)]}
 
-      KanbanStore, :list_tasks, args ->
-        apply(KanbanStore, :list_tasks, args)
+      KanbanStore, :list_tasks_for, args ->
+        apply(KanbanStore, :list_tasks_for, args)
 
       GoalStore, :list, _ ->
         {:ok, []}
@@ -874,8 +970,8 @@ defmodule LemonWeb.WorkManagementLiveTest do
       CronManager, :list, _ ->
         []
 
-      KanbanDispatcher, :status, [id] ->
-        KanbanDispatcher.status(id, name: dispatcher)
+      KanbanDispatcher, :status_many, [ids] ->
+        KanbanDispatcher.status_many(ids, name: dispatcher)
 
       KanbanDispatcher, fun, [id, opts] ->
         apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
@@ -934,8 +1030,8 @@ defmodule LemonWeb.WorkManagementLiveTest do
       KanbanStore, :list_boards, _ ->
         {:ok, [KanbanStore.get_board(board.id)]}
 
-      KanbanStore, :list_tasks, args ->
-        apply(KanbanStore, :list_tasks, args)
+      KanbanStore, :list_tasks_for, args ->
+        apply(KanbanStore, :list_tasks_for, args)
 
       GoalStore, :list, _ ->
         {:ok, []}
@@ -943,8 +1039,8 @@ defmodule LemonWeb.WorkManagementLiveTest do
       CronManager, :list, _ ->
         []
 
-      KanbanDispatcher, :status, [id] ->
-        KanbanDispatcher.status(id, name: dispatcher)
+      KanbanDispatcher, :status_many, [ids] ->
+        KanbanDispatcher.status_many(ids, name: dispatcher)
 
       KanbanDispatcher, fun, [id, opts] ->
         apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
@@ -996,6 +1092,24 @@ defmodule LemonWeb.WorkManagementLiveTest do
     assert CronText.describe("5 4 1-7 * 2") == "Custom schedule"
     assert CronText.describe("Custom schedule") == "Custom schedule"
   end
+
+  defp drain_service_calls(acc) do
+    receive do
+      {:service_call, _, module, function} -> drain_service_calls([{module, function} | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  # Expands the one-row fixture lists to `n` distinct rows.
+  defp multiply({:ok, [board]}, KanbanStore, :list_boards, n),
+    do: {:ok, for(i <- 1..n, do: %{board | id: "board_#{i}"})}
+
+  defp multiply({:ok, [goal]}, GoalStore, :list, n),
+    do: {:ok, for(i <- 1..n, do: %{goal | id: "goal_#{i}", session_key: "agent:goal#{i}:main"})}
+
+  defp multiply([job], CronManager, :list, n), do: for(i <- 1..n, do: %{job | id: "cron_#{i}"})
+  defp multiply(result, _module, _function, _n), do: result
 
   defp flush_service_calls do
     receive do
@@ -1133,8 +1247,8 @@ defmodule LemonWeb.WorkManagementLiveTest do
       {KanbanStore, :list_boards, _} ->
         {:ok, [state.board]}
 
-      {KanbanStore, :list_tasks, _} ->
-        {:ok, [state.card]}
+      {KanbanStore, :list_tasks_for, [ids, _]} ->
+        {:ok, Map.new(ids, &{&1, [state.card]})}
 
       {GoalStore, :list, _} ->
         {:ok, [state.goal]}
@@ -1142,14 +1256,14 @@ defmodule LemonWeb.WorkManagementLiveTest do
       {CronManager, :list, _} ->
         if state.job, do: [state.job], else: []
 
-      {CronManager, :runs, _} ->
-        {:ok, [state.run]}
+      {CronManager, :runs_for, [ids, _]} ->
+        {:ok, Map.new(ids, &{&1, [state.run]})}
 
-      {KanbanDispatcher, :status, _} ->
-        runtime(state, :board_running, :dispatcher)
+      {KanbanDispatcher, :status_many, [ids]} ->
+        many(ids, runtime(state, :board_running, :dispatcher))
 
-      {GoalLoopManager, :status, _} ->
-        runtime(state, :goal_running, :loop)
+      {GoalLoopManager, :status_many, [ids]} ->
+        many(ids, runtime(state, :goal_running, :loop))
 
       _ ->
         Agent.update(
@@ -1170,6 +1284,9 @@ defmodule LemonWeb.WorkManagementLiveTest do
         end
     end
   end
+
+  defp many(ids, {:ok, status}), do: {:ok, Map.new(ids, &{&1, status})}
+  defp many(_ids, error), do: error
 
   defp runtime(%{runtime_unavailable: true}, _, _), do: {:error, :unavailable}
 

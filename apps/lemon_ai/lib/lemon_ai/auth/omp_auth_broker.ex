@@ -107,7 +107,7 @@ defmodule LemonAi.Auth.OmpAuthBroker do
   def init(_opts) do
     # Watchers are linked; trapping exits lets the owner reap them one by one.
     Process.flag(:trap_exit, true)
-    :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
+    _ = :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
     {:ok, %{watchers: %{}}}
   end
 
@@ -471,19 +471,20 @@ defmodule LemonAi.Auth.OmpAuthBroker do
   # Applies a block the broker just accepted to the cached entry, so the next
   # `credentials/3` sorts it last without another snapshot fetch.
   defp store_block(key, id, provider_key, blocked_until_ms) do
-    with true <- table?(),
-         [{^key, {:ok, snapshot}, stored_at}] <- :ets.lookup(@table, key) do
-      entries =
-        Enum.map(snapshot.entries, fn
-          %{id: ^id} = entry ->
-            %{entry | blocks: merge_block(entry.blocks, provider_key, blocked_until_ms)}
+    _ =
+      with true <- table?(),
+           [{^key, {:ok, snapshot}, stored_at}] <- :ets.lookup(@table, key) do
+        entries =
+          Enum.map(snapshot.entries, fn
+            %{id: ^id} = entry ->
+              %{entry | blocks: merge_block(entry.blocks, provider_key, blocked_until_ms)}
 
-          entry ->
-            entry
-        end)
+            entry ->
+              entry
+          end)
 
-      :ets.insert(@table, {key, {:ok, %{snapshot | entries: entries}}, stored_at})
-    end
+        :ets.insert(@table, {key, {:ok, %{snapshot | entries: entries}}, stored_at})
+      end
 
     :ok
   rescue

@@ -1585,13 +1585,7 @@ defmodule LemonWeb.ManagementLive do
   end
 
   defp detail_meta(key) do
-    case Rpc.call("session.detail", %{
-           "sessionKey" => key,
-           "limit" => 1,
-           "historyLimit" => 1,
-           "eventLimit" => 1,
-           "toolCallLimit" => 1
-         }) do
+    case Rpc.call("session.detail", %{"sessionKey" => key}) do
       {:ok, %{"session" => session}} when is_map(session) ->
         %{
           model: safe_model(session["model"]),

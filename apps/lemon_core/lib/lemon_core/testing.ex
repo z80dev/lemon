@@ -176,32 +176,34 @@ defmodule LemonCore.Testing do
 
     ## Options
 
-      * `:async` - Whether tests run asynchronously (default: true)
-      * `:with_store` - Whether to start the Store process (default: false)
+      * `:async` - Whether tests run asynchronously (default: false, as for
+        `ExUnit.Case`)
+      * `:with_store` - Whether to start the Store process (default: false).
+        A `@tag with_store: true` or `@moduletag with_store: true` overrides
+        the module default.
     """
 
     use ExUnit.CaseTemplate
 
     using opts do
+      with_store = Keyword.get(opts, :with_store, false)
+
       quote do
         import LemonCore.Testing
         import LemonCore.Testing.Helpers
 
-        @async unquote(opts[:async] || true)
+        setup ctx do
+          LemonCore.Testing.Case.__harness__(ctx, unquote(with_store))
+        end
       end
     end
 
-    setup ctx do
-      async = Map.get(ctx, :async, true)
-      with_store = Map.get(ctx, :with_store, false)
-
-      harness_ctx =
-        LemonCore.Testing.Harness.new()
-        |> LemonCore.Testing.Harness.set_async(async)
-        |> LemonCore.Testing.Harness.with_store(with_store)
-        |> LemonCore.Testing.Harness.build()
-
-      harness_ctx
+    @doc false
+    def __harness__(ctx, default_with_store) do
+      LemonCore.Testing.Harness.new()
+      |> LemonCore.Testing.Harness.set_async(Map.get(ctx, :async, false))
+      |> LemonCore.Testing.Harness.with_store(Map.get(ctx, :with_store, default_with_store))
+      |> LemonCore.Testing.Harness.build()
     end
   end
 

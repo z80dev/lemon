@@ -108,7 +108,7 @@ defmodule LemonCore.SentryCrashRedactionTest do
 
     refute rendered =~ "PRIVATE-"
     assert [%{type: type}] = event.exception
-    assert type =~ "RedactedCrash"
+    assert type == "LemonCore.StatusRedaction.RedactedCrashError"
   end
 
   test "scrubber drops call payload fingerprints, frame vars, breadcrumbs and request bodies" do

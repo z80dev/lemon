@@ -121,7 +121,7 @@ defmodule LemonControlPlane.Methods.TaskList do
   end
 
   defp list_task_ids do
-    case AgentRuntime.call(:list_tasks, [], :unavailable) do
+    case AgentRuntime.query(:list_tasks, []) do
       tasks when is_list(tasks) -> {:ok, Enum.map(tasks, fn {task_id, _record} -> task_id end)}
       _unavailable -> :unavailable
     end
@@ -140,7 +140,7 @@ defmodule LemonControlPlane.Methods.TaskList do
   end
 
   defp task_from_store(task_id, {content?, include_events, include_record}, event_limit, mode) do
-    case AgentRuntime.call(:get_task, [task_id], :unavailable) do
+    case AgentRuntime.query(:get_task, [task_id]) do
       {:ok, record, events} when is_map(record) and is_list(events) ->
         status = derive_task_status(record, mode)
         engine = get_map(record, :engine) || infer_engine(record, events)

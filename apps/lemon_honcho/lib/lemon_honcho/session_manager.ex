@@ -1202,7 +1202,7 @@ defmodule LemonHoncho.SessionManager do
     with {:ok, owner} <- LemonHoncho.Owner.from_document(config, document),
          false <- bot_document?(document) do
       request = %{
-        session_key: document.session_key || @default_key,
+        session_key: document.session_key,
         cwd: document.workspace_key,
         honcho_owner: owner
       }
@@ -1217,7 +1217,7 @@ defmodule LemonHoncho.SessionManager do
   end
 
   defp bot_document?(document) do
-    claimed = LemonCore.MapHelpers.get_key(document.meta || %{}, :channel_identity)
+    claimed = LemonCore.MapHelpers.get_key(document.meta, :channel_identity)
     LemonHoncho.UserPeer.bot?(LemonHoncho.UserPeer.identity(document.session_key, claimed))
   end
 

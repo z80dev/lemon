@@ -105,6 +105,14 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
     assert [%{id: task_id}] = KanbanStore.list_tasks(board.id, status: "done")
     assert task_id == task.id
 
+    # One store read for several boards; each matches its own list_tasks/2.
+    assert {:ok, %{} = by_board} =
+             KanbanStore.list_tasks_for([board.id, "board-without-cards"], limit: 5)
+
+    assert by_board[board.id] == KanbanStore.list_tasks(board.id, limit: 5)
+    assert [%{id: ^task_id}] = by_board[board.id]
+    assert by_board["board-without-cards"] == []
+
     assert {:ok, archived} = KanbanStore.archive_board(board.id)
     assert archived.status == "archived"
     assert is_integer(archived.archived_at_ms)

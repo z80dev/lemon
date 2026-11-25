@@ -65,7 +65,7 @@ echo ""
 echo -e "${BLUE}Summary:${NC}"
 if ! lsof -ti:4047 > /dev/null 2>&1; then
     echo -e "${RED}PROBLEM: Voice server not running on port 4047${NC}"
-    echo "The main Lemon Gateway needs to be restarted with voice_enabled: true"
+    echo "Set enabled = true in both [gateway.ingress] and [gateway.voice] in ~/.lemon/config.toml"
     echo ""
     echo "To fix:"
     echo "1. Restart your main Lemon Gateway (it will pick up the new config)"

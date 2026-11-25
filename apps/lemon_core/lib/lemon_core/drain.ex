@@ -188,7 +188,7 @@ defmodule LemonCore.Drain do
 
   @impl true
   def init(_opts) do
-    :ets.new(@phase_table, [:named_table, :protected, :set, read_concurrency: true])
+    _ = :ets.new(@phase_table, [:named_table, :protected, :set, read_concurrency: true])
     put_phase(:serving)
     {:ok, %{participants: %{}, phase: :serving, stop_requested?: false, last_report: nil}}
   end

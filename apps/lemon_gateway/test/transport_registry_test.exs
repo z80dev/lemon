@@ -182,20 +182,20 @@ defmodule LemonGateway.TransportRegistryTest do
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 1,
+      ingress: %{enabled: true},
       enable_telegram: false,
       enable_xmtp: false
     })
 
     Application.put_env(:lemon_gateway, :commands, [])
     Application.put_env(:lemon_gateway, :transports, [])
-    Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = restart_registry()
 
     on_exit(fn ->
       Application.stop(:lemon_gateway)
-      Application.delete_env(:lemon_gateway, :gateway_ingress_enabled)
+      Application.delete_env(:lemon_gateway, Elixir.LemonGateway.Config)
       Application.delete_env(:lemon_gateway, :transports)
     end)
 
@@ -809,13 +809,14 @@ defmodule LemonGateway.TransportRegistryTest do
   # ===========================================================================
 
   describe "default transports" do
-    test "uses empty transport list by default (telegram polling is owned by lemon_channels)" do
+    test "registers the built-in webhook by default without enabling it" do
       Application.delete_env(:lemon_gateway, :transports)
 
       {:ok, _} = restart_registry()
 
-      ids = TransportRegistry.list_transports()
-      assert ids == []
+      assert TransportRegistry.list_transports() == ["webhook"]
+      assert TransportRegistry.get_transport("webhook") == LemonGateway.Transports.Webhook
+      assert TransportRegistry.enabled_transports() == []
     end
   end
 end

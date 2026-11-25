@@ -228,9 +228,8 @@ defmodule CodingAgent.SessionRecalledContextTest do
     cwd = Session.get_state(session).cwd
 
     # learning_nudge intervals are operator settings (a project file may only
-    # lengthen them), so configure the isolated global skills.json.
-    isolate_agent_dir!(cwd)
-    :ok = LemonSkills.Config.save_config(%{"learning_nudge" => %{"memory_turn_interval" => 2}})
+    # lengthen them), so configure an isolated global config.toml.
+    isolate_global_config!(cwd, "[skills.learning_nudge]\nmemory_turn_interval = 2\n")
 
     unsubscribe = Session.subscribe(session)
     :ok = Session.prompt(session, "first")
@@ -807,6 +806,20 @@ defmodule CodingAgent.SessionRecalledContextTest do
       if previous,
         do: System.put_env("LEMON_AGENT_DIR", previous),
         else: System.delete_env("LEMON_AGENT_DIR")
+    end)
+  end
+
+  defp isolate_global_config!(cwd, body) do
+    previous = Application.get_env(:lemon_core, :paths)
+    config = Path.join(cwd, "operator-config.toml")
+    File.write!(config, body)
+    Application.put_env(:lemon_core, :paths, Keyword.put(previous || [], :global_config, config))
+    LemonCore.Config.reload(cwd)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:lemon_core, :paths, previous),
+        else: Application.delete_env(:lemon_core, :paths)
     end)
   end
 

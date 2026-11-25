@@ -189,7 +189,13 @@ defmodule LemonCore.RouterBridge do
     end
   end
 
-  @doc "Read the durable receipt for the original intent; never dispatches."
+  @doc """
+  Read the durable receipt for the original intent; never dispatches.
+
+  `:rejected` proves the recorded attempt did not execute; `:aborted` also
+  permanently fences that ID. `:terminal` proves completion but does not imply
+  it is safe to retry. `:outcome_unknown` does not prove any of those outcomes.
+  """
   def run_receipt(run_id) when is_binary(run_id) and run_id != "" do
     case call(:run_orchestrator, :run_receipt, [run_id], :query) do
       {:ok, %{run_id: ^run_id} = receipt} -> {:ok, receipt}

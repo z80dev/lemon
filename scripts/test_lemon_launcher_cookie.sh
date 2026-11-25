@@ -48,7 +48,16 @@ defmodule LemonCore.Runtime.Boot do
       true = :rpc.call(String.to_atom(target), Node, :alive?, [])
     end
     false = File.exists?(Path.join(System.user_home!(), ".erlang.cookie"))
+    kernel_servers!()
     File.write!(System.fetch_env!("LEMON_COOKIE_TEST_READY"), System.pid())
+  end
+  # start_distribution false must not drop the rpc and global kernel servers
+  # that native session ownership (:global) relies on.
+  def kernel_servers! do
+    true = Enum.all?([:rex, :global_name_server, :global_group], &is_pid(Process.whereis(&1)))
+    name = {:cookie_fixture, node(), System.pid()}
+    :yes = :global.register_name(name, spawn(fn -> Process.sleep(:infinity) end))
+    true = is_pid(:global.whereis_name(name))
   end
 end
 ELIXIR
@@ -155,7 +164,7 @@ PIDS+=("$!")
 wait_ready "$HOME/rpc.ready" "${PIDS[3]}"
 check_argv "${PIDS[3]}"
 LEMON_COOKIE_TEST_READY="$TEST_DIR/eval.ready" "$RELEASE_BIN" eval \
-  'false = Node.alive?(); File.write!(System.fetch_env!("LEMON_COOKIE_TEST_READY"), System.pid()); Process.sleep(:infinity)' \
+  'false = Node.alive?(); LemonCore.Runtime.Boot.kernel_servers!(); File.write!(System.fetch_env!("LEMON_COOKIE_TEST_READY"), System.pid()); Process.sleep(:infinity)' \
   > "$TEST_DIR/eval.log" 2>&1 &
 PIDS+=("$!")
 wait_ready "$TEST_DIR/eval.ready" "${PIDS[4]}"
