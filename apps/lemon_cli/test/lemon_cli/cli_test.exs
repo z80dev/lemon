@@ -80,20 +80,31 @@ defmodule LemonCli.CLITest do
     {:ok, tmp_dir: tmp_dir}
   end
 
-  test "cold setup readiness starts the secrets store without starting the runtime" do
-    path = Modular.global_path()
-    File.mkdir_p!(Path.dirname(path))
-    File.write!(path, "[defaults]\nprovider = \"ollama\"\nmodel = \"llama3\"\n")
+  test "cold setup readiness starts the secrets store without starting the runtime", %{
+    tmp_dir: tmp_dir
+  } do
     root = Path.expand("../../../..", __DIR__)
 
-    source = """
-    # Match mix run --no-start without trying to acquire the parent test's Mix lock.
+    source = ~S"""
+    # Load the umbrella's readiness wiring without taking the parent test's Mix lock.
     Mix.start()
     Mix.env(:test)
+    Application.put_all_env(Config.Reader.read!("config/config.exs", env: :test, target: :host))
+    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env])
+
+    # config/test.exs gives this VM its own HOME.
+    path = LemonCore.Config.Modular.global_path()
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "[defaults]\nprovider = \"ollama\"\nmodel = \"llama3\"\n")
+
     nil = Process.whereis(LemonCore.Store)
     {:error, :store_unavailable} = LemonCore.Secrets.status()
     false = LemonCli.CLI.setup_required?()
     true = is_pid(Process.whereis(LemonCore.Store))
+    :client = LemonCore.Application.boot_mode()
+    %{configured: true, source: :env} = LemonCore.Secrets.status()
+    nil = Process.whereis(LemonCore.RuntimeOwner)
+    nil = Process.whereis(LemonAgent.Supervisor)
     nil = Process.whereis(LemonGateway.Supervisor)
     nil = Process.whereis(LemonRouter.Supervisor)
     IO.puts("cold readiness complete")
@@ -103,6 +114,8 @@ defmodule LemonCli.CLITest do
       System.cmd(
         System.find_executable("elixir"),
         ["--erl", "+S 2:2", "-pa", Path.join(root, "_build/test/lib/*/ebin"), "-e", source],
+        cd: root,
+        env: [{"LEMON_TEST_TMPDIR", tmp_dir}],
         stderr_to_stdout: true
       )
 
