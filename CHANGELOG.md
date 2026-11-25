@@ -148,6 +148,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   longer crash a live session's append. `CodingAgent.SessionIndex` and
   `SessionManager.list_sessions/1` (no callers) are removed; leftover
   `.index.sqlite3` files in session directories are unused (#695).
+- `scripts/test coverage` runs each app in its own VM, so failures that only
+  appeared when one VM re-cover-compiled apps under running processes are
+  gone; paths select apps and other arguments go to every app's run (#499).
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
@@ -509,6 +512,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `{:error, :invalid_message_encoding}` for unencodable messages, and
   `{:error, {:session_crashed, class}}` (never the raw exit reason) for any other
   session exit during a call (#663).
+- Session reset no longer exits its caller with a call timeout when aborting
+  the active run takes most of the session's 5-second abort wait (#499).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

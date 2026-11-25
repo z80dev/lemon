@@ -97,6 +97,10 @@ defmodule CodingAgent.Session do
   require Logger
 
   @reset_abort_wait_ms 5_000
+  # The caller outlasts the session's own bounded abort wait plus the reset
+  # work after it, so a slow abort returns `:ok` or `{:error, :busy}` instead
+  # of exiting the caller while the reset may still complete.
+  @reset_call_timeout_ms @reset_abort_wait_ms + 10_000
   @todo_call_timeout_ms 30_000
 
   # Calls that report `{:error, :busy}` while a manual compaction/summary runs.
@@ -901,7 +905,7 @@ defmodule CodingAgent.Session do
   """
   @spec reset(GenServer.server()) :: :ok | {:error, :busy}
   def reset(session) do
-    GenServer.call(session, :reset)
+    GenServer.call(session, :reset, @reset_call_timeout_ms)
   end
 
   @doc """
