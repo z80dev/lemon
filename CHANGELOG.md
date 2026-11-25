@@ -645,6 +645,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** `LemonAgent.Proxy` (SSE proxy `stream_fn`) and `LemonAgent.Context`
+  (size estimates, truncation, `make_transform/1`) are deleted together with
+  `docs/context.md`, the `req` dependency of `lemon_agent` and the
+  `[:lemon_agent, :context, :size | :warning | :truncated]` telemetry events. The
+  agent loop no longer JSON-encodes the whole history before every request (#708).
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.
