@@ -15,7 +15,7 @@ defmodule LemonCore.Quality.ArchitectureDocsTest do
       assert rendered =~ "| `lemon_core` | foundation | *(none)* | *(none)* | *(none)* |"
 
       assert rendered =~
-               "| `lemon_gateway` | platform | `lemon_agent`, `lemon_core`, `lemon_media` | *(none)* | `lemon_ai` |"
+               "| `lemon_gateway` | satellite | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_platform_test` | `lemon_ai` |"
     end
 
     test "renders rows in sorted app order" do

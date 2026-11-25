@@ -233,10 +233,11 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
     test "unused reference seams and config bindings are stale" do
       root = tmp_umbrella()
       write_app(root, :lemon_gateway, [])
-      write_app(root, :lemon_router, [])
+      write_app(root, :lemon_core, [])
+      write_app(root, :lemon_ai, [])
 
       assert issue?(root, :stale_reference_exception, "lemon_gateway -> lemon_ai")
-      assert issue?(root, :stale_config_binding, "lemon_router -> lemon_gateway")
+      assert issue?(root, :stale_config_binding, "lemon_core -> lemon_ai")
     end
 
     test "apps without namespace ownership are unknown" do
