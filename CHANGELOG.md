@@ -837,7 +837,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `CodingAgent.Tools.ToolAuth`, the `wasm-runtime` CI job, `LEMON_WASM_*`
   variables, the `wasm` extension-manifest host type and `docs/tools/wasm.md`.
   `[runtime.tools.wasm]` is no longer read; delete it. Tool precedence is now
-  built-in > extension > MCP.
+  built-in > extension > MCP. OSV no longer scans the deleted `native/` Cargo
+  lockfiles, and their three accepted RUSTSEC findings are removed from
+  `osv-scanner.toml`.
 - **Breaking:** the opt-in session advisor (#600) is retired: `CodingAgent.Advisor`,
   its `AdvisorSupervisor` child and the `advisor:` session option are removed.
   No shipped caller enabled it; `start_session(advisor: ...)` now fails with

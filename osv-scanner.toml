@@ -24,22 +24,6 @@ id = "EEF-CVE-2026-117678"
 ignoreUntil = 2026-12-31
 reason = "idna 7.1.0 punycode CPU use; hackney pins idna ~> 7.1.0, so the 8.0.0 fix needs a hackney release."
 
-# native/lemon-wasm-runtime/Cargo.lock: the WASM stack is scheduled for deletion (#707).
-[[IgnoredVulns]]
-id = "RUSTSEC-2025-0057"
-ignoreUntil = 2026-12-31
-reason = "fxhash unmaintained (no fix); WASM runtime is being deleted (#707)."
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0592"
-ignoreUntil = 2026-12-31
-reason = "url Url::origin() stack overflow on nested blob: URLs; WASM runtime is being deleted (#707)."
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0587"
-ignoreUntil = 2026-12-31
-reason = "wasmtime-wasi sandbox escape on Windows only (Lemon ships no Windows runtime); WASM runtime is being deleted (#707)."
-
 # apps/lemon_web/assets/package-lock.json: tailwind build-time dev dependencies only.
 [[IgnoredVulns]]
 id = "GHSA-rj75-hqrm-r3gf"
