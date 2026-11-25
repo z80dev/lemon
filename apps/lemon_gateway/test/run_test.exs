@@ -819,7 +819,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:lemon_gateway_run_completed, ^request, %{ok: false, error: :interrupted}},
                      2_000
 
-      stored = LemonCore.RunStore.get_with_events(request.run_id)
+      stored = LemonCore.Store.get_run_with_events(request.run_id)
       assert stored.summary.completed.error == :interrupted
       assert stored.summary.completed.meta.cancelled == true
 

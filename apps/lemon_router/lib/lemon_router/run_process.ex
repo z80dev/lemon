@@ -941,7 +941,7 @@ defmodule LemonRouter.RunProcess do
 
         state =
           Enum.reduce(record[:events] || [], state, fn
-            %{__event__: :action} = action, acc ->
+            %{__event__: :action_event} = action, acc ->
               acc
               |> ArtifactTracker.track_generated_images(action)
               |> ArtifactTracker.track_requested_send_files(action)
