@@ -219,13 +219,11 @@ does not inherit repository-local resources.
 The two approval-event broadcast cases remain in the small synchronous
 `SessionApprovalEventsTest` module because they publish to a shared Bus topic.
 
-Shared Elixir helpers live in `LemonCore.Testing.HermeticEnv`:
-
-- `credential_env_vars/0` returns the canonical scrub list.
-- `scrub_unit_credentials!/1` deletes those variables unless live credentials
-  are explicitly allowed.
-- `with_restored_env/2` snapshots and restores env vars around synchronous
-  tests that mutate process-wide env.
+Ambient provider/platform credentials are scrubbed before the BEAM starts, from
+the single `SCRUB_CREDENTIAL_ENV_VARS` list in `scripts/test`; no Elixir copy
+of that list exists. `LemonCore.Testing.HermeticEnv.with_restored_env/2`
+snapshots and restores env vars around synchronous tests that mutate
+process-wide env.
 
 Tests that call `System.put_env/2` or `System.delete_env/1` should be
 `async: false` and restore their changes.

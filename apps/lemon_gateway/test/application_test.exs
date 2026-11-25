@@ -1,7 +1,7 @@
 defmodule LemonGateway.ApplicationTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
-  import LemonGateway.AsyncHelpers, only: [assert_eventually: 1, assert_eventually: 2]
+  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1, assert_eventually: 2]
 
   alias Elixir.LemonGateway.ExecutionRequest
 

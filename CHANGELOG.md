@@ -115,6 +115,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   and did worse, so a changed default takes effect immediately. The router reads
   the flag from the config cache instead of parsing TOML per submission, and
   the history lookup is an index range scan (#647).
+- **Breaking (lemon_core package):** the `LemonCore.Testing*` harness is no
+  longer published with lemon_core; `use LemonCore.Testing.Case, with_store:
+  true` now actually starts the Store; the duplicate Elixir credential scrub
+  list (`HermeticEnv.credential_env_vars/0`, `scrub_unit_credentials!/1`,
+  `:test_credential_env_vars`) is removed in favour of the single list in
+  `scripts/test`; `LemonGateway.AsyncHelpers` is removed (#713).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle

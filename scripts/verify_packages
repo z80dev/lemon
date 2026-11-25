@@ -152,8 +152,17 @@ echo "==> consumer: boot and inspect"
     Code.ensure_loaded?(module) || raise "#{inspect(module)} is missing from the packages"
   end
 
-  # Repo-only tooling is excluded from the lemon_core tarball (apps/lemon_core/mix.exs).
-  for module <- [LemonCore.Quality.ArchitectureCheck, LemonCore.Update.Version, Mix.Tasks.Lemon.Quality] do
+  # Repo-only tooling and the in-repo test harness are excluded from the
+  # lemon_core tarball (apps/lemon_core/mix.exs).
+  for module <- [
+        LemonCore.Quality.ArchitectureCheck,
+        LemonCore.Update.Version,
+        Mix.Tasks.Lemon.Quality,
+        LemonCore.Testing,
+        LemonCore.Testing.Case,
+        LemonCore.Testing.HermeticEnv,
+        LemonCore.Testing.AsyncHelpers
+      ] do
     Code.ensure_loaded?(module) && raise "#{inspect(module)} leaked into the lemon_core package"
   end
 
