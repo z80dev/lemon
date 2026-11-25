@@ -111,8 +111,10 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
   end
 
   defp provider_stream_options(model, providers_map, base_opts) do
+    provider_id = provider_config_lookup_key(model)
+
     provider_cfg =
-      ProviderNames.provider_config(providers_map, provider_config_lookup_key(model)) ||
+      ProviderNames.provider_config(providers_map, provider_id) ||
         CustomProviders.config_for(providers_map, Map.get(model, :provider)) || %{}
 
     base_opts = responses_options(base_opts, model, provider_cfg)
@@ -134,10 +136,17 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
       end
 
     base_opts =
-      if Credentials.authoritative_selected?(provider_cfg) do
-        %{base_opts | api_key: nil, api_key_authoritative: true}
-      else
-        base_opts
+      cond do
+        Credentials.authoritative_selected?(provider_cfg) ->
+          %{base_opts | api_key: nil, api_key_authoritative: true}
+
+        provider_id == :openai_codex ->
+          # A missing or invalid Codex auth_source refuses with an empty key.
+          # Do not let the library-level env fallback replace that refusal.
+          %{base_opts | api_key_authoritative: true}
+
+        true ->
+          base_opts
       end
 
     case model do
@@ -207,8 +216,6 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
         |> put_provider_options(:google_gemini_cli, %{project: resolved[:project]})
 
       %{api: :openai_completions} ->
-        provider_id = provider_config_lookup_key(model)
-
         resolved =
           ProviderSettings.resolve(
             provider_id,
