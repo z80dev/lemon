@@ -22,6 +22,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
   }
 
   alias LemonControlPlane.SessionLifecycle
+  alias LemonCore.SessionLifecycle.Participant
 
   alias LemonRouter.RunCompletion
 
@@ -121,6 +122,43 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     end
 
     def delete(state, table, key), do: EtsBackend.delete(state, table, key)
+  end
+
+  # Pauses only the fenced delete owner, after real participants have verified
+  # their deletions and before the canonical session and history are removed.
+  defmodule DeleteBarrier do
+    @behaviour Participant
+
+    @impl true
+    def snapshot(key, :delete) do
+      case Application.get_env(:lemon_control_plane, __MODULE__) do
+        {^key, test} -> {:ok, test}
+        _ -> {:ok, nil}
+      end
+    end
+
+    @impl true
+    def delete(_key, :delete, nil), do: :ok
+
+    def delete(key, :delete, test) do
+      ref = Process.monitor(test)
+      send(test, {:delete_paused, key, self(), ref})
+
+      receive do
+        {:release_delete, ^ref} ->
+          Process.demonitor(ref, [:flush])
+          :ok
+
+        {:DOWN, ^ref, :process, ^test, _reason} ->
+          {:error, :test_exited}
+      end
+    end
+
+    @impl true
+    def verify_deleted(_key, :delete, _test), do: :ok
+
+    @impl true
+    def restore(_key, :delete, _test), do: :ok
   end
 
   setup do
@@ -742,16 +780,20 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
        %{key: key} do
     seed_session(key)
     reset_params = confirm_reset_params(key)
-    history = Process.whereis(RunHistoryStore)
+    Application.put_env(:lemon_control_plane, DeleteBarrier, {key, self()})
+    :ok = Participant.register(:test_delete_barrier, DeleteBarrier, order: 99)
 
-    delete =
-      with_suspend_history_on_policy_delete(key, fn ->
-        Task.async(fn -> SessionsDelete.handle(%{"sessionKey" => key}, %{}) end)
-      end)
+    on_exit(fn ->
+      Participant.unregister(:test_delete_barrier)
+      Application.delete_env(:lemon_control_plane, DeleteBarrier)
+    end)
+
+    delete = Task.async(fn -> SessionsDelete.handle(%{"sessionKey" => key}, %{}) end)
+    assert_receive {:delete_paused, ^key, owner, ref}, 5_000
 
     try do
-      # The snapshots read history before this point; verification still needs it.
-      await(fn -> policy(key) == nil end)
+      assert policy(key) == nil
+      assert {:ok, [_ | _]} = RunHistoryStore.fetch(key, limit: 1)
 
       assert {:error, :session_lifecycle_in_progress} =
                LemonRouter.submit(request(key, "racing work from another client"))
@@ -768,8 +810,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
                  method.handle(call_params, %{})
       end
     after
-      restore_store_backend()
-      :sys.resume(history)
+      send(owner, {:release_delete, ref})
     end
 
     assert {:ok, %{"summary" => %{"verified" => true}}} = Task.await(delete, 10_000)
