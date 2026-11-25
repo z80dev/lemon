@@ -151,6 +151,7 @@ defmodule LemonRouter.RunPresence do
     case RunStore.fetch(id) do
       {:ok, nil} -> {:ok, false}
       {:ok, record} when is_map(record) -> {:ok, is_map(MapHelpers.get_key(record, :summary))}
+      {:error, :evicted} -> {:ok, true}
       _ -> {:error, :query_failed}
     end
   end

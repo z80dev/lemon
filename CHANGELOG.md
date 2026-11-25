@@ -164,6 +164,19 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `scripts/test coverage` runs each app in its own VM, so failures that only
   appeared when one VM re-cover-compiled apps under running processes are
   gone; paths select apps and other arguments go to every app's run (#499).
+- The Store bounds the `:runs` table and keeps full-table reads off its
+  process (#682). Run events go into a per-run buffer (first 200 + latest,
+  2,000 in all, `:events_dropped` counts the rest) instead of rewriting the run
+  record per event; finalized runs are evicted `:runs_retention_ms` (default
+  24 h) after finalization, and a durable `:run_terminals` entry makes
+  `RunStore.fetch/1` return `{:error, :evicted}` so a finished run (also after a
+  restart) is never reopened by the gateway. `fetch_all/2`, `list/2`, the new
+  `fetch_keys/2` and `fetch_range/5`, and introspection listing read the backend
+  in the caller's process (SQLite: a private read-only WAL connection). Usage
+  pages read only the window's ledger occurrences, never `:runs`; router
+  session discovery reads session keys only. **Breaking** for `lemon_core`
+  callers: `:runs` cannot be listed whole, `UsageStore.fetch_runs/1` is gone,
+  and introspection listing errors are `{:error, :store_unavailable}`.
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
@@ -538,6 +551,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `memory.transfer.release` worker method), when any document it captured is
   deleted, erased by scope or aged out, and after the new `transfer_ttl_ms`
   Store setting (default 24 hours, capped at `retention_ms`) (#623).
+- The Store publishes a table as read-cached only after its warm-up read
+  succeeded, and clears the published list when a store starts or stops. A table
+  whose warm-up failed stays uncached, so reads reach the backend and surface
+  its error instead of an empty mirror (`RunStore.list_sessions`, channel known
+  targets and gateway progress no longer read as empty). SQLite table reads
+  decode every row and report the number of corrupt rows (#618).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

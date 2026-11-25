@@ -17,8 +17,20 @@ defmodule LemonCore.UsageStore do
 
   @doc "Strict reads for the canonical ledger, never unavailable-as-empty."
   def fetch_occurrences(server \\ Store), do: Store.fetch_all(server, @occurrence_table)
-  def fetch_runs(server \\ Store), do: Store.fetch_all(server, :runs)
   def fetch_daily_records(server \\ Store), do: Store.fetch_all(server, @record_table)
+
+  @doc "Strict indexed read of daily coverage plus any rows with malformed date keys."
+  def fetch_daily_records_between(server, from_ms, to_ms),
+    do: Store.fetch_range(server, @record_table, from_ms, to_ms, include_untimed: true)
+
+  @doc """
+  Strict read of the occurrences timed in `[from_ms, to_ms)` plus those with no
+  time, which no window can exclude. Reads only that window on SQLite.
+  """
+  @spec fetch_occurrences_between(Store.server(), integer(), integer()) ::
+          {:ok, [{binary(), map()}]} | {:error, :store_unavailable}
+  def fetch_occurrences_between(server \\ Store, from_ms, to_ms),
+    do: Store.fetch_range(server, @occurrence_table, from_ms, to_ms, include_untimed: true)
 
   @doc "Returns a filter-bound, half-open page of canonical usage records."
   def records(params, opts \\ []), do: LemonCore.UsageRecords.query(params, opts)
