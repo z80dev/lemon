@@ -29,7 +29,7 @@ defmodule LemonControlPlane.Methods.SessionsEvents do
          {:ok, cursor} <- cursor(params["cursor"]),
          {:ok, limit} <- NativeSessions.integer(params, "limit", 50, 1, 100),
          {:ok, _scopes} <- authorize(ctx),
-         result <- AgentRuntime.call(:session_event_replay, [key, cursor, limit], :unavailable),
+         result <- AgentRuntime.query(:session_event_replay, [key, cursor, limit]),
          {:ok, scopes} <- authorize(ctx) do
       project(key, cursor, limit, result, scopes)
     end

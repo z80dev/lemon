@@ -311,20 +311,24 @@ defmodule LemonCore.A2AStore do
 
   @doc """
   Returns a context's messages in order. `direction: :inbound | :outbound`
-  restricts the transcript to one direction of the exchange.
+  restricts the transcript to one direction of the exchange. An unreadable
+  store is `{:error, :store_unavailable}`, never an empty transcript.
   """
-  @spec history(binary(), binary(), keyword()) :: [map()]
+  @spec history(binary(), binary(), keyword()) ::
+          {:ok, [map()]} | {:error, :store_unavailable}
   def history(peer_id, context_id, opts \\ []) do
     limit = opts |> Keyword.get(:limit, 100) |> min(@max_list) |> max(1)
     direction = Keyword.get(opts, :direction)
 
-    store(opts)
-    |> Store.list(@messages)
-    |> Enum.map(&elem(&1, 1))
-    |> Enum.filter(&(&1.peer_id == peer_id and &1.context_id == context_id))
-    |> Enum.filter(&(is_nil(direction) or &1.direction == direction))
-    |> Enum.sort_by(&{&1.created_at_ms, &1.id}, :asc)
-    |> Enum.take(-limit)
+    with {:ok, entries} <- Store.fetch_all(store(opts), @messages) do
+      {:ok,
+       entries
+       |> Enum.map(&elem(&1, 1))
+       |> Enum.filter(&(&1.peer_id == peer_id and &1.context_id == context_id))
+       |> Enum.filter(&(is_nil(direction) or &1.direction == direction))
+       |> Enum.sort_by(&{&1.created_at_ms, &1.id}, :asc)
+       |> Enum.take(-limit)}
+    end
   end
 
   defp normalize_task(task) do

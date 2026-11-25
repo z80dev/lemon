@@ -796,9 +796,14 @@ Unknown keys return `not_found`; these methods do not invent an empty session or
 read a separate client-local store. Keys are non-empty and bounded to 1,024 bytes.
 
 This management history is distinct from native branch messages returned by
-`chat.history` with `cwd`. `session.detail` remains the richer routing/run
-inspection surface and includes durable title/pin/archive metadata when present,
-so reopening a named session restores its display name.
+`chat.history` with `cwd`. `session.detail` is the routing projection: it
+answers what the session's next run resolves to (`model`, `provider`,
+`contextWindow`, `maxOutput`, `thinkingLevel`, `modelSource`, `modelOverride`)
+plus its durable `agentId`, title/pin/archive metadata, `runCount` and
+timestamps, so reopening a named session restores its display name. It reads
+no run history; unlike `sessions.get` it answers an unknown key with routing
+only. Run and event content come from `chat.history`, `sessions.history` and
+`runs.timeline.get`.
 
 ## Native session navigation
 
@@ -1112,11 +1117,16 @@ as profile memory, but destination repository-specific recall cannot infer a
 new repository mapping.
 
 Private worker methods are `memory.transfer.prepare`, `.snapshot`, `.validate`,
-`.preview`, `.apply`, `.status`, and `.inspect` over the authenticated invocation
+`.release`, `.preview`, `.apply`, `.status`, and `.inspect` over the authenticated invocation
 channel. Each method requires this connection's fresh
 `{version: 1, contextVersion: 1}` advertisement and exact ID/PID dispatch binding,
 before a source snapshot read or destination apply. Old provenance-unaware
 workers cannot strip actor ownership into a legacy copy or attest such a receipt.
+Once the destination receipt is recorded, the controller calls the source node's
+`memory.transfer.release` to delete its frozen snapshot. That call is best effort
+and bounded to five seconds; a source that does not advertise it, or a failed
+call, leaves the snapshot to the source Store's `transfer_ttl_ms`, scope erasure
+and retention, and never changes the returned receipt.
 Full snapshot content is never included in management responses,
 broadcast events, controller operation journals, or logs. Only after `copied`
 is durably acknowledged should the caller perform persona sync and explicitly

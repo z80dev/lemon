@@ -11,7 +11,6 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
   alias LemonControlPlane.Methods.{
     ChatHistory,
     CronRuns,
-    SessionDetail,
     SessionsActive,
     SessionsActiveList,
     SessionsList,
@@ -445,18 +444,15 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert session["harness"]["requirements"]["cwd"] == requirements_cwd
     end
 
-    test "list and detail return bounded unavailable errors when routing state is down" do
+    test "list returns a bounded unavailable error when routing state is down" do
       SessionCoordinatorStub.set_active_sessions_result({:error, :unavailable})
 
       assert {:error, {:unavailable, "Active sessions are unavailable", nil}} =
                SessionsActiveList.handle(%{}, %{})
-
-      assert {:error, {:unavailable, "Session directory is unavailable", nil}} =
-               SessionDetail.handle(%{"sessionKey" => "agent:offline:main"}, @operator_ctx)
     end
   end
 
-  describe "sessions.list and session.detail" do
+  describe "sessions.list, previews and chat history" do
     test "return summaries and keep full prompt/answer text behind includeFullText" do
       token = System.unique_integer([:positive, :monotonic])
       agent_id = "cp_session_detail_#{token}"
@@ -522,55 +518,6 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert listed["summary"]["filtersApplied"] == ["agentId"]
       assert listed["summary"]["cleanup"]["includesMessages"] == false
       assert listed["summary"]["cleanup"]["includesSecretValues"] == false
-
-      {:ok, detail} = SessionDetail.handle(%{"sessionKey" => session_key}, @operator_ctx)
-
-      assert detail["summary"]["count"] == 1
-      assert detail["summary"]["okCount"] == 1
-      assert detail["summary"]["toolCallCount"] == 1
-      assert detail["summary"]["tokenTotals"]["total"] == 3
-      assert detail["summary"]["cleanup"]["includesFullText"] == false
-      assert detail["summary"]["cleanup"]["includesRawEvents"] == false
-      assert detail["summary"]["cleanup"]["includesRunRecords"] == false
-      assert detail["summary"]["cleanup"]["redactsSensitiveRunInternals"] == true
-
-      [run] = detail["runs"]
-      assert run["tokens"] == %{"input" => 1, "output" => 2, "total" => 3, "costUsd" => nil}
-      refute Map.has_key?(run, "promptFull")
-      refute Map.has_key?(run, "answerFull")
-      refute inspect(detail) =~ prompt_secret
-      refute inspect(detail) =~ answer_secret
-      refute inspect(detail) =~ tool_secret
-      refute inspect(detail) =~ prompt_inline_secret
-      refute inspect(detail) =~ answer_inline_secret
-
-      {:ok, full_detail} =
-        SessionDetail.handle(
-          %{"sessionKey" => session_key, "includeFullText" => true},
-          @operator_ctx
-        )
-
-      assert full_detail["summary"]["cleanup"]["includesFullText"] == true
-      [full_run] = full_detail["runs"]
-      assert full_run["promptFull"] =~ prompt_secret
-      assert full_run["answerFull"] =~ answer_secret
-      # Full text is complete content, never credentials (read scope).
-      refute inspect(full_detail) =~ prompt_inline_secret
-      refute inspect(full_detail) =~ answer_inline_secret
-      assert full_detail["summary"]["cleanup"]["includesSecretValues"] == false
-      refute inspect(full_run["toolCalls"]) =~ tool_secret
-
-      {:ok, raw_detail} =
-        SessionDetail.handle(
-          %{
-            "sessionKey" => session_key,
-            "includeRawEvents" => true,
-            "includeRunRecord" => true
-          },
-          @operator_ctx
-        )
-
-      refute inspect(raw_detail) =~ tool_secret
 
       {:ok, preview} =
         SessionsPreview.handle(%{"sessionKey" => session_key, "limit" => "5"}, @operator_ctx)

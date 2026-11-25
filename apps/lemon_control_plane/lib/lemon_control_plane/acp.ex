@@ -330,11 +330,7 @@ defmodule LemonControlPlane.ACP do
        when rest == "" or binary_part(rest, 0, 1) in [" ", "\n", "\t"] do
     compact_opts = [cwd: session.cwd, custom_instructions: String.trim(rest)]
 
-    case AgentRuntime.call(
-           :compact_session,
-           [session.session_key, compact_opts],
-           {:error, :unavailable}
-         ) do
+    case AgentRuntime.mutate(:compact_session, [session.session_key, compact_opts]) do
       :ok ->
         emit(
           session_id,
@@ -346,6 +342,9 @@ defmodule LemonControlPlane.ACP do
         )
 
         {:ok, %{"stopReason" => "end_turn"}}
+
+      {:error, :outcome_unknown} ->
+        outcome_unknown("compaction")
 
       _ ->
         {:error, -32_000, "session context could not be compacted"}
@@ -750,16 +749,22 @@ defmodule LemonControlPlane.ACP do
   defp authorize_config(_key, _value, _opts), do: :ok
 
   defp native_plan(session, action, opts \\ []) do
-    case AgentRuntime.call(
-           :session_plan,
-           [session.session_key, session.cwd, action, opts],
-           {:error, :unavailable}
-         ) do
+    args = [session.session_key, session.cwd, action, opts]
+
+    result =
+      if action == :status,
+        do: AgentRuntime.query(:session_plan, args),
+        else: AgentRuntime.mutate(:session_plan, args)
+
+    case result do
       {:ok, %{"mode" => mode} = plan} when mode in ["code", "plan"] ->
         {:ok, plan}
 
       {:error, :busy} ->
         {:error, -32_000, "session is busy; wait for the active turn"}
+
+      {:error, :outcome_unknown} ->
+        outcome_unknown("plan mode change")
 
       _ ->
         {:error, -32_000, "native session planning is unavailable"}
@@ -785,11 +790,10 @@ defmodule LemonControlPlane.ACP do
   defp session_tool_policy(session) do
     cond do
       Map.get(session, :approval_mode) == "never" ->
-        AgentRuntime.call(:tool_policy, [:read_only], %{
-          allow: [],
-          deny: [],
-          profile: :unavailable
-        })
+        case AgentRuntime.query(:tool_policy, [:read_only]) do
+          policy when is_map(policy) -> policy
+          _ -> %{allow: [], deny: [], profile: :unavailable}
+        end
 
       # Canonical mode: every non-read tier, including eval, debug, LSP
       # execution and unclassified satellite tools, needs review.
@@ -848,7 +852,7 @@ defmodule LemonControlPlane.ACP do
   # File-defined slash commands are listed but expanded server-side by the
   # native executor, so `/name args` is submitted verbatim like any prompt.
   defp file_commands(cwd) do
-    case AgentRuntime.call(:slash_commands, [cwd], []) do
+    case AgentRuntime.query(:slash_commands, [cwd]) do
       commands when is_list(commands) ->
         commands
         |> Enum.reject(
@@ -888,11 +892,7 @@ defmodule LemonControlPlane.ACP do
   defp expand_skill_command(prompt, _session), do: {:ok, prompt}
 
   defp project_todos(session_id, session, opts) do
-    case AgentRuntime.call(
-           :session_todos,
-           [session.session_key, session.cwd],
-           {:error, :unavailable}
-         ) do
+    case AgentRuntime.query(:session_todos, [session.session_key, session.cwd]) do
       {:ok, todos, _revision} when is_list(todos) ->
         state = LemonControlPlane.ACP.SessionUpdates.new(session_id, cwd: session.cwd)
         replay_event(state, {:todos_changed, todos}, opts)
@@ -1109,11 +1109,7 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp native_history(session) do
-    case AgentRuntime.call(
-           :session_history,
-           [session.session_key, session.cwd],
-           {:error, :unavailable}
-         ) do
+    case AgentRuntime.query(:session_history, [session.session_key, session.cwd]) do
       {:ok, entries} when is_list(entries) -> {:ok, entries}
       _ -> :unavailable
     end
@@ -1162,15 +1158,17 @@ defmodule LemonControlPlane.ACP do
     if is_nil(source.last_run_id) and is_nil(LemonCore.ChatStateStore.get(source.session_key)) do
       :ok
     else
-      case AgentRuntime.call(
-             :session_fork,
-             [source.session_key, source.cwd, destination_key],
-             {:error, :unavailable}
-           ) do
+      case AgentRuntime.mutate(:session_fork, [source.session_key, source.cwd, destination_key]) do
         :ok -> :ok
+        {:error, :outcome_unknown} -> outcome_unknown("session fork")
         _ -> {:error, -32_000, "could not fork the persisted native session"}
       end
     end
+  end
+
+  # A reached runtime mutation that failed may already have applied.
+  defp outcome_unknown(operation) do
+    {:error, -32_000, "#{operation} outcome is unknown; reconcile before retrying"}
   end
 
   defp submit_prompt(session_id, session, params, prompt, run_id) do

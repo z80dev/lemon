@@ -54,6 +54,11 @@ defmodule LemonPlatformTest.HelpersTest do
                confirm_durable: 1,
                list_recent: 3,
                ping: 1,
+               read_keys: 2,
+               read_list: 2,
+               read_range: 5,
+               read_recent: 3,
+               reader: 1,
                sweep: 3,
                sync: 1,
                with_durability: 2

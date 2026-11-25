@@ -86,8 +86,7 @@ defmodule LemonControlPlane.Methods.ReadFailClosedTest do
     {"cron.runs", :store, &__MODULE__.cron_runs/0},
     {"sessions.preview", :run_history, &__MODULE__.sessions_preview/0},
     {"chat.history", :run_history, &__MODULE__.chat_history/0},
-    {"session.detail", :run_history, &__MODULE__.session_detail/0},
-    {"session.detail (directory)", :store, &__MODULE__.session_detail/0},
+    {"session.detail", :store, &__MODULE__.session_detail/0},
     {"logs.tail", :log_ring, &__MODULE__.logs_tail/0},
     {"tasks.active.list", :task_runtime, &__MODULE__.tasks_active/0},
     {"tasks.recent.list", :task_runtime, &__MODULE__.tasks_recent/0}

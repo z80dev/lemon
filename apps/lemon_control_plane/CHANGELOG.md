@@ -4,12 +4,6 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ## [Unreleased]
 
-### Fixed
-
-- A method with any scope beyond `:read` that raises, throws or whose async task
-  dies now answers `INTERNAL_ERROR` with `details.retrySafe: false`, so clients
-  never retry a mutation that may already have applied (#616).
-
 ### Added
 
 - Admin-only `browser.stop` stops the local browser driver and the Chrome it
@@ -68,6 +62,10 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Fixed
 
+- A method with any scope beyond `:read` that raises, throws or whose async task
+  dies now answers `INTERNAL_ERROR` with `details.retrySafe: false`, so clients
+  never retry a mutation that may already have applied (#616).
+
 - `sessions.snapshot` compares its two owner collections without
   `consistency.eventCursor`: a live event between them returns the newer
   collection and its cursor (read in one owner call) instead of
@@ -83,6 +81,10 @@ All notable changes to `lemon_control_plane` are documented here.
   `ConfigStore` and `LogRing` reads return tagged results (#619).
 - `memory.transfer` releases a local source's frozen memory snapshot as soon
   as the destination receipt is recorded instead of keeping it indefinitely (#623).
+- `memory.transfer` releases the source's frozen memory snapshot as soon as the
+  destination receipt is recorded instead of keeping it indefinitely: directly
+  for a local source, and through `memory.transfer.release` (best effort, five
+  seconds) for a remote source worker that advertises it (#623).
 - Timeouts, closed openers and unclassified failures of passive node inspections
   (`node.capabilities.get`, `node.runtime.features`, `node.host.info`) are
   retry-safe unavailable reads, not uncertain mutations.

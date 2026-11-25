@@ -34,10 +34,9 @@ defmodule LemonControlPlane.Methods.SessionsPromptResolve do
           |> put_present(params, "answers")
           |> put_present(params, "notes")
 
-        case LemonCore.AgentRuntime.call(
+        case LemonCore.AgentRuntime.mutate(
                :user_prompt_resolve,
-               [id, key, run_id, response, connection],
-               {:error, :unavailable}
+               [id, key, run_id, response, connection]
              ) do
           :ok ->
             {:ok, %{"resolved" => true, "promptId" => id, "sessionKey" => key, "runId" => run_id}}
@@ -50,6 +49,9 @@ defmodule LemonControlPlane.Methods.SessionsPromptResolve do
 
           {:error, :expired} ->
             {:error, {:conflict, "Question expired; no answer was selected", nil}}
+
+          {:error, :outcome_unknown} ->
+            LemonControlPlane.Methods.NativeSessions.failure(:outcome_unknown)
 
           _ ->
             {:error, {:unavailable, "Session user prompts are unavailable", nil}}

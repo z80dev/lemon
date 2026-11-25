@@ -26,12 +26,7 @@ defmodule LemonControlPlane.Methods.SessionsTree do
     with {:ok, key, cwd} <- NativeSessions.target(params),
          {:ok, limit} <- NativeSessions.integer(params, "limit", 100, 1, 500),
          {:ok, offset} <- NativeSessions.integer(params, "offset", 0, 0, 1_000_000) do
-      result =
-        AgentRuntime.call(
-          :session_tree,
-          [key, cwd, [limit: limit, offset: offset]],
-          {:error, :unavailable}
-        )
+      result = AgentRuntime.query(:session_tree, [key, cwd, [limit: limit, offset: offset]])
 
       case result do
         {:ok, %{"entries" => entries, "branches" => branches} = tree}

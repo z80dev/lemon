@@ -194,6 +194,9 @@ defmodule LemonCli.SessionClient do
           "partial_failure" ->
             {:error, {:partial_failure, normalize_maintenance(details["report"])}}
 
+          "outcome_unknown" ->
+            {:error, :outcome_unknown}
+
           _ ->
             {:error, :maintenance_unavailable}
         end

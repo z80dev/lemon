@@ -2,9 +2,10 @@ defmodule CodingAgent.ControlPlaneProvider do
   @moduledoc """
   Exposes this agent's internals through the shared core runtime contract.
 
-  Runtime consumers report on tasks, sessions, extensions, the run graph and
-  progress without depending on this app; they call the provider registered with
-  `LemonCore.AgentRuntime`. `CodingAgent.Application` registers this module at boot.
+  Runtime consumers report on and operate tasks, sessions, subagents and
+  background runs without depending on this app; they call the
+  provider registered with `LemonCore.AgentRuntime`. `CodingAgent.Application`
+  registers this module at boot.
 
   Each function is a thin adapter over the agent's own modules. Shapes match
   what the control plane used to read directly, so method payloads are
@@ -922,22 +923,6 @@ defmodule CodingAgent.ControlPlaneProvider do
     do: CodingAgent.BackgroundRun.cancel_scoped(id, session_key)
 
   def side_query(source, question, opts), do: CodingAgent.SideQuery.ask(source, question, opts)
-
-  def run_graph(run_id), do: CodingAgent.RunGraph.get(run_id)
-
-  def progress_snapshot(session_id, cwd), do: CodingAgent.Progress.snapshot(session_id, cwd)
-
-  def load_extensions(paths), do: CodingAgent.Extensions.load_extensions_with_errors(paths)
-
-  def extension_providers(extensions), do: CodingAgent.Extensions.get_providers(extensions)
-
-  def extension_info(extensions), do: CodingAgent.Extensions.get_info(extensions)
-
-  def tool_conflicts(cwd, opts), do: CodingAgent.ToolRegistry.tool_conflict_report(cwd, opts)
-
-  def wasm_sidecar_running? do
-    is_pid(Process.whereis(CodingAgent.Wasm.SidecarSupervisor))
-  end
 
   defp normalize_background_list_opts(opts) do
     case Keyword.get(opts, :status) do

@@ -128,6 +128,9 @@
 - `CodingAgent.Session.reset/1` waits longer than the session's own 5-second
   abort wait, so a slow abort returns `:ok` or `{:error, :busy}` instead of
   exiting the caller with a call timeout while the reset may still finish (#499).
+- Execution nodes advertise `memory.transfer.release`, bound to the source node,
+  so the controller deletes a node's frozen memory-transfer snapshot once the
+  destination receipt is recorded rather than waiting for the Store TTL (#623).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller

@@ -531,6 +531,8 @@ widget = MyApp.WidgetStore.get(id)
 
 Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and ordinary read/list APIs return `nil`/`[]`. `get/3` and `list/2` are for genuinely optional or display data only and are never an admission, policy, idempotency or verification check. Correctness-sensitive callers use `fetch/3` and `fetch_all/2` to distinguish confirmed absence or an empty table from an unavailable backend.
 
+Whole-table and range reads (`fetch_all/2`, `fetch_keys/2`, `fetch_range/5`, `list/2`, introspection listing) take a read handle from the Store in one short call and then read the backend in the caller's process — SQLite through a private read-only WAL connection — so a large scan never stalls other Store callers. `fetch_range/5` returns rows whose map value has an integer `:at_ms` in `[from, to)` (optionally plus untimed rows); SQLite indexes `:at_ms`. `:runs` cannot be read whole: read runs by id.
+
 For power-loss-sensitive writes, pass `durable: true` to the explicit-server
 mutation arity, for example
 `LemonCore.Store.put(LemonCore.Store, :receipts, id, receipt, durable: true)`.
@@ -591,6 +593,18 @@ inside the Store process. All hooks share a five-second budget, configurable via
 expires; hooks are not automatically retried. Successful persistence still
 returns `:ok` even when a hook fails or times out. Explicit finalization retries
 can redeliver hooks, so implementations must be idempotent by run id.
+
+Run records are bounded. `RunStore.append_event/2` writes each event into a per-run
+buffer (the first 200 and the latest events, 2,000 in all; `:events_dropped`
+counts the rest) instead of rewriting the record; `get/1`/`fetch/1` attach it as
+`:events`, and finalization moves it into the record. The Store sweep evicts a
+finalized run `:runs_retention_ms` (Store config, default 24 hours) after
+finalization. A durable terminal marker in `:run_terminals`
+makes `RunStore.fetch/1` answer `{:error, :evicted}` for a
+finished run whose record is gone, including after a restart drops the
+ephemeral `:runs` table; treat it as finished. Durable per-session history is
+`LemonCore.RunHistoryStore`. Usage pages read only ledger occurrences, never
+`:runs`.
 
 Agent workspace coordination — goals and kanban boards — is built on this Store but lives in `lemon_agent` as `LemonAgent.Workspace.{GoalStore, KanbanStore}`. Heartbeats use automation cron jobs and cron history.
 

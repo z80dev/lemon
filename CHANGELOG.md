@@ -125,6 +125,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   list (`HermeticEnv.credential_env_vars/0`, `scrub_unit_credentials!/1`,
   `:test_credential_env_vars`) is removed in favour of the single list in
   `scripts/test`; `LemonGateway.AsyncHelpers` is removed (#713).
+- **Breaking:** `session.detail` is now a routing projection only: `session`
+  carries the next run's model, provider, context window and thinking level
+  plus the durable agent, title/pin/archive state, run count and timestamps.
+  The `runs`, `runCount`, `summary`, `options` and `contentWithheld` blocks and
+  the `limit`/`historyLimit`/`eventLimit`/`toolCallLimit`/include parameters
+  are gone, and it no longer reads run history or scans the session directory,
+  so a TUI or web session switch costs point reads of that session's index,
+  metadata and policy rows. Run and event content come from `chat.history`,
+  `sessions.history` and `runs.timeline.get` (#700).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
@@ -155,6 +164,19 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `scripts/test coverage` runs each app in its own VM, so failures that only
   appeared when one VM re-cover-compiled apps under running processes are
   gone; paths select apps and other arguments go to every app's run (#499).
+- The Store bounds the `:runs` table and keeps full-table reads off its
+  process (#682). Run events go into a per-run buffer (first 200 + latest,
+  2,000 in all, `:events_dropped` counts the rest) instead of rewriting the run
+  record per event; finalized runs are evicted `:runs_retention_ms` (default
+  24 h) after finalization, and a durable `:run_terminals` entry makes
+  `RunStore.fetch/1` return `{:error, :evicted}` so a finished run (also after a
+  restart) is never reopened by the gateway. `fetch_all/2`, `list/2`, the new
+  `fetch_keys/2` and `fetch_range/5`, and introspection listing read the backend
+  in the caller's process (SQLite: a private read-only WAL connection). Usage
+  pages read only the window's ledger occurrences, never `:runs`; router
+  session discovery reads session keys only. **Breaking** for `lemon_core`
+  callers: `:runs` cannot be listed whole, `UsageStore.fetch_runs/1` is gone,
+  and introspection listing errors are `{:error, :store_unavailable}`.
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
@@ -523,6 +545,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   parser (`LemonSkills.Frontmatter`); a rule or skill manifest that repeats a
   frontmatter key, or a rule whose frontmatter exceeds 16 KiB (skills: 64 KiB),
   is rejected with a warning instead of resolving last-wins (#671).
+- The `lsp` tool starts one language server per workspace instead of one per
+  member project: the outermost Mix umbrella, Cargo, npm/yarn/pnpm, Go or uv
+  workspace inside the working directory is the root (else the nearest marker).
+  `LemonLsp.ServerManager` keeps at most eight servers live, evicting the
+  least-recently-used one without an in-flight request and failing with
+  `{:error, :lsp_session_limit}` when all are busy; `status/0` and the doctor
+  report `max_active_count` beside `active_count` (#690).
 - The `lsp` tool refuses a non-UTF-8 file with a clear error instead of crashing
   the language-server session it shares with other leases, restarting it and
   telling the model to retry. `LemonLsp.ServerManager` returns
@@ -532,6 +561,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   session exit during a call (#663).
 - Session reset no longer exits its caller with a call timeout when aborting
   the active run takes most of the session's 5-second abort wait (#499).
+  once the receipt is recorded (on a remote source node through its new
+  `memory.transfer.release` worker method), when any document it captured is
+  deleted, erased by scope or aged out, and after the new `transfer_ttl_ms`
+  Store setting (default 24 hours, capped at `retention_ms`) (#623).
+- The Store publishes a table as read-cached only after its warm-up read
+  succeeded, and clears the published list when a store starts or stops. A table
+  whose warm-up failed stays uncached, so reads reach the backend and surface
+  its error instead of an empty mirror (`RunStore.list_sessions`, channel known
+  targets and gateway progress no longer read as empty). SQLite table reads
+  decode every row and report the number of corrupt rows (#618).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
@@ -730,6 +769,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `docs/context.md`, the `req` dependency of `lemon_agent` and the
   `[:lemon_agent, :context, :size | :warning | :truncated]` telemetry events. The
   agent loop no longer JSON-encodes the whole history before every request (#708).
+- **Breaking:** `bin/lemon-control-plane` is removed; use `./bin/lemon start`
+  or `./bin/lemon daemon`. `./bin/lemon-gateway` now runs `./bin/lemon start`
+  (node name `lemon_gateway` by default): it reuses a healthy runtime on the
+  control port instead of starting a second router and duplicate Telegram and
+  Discord adapters, starts the full runtime when none is running, and no longer
+  runs `mix deps.get` (#701).
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.

@@ -6,11 +6,6 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
-### Removed
-
-- **Breaking:** the `controller` and `hybrid` ids from
-  `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
-
 ### Changed
 
 - Dialyzer-clean (#734): `Lemon.Reload` no longer reports a successful
@@ -29,6 +24,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `HermeticEnv.credential_env_vars/0`, `scrub_unit_credentials!/1` and the
   `:test_credential_env_vars` setting are removed: `scripts/test` holds the one
   credential scrub list (#713).
+- **Breaking (0.3.0):** `LemonCore.AgentRuntime.query/3` and `mutate/2` replace
+  `call/3`, and provider callback groups are required. Failed reads are explicit
+  errors; runtime and credential mutations whose callback failed after dispatch
+  return `{:error, :outcome_unknown}` and must be reconciled before retry (#626).
 - `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
   fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
   instead of launching a browser (#660).
@@ -49,6 +48,23 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   retried like runtime unavailability, and the documented cancellation reasons
   are `:run_idle_watchdog_timeout` (was `:run_watchdog_timeout`),
   `:user_requested`, `:runtime_restart` and `:run_process_terminated` (#643).
+- **Breaking (0.3.0):** `LemonCore.Store` bounds `:runs` (#682). Events are
+  buffered per run (first 200 + latest, 2,000 in all; `:events_dropped`) and
+  attached to `get_run/2`/`fetch_run/2` results; finalization moves them into
+  the record and stamps `:finalized_at_ms`/`:expires_at`; the sweep evicts
+  finalized runs after `:runs_retention_ms` (default 24 h) and keeps a
+  durable terminal marker in `:run_terminals`.
+  `fetch_run/2` returns `{:error, :evicted}` for a finalized, evicted run;
+  events for finalized runs are dropped. `list/2`, `fetch_all/2`,
+  `fetch_keys/2` and `fetch_range/5` raise `ArgumentError` for `:runs`;
+  `UsageStore.fetch_runs/1` is removed and `UsageRecords` reads only
+  occurrences (`UsageStore.fetch_occurrences_between/3`).
+- `LemonCore.Store` whole-table reads (`fetch_all/2`, `list/2`,
+  `list_introspection_events/2`, new `fetch_keys/2` and `fetch_range/5`) run in
+  the caller through the new optional `Store.Backend` callbacks `reader/1`,
+  `read_list/2`, `read_range/5` and `read_recent/3` (implemented by the ETS and
+  SQLite backends; SQLite adds an indexed `at_ms` column). Introspection listing
+  errors are now `{:error, :store_unavailable}` (#682).
 - `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
   OS processes (#586).
 - **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,
@@ -295,6 +311,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `LemonCore.LoopbackListener` share the cached uid, and
   `Identity.boot_check/0` (run at application start) logs an error when `ps`
   is unavailable (#684).
+- `LemonCore.Store` publishes a cached table only after its warm-up read
+  succeeded and clears the published list on start and stop, so a failed warm
+  no longer turns `list/2` into `[]`; `ReadCache.fetch_all/2` returns
+  `:uncached` for a missing mirror. `SqliteBackend.list/2` decodes past bad rows
+  and its `:sqlite_corrupt_data` context carries `:corrupt_rows` (#618).
 - `Durable.sync_file` no longer leaks a stray port `EXIT` message to its caller
   (#555).
 - Credential redaction classifies trailing separator-delimited and camelCase
@@ -394,6 +415,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   10 MiB/file, 50 MiB aggregate, 10,000 entries, depth 128 per capture.
 
 ### Removed
+
+- **Breaking:** the `controller` and `hybrid` ids from
+  `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
 
 - **Breaking (0.3.0):** `[gateway.queue]` (`Config.Gateway` `:queue`,
   `Validator.validate_queue_config/2`); the section is ignored with a

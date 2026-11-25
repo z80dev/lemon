@@ -17,8 +17,6 @@ defmodule LemonGateway.Executor do
 
   alias LemonGateway.ExecutionRequest
 
-  @required_callbacks [start_run: 3, cancel: 1, steer: 2, redirect: 2]
-
   @type run_opts :: keyword()
   @type cancel_context :: term()
   @type validation_error ::
@@ -57,25 +55,21 @@ defmodule LemonGateway.Executor do
 
   @doc """
   Validates that a module is loadable and implements the native executor
-  contract.
+  contract, through the shared runtime-seam behaviour check.
   """
   @spec validate(module()) :: :ok | {:error, validation_error()}
   def validate(module) when is_atom(module) do
-    if Code.ensure_loaded?(module) do
-      case missing_callbacks(module) do
-        [] -> :ok
-        callbacks -> {:error, {:executor_missing_callbacks, module, callbacks}}
-      end
-    else
-      {:error, {:executor_not_loadable, module}}
+    case LemonCore.RuntimeSeam.validate(module, __MODULE__) do
+      :ok ->
+        :ok
+
+      {:error, {:missing_callbacks, ^module, callbacks}} ->
+        {:error, {:executor_missing_callbacks, module, callbacks}}
+
+      {:error, _not_loadable} ->
+        {:error, {:executor_not_loadable, module}}
     end
   end
 
   def validate(configured), do: {:error, {:invalid_executor, configured}}
-
-  defp missing_callbacks(module) do
-    Enum.reject(@required_callbacks, fn {function, arity} ->
-      function_exported?(module, function, arity)
-    end)
-  end
 end

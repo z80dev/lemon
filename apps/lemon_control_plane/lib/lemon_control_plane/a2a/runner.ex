@@ -253,12 +253,19 @@ defmodule LemonControlPlane.A2A.Runner do
 
   def reconcile(task), do: task
 
+  # An unreadable history leaves the task as stored: reconciliation never
+  # resumes a submission it could not confirm.
   defp submitted_message(task) do
-    task.peer_id
-    |> A2AStore.history(task.context_id, limit: 100)
-    |> Enum.find(fn message ->
-      message.task_id == task.id and message.direction == :inbound and message.role == "ROLE_USER"
-    end)
+    case A2AStore.history(task.peer_id, task.context_id, limit: 100) do
+      {:ok, messages} ->
+        Enum.find(messages, fn message ->
+          message.task_id == task.id and message.direction == :inbound and
+            message.role == "ROLE_USER"
+        end)
+
+      {:error, _reason} ->
+        nil
+    end
   end
 
   defp execute(task, context, peer, config, text, lease_id) do

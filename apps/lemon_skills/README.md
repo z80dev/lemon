@@ -136,7 +136,8 @@ automatically replay. A definite failure (`:stale_destination`,
 rollback) returns that reason, removes the staging directory and frees the
 mutation id, so the same mutation can be applied again. The frozen source
 snapshot is released with the receipt when it shares the destination Store, and
-by `release/5` (the controller calls it for a local source) otherwise; the Store
+by `release/5` otherwise: the controller calls it for a local source and through
+the source worker's `memory.transfer.release` for a remote one. The Store
 TTL, scope erasure and retention bound it in every case. Runtime provider/model/session/tool labels retain bounded
 noncontrol UTF-8 namespaces, including slash names. Allowed learned provenance
 atom keys/type labels are normalized to JSON strings without changing summaries.
