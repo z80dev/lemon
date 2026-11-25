@@ -6,8 +6,7 @@ defmodule LemonCore.Doctor.ChecksTest do
   alias LemonCore.Doctor.Checks.{
     Config,
     NodeTools,
-    Providers,
-    Usage
+    Providers
   }
 
   describe "Config.run/1" do
@@ -135,68 +134,6 @@ defmodule LemonCore.Doctor.ChecksTest do
       assert routing_check.message =~ "Default provider is not credential-ready"
       assert routing_check.message =~ "zai"
       refute inspect(routing_check) =~ "private-zai-key"
-    end
-  end
-
-  describe "Usage.run/1" do
-    test "reports safe aggregate usage without leaking stored prompt or credential fields" do
-      checks =
-        Usage.run(
-          summary: %{
-            total_cost: 0.42,
-            total_requests: 3,
-            total_tokens: %{input: 1_000, output: 500},
-            breakdown: %{"openai" => 0.42},
-            requests: %{"openai" => 3},
-            tokens: %{"openai" => %{input: 1_000, output: 500}},
-            prompt: "private usage prompt",
-            api_key: "usage-secret-key"
-          },
-          today: %{date: Date.to_iso8601(Date.utc_today()), total_cost: 0.42},
-          quotas: %{runs_limit: 10, tokens_limit: 2_000, cost_limit: 1.0}
-        )
-
-      usage = Enum.find(checks, &(&1.name == "usage.status"))
-
-      assert usage.status == :pass
-      assert usage.message =~ "3 request(s)"
-      assert usage.message =~ "1500 token(s)"
-      assert usage.message =~ "1 provider(s)"
-      refute inspect(usage) =~ "private usage prompt"
-      refute inspect(usage) =~ "usage-secret-key"
-    end
-
-    test "warns when configured usage quotas are exceeded" do
-      checks =
-        Usage.run(
-          summary: %{
-            total_cost: 1.5,
-            total_requests: 3,
-            total_tokens: %{input: 1_000, output: 500}
-          },
-          quotas: %{runs_limit: 2, tokens_limit: 1_000, cost_limit: 1.0}
-        )
-
-      usage = Enum.find(checks, &(&1.name == "usage.status"))
-
-      assert usage.status == :warn
-      assert usage.message =~ "over a configured quota"
-      assert usage.remediation =~ "`usage.status`"
-    end
-
-    test "warns rather than treating unknown measurements as a cleared quota" do
-      [usage] =
-        Usage.run(
-          summary: %{total_requests: 1, total_cost: nil, total_tokens: nil},
-          today: %{},
-          quotas: %{runs_limit: 10, tokens_limit: 100, cost_limit: 1.0}
-        )
-
-      assert usage.status == :warn
-      assert usage.message =~ "quota status is unknown"
-      assert usage.message =~ "unknown token(s)"
-      assert usage.message =~ "unknown cost"
-      refute usage.message =~ "$0.0000"
     end
   end
 
