@@ -70,7 +70,9 @@ defmodule CodingAgent.Tools.WebGuardSsrfTest do
       assert {:error, _} = fetch.("host-#{n}-#{System.unique_integer([:positive])}.example")
     end
 
-    assert :erlang.system_info(:atom_count) - atoms == 0
+    # 40 distinct hosts would intern >= 40 atoms if per-host atoms leaked;
+    # allow a handful of incidental atoms from concurrent OTP/umbrella workers.
+    assert :erlang.system_info(:atom_count) - atoms < 5
 
     # Allow short-lived per-request processes to exit before counting.
     Process.sleep(200)

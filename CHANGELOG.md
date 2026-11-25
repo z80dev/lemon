@@ -292,7 +292,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
-  tab makes no service calls and kanban changes appear immediately (#687).
+  tab makes no service calls and kanban changes appear immediately. Each load
+  makes seven batched reads whatever the number of boards, goals and cron jobs
+  (`KanbanStore.list_tasks_for/2`, `KanbanDispatcher.status_many/2`,
+  `GoalLoopManager.status_many/1`, `CronManager.runs_for/2`) (#687).
 - Media provider drivers (OpenAI image/TTS/STT/vision/video, Vertex Imagen/Veo,
   Google TTS, ElevenLabs, Deepgram) moved from `lemon_skills` into `lemon_media`
   behind `LemonMedia.Providers.run/1` with one shared retry helper; Google
@@ -329,13 +332,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `fetch_keys/2` and `fetch_range/5`, and introspection listing read the backend
   in the caller's process (SQLite: a private read-only WAL connection). Usage
   pages read only the window's ledger occurrences, never `:runs`; router
-  session discovery reads session keys only. **Breaking** for `lemon_core`
-  callers: `:runs` cannot be listed whole, `UsageStore.fetch_runs/1` is gone,
-  and introspection listing errors are `{:error, :store_unavailable}`.
-  tab makes no service calls and kanban changes appear immediately. Each load
-  makes seven batched reads whatever the number of boards, goals and cron jobs
-  (`KanbanStore.list_tasks_for/2`, `KanbanDispatcher.status_many/2`,
-  `GoalLoopManager.status_many/1`, `CronManager.runs_for/2`) (#687).
   session discovery reads session keys only, and session-maintenance previews
   use a bounded metadata index. **Breaking** for `lemon_core` callers:
   `:runs` cannot be listed whole, event readers must use `RunStore.get_with_events/1`,
@@ -455,9 +451,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `503` naming the stopped applications instead of a constant `200`; `lemon
   doctor` reports an expected application that failed to start or stopped
   (#726).
-- `agent.wait` returns `UNAVAILABLE` when the run store cannot be read instead
-  of reporting a timeout, and no longer copies a raw exception message into its
-  error details (#620).
 - Source (`bin/lemon`) and packaged distributed runtimes start OTP's `rex`,
   `global_name_server` and `global_group` again: `-kernel start_distribution
   false` (#551) had dropped them, so every native session start failed on

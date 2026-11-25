@@ -73,7 +73,7 @@ defmodule LemonAi.Providers.MoonshotToolSchema do
   # carries a definitions block. `budget` bounds the number of inlined refs.
   defp dereference(%{} = root)
        when is_map_key(root, "$defs") or is_map_key(root, "definitions") do
-    {schema, _budget} = deref_node(root, root, MapSet.new(), @ref_budget)
+    {schema, _budget} = deref_node(root, root, %{}, @ref_budget)
     schema
   end
 
@@ -84,7 +84,7 @@ defmodule LemonAi.Providers.MoonshotToolSchema do
   end
 
   defp deref_node(%{"$ref" => ref} = node, root, visiting, budget) when is_binary(ref) do
-    if MapSet.member?(visiting, ref) do
+    if is_map_key(visiting, ref) do
       {%{}, budget}
     else
       case local_ref(ref, root) do
@@ -96,7 +96,7 @@ defmodule LemonAi.Providers.MoonshotToolSchema do
 
         definition ->
           {inlined, budget} =
-            deref_node(definition, root, MapSet.put(visiting, ref), budget - 1)
+            deref_node(definition, root, Map.put(visiting, ref, true), budget - 1)
 
           # Keywords beside `$ref` (description, default, ...) win, unprocessed.
           case Map.delete(node, "$ref") do

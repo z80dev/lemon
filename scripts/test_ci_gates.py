@@ -117,6 +117,15 @@ class DialyzerGateTest(unittest.TestCase):
         self.assertEqual(self.gate("Starting Dialyzer\n").returncode, 2)
         self.assertEqual(self.gate("Total errors: 3, Skipped: 0, Unnecessary Skips: 1\n").returncode, 2)
 
+    def test_ci_result_job_checks_out_failure_report_script(self):
+        ci_workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        result_job = ci_workflow.split("\n  result:\n", 1)[1]
+        checkout_pos = result_job.find("sparse-checkout: scripts/ci_failure_report")
+        invoke_pos = result_job.find("scripts/ci_failure_report ")
+        self.assertGreater(checkout_pos, 0, "CI result job must sparse-checkout scripts/ci_failure_report")
+        self.assertLess(checkout_pos, invoke_pos)
+        self.assertTrue((ROOT / "scripts/ci_failure_report").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

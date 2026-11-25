@@ -544,7 +544,6 @@ defmodule LemonAgent.Loop.Streaming do
             {:ok, response_stream} when is_pid(response_stream) -> :ok
             response_stream when is_pid(response_stream) -> :ok
             {:error, reason} -> Loop.record_budget_usage(config, reason, stream)
-            _ -> Loop.record_budget_usage(config, nil, stream)
           end
 
           result

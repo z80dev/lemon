@@ -216,9 +216,9 @@ defmodule LemonCore.TerminalOutbox do
            decision(server, run_id) do
       with_pending(server, run_id, fn
         %{digest: ^digest} = row ->
-          publish_pending(server, run_id, row, Event.now_ms())
+          _ = publish_pending(server, run_id, row, Event.now_ms())
 
-          if retryable?(row, :projections), do: repair_projections(server, run_id, row)
+          _ = if retryable?(row, :projections), do: repair_projections(server, run_id, row)
           if retryable?(row, :presentation), do: repair_presentation(server, run_id, row.record)
 
         _ ->

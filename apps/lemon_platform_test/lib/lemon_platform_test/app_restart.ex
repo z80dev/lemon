@@ -47,7 +47,7 @@ defmodule LemonPlatformTest.AppRestart do
       # have been loaded until the test started it.
       stop_apps(apps, &(&1 in apps or not MapSet.member?(originally_running, &1)))
 
-      for id <- handlers, do: :telemetry.detach(id)
+      Enum.each(handlers, fn id -> _ = :telemetry.detach(id) end)
 
       Enum.each(app_env, fn
         {{app, key}, {:ok, value}} -> Application.put_env(app, key, value)

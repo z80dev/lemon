@@ -469,6 +469,13 @@ jobs:
           done
           echo "status=$status" >> "$GITHUB_OUTPUT"
 
+      - name: Checkout report script
+        if: (steps.status.outputs.status == 'failure' && contains(needs.*.result, 'failure')) || (github.event_name == 'push' && github.ref == 'refs/heads/main' && !cancelled())
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ci_failure_report
+          sparse-checkout-cone-mode: false
+
       - name: Summarize failures
         if: steps.status.outputs.status == 'failure' && contains(needs.*.result, 'failure')
         continue-on-error: true

@@ -102,7 +102,7 @@ defmodule LemonAgent.ModelRuntime.ProviderFailover do
 
   def wrap(stream_fn, %__MODULE__{} = failover, opts) do
     # Even a single provider/credential needs the wrapper for refresh-on-401.
-    if Map.get(failover.settings.provider_routing || %{}, :enabled, true) == false do
+    if Map.get(failover.settings.provider_routing, :enabled, true) == false do
       stream_fn
     else
       fn primary_model, context, options ->
@@ -149,7 +149,7 @@ defmodule LemonAgent.ModelRuntime.ProviderFailover do
             options: options,
             output_stream: output_stream,
             primary_model: primary_model,
-            refreshed: MapSet.new()
+            refreshed: %{}
           })
 
         try do
@@ -283,10 +283,10 @@ defmodule LemonAgent.ModelRuntime.ProviderFailover do
 
     refresh? =
       details.status == 401 and details.category == :auth and
-        not MapSet.member?(ctx.refreshed, refresh_id)
+        not is_map_key(ctx.refreshed, refresh_id)
 
     if refresh? do
-      ctx = %{ctx | refreshed: MapSet.put(ctx.refreshed, refresh_id)}
+      ctx = %{ctx | refreshed: Map.put(ctx.refreshed, refresh_id, true)}
 
       case ctx.refresh_api_key.(ctx.settings, model.provider, entry.ref, entry.api_key) do
         {:ok, fresh_key} ->
@@ -380,7 +380,7 @@ defmodule LemonAgent.ModelRuntime.ProviderFailover do
   # cooled key beats skipping the provider. With nothing resolvable a single
   # placeholder entry keeps today's ensure_api_key/4 behavior.
   defp credential_entries(model, ctx) do
-    provider = model && model.provider
+    provider = model.provider
 
     entries =
       ctx.settings
@@ -428,7 +428,7 @@ defmodule LemonAgent.ModelRuntime.ProviderFailover do
   # The first committed output fixes provider, model and credential identity.
   # Committing on the natural primary clears stale fallback ordering.
   defp record_commit(model, entry, ctx) do
-    provider = model && model.provider
+    provider = model.provider
     CredentialHealth.record_success(provider, entry.ref)
 
     if model_identity(model) == model_identity(ctx.primary_model) and entry.index == 0 do
@@ -668,7 +668,7 @@ defmodule LemonAgent.ModelRuntime.ProviderFailover do
          original_options
        ) do
     get_api_key = ModelResolver.build_get_api_key(settings)
-    provider = model && model.provider
+    provider = model.provider
 
     resolved =
       get_api_key.(provider) ||

@@ -595,7 +595,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   # ---------------------------------------------------------------------------
 
   defp config_issues(root, known_apps, lib_deps, bindings) do
-    known = MapSet.new(known_apps)
+    known = Map.new(known_apps, &{&1, true})
     reach = Map.new(known_apps, &{&1, reachable(&1, lib_deps)})
 
     {refs, parse_issues} =
@@ -624,8 +624,8 @@ defmodule LemonCore.Quality.ArchitectureCheck do
 
     unrelated =
       for %{app: app, owner: owner} = ref <- refs,
-          not MapSet.member?(reach[app], owner),
-          not MapSet.member?(Map.get(reach, owner, MapSet.new()), app),
+          not Map.has_key?(Map.get(reach, app, %{}), owner),
+          not Map.has_key?(Map.get(reach, owner, %{}), app),
           owner not in Map.get(bindings, app, []) do
         issue(
           :config_module_reference,
@@ -651,21 +651,21 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   end
 
   # Apps reachable from `app` through declared lib dependencies.
-  defp reachable(app, lib_deps), do: reachable(Map.get(lib_deps, app, []), lib_deps, MapSet.new())
+  defp reachable(app, lib_deps), do: reachable(Map.get(lib_deps, app, []), lib_deps, %{})
 
   defp reachable([], _lib_deps, seen), do: seen
 
   defp reachable([app | rest], lib_deps, seen) do
-    if MapSet.member?(seen, app),
+    if is_map_key(seen, app),
       do: reachable(rest, lib_deps, seen),
-      else: reachable(Map.get(lib_deps, app, []) ++ rest, lib_deps, MapSet.put(seen, app))
+      else: reachable(Map.get(lib_deps, app, []) ++ rest, lib_deps, Map.put(seen, app, true))
   end
 
   defp config_calls(ast, known) do
     {_ast, calls} =
       Macro.prewalk(ast, [], fn
         {:config, _meta, [app | args]} = node, acc when is_atom(app) ->
-          if MapSet.member?(known, app), do: {node, [{app, args} | acc]}, else: {node, acc}
+          if is_map_key(known, app), do: {node, [{app, args} | acc]}, else: {node, acc}
 
         node, acc ->
           {node, acc}

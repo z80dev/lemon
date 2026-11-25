@@ -562,7 +562,7 @@ defmodule LemonAgent.ModelRuntime.ModelResolver do
 
   defp gateway_wire_base_url(model), do: model
 
-  @spec build_get_api_key(settings()) :: (atom() -> String.t() | nil)
+  @spec build_get_api_key(settings()) :: (atom() | String.t() -> String.t() | nil)
   def build_get_api_key(%{providers: _} = settings) do
     # Pass the whole settings (not just providers) so pool credentials from
     # provider_routing participate in resolution; with no pools configured the
@@ -815,8 +815,6 @@ defmodule LemonAgent.ModelRuntime.ModelResolver do
         |> Kernel.==(normalized)
       end)
   end
-
-  defp provider_to_atom(_), do: nil
 
   # Coding settings keep legacy config compatibility by representing provider
   # names as underscored atoms (for example :openai_codex). Model registry keys

@@ -160,7 +160,7 @@ defmodule LemonMemory.Providers do
 
   @impl true
   def handle_cast({:put, %Document{} = doc, opts}, state) do
-    store_document(doc, opts, state)
+    _ = store_document(doc, opts, state)
     {:noreply, state}
   end
 

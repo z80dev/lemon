@@ -248,10 +248,11 @@ defmodule LemonCore.Store do
            key: run_id
          ) do
       {:finalized, hooks, payload} ->
-        case Hooks.invoke_bounded(hooks, payload, op: :finalize_run, store: server) do
-          :ok -> update_terminal_effect(server, run_id, :projections, :done)
-          {:error, _} -> update_terminal_effect(server, run_id, :projections, :failed)
-        end
+        _ =
+          case Hooks.invoke_bounded(hooks, payload, op: :finalize_run, store: server) do
+            :ok -> update_terminal_effect(server, run_id, :projections, :done)
+            {:error, _} -> update_terminal_effect(server, run_id, :projections, :failed)
+          end
 
         :ok
 

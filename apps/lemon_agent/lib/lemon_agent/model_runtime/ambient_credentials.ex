@@ -217,8 +217,7 @@ defmodule LemonAgent.ModelRuntime.AmbientCredentials do
          {:ok, contents} <- read_bounded(path) do
       OpenAICodexOAuth.decode_codex_cli_login(contents)
     else
-      {:error, reason} when is_atom(reason) -> {:error, reason}
-      _ -> {:error, :invalid_codex_cli_login}
+      {:error, reason} -> {:error, reason}
     end
   end
 

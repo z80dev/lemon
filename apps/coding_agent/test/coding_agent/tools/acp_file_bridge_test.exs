@@ -211,7 +211,7 @@ defmodule CodingAgent.Tools.ACPFileBridgeTest do
         send(reply_to, {:acp_client_response, ref, response})
         params
     after
-      1_000 -> flunk("timed out waiting for #{method}")
+      5_000 -> flunk("timed out waiting for #{method}")
     end
   end
 end

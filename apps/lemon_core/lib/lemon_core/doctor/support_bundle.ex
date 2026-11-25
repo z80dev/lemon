@@ -330,8 +330,8 @@ defmodule LemonCore.Doctor.SupportBundle do
   defp provider_diagnostics(opts) do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
     config = LemonCore.Config.load(project_dir, cache: false)
-    agent = config.agent || %{}
-    providers = config.providers || %{}
+    agent = config.agent
+    providers = config.providers
     routing = map_value(agent, :provider_routing) || %{}
     default_provider = map_value(agent, :default_provider)
 

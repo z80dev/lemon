@@ -304,7 +304,7 @@ defmodule LemonCore.RunHistoryStore do
 
   @impl true
   def handle_cast({:put, session_key, started_at_ms, run_id, data}, state) do
-    persist_history(state, session_key, started_at_ms, run_id, data)
+    _ = persist_history(state, session_key, started_at_ms, run_id, data)
     {:noreply, state}
   end
 

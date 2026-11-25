@@ -61,7 +61,6 @@ defmodule LemonCore.SessionLifecycle.StoreRows do
       case fun.(row) do
         :ok -> {:cont, :ok}
         {:error, _} = error -> {:halt, error}
-        _other -> {:halt, {:error, :unexpected_result}}
       end
     end)
   end

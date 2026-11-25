@@ -20,8 +20,8 @@ defmodule LemonCore.Doctor.Checks.Providers do
   @spec run(keyword()) :: [Check.t()]
   def run(opts \\ []) do
     config = Modular.load(Keyword.take(opts, [:project_dir]))
-    providers = (config.providers && config.providers.providers) || %{}
-    routing = Map.get(config.agent || %{}, :provider_routing) || %{}
+    providers = config.providers.providers
+    routing = config.agent.provider_routing
 
     ready? = fn provider ->
       present?(provider) and
@@ -49,19 +49,19 @@ defmodule LemonCore.Doctor.Checks.Providers do
   end
 
   defp check_default_provider(config) do
-    case config.agent.default_provider do
-      nil ->
-        Check.fail(
-          "providers.default",
-          "No default provider is set.",
-          "Run `lemon setup` to sign in and choose a default model."
-        )
+    provider = config.agent.default_provider
 
-      provider ->
-        Check.pass(
-          "providers.default",
-          "Default provider: #{ProviderIdentity.public_name(provider)}"
-        )
+    if present?(provider) do
+      Check.pass(
+        "providers.default",
+        "Default provider: #{ProviderIdentity.public_name(provider)}"
+      )
+    else
+      Check.fail(
+        "providers.default",
+        "No default provider is set.",
+        "Run `lemon setup` to sign in and choose a default model."
+      )
     end
   end
 

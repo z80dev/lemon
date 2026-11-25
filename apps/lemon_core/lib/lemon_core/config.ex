@@ -267,7 +267,7 @@ defmodule LemonCore.Config do
   # Registered `[runtime.tools.<id>]` tables keep the flat legacy shape
   # `agent.tools[id]` that every reader expects.
   defp convert_tools(tools) do
-    Map.merge(tools.sections || %{}, %{
+    Map.merge(tools.sections, %{
       auto_resize_images: tools.auto_resize_images,
       approval_mode: tools.approval_mode,
       edit: tools.edit,

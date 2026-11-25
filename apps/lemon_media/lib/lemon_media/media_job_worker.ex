@@ -28,43 +28,88 @@ defmodule LemonMedia.MediaJobWorker do
         if deadline <= System.monotonic_time(:millisecond) do
           cancelled(attrs, record_opts, :timeout)
         else
-          task = Task.async(fn -> execute(attrs, opts, record_opts) end)
-          await_runner(task, caller, caller_ref, supervisor, attrs, record_opts, deadline)
+          runner = start_runner(attrs, opts, record_opts)
+          await_runner(runner, caller, caller_ref, supervisor, attrs, record_opts, deadline)
         end
     end
   end
 
-  defp await_runner(task, caller, caller_ref, supervisor, attrs, record_opts, deadline) do
-    %Task{ref: runner_ref, pid: runner} = task
+  defp start_runner(attrs, opts, record_opts) do
+    owner = self()
+    tag = make_ref()
+    pid = spawn_link(fn -> send(owner, {tag, execute(attrs, opts, record_opts)}) end)
+    %{pid: pid, ref: Process.monitor(pid), tag: tag}
+  end
+
+  defp await_runner(runner, caller, caller_ref, supervisor, attrs, record_opts, deadline) do
+    %{pid: runner_pid, ref: runner_ref, tag: result_tag} = runner
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
-      {^runner_ref, result} ->
+      {^result_tag, result} ->
         Process.demonitor(runner_ref, [:flush])
+        flush_runner_exit(runner_pid)
         result
 
-      {:DOWN, ^runner_ref, :process, ^runner, _reason} ->
+      {:DOWN, ^runner_ref, :process, ^runner_pid, _reason} ->
+        flush_runner_exit(runner_pid)
         exit(:job_exited)
 
       {:DOWN, ^caller_ref, :process, ^caller, _reason} ->
-        cancel_runner(task, attrs, record_opts, :caller_exited)
+        cancel_runner(runner, attrs, record_opts, :caller_exited)
 
       {:abort, ^caller} ->
-        cancel_runner(task, attrs, record_opts, :aborted)
+        cancel_runner(runner, attrs, record_opts, :aborted)
 
       {:EXIT, ^supervisor, reason} ->
-        Task.shutdown(task, :brutal_kill)
+        kill_runner(runner)
         exit(reason)
     after
-      remaining -> cancel_runner(task, attrs, record_opts, :timeout)
+      remaining -> cancel_runner(runner, attrs, record_opts, :timeout)
     end
   end
 
-  defp cancel_runner(task, attrs, record_opts, reason) do
-    case Task.shutdown(task, :brutal_kill) do
-      {:ok, result} -> result
-      {:exit, _reason} -> exit(:job_exited)
-      nil -> cancelled(attrs, record_opts, reason)
+  defp kill_runner(%{pid: pid, ref: ref}) do
+    Process.unlink(pid)
+    Process.demonitor(ref, [:flush])
+    Process.exit(pid, :kill)
+    flush_runner_exit(pid)
+  end
+
+  defp cancel_runner(%{pid: pid, ref: ref, tag: tag}, attrs, record_opts, reason) do
+    Process.unlink(pid)
+    Process.exit(pid, :kill)
+
+    receive do
+      {^tag, result} ->
+        Process.demonitor(ref, [:flush])
+        flush_runner_exit(pid)
+        result
+
+      {:DOWN, ^ref, :process, ^pid, down} when down in [:killed, :noproc] ->
+        flush_runner_exit(pid)
+        cancelled(attrs, record_opts, reason)
+
+      {:DOWN, ^ref, :process, ^pid, :normal} ->
+        flush_runner_exit(pid)
+
+        receive do
+          {^tag, result} -> result
+        after
+          0 -> cancelled(attrs, record_opts, reason)
+        end
+
+      {:DOWN, ^ref, :process, ^pid, _reason} ->
+        flush_runner_exit(pid)
+        exit(:job_exited)
+    end
+  end
+
+  defp flush_runner_exit(pid) do
+    receive do
+      {:EXIT, ^pid, _reason} -> :ok
+    after
+      0 -> :ok
     end
   end
 

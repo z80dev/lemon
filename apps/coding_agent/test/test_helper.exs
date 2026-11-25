@@ -100,6 +100,9 @@ Application.ensure_all_started(:lemon_skills)
 
 {:ok, _} = Application.ensure_all_started(:coding_agent)
 
+# Warm the one-time PATH checker scan before async tests race under short timeouts.
+_ = CodingAgent.Tools.OperatorState.protected_roots()
+
 # Compile test support files
 Code.require_file("support/permission_helpers.ex", __DIR__)
 Code.require_file("support/test_git_repo.ex", __DIR__)

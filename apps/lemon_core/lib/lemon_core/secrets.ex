@@ -690,10 +690,10 @@ defmodule LemonCore.Secrets do
         {:error, reason} ->
           if store_miss?(reason, opts),
             do: presence_after_store(name, opts),
-            else: {:unusable, presence_reason(reason)}
+            else: {:unusable, reason}
       end
     else
-      {:error, reason} -> {:unusable, presence_reason(reason)}
+      {:error, reason} -> {:unusable, reason}
     end
   rescue
     _ -> {:unusable, :secret_store_failed}
@@ -720,9 +720,6 @@ defmodule LemonCore.Secrets do
       true -> :missing
     end
   end
-
-  defp presence_reason(reason) when is_atom(reason), do: reason
-  defp presence_reason(_reason), do: :secret_store_failed
 
   @doc """
   Persist a secret to the encrypted store.

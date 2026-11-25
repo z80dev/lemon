@@ -101,7 +101,7 @@ defmodule LemonCore.Quality.VacuousAssertionCheck do
         ast |> vacuous_lines() |> Enum.map(&vacuous_issue(path, &1))
 
       {:error, {location, _message, _token}} ->
-        line = if is_list(location), do: location[:line], else: location
+        line = Keyword.get(location, :line)
 
         [
           %{

@@ -361,8 +361,15 @@ defmodule LemonAutomation.GoalStore do
         stored ->
           case Store.compare_and_delete(@table, session_key, stored) do
             :ok ->
-              goal = normalize_stored(stored)
-              if goal != %{}, do: emit(:goal_cleared, goal, opts)
+              if is_map(stored) and map_size(stored) > 0 do
+                goal =
+                  stored
+                  |> normalize_stored()
+                  |> Map.update(:session_key, session_key, &(&1 || session_key))
+
+                emit(:goal_cleared, goal, opts)
+              end
+
               :ok
 
             {:error, :mismatch} ->
@@ -694,7 +701,10 @@ defmodule LemonAutomation.GoalStore do
     if Bus.running?() do
       event = Event.new(event_type, payload, %{session_key: goal.session_key, goal_id: goal.id})
       Bus.broadcast("goals", event)
-      Bus.broadcast(Bus.session_topic(goal.session_key), event)
+
+      if is_binary(goal.session_key) and goal.session_key != "" do
+        Bus.broadcast(Bus.session_topic(goal.session_key), event)
+      end
     end
 
     :ok
