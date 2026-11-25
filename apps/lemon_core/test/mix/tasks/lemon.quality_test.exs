@@ -221,8 +221,7 @@ defmodule Mix.Tasks.Lemon.QualityTest do
     @vacuous Enum.join(["assert", "true"], " ")
 
     test "an else-branch literal assertion in an app test fails the quality run" do
-      tmp_dir =
-        create_tmp_quality_repo(ArchitectureDocs.render_dependency_policy_markdown(@repo_root))
+      tmp_dir = create_tmp_quality_repo(:current)
 
       test_dir = Path.join(tmp_dir, "apps/lemon_core/test")
       File.mkdir_p!(test_dir)
