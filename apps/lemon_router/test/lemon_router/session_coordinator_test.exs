@@ -48,8 +48,12 @@ defmodule LemonRouter.SessionCoordinatorTest do
     end
 
     def start_link(opts) do
-      case Registry.lookup(LemonRouter.RunRegistry, opts[:collision_run_id]) do
-        [{pid, _}] ->
+      owner = {:via, Registry, {LemonRouter.RunRegistry, opts[:collision_run_id]}}
+
+      # The coordinator can see the winner's DOWN before Registry removes its entry.
+      # Only a live owner can claim the session and cause the simulated collision.
+      case GenServer.whereis(owner) do
+        pid when is_pid(pid) ->
           :ok = GenServer.call(pid, {:claim_session, opts[:session_key], opts[:conversation_key]})
 
           reason =
@@ -59,7 +63,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
           {:error, reason}
 
-        [] ->
+        nil ->
           LemonRouter.SessionCoordinatorTest.StubRunProcess.start_link(opts)
       end
     end
@@ -2281,14 +2285,20 @@ defmodule LemonRouter.SessionCoordinatorTest do
           }
         )
 
-      assert {:ok, %{effective_mode: :queued, target_run_id: ^own}} =
+      assert {:ok, %{effective_mode: :queued, target_run_id: ^own} = receipt} =
                SessionCoordinator.submit_with_receipt(key, input)
+
+      assert {:ok, ^receipt} = SessionCoordinator.submit_with_receipt(key, input)
 
       assert {:ok, ^active} = SessionCoordinator.active_run(key)
       state = :sys.get_state(coordinator_pid(key))
       assert [%Submission{run_id: ^own}] = state.queue
+      refute_receive {:started, ^own, _}, 0
+
       GenServer.stop(survivor)
-      assert_receive {:started, ^own, _}
+      assert_receive {:started, ^own, opts}
+      assert opts[:execution_request].prompt == "after collision"
+      assert {:ok, ^own} = SessionCoordinator.active_run(key)
       :ok = stop_active_run(supervisor)
       assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
     end
