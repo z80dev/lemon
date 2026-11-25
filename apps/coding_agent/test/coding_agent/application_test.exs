@@ -8,7 +8,7 @@ defmodule CodingAgent.ApplicationTest do
     end
   end
 
-  test "session and process registries own dependency-ordered subtrees" do
+  test "session, process and task registries own dependency-ordered subtrees" do
     for {name, expected} <- [
           {CodingAgent.SessionTree,
            [
@@ -22,6 +22,14 @@ defmodule CodingAgent.ApplicationTest do
              CodingAgent.ProcessManager,
              CodingAgent.ProcessStoreServer,
              CodingAgent.LaneQueue
+           ]},
+          {CodingAgent.TaskRuntime.Tree,
+           [
+             # The journal must survive a restart of either registry or the child owners.
+             CodingAgent.TaskRuntime.Journal,
+             CodingAgent.TaskRuntime.Registry,
+             CodingAgent.TaskRuntime.Parents,
+             CodingAgent.TaskRuntime.Supervisor
            ]}
         ] do
       assert {:ok, %{start: {Supervisor, :start_link, [children, opts]}}} =

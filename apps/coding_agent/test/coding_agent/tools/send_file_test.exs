@@ -1,5 +1,5 @@
 defmodule CodingAgent.Tools.SendFileTest do
-  # Not async: some tests swap the running gateway config's channel sections.
+  # Not async: the TOML-backed tests change application config.
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.SendFile
@@ -37,6 +37,25 @@ defmodule CodingAgent.Tools.SendFileTest do
     File.write!(Path.join(tmp_dir, "secret.png"), "secret")
     File.write!(Path.join(tmp_dir, "secret.txt"), "secret")
     %{root: root, outside: tmp_dir}
+  end
+
+  defp use_toml_channel_config(%{root: root}) do
+    path = Path.join(root, "global-config.toml")
+    keys = [:paths, :gateway_channels, :config_test_mode]
+    saved = Enum.map(keys, &{&1, Application.fetch_env(:lemon_core, &1)})
+
+    paths = Application.get_env(:lemon_core, :paths) || []
+    Application.put_env(:lemon_core, :paths, Keyword.put(paths, :global_config, path))
+    Application.put_env(:lemon_core, :gateway_channels, [DiscordConfig, TelegramConfig])
+    # The umbrella's test gateway replacement would otherwise mask the TOML.
+    Application.put_env(:lemon_core, :config_test_mode, false)
+
+    on_exit(fn ->
+      LemonCore.ConfigCache.invalidate()
+      Enum.each(saved, fn {key, value} -> restore_config(key, value) end)
+    end)
+
+    :ok
   end
 
   defp key(channel) do
@@ -189,6 +208,8 @@ defmodule CodingAgent.Tools.SendFileTest do
   end
 
   describe "deny rules and private copies" do
+    setup :use_toml_channel_config
+
     test "the queued file keeps the validated bytes after the source changes", %{
       root: root,
       outside: outside
@@ -260,6 +281,8 @@ defmodule CodingAgent.Tools.SendFileTest do
   end
 
   describe "size limits" do
+    setup :use_toml_channel_config
+
     setup %{root: root} do
       File.write!(Path.join(root, "big.png"), String.duplicate("x", 10))
       File.write!(Path.join(root, "small.png"), "xx")
@@ -306,18 +329,8 @@ defmodule CodingAgent.Tools.SendFileTest do
 
   defp put_config(root, channel, settings) do
     path = Path.join(root, "global-config.toml")
-    saved_paths = Application.fetch_env(:lemon_core, :paths)
-    saved_channels = Application.fetch_env(:lemon_core, :gateway_channels)
-    previous = Application.get_env(:lemon_core, :paths, [])
     File.write!(path, "[gateway.#{channel}]\n#{settings}\n")
-    Application.put_env(:lemon_core, :paths, Keyword.put(previous || [], :global_config, path))
-    Application.put_env(:lemon_core, :gateway_channels, [DiscordConfig, TelegramConfig])
-    LemonCore.ConfigCache.invalidate(nil)
-
-    on_exit(fn ->
-      restore_config(:paths, saved_paths)
-      restore_config(:gateway_channels, saved_channels)
-    end)
+    LemonCore.Config.reload()
   end
 
   defp restore_config(key, {:ok, value}), do: Application.put_env(:lemon_core, key, value)

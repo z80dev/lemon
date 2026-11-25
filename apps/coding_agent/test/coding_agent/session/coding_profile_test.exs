@@ -105,6 +105,9 @@ defmodule CodingAgent.Session.CodingProfileTest do
   end
 
   test "prompt refresh cannot reintroduce persona", %{tmp_dir: root} do
+    workspace = Path.join(root, "workspace")
+    File.mkdir_p!(workspace)
+
     parent = self()
     response = LemonAgent.Test.Mocks.assistant_message("done")
     stream = LemonAgent.Test.Mocks.mock_stream_fn_single(response)
@@ -115,7 +118,7 @@ defmodule CodingAgent.Session.CodingProfileTest do
     end
 
     session = start_session(root, stream_fn: stream_fn)
-    File.write!(Path.join(root, "workspace/SOUL.md"), "Persona must not return on refresh")
+    File.write!(Path.join(workspace, "SOUL.md"), "Persona must not return on refresh")
     :ok = Session.prompt(session, "Inspect the repository")
     assert_receive {:request_prompt, prompt}, 5_000
     refute prompt =~ "Persona must not return on refresh"

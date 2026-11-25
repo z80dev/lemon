@@ -18,7 +18,9 @@ defmodule CodingAgent.ToolRegistryRestrictedProfilesTest do
     {:contributed_satellite_tool, __MODULE__.Contributed}
   ]
 
-  for {name, module} <- @satellites do
+  @sms_tool {:sms_list_messages, __MODULE__.SmsListMessages}
+
+  for {name, module} <- [@sms_tool | @satellites] do
     defmodule module do
       @moduledoc false
       def tool(_cwd, _opts) do
@@ -58,8 +60,8 @@ defmodule CodingAgent.ToolRegistryRestrictedProfilesTest do
     end
   end
 
-  test "a satellite cannot register a platform tool's name" do
-    for name <- [:read, :sms_list_messages, :submit_result, :tool_invoke] do
+  test "a satellite cannot register a tool reserved for platform builders" do
+    for name <- [:read, :discord_send_file, :submit_result, :tool_invoke] do
       assert_raise ArgumentError, fn ->
         LemonAgent.ToolRegistry.register(name, __MODULE__.Contributed)
       end
@@ -86,7 +88,19 @@ defmodule CodingAgent.ToolRegistryRestrictedProfilesTest do
     for name <- @satellite_names, do: assert(name in available)
   end
 
-  test "restricted profiles build no satellite or peer tool, but keep agent_message",
+  test "the SMS ingress satellite can register its classified tool", %{tmp_dir: cwd} do
+    {name, module} = @sms_tool
+
+    assert :ok =
+             LemonAgent.ToolRegistry.register(name, module, native_process_ownership: :managed)
+
+    assert {:ok, %{classes: [:external]}} = LemonCore.ToolCatalog.fetch("sms_list_messages")
+    assert "sms_list_messages" in names(cwd, ToolPolicy.from_profile(:full_access), mcp_tools: [])
+
+    refute "sms_list_messages" in names(cwd, ToolPolicy.from_profile(:no_external), mcp_tools: [])
+  end
+
+  test "restricted profiles build no unclassified satellite or peer tool, but keep agent_message",
        %{tmp_dir: cwd} do
     for profile <- @restricted do
       available = names(cwd, ToolPolicy.from_profile(profile), mcp_tools: [])
