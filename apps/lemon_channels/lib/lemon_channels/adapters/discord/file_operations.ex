@@ -248,7 +248,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   def send_file_to_channel(channel_id, path, filename) when is_integer(channel_id) do
     api =
       cfg_get(
-        LemonChannels.GatewayConfig.get(:discord, %{}) || %{},
+        LemonCore.GatewayConfig.get(:discord, %{}) || %{},
         :api_mod,
         Nostrum.Api.Message
       )

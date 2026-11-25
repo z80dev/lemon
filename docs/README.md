@@ -64,8 +64,7 @@ overview and the app guides below, rather than keeping a second runtime catalog.
 
 - [Add a channel](getting-started/add-a-channel.md) and [lemon_gateway](platform/lemon_gateway.md)
 - [Lemon in Tern](user-guide/tern.md)
-- [OpenAI-compatible API](tools/openai-compatible-api.md), [ACP](tools/acp.md),
-  [extensions/MCP clients](extensions.md)
+- [ACP](tools/acp.md), [extensions/MCP clients](extensions.md)
 - [Delegating to omp](user-guide/omp.md): run, watch, steer and resume omp sessions
 - [A2A peers](user-guide/a2a-peers.md) and [Honcho memory](user-guide/honcho.md)
 
@@ -76,7 +75,7 @@ overview and the app guides below, rather than keeping a second runtime catalog.
 - Architecture: [overview](architecture/overview.md), [app boundaries](architecture_boundaries.md),
   [BEAM lifecycle invariants](beam_agents.md), [bus events](platform/bus-events.md)
   and [execution policy](execution-policy.md)
-- [Context](context.md), [assistant bootstrap](assistant_bootstrap_contract.md) and
+- [Assistant bootstrap](assistant_bootstrap_contract.md) and
   [long-running harnesses](long-running-agent-harnesses.md)
 - [Hot reload](runtime-hot-reload.md), [telemetry](telemetry.md) and [error reporting](error-reporting.md)
 - [Testing lanes](testing.md), [deterministic test patterns](testing/deterministic-test-patterns.md),

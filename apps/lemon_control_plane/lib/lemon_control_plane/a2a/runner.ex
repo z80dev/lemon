@@ -253,12 +253,19 @@ defmodule LemonControlPlane.A2A.Runner do
 
   def reconcile(task), do: task
 
+  # An unreadable history leaves the task as stored: reconciliation never
+  # resumes a submission it could not confirm.
   defp submitted_message(task) do
-    task.peer_id
-    |> A2AStore.history(task.context_id, limit: 100)
-    |> Enum.find(fn message ->
-      message.task_id == task.id and message.direction == :inbound and message.role == "ROLE_USER"
-    end)
+    case A2AStore.history(task.peer_id, task.context_id, limit: 100) do
+      {:ok, messages} ->
+        Enum.find(messages, fn message ->
+          message.task_id == task.id and message.direction == :inbound and
+            message.role == "ROLE_USER"
+        end)
+
+      {:error, _reason} ->
+        nil
+    end
   end
 
   defp execute(task, context, peer, config, text, lease_id) do
@@ -521,6 +528,7 @@ defmodule LemonControlPlane.A2A.Runner do
     try do
       case completed_from_store(run_id) do
         {:ok, _} = complete -> complete
+        {:error, _} = complete -> complete
         :running -> wait_event(timeout_ms)
       end
     after
@@ -540,10 +548,30 @@ defmodule LemonControlPlane.A2A.Runner do
   defp completed_from_store(run_id) do
     case RunStore.get(run_id) do
       %{summary: %{completed: completed}} when not is_nil(completed) -> completion(completed)
-      _ -> :running
+      _ -> completion_from_receipt(run_id)
     end
   rescue
     _ -> :running
+  end
+
+  defp completion_from_receipt(run_id) do
+    case LemonCore.RouterBridge.run_receipt(run_id) do
+      {:ok, %{state: :aborted}} ->
+        {:error, :canceled}
+
+      {:ok, %{state: :rejected}} ->
+        {:error, :run_failed}
+
+      {:ok, %{state: :terminal}} ->
+        # Reading the receipt may have just settled the orphan's run record.
+        case RunStore.get(run_id) do
+          %{summary: %{completed: completed}} when not is_nil(completed) -> completion(completed)
+          _ -> {:error, :run_failed}
+        end
+
+      _ ->
+        :running
+    end
   end
 
   defp completion(payload) do

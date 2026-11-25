@@ -40,6 +40,68 @@ defmodule LemonCore.Runtime.HealthTest do
     end
   end
 
+  describe "check/2" do
+    test "names the missing applications of an unhealthy Lemon runtime" do
+      for {status, body, expected} <- [
+            {"200 OK", ~s({"ok":true}), {:ok, :healthy}},
+            {"503 Service Unavailable", ~s({"ok":false,"missing":["lemon_web"]}),
+             {:error, {:unhealthy, ["lemon_web"]}}},
+            {"503 Service Unavailable", ~s({"ok":false,"missing":[]}), {:error, :bad_response}},
+            {"503 Service Unavailable", ~s({"ok":false,"missing":["Not An App"]}),
+             {:error, :bad_response}},
+            {"500 Internal Server Error", ~s({"ok":false}), {:error, :bad_response}}
+          ] do
+        {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+        {:ok, port} = :inet.port(listener)
+
+        server =
+          Task.async(fn ->
+            {:ok, socket} = :gen_tcp.accept(listener)
+            {:ok, _request} = :gen_tcp.recv(socket, 0, 1_000)
+
+            :ok =
+              :gen_tcp.send(
+                socket,
+                "HTTP/1.1 #{status}\r\nContent-Length: #{byte_size(body)}\r\n\r\n#{body}"
+              )
+
+            :gen_tcp.close(socket)
+          end)
+
+        assert Health.check(port, timeout_ms: 1_000) == expected
+        Task.await(server)
+        :gen_tcp.close(listener)
+      end
+    end
+  end
+
+  describe "runtime_status/1" do
+    test "a node that runs no profile has no expected applications" do
+      assert Health.runtime_status(profile: :none) == %{ok: true, profile: nil, missing: []}
+    end
+
+    test "an unknown configured profile is unhealthy" do
+      assert %{ok: false, error: :unknown_profile} =
+               Health.runtime_status(profile: {:error, :unknown_profile})
+    end
+
+    test "a profile expects exactly its :permanent applications" do
+      %{profile: :runtime_full, missing: missing, ok: ok} =
+        Health.runtime_status(profile: {:ok, :runtime_full})
+
+      assert missing -- LemonCore.Runtime.Profile.running_apps(:runtime_full) == []
+      assert ok == (missing == [])
+      refute :lemon_mcp in missing
+    end
+
+    test "the :apps option names the expected applications" do
+      assert %{ok: true, missing: []} = Health.runtime_status(apps: [:kernel])
+
+      assert %{ok: false, missing: [:nonexistent_app_xyz]} =
+               Health.runtime_status(apps: [:kernel, :nonexistent_app_xyz])
+    end
+  end
+
   describe "await/2" do
     test "returns {:error, :timeout} when port is closed" do
       assert {:error, :timeout} = Health.await(19_998, timeout_ms: 300)

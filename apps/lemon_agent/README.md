@@ -97,9 +97,7 @@ options are documented in each module's `@moduledoc`/`@doc`.
 | `LemonAgent.Application` | `lib/lemon_agent/application.ex` | The supervision tree above. |
 | `LemonAgent.Loop` | `lib/lemon_agent/loop.ex` | Stateless agent loop (`stream/4`, `stream_continue/3`). Internal `Loop.Streaming` streams the provider response; internal `Loop.ToolCalls` runs supervised tool tasks, overlapping only `parallel_safe: true` tools. |
 | `LemonAgent.EventStream` | `lib/lemon_agent/event_stream.ex` | Published facade over the single `LemonAi.EventStream` implementation; preserves agent terminal events, cooperative abort and cancellation draining. |
-| `LemonAgent.Context` | `lib/lemon_agent/context.ex` | Context-window size estimates, warnings and truncation that keeps tool-call/result transcripts atomic. |
 | `LemonAgent.AbortSignal` | `lib/lemon_agent/abort_signal.ex` | Atomics-backed, monotonic cooperative cancellation with `{:lemon_abort, signal, :abort \| :redirect}` notifications. |
-| `LemonAgent.Proxy` | `lib/lemon_agent/proxy.ex` | SSE proxy stream function (`ProxyStreamOptions`) for routing model calls through a server. |
 | `LemonAgent.ModelRuntime.ProviderConfiguration` | `lib/lemon_agent/model_runtime/provider_configuration.ex` | Comment-preserving provider fallback/pool mutations with revision-checked previews and exact destructive confirmation. |
 | `LemonAgent.Types` | `lib/lemon_agent/types.ex` | Core types and the nested `AgentTool`, `AgentToolResult`, `AgentContext`, `AgentState` and `AgentLoopConfig` structs. |
 
@@ -297,7 +295,6 @@ The library emits telemetry events under the `[:lemon_agent, ...]` prefix:
 - `[:lemon_agent, :tool_task, :start]` / `[:lemon_agent, :tool_task, :end]` / `[:lemon_agent, :tool_task, :error]` -- Individual tool execution.
 - `[:lemon_agent, :tool_call, :start | :stop | :exception]` -- Content-free tool outcomes with native monotonic timing.
 - `[:lemon_agent, :tool_result, :emit]` -- Tool result emission.
-- `[:lemon_agent, :context, :size]` / `[:lemon_agent, :context, :warning]` / `[:lemon_agent, :context, :truncated]` -- Context management.
 
 Optional `LemonAgent.GenAISpans` handlers export model and tool spans with GenAI
 attributes. Export is off by default, has no required OpenTelemetry dependency,
@@ -419,42 +416,6 @@ while the hard ceiling never resets. Either may be `:infinity`. Whole-run event
 streams disable both timers so a long-running tool is not mistaken for a stalled
 provider. Standalone `LemonAgent.EventStream` instances expose these as
 `:idle_timeout` and `:timeout` with the same defaults.
-
-### Context Management
-
-```elixir
-transform = LemonAgent.Context.make_transform(
-  max_messages: 50,
-  max_chars: 200_000
-)
-
-config = %LemonAgent.Types.AgentLoopConfig{
-  transform_context: transform,
-  model: model,
-  convert_to_llm: &my_convert/1
-}
-
-# Standalone usage
-size = LemonAgent.Context.estimate_size(messages, system_prompt)
-{truncated, dropped} = LemonAgent.Context.truncate(messages, max_messages: 50)
-stats = LemonAgent.Context.stats(messages, system_prompt)
-```
-
-### Proxy Streaming
-
-```elixir
-config = %LemonAgent.Types.AgentLoopConfig{
-  model: model,
-  convert_to_llm: &my_convert/1,
-  stream_fn: fn model, context, opts ->
-    LemonAgent.Proxy.stream_proxy(model, context, %LemonAgent.Proxy.ProxyStreamOptions{
-      auth_token: get_auth_token(),
-      proxy_url: "https://genai.example.com",
-      reasoning: opts.reasoning
-    })
-  end
-}
-```
 
 ### Using EventStream Directly
 

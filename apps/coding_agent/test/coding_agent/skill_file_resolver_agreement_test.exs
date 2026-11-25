@@ -52,7 +52,7 @@ defmodule CodingAgent.SkillFileResolverAgreementTest do
     create_skill(Config.project_skills_dir(cwd), "agree-off")
     authorize_skill!(bundle, {:project, cwd})
     authorize_skill!(Path.join(Config.project_skills_dir(cwd), "agree-off"), {:project, cwd})
-    assert :ok = Config.save_config(%{"disabled" => ["agree-off"]}, false, cwd)
+    assert :ok = Config.disable("agree-off", global: false, cwd: cwd)
     LemonSkills.refresh(cwd: cwd)
 
     cases = [

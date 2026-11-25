@@ -28,7 +28,7 @@ defmodule LemonCore.Config do
             gateway: %{},
             agents: %{},
             memory: %{auto_recall: true, write_approval: false},
-            skills: %{write_approval: false, allowed_private_git_hosts: []},
+            skills: %{write_approval: false, allowed_private_git_hosts: [], learning_nudge: %{}},
             secrets: %LemonCore.Config.Secrets{},
             provenance: nil
 
@@ -54,7 +54,11 @@ defmodule LemonCore.Config do
           gateway: map(),
           agents: map(),
           memory: %{auto_recall: boolean(), write_approval: boolean()},
-          skills: %{write_approval: boolean(), allowed_private_git_hosts: [String.t()]},
+          skills: %{
+            write_approval: boolean(),
+            allowed_private_git_hosts: [String.t()],
+            learning_nudge: map()
+          },
           secrets: LemonCore.Config.Secrets.t(),
           provenance: provenance() | nil
         }

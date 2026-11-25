@@ -75,9 +75,9 @@ Background review (including draft creation) cannot bypass the gate and fails
 closed when enabled; interactive denials leave targets unchanged. See the
 [configuration reference](../../docs/config.md#memory).
 
-The existing global/project `skills.json` configuration accepts
-`learning_nudge.enabled` (default `true`), `memory_turn_interval` (10), and
-`skill_tool_threshold` (15). See the
+`[skills.learning_nudge]` in `config.toml` accepts `enabled` (default `true`),
+`memory_turn_interval` (10), and `skill_tool_threshold` (15); a project config can
+only narrow it. See the
 [user guide](../../docs/user-guide/skills.md#learning-reminders) for cadence and
 configuration examples.
 
@@ -136,7 +136,8 @@ automatically replay. A definite failure (`:stale_destination`,
 rollback) returns that reason, removes the staging directory and frees the
 mutation id, so the same mutation can be applied again. The frozen source
 snapshot is released with the receipt when it shares the destination Store, and
-by `release/5` (the controller calls it for a local source) otherwise; the Store
+by `release/5` otherwise: the controller calls it for a local source and through
+the source worker's `memory.transfer.release` for a remote one. The Store
 TTL, scope erasure and retention bound it in every case. Runtime provider/model/session/tool labels retain bounded
 noncontrol UTF-8 namespaces, including slash names. Allowed learned provenance
 atom keys/type labels are normalized to JSON strings without changing summaries.
@@ -689,29 +690,26 @@ mix lemon.skill info <key>                    # Show skill details
 | `LEMON_MCP_EXTERNAL_USER_DISCOVERY` | Set to `1`/`true`/`yes` to import other tools' user-level MCP configs |
 | `LEMON_HARNESS_SKILLS_DIR` | Override the harness-compatible global skills directory |
 
-### Configuration Files
+### Skill State Files
 
-Skills configuration is stored in JSON files:
+Skill state (not settings) is stored in JSON files:
 
 - **Global**: `~/.lemon/agent/skills.json`
 - **Project**: `<cwd>/.lemon/skills.json`
 
-The global file is authoritative. A project file arrives with the repository,
-so it can only narrow it: its `disabled` keys are added to the global list,
-`learning_nudge.enabled` may only be `false`, and the nudge intervals may only
-grow. Per-skill `skills` settings, `learning_nudge.background_review` and every
-other project key are ignored (see `LemonSkills.Config.load_config/1`).
-
 ```json
 {
-  "disabled": ["skill-key-1", "skill-key-2"],
-  "skills": {
-    "my-skill": {
-      "custom_setting": "value"
-    }
-  }
+  "disabled": ["skill-key-1", "skill-key-2"]
 }
 ```
+
+The effective disabled set is the global list united with the project list
+(`LemonSkills.Config.disabled_keys/1`): a project file arrives with the
+repository, so it can only add keys. A project-scope `enable/2` never lifts a
+global disable or an archive. Writes are atomic under the file's lock. A present
+file that cannot be read, is not a JSON object, or has a non-list `disabled`
+fails closed: every skill reads as disabled and `lemon doctor` reports the file.
+Other keys are ignored; `learning_nudge` settings belong in `config.toml`.
 
 ## Dependencies
 
@@ -722,7 +720,7 @@ other project key are ignored (see `LemonSkills.Config.load_config/1`).
 | `lemon_ai` | umbrella | AI types (`TextContent`) used in tool results; the model call behind the optional LLM audit |
 | `lemon_memory` | umbrella | Durable memory behind the `remember` and `recall` tools |
 | `lemon_media` | umbrella | Media job records and artifacts behind the media tools |
-| `jason` | hex | JSON encoding/decoding for `skills.json` configuration files |
+| `jason` | hex | JSON encoding/decoding for `skills.json` state files |
 | `phoenix_pubsub` | hex | Broadcasts skill and media lifecycle events on `LemonCore.PubSub` |
 | `req` | hex | HTTP client for the media provider APIs |
 

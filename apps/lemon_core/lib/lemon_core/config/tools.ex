@@ -90,6 +90,8 @@ defmodule LemonCore.Config.Tools do
           enabled: boolean(),
           provider: String.t(),
           api_key: String.t() | nil,
+          api_key_secret: String.t() | nil,
+          providers: map(),
           max_results: integer(),
           timeout_seconds: integer(),
           cache_ttl_minutes: integer(),
@@ -99,6 +101,7 @@ defmodule LemonCore.Config.Tools do
           },
           perplexity: %{
             api_key: String.t() | nil,
+            api_key_secret: String.t() | nil,
             base_url: String.t() | nil,
             model: String.t()
           }
@@ -115,9 +118,11 @@ defmodule LemonCore.Config.Tools do
           readability: boolean(),
           allow_private_network: boolean(),
           allowed_hostnames: [String.t()],
+          providers: map(),
           firecrawl: %{
             enabled: boolean() | nil,
             api_key: String.t() | nil,
+            api_key_secret: String.t() | nil,
             base_url: String.t(),
             only_main_content: boolean(),
             max_age_ms: integer(),

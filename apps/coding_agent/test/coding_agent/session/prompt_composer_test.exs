@@ -104,6 +104,9 @@ defmodule CodingAgent.Session.PromptComposerTest do
   end
 
   test "date, branch and dirty-file changes never change the system bytes", %{tmp_dir: cwd} do
+    # Global skills, rules and assistant-home files come from the agent
+    # directory; a private one keeps other tests' writes out of both prompts.
+    isolate_agent_dir!(cwd)
     git = System.find_executable("git") || flunk("Git is required")
     {_, 0} = System.cmd(git, ["init", "-q", "-b", "before", cwd])
     workspace = Path.join(cwd, "workspace")

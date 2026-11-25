@@ -11,7 +11,7 @@ The configuration system has been refactored from a monolithic 1253-line module 
 | `Helpers` | Environment variable utilities | 66 |
 | `Agent` | Agent behavior settings | 17 |
 | `Tools` | Web tool configuration | 25 |
-| `Gateway` | Engine bindings, queueing, channel sections | 22 |
+| `Gateway` | Engine bindings, projects, channel sections | 22 |
 | `Logging` | Log file and rotation settings | 20 |
 | `TUI` | Terminal UI theme and debug | 12 |
 | `Providers` | LLM provider configurations | 18 |
@@ -186,7 +186,6 @@ Gateway configuration:
 - `default_cwd` - Default working directory
 - `enable_webhook` - Enable the generic webhook transport
 - `bindings` - Transport bindings
-- `queue` - Queue management
 - `enabled_channels` / `channels` - Per-platform flags and sections, resolved
   by the modules registered under `config :lemon_core, :gateway_channels`.
   `LemonCore.Config` flattens both onto the legacy map as `gateway[:enable_<id>]`

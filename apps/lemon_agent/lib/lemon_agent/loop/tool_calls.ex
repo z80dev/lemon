@@ -72,7 +72,7 @@ defmodule LemonAgent.Loop.ToolCalls do
         # Every abnormal exit cancels the batch before the failure propagates.
         AbortSignal.abort(signal)
         {pending_by_ref, pending_by_mon} = Process.get(@pending_tools_key)
-        stop_aborted_tools(pending_by_ref, pending_by_mon, tool_task_supervisor)
+        _ = stop_aborted_tools(pending_by_ref, pending_by_mon, tool_task_supervisor)
         :erlang.raise(kind, reason, __STACKTRACE__)
     after
       if reaper, do: ToolReaper.stop(reaper)
@@ -1220,7 +1220,7 @@ defmodule LemonAgent.Loop.ToolCalls do
       )
 
     Enum.each(remaining, fn {_ref, pending} ->
-      Task.Supervisor.terminate_child(supervisor, pending.pid)
+      _ = Task.Supervisor.terminate_child(supervisor, pending.pid)
       Process.demonitor(pending.mon_ref, [:flush])
     end)
 

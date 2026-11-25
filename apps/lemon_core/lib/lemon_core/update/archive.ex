@@ -13,7 +13,8 @@ defmodule LemonCore.Update.Archive do
   @default_table_timeout_ms 60_000
 
   @spec preflight(
-          {String.t(), String.t() | nil} | {String.t(), String.t() | nil, String.t() | nil},
+          {String.t() | nil, String.t() | nil}
+          | {String.t() | nil, String.t() | nil, String.t() | nil},
           keyword()
         ) ::
           :ok | {:error, term()}

@@ -7,8 +7,6 @@ defmodule LemonControlPlane.SessionEventReplayTest do
   alias LemonCore.{AgentRuntime, Event}
 
   defmodule Runtime do
-    @behaviour LemonCore.AgentRuntime.Provider
-
     def session_event_replay(key, cursor, limit) do
       state =
         Agent.get_and_update(owner(), fn state ->
@@ -50,7 +48,6 @@ defmodule LemonControlPlane.SessionEventReplayTest do
   end
 
   defmodule MissingRuntime do
-    @behaviour LemonCore.AgentRuntime.Provider
   end
 
   setup do
@@ -76,7 +73,7 @@ defmodule LemonControlPlane.SessionEventReplayTest do
       )
 
     Application.put_env(:lemon_control_plane, Runtime, state)
-    :ok = AgentRuntime.register(Runtime)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, Runtime)
     if is_nil(Process.whereis(Registry)), do: start_supervised!(Registry)
     if is_nil(Process.whereis(Connections)), do: start_supervised!(Connections)
     if is_nil(Process.whereis(EventBridge)), do: start_supervised!(EventBridge)
@@ -89,7 +86,7 @@ defmodule LemonControlPlane.SessionEventReplayTest do
     %{key: key, state: state, conn_id: conn_id, cursor: initial}
   end
 
-  test "method, schema, event, and optional provider callback are registered", c do
+  test "method, schema, event, and required provider callback are registered", c do
     assert Registry.lookup("sessions.events") == {:ok, SessionsEvents}
     assert Registry.dispatch_mode("sessions.events") == :async
     assert SessionsEvents.scopes() == [:read]
@@ -98,6 +95,10 @@ defmodule LemonControlPlane.SessionEventReplayTest do
     assert "session.event" in Frames.supported_events()
 
     assert {:session_event_replay, 3} in LemonCore.AgentRuntime.Provider.behaviour_info(
+             :callbacks
+           )
+
+    refute {:session_event_replay, 3} in LemonCore.AgentRuntime.Provider.behaviour_info(
              :optional_callbacks
            )
 
@@ -264,7 +265,7 @@ defmodule LemonControlPlane.SessionEventReplayTest do
                SessionsEvents.handle(params(c), ctx())
     end
 
-    :ok = AgentRuntime.register(MissingRuntime)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, MissingRuntime)
     assert {:error, {:unavailable, _, nil}} = SessionsEvents.handle(params(c), ctx())
     Application.delete_env(:lemon_core, :agent_runtime_provider)
     assert {:error, {:unavailable, _, nil}} = SessionsEvents.handle(params(c), ctx())

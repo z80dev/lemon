@@ -10,6 +10,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- Typespecs corrected so the package is Dialyzer-clean (#734):
+  `LemonAi.EventStream.push/2` and `push_async/2` accept any event term;
+  `Types.AssistantMessage.t()` allows `nil` `usage` and `stop_reason`;
+  `Types.ModelCost.t()` costs are `number()`; `Providers.GoogleShared`
+  function-declaration types use string keys. No runtime change.
 - **Breaking (0.3.0):** provider streaming is delta-only: events carry deltas,
   accumulation happens once, and deltas are coalesced (#571). Migration:
   consumers that read accumulated partial messages from every event must

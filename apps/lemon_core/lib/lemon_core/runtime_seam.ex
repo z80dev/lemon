@@ -9,8 +9,9 @@ defmodule LemonCore.RuntimeSeam do
 
   A missing callback is distinct from a callback that raises, exits or throws.
   Mutating bridges must select `{:error, :outcome_unknown}` for all reached-call
-  failures; this helper never retries a callback. Failure logging includes only
-  the callback MFA and a fixed failure class, never arguments or exception terms.
+  failures; this helper never retries a callback. Every reached-call failure is
+  logged once, with only the callback MFA and a fixed failure class, never
+  arguments or exception terms.
   """
 
   require Logger
@@ -88,9 +89,14 @@ defmodule LemonCore.RuntimeSeam do
   @doc """
   Calls an optional implementation with explicit per-failure return values.
 
-  Options are `:unavailable`, `:missing`, `:exception`, `:exit`, `:throw` and an optional
-  `:log` label. Unspecified failure values default to `:unavailable`'s value.
-  Callback results are returned unchanged for domain-level acknowledgement checks.
+  Options are `:unavailable`, `:missing`, `:exception`, `:exit` and `:throw`.
+  Unspecified failure values default to `:unavailable`'s value. Callback results
+  are returned unchanged for domain-level acknowledgement checks.
+
+  A callback that raises, exits or throws is always logged once: `:log` sets the
+  label (default `"RuntimeSeam"`), and `:log_level` (`:error` or `:warning`)
+  overrides the default of `:warning` for exits and `:error` otherwise. An
+  absent implementation or callback was never reached and is not logged.
   """
   def invoke(module, function, args, opts) do
     cond do
@@ -111,20 +117,17 @@ defmodule LemonCore.RuntimeSeam do
   end
 
   defp failed(module, function, args, opts, kind, failure_class) do
-    case Keyword.get(opts, :log) do
-      nil -> :ok
-      label -> log_failure(label, module, function, args, kind, failure_class)
-    end
+    label = Keyword.get(opts, :log, "RuntimeSeam")
+    default_level = if kind == :exit, do: :warning, else: :error
+    level = Keyword.get(opts, :log_level, default_level)
 
-    Keyword.get(opts, kind, Keyword.get(opts, :unavailable))
-  end
-
-  defp log_failure(label, module, function, args, kind, failure_class) do
-    message =
+    Logger.log(
+      level,
       "#{label} callback failed callback=#{Exception.format_mfa(module, function, length(args))} " <>
         "failure_class=#{failure_class}"
+    )
 
-    if kind == :exit, do: Logger.warning(message), else: Logger.error(message)
+    Keyword.get(opts, kind, Keyword.get(opts, :unavailable))
   end
 
   defp exit_class(:noproc), do: :no_process

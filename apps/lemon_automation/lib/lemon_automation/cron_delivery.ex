@@ -266,14 +266,5 @@ defmodule LemonAutomation.CronDelivery do
 
   defp field(map, key), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
 
-  # Same source order as `LemonChannels.GatewayConfig`: a full-replacement
-  # config held by the running gateway wins over the canonical TOML config.
-  defp gateway(key) do
-    case LemonCore.EngineInfoBridge.gateway_config() do
-      {:ok, config} -> GatewayConfig.fetch(config, key, nil)
-      :none -> GatewayConfig.get(key, nil)
-    end
-  rescue
-    _ -> nil
-  end
+  defp gateway(key), do: GatewayConfig.get(key, nil)
 end

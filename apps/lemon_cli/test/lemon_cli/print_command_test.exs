@@ -8,7 +8,7 @@ defmodule LemonCli.PrintCommandTest do
 
     def call(:print_connection, "agent", params) do
       send(self(), {:print_submission, params})
-      {:ok, %{"run_id" => "print-run"}}
+      {:ok, %{"runId" => "print-run"}}
     end
 
     def call(:print_connection, "chat.abort", params) do
@@ -45,7 +45,7 @@ defmodule LemonCli.PrintCommandTest do
 
     assert_receive {:print_timeout, timeout}
     assert timeout in 1_199_000..1_200_000
-    assert_receive {:print_submission, %{"project_memory_capture" => false}}
+    assert_receive {:print_submission, %{"project_memory_capture" => false, "sessionKey" => _}}
     assert_receive {:print_abort, %{"runId" => "print-run"}}
     assert_receive :print_closed
     assert %{"ok" => false, "error" => "timeout"} = Jason.decode!(output)

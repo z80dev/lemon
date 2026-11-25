@@ -205,8 +205,6 @@ defmodule LemonGateway.Health do
   end
 
   defp xmtp_enabled? do
-    LemonGateway.Config.get_or_env(:enable_xmtp, false) == true
-  rescue
-    _ -> false
+    LemonCore.GatewayConfig.get(:enable_xmtp, false) == true
   end
 end

@@ -566,7 +566,7 @@ defmodule LemonCore.Backup do
       try do
         copy_chunks(input, output, :crypto.hash_init(:sha256))
       after
-        File.close(input)
+        _ = File.close(input)
         File.close(output)
       end
     end
@@ -661,7 +661,6 @@ defmodule LemonCore.Backup do
          {:ok, manifest} <- Jason.decode(bytes) do
       {:ok, manifest, expected}
     else
-      false -> {:error, :manifest_checksum_mismatch}
       {:error, %Jason.DecodeError{}} -> {:error, :invalid_manifest_json}
       {:error, reason} -> {:error, reason}
     end
@@ -721,7 +720,6 @@ defmodule LemonCore.Backup do
                  {:error, :invalid_total_bytes} do
           {:ok, entries}
         else
-          false -> {:error, :invalid_total_bytes}
           {:error, reason} -> {:error, reason}
         end
     end
@@ -799,7 +797,6 @@ defmodule LemonCore.Backup do
          true <- MapSet.equal?(expected, actual_set) || {:error, :bundle_file_set_mismatch} do
       :ok
     else
-      false -> {:error, :bundle_file_set_mismatch}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -979,7 +976,6 @@ defmodule LemonCore.Backup do
            :ok <- chmod_and_sync(destination, entry["mode"]) do
         {:cont, :ok}
       else
-        false -> {:halt, {:error, :file_checksum_mismatch}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
@@ -1391,14 +1387,14 @@ defmodule LemonCore.Backup do
       :ok ->
         try do
           if not live_pid_file?(Path.join(lock, "owner")) do
-            File.rm(Path.join(lock, "owner"))
-            File.rm(Path.join(lock, "target"))
+            _ = File.rm(Path.join(lock, "owner"))
+            _ = File.rm(Path.join(lock, "target"))
             true
           else
             false
           end
         after
-          File.rmdir(reaping)
+          _ = File.rmdir(reaping)
           File.rmdir(lock)
         end
 
@@ -1422,10 +1418,10 @@ defmodule LemonCore.Backup do
       try do
         :ok = IO.binwrite(io, "pid=#{System.pid()}\n")
         :ok = :file.sync(io)
-        File.chmod(lock, 0o600)
+        _ = File.chmod(lock, 0o600)
         fun.()
       after
-        File.close(io)
+        _ = File.close(io)
         File.rm(lock)
       end
     else
@@ -1559,7 +1555,6 @@ defmodule LemonCore.Backup do
       {:ok, bytes}
     else
       {:ok, %File.Stat{}} -> {:error, :unsafe_manifest_file}
-      false -> {:error, :manifest_too_large}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -1659,9 +1654,9 @@ defmodule LemonCore.Backup do
   end
 
   defp remove_partial(path) do
-    if is_binary(path) and String.contains?(Path.basename(path), [".partial.", ".pre-restore."]) do
-      File.rm_rf(path)
-    end
+    _ =
+      if String.contains?(Path.basename(path), [".partial.", ".pre-restore."]),
+        do: File.rm_rf(path)
 
     :ok
   end
@@ -1671,7 +1666,7 @@ defmodule LemonCore.Backup do
 
     try do
       with :ok <- write_synced(tmp, bytes),
-           :ok <- if(is_integer(mode), do: chmod_and_sync(tmp, mode), else: :ok),
+           :ok <- chmod_and_sync(tmp, mode),
            :ok <- File.rename(tmp, path),
            :ok <- sync_dir(Path.dirname(path)) do
         :ok

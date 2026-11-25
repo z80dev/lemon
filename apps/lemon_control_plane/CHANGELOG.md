@@ -4,8 +4,22 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** the OpenAI-compatible `/v1` HTTP API, the single-shot
+  `POST /acp` endpoint, their dedicated API-token principals
+  (`Authorize.authenticate_api/3`, `LEMON_ACP_API_TOKEN` and the OpenAI-compat
+  token and image-fetch variables), the `LEMON_CONTROL_PLANE_REMOTE_HTTP`
+  opt-in and the ACP API-workspace confinement they required. The loopback
+  `/acp/ws` transport behind `lemon acp` is unchanged; remote peers reach only
+  `/ws` and `/healthz` (#711).
+
 ### Fixed
 
+- `agent.wait` reports `UNAVAILABLE` when the run store cannot be read instead
+  of waiting out the timeout, never puts a raw exception message in error
+  details, and validates `runId`/`timeoutMs`. `cron.runs` never renders a
+  non-text output term onto the wire (#620).
 - A method with any scope beyond `:read` that raises, throws or whose async task
   dies now answers `INTERNAL_ERROR` with `details.retrySafe: false`, so clients
   never retry a mutation that may already have applied (#616).
@@ -56,6 +70,14 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Changed
 
+- **Breaking:** the `agent` method takes `sessionKey`, `agentId` and `queueMode`
+  (the advertised schema spelling) and an optional fixed `runId`; the old
+  `session_key`, `agent_id` and `queue_mode` are rejected instead of being
+  silently ignored. It submits through the `chat.send` receipt path and returns
+  `runId`, `sessionKey`, `state`, `effectiveMode`, `targetRunId` and
+  `retrySafe: false`. An `agentId` naming a managed profile runs as that
+  profile's chat in its workspace and rejects a caller `cwd`. Unknown queue
+  modes are rejected (#620).
 - `node.process.run`, `.get` and `.cancel` receipts accept the terminal state
   `failed` (null exit and outputs): the destination proved the program never
   started. Terminal receipts now retire on the destination 24 hours after they
@@ -65,8 +87,21 @@ All notable changes to `lemon_control_plane` are documented here.
   LAN deployments must explicitly configure `LEMON_CONTROL_PLANE_BIND_IP` and
   authentication. The separate node gateway defaults to `127.0.0.1:4044`;
   off-loopback OpenAI/ACP HTTP access requires explicit opt-in and dedicated tokens.
+- **Breaking:** `sessions.reset` delegates to `LemonCore.SessionLifecycle.reset/2`
+  and is preview-first. Without `confirmToken` (or with `dryRun: true`) it
+  mutates nothing and returns the state digest and a single-use `confirmToken`;
+  `dryRun: false` with that token resets under the session lifecycle fence.
+  Failures map to `unavailable`/`internal_error` with `retrySafe: false` and no
+  raw exception text (#615).
+- ACP session metadata is stored on the canonical `SessionMetadataStore` record
+  instead of a separate ACP table and is removed with the session; ACP sessions
+  created before this release are not carried over (#652).
 
 ### Fixed
+
+- A method with any scope beyond `:read` that raises, throws or whose async task
+  dies now answers `INTERNAL_ERROR` with `details.retrySafe: false`, so clients
+  never retry a mutation that may already have applied (#616).
 
 - `sessions.snapshot` compares its two owner collections without
   `consistency.eventCursor`: a live event between them returns the newer
@@ -83,11 +118,19 @@ All notable changes to `lemon_control_plane` are documented here.
   `ConfigStore` and `LogRing` reads return tagged results (#619).
 - `memory.transfer` releases a local source's frozen memory snapshot as soon
   as the destination receipt is recorded instead of keeping it indefinitely (#623).
+- `memory.transfer` releases the source's frozen memory snapshot as soon as the
+  destination receipt is recorded instead of keeping it indefinitely: directly
+  for a local source, and through `memory.transfer.release` (best effort, five
+  seconds) for a remote source worker that advertises it (#623).
 - Timeouts, closed openers and unclassified failures of passive node inspections
   (`node.capabilities.get`, `node.runtime.features`, `node.host.info`) are
   retry-safe unavailable reads, not uncertain mutations.
 - Register controller and named-node provider check/import handlers in the RPC
   method registry so clients can discover and invoke model-readiness capabilities.
+- ACP never writes a stored resume token back into `ChatState`, so a reset or
+  deleted session stays empty after a later ACP touch. Session store failures
+  fail closed, and a store write failure after prompt submission returns the
+  run ID with `retrySafe: false` instead of raising (#652).
 
 - Honor the configured HTTP/WebSocket listener IP, including isolated benchmark
   runtimes and explicitly exposed deployments.

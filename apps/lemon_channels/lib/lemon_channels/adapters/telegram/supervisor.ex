@@ -15,7 +15,7 @@ defmodule LemonChannels.Adapters.Telegram.Supervisor do
   def init(opts) do
     # Allow running lemon_channels without any Telegram token configured.
     explicit = Keyword.get(opts, :config)
-    base = LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
+    base = LemonCore.GatewayConfig.get(:telegram, %{}) || %{}
     config = merge_config(base, explicit)
 
     token = config[:bot_token] || config["bot_token"] || resolve_bot_token_secret(config)

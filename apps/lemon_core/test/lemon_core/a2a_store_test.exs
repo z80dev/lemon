@@ -22,7 +22,9 @@ defmodule LemonCore.A2AStoreTest do
     def get(state, table, key), do: EtsBackend.get(state, table, key)
 
     @impl true
-    def list(_state, :a2a_tasks), do: {:error, :disk_read_failed}
+    def list(_state, table) when table in [:a2a_tasks, :a2a_messages],
+      do: {:error, :disk_read_failed}
+
     def list(state, table), do: EtsBackend.list(state, table)
   end
 
@@ -63,7 +65,10 @@ defmodule LemonCore.A2AStoreTest do
                opts
              )
 
-    assert Enum.map(A2AStore.history("hermes", context.id, opts), & &1.text) == ["one", "two"]
+    assert Enum.map(elem(A2AStore.history("hermes", context.id, opts), 1), & &1.text) == [
+             "one",
+             "two"
+           ]
 
     assert {:ok, %{turn_count: 1}} =
              A2AStore.increment_turn(:outbound, "hermes", context.id, opts)
@@ -181,5 +186,6 @@ defmodule LemonCore.A2AStoreTest do
     assert {:error, :store_unavailable} = A2AStore.fetch_task("t1", opts)
     assert {:error, :store_unavailable} = A2AStore.list_tasks("hermes", opts)
     assert {:error, :store_unavailable} = A2AStore.update_task("t1", & &1, opts)
+    assert {:error, :store_unavailable} = A2AStore.history("hermes", "ctx", opts)
   end
 end

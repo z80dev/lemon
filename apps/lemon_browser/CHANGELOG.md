@@ -8,12 +8,6 @@
   `LemonBrowser.Backends.Hybrid`, `LemonBrowser.HybridRouter` and the
   `LEMON_BROWSER_HYBRID_*` settings; neither backend was selectable (#702).
 
-### Fixed
-
-- `TernSession` monitors its Tern client and reconnects on the next request
-  after the client dies, keeping its block; a failed reconnect is a `:connect`
-  error so auto-selected panes can fall back (#661).
-
 ### Added
 
 - Opt-in durable tracking for local browser-driver launches, with external-work
@@ -32,6 +26,10 @@
   inspection helper reports driver builds lacking its exports distinctly.
 
 ### Fixed
+
+- `TernSession` monitors its Tern client and reconnects on the next request
+  after the client dies, keeping its block; a failed reconnect is a `:connect`
+  error so auto-selected panes can fall back (#661).
 
 - The local driver never starts a request after its deadline (requests carry
   `deadlineAtMs`; a queued one answers "timed out before it started"), runs

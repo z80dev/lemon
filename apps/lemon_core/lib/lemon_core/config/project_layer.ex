@@ -38,6 +38,10 @@ defmodule LemonCore.Config.ProjectLayer do
       routing picks the request model after task selection is gated.
     * `runtime.tools.bash.git_guard`, `runtime.secret_obfuscation.enabled`,
       `memory.write_approval`, `skills.write_approval`: only `true`
+    * `skills.learning_nudge.enabled`: only `false`;
+      `skills.learning_nudge.memory_turn_interval` and `skill_tool_threshold`:
+      only at or above the effective operator value (defaults 10 and 15).
+      `skills.learning_nudge.background_review` is operator-only.
     * `memory.auto_recall`: only `false`
     * `features.*`: only `"off"`
     * `runtime.tools.lsp.servers.<id>.disabled`: only `true`
@@ -78,7 +82,15 @@ defmodule LemonCore.Config.ProjectLayer do
       "write_approval" => {:narrow, :true_only},
       "auto_recall" => {:narrow, :false_only}
     },
-    "skills" => %{"write_approval" => {:narrow, :true_only}},
+    "skills" => %{
+      "write_approval" => {:narrow, :true_only},
+      # `background_review` (model, timeouts, turn caps) stays operator-only.
+      "learning_nudge" => %{
+        "enabled" => {:narrow, :false_only},
+        "memory_turn_interval" => {:narrow, {:raise_interval, 10}},
+        "skill_tool_threshold" => {:narrow, {:raise_interval, 15}}
+      }
+    },
     "profiles" => :profiles,
     "runtime" => %{
       "max_tool_turns" => {:narrow, :lower_turns},
@@ -159,7 +171,6 @@ defmodule LemonCore.Config.ProjectLayer do
   end
 
   defp rule_for(rules, key) when is_map(rules), do: Map.get(rules, key, Map.get(rules, :any))
-  defp rule_for(_rules, _key), do: nil
 
   defp apply_rule(nil, _value, _operator, _path), do: {:reject, :operator_only}
   defp apply_rule(:allow, value, _operator, _path), do: {:allow, value}
@@ -227,6 +238,13 @@ defmodule LemonCore.Config.ProjectLayer do
   defp narrow(:true_only, _operator, true), do: {:ok, true}
   defp narrow(:false_only, _operator, false), do: {:ok, false}
   defp narrow(:off_only, _operator, "off"), do: {:ok, "off"}
+
+  # Learning reminder intervals: only less frequent than the effective operator
+  # value (`default` when the operator sets none).
+  defp narrow({:raise_interval, default}, operator, value) when is_integer(value) do
+    current = if is_integer(operator) and operator > 0, do: operator, else: default
+    if value >= current, do: {:ok, value}, else: :error
+  end
 
   defp narrow(:disclosure_profile, _operator, profile) when profile in @disclosure_profiles,
     do: {:ok, profile}

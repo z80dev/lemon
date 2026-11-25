@@ -70,14 +70,11 @@ defmodule LemonControlPlane.Methods.SessionsCompact do
   defp put_optional(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp compact_session(session_key, opts) do
-    case AgentRuntime.call(
-           :compact_session,
-           [session_key, opts],
-           {:error, :session_registry_not_available}
-         ) do
+    case AgentRuntime.mutate(:compact_session, [session_key, opts]) do
       :ok -> :ok
+      {:error, :unavailable} -> {:error, :session_registry_not_available}
       {:error, reason} -> {:error, reason}
-      _ -> {:error, :unexpected_compaction_result}
+      _ -> {:error, :outcome_unknown}
     end
   end
 

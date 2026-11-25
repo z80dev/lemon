@@ -253,7 +253,7 @@ defmodule LemonCore.Rpc.Client do
         {nil, data}
 
       {entry, pending} ->
-        if entry.timer, do: Process.cancel_timer(entry.timer)
+        _ = if entry.timer, do: Process.cancel_timer(entry.timer)
         Process.demonitor(entry.monitor, [:flush])
         send(data.owner, {:rpc_finished, id, reason})
         {entry, %{data | pending: pending}}

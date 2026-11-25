@@ -214,10 +214,32 @@ enable_webhook = false
 enable_xmtp = false
 enable_a2a = false
 
-[gateway.queue]
-mode = "collect"
-cap = 50
-drop = "oldest"
+# Gateway-native HTTP listeners are off unless opted in at startup.
+# LEMON_GATEWAY_INGRESS_ENABLED can override this boolean.
+[gateway.ingress]
+enabled = false
+
+# Generic webhook also needs [gateway] enable_webhook = true.
+# [gateway.webhook]
+# port = 4046
+# [gateway.webhook.integrations.example]
+## Add token = "<your strong random secret>" before enabling this integration.
+# mode = "async"
+# agent_id = "default"
+
+# [gateway.sms]
+# webhook_enabled = true
+# webhook_port = 4041
+# webhook_url = "https://sms.example.com/webhooks/twilio/sms"
+# auth_token_secret = "twilio_auth_token"
+
+# [gateway.voice]
+# enabled = true
+# websocket_port = 4047
+# public_url = "https://voice.example.com"
+# twilio_auth_token_secret = "twilio_auth_token"
+# deepgram_api_key_secret = "deepgram_api_key"
+# elevenlabs_api_key_secret = "elevenlabs_api_key"
 
 # [gateway.telegram]
 # bot_token_secret = "TELEGRAM_BOT_TOKEN"

@@ -14,6 +14,7 @@ System.put_env("HOME", home)
 Code.require_file("support/http_mock.ex", __DIR__)
 Code.require_file("support/test_git_repo.ex", __DIR__)
 Code.require_file("support/fake_ssh.ex", __DIR__)
+Code.require_file("support/learning_nudge_config.ex", __DIR__)
 
 # Wire up the deterministic HTTP mock so Discovery tests don't need real HTTP.
 Application.put_env(:lemon_skills, :http_client, LemonSkills.HttpClient.Mock)

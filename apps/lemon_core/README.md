@@ -100,6 +100,23 @@ set by `LemonCore.CLI.start/2`): no `RuntimeOwner`, `RunHistoryStore`,
 `ConfigReloader`, `Watcher` or `Drain` (no SIGTERM trap), Store sweeps off, and
 `ExecApprovalExpiry` with `recover: false`; see `LemonCore.Application`.
 
+`config :lemon_core, :services` selects service groups: `:core` (always:
+`RuntimeCache`, `RuntimeLatch`, dedupe, the Bus, `ConfigCache`, `Store` and the
+secrets helpers), `:runtime_control` (`Drain`, `ACPClientBridge`,
+`NodeRegistry`, `RuntimeOwner`, `SessionActivity`, `UsageLedger`,
+`ExecApprovalExpiry`, the config reloader) and `:run_history`
+(`RunHistoryStore`). Unset starts every group. A library consumer that only uses
+the agent and store APIs can start just the core:
+
+```elixir
+config :lemon_core, :services, [:core]
+```
+
+A product that cannot run without durability or a group lists it in
+`config :lemon_core, :required_capabilities` (`:durable_store`, `:run_history`,
+`:runtime_control`); lemon_core then refuses to start, logging the fix, when one
+is unavailable. See `LemonCore.Capabilities`.
+
 Named-node sockets register themselves, so Registry removes dead connections
 without node-monitor bookkeeping. Each temporary `LemonCore.NodeInvocation` owns
 its timeout, recipient/socket monitors, sequence validation and controls.
@@ -244,6 +261,7 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 
 | Module | Purpose |
 |--------|---------|
+| `LemonCore.Capabilities` | Capabilities a product requires at boot (`:durable_store`, `:run_history`, `:runtime_control`); checked before the tree starts |
 | `LemonCore.Idempotency` | At-most-once execution backed by Store; done results expire after 24h, unresolved claims never expire |
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
 | `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events; interactive restores need a random single-use preview token held server-side (`:checkpoint_restore_confirmations`), bound to caller, checkpoint revision, roots and tree fingerprint, with a five-minute TTL |
@@ -266,7 +284,6 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore.ConfinedFS` | Descriptor-bound file operations below a trusted root (port helper `priv/lemon_confined_fs`, built from `c_src/` during `mix compile`): no-follow directory walks (`openat2` `RESOLVE_BENEATH` on Linux), reads, exclusive creates, private-staging atomic replaces, appends, in-place overwrites, rename, unlink, tree removal and chmod relative to walked handles. Inside the Lemon umbrella (and therefore every release) the helper is required and `mix compile` fails without a C compiler and `make`. As a Hex dependency it is built when they are present; otherwise `ConfinedFS.available?/0` is `false` and every operation returns `{:error, :helper_unavailable}`, so confined callers (FileAccess, Checkpoint filesystem restore) fail closed instead of using path-based I/O |
 | `Lemon.Reload` | Published low-level BEAM/extension reload API; see its moduledoc for retained contracts |
 | `LemonCore.CodeReload` | Soft-loads changed BEAM files and invokes the configured session refresher for source-development reload |
-| `LemonCore.Testing` | Test harness builder (Harness, Case, Helpers) |
 | `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
 
 ### Quality
@@ -528,6 +545,8 @@ widget = MyApp.WidgetStore.get(id)
 
 Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and ordinary read/list APIs return `nil`/`[]`. `get/3` and `list/2` are for genuinely optional or display data only and are never an admission, policy, idempotency or verification check. Correctness-sensitive callers use `fetch/3` and `fetch_all/2` to distinguish confirmed absence or an empty table from an unavailable backend.
 
+Whole-table and range reads (`fetch_all/2`, `fetch_keys/2`, `fetch_range/5`, `list/2`, introspection listing) take a read handle from the Store in one short call and then read the backend in the caller's process — SQLite through a private read-only WAL connection — so a large scan never stalls other Store callers. `fetch_range/5` returns rows whose map value has an integer `:at_ms` in `[from, to)` (optionally plus untimed rows); SQLite indexes `:at_ms`. `:runs` cannot be read whole: read runs by id.
+
 For power-loss-sensitive writes, pass `durable: true` to the explicit-server
 mutation arity, for example
 `LemonCore.Store.put(LemonCore.Store, :receipts, id, receipt, durable: true)`.
@@ -588,6 +607,18 @@ inside the Store process. All hooks share a five-second budget, configurable via
 expires; hooks are not automatically retried. Successful persistence still
 returns `:ok` even when a hook fails or times out. Explicit finalization retries
 can redeliver hooks, so implementations must be idempotent by run id.
+
+Run records are bounded. `RunStore.append_event/2` writes each event into a per-run
+buffer (the first 200 and the latest events, 2,000 in all; `:events_dropped`
+counts the rest) instead of rewriting the record; `get/1`/`fetch/1` attach it as
+`:events`, and finalization moves it into the record. The Store sweep evicts a
+finalized run `:runs_retention_ms` (Store config, default 24 hours) after
+finalization. A durable terminal marker in `:run_terminals`
+makes `RunStore.fetch/1` answer `{:error, :evicted}` for a
+finished run whose record is gone, including after a restart drops the
+ephemeral `:runs` table; treat it as finished. Durable per-session history is
+`LemonCore.RunHistoryStore`. Usage pages read only ledger occurrences, never
+`:runs`.
 
 Agent workspace coordination — goals and kanban boards — is built on this Store but lives in `lemon_agent` as `LemonAgent.Workspace.{GoalStore, KanbanStore}`. Heartbeats use automation cron jobs and cron history.
 
@@ -989,6 +1020,9 @@ mix test --cover apps/lemon_core
 
 ### Test Harness
 
+The harness (`LemonCore.Testing*`) serves this repository's own test suites
+and is not part of the published Hex package.
+
 ```elixir
 defmodule MyTest do
   use LemonCore.Testing.Case, async: true
@@ -1000,7 +1034,7 @@ defmodule MyTest do
 end
 ```
 
-Available helpers: `unique_token/0`, `unique_scope/0`, `unique_session_key/0`, `unique_run_id/0`, `temp_file!/3`, `temp_dir!/2`, `clear_store_table/1`, `mock_home!/1`, `random_master_key/0`.
+Available helpers: `unique_token/0`, `unique_scope/0`, `unique_session_key/0`, `unique_run_id/0`, `temp_file!/3`, `temp_dir!/2`, `clear_store_table/1`, `mock_home!/1`, `random_master_key/0`. `use LemonCore.Testing.Case, with_store: true` (or `@tag with_store: true`) starts `LemonCore.Store` for the module (or test).
 
 ## Important Notes
 

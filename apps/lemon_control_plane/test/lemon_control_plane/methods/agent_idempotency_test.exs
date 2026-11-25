@@ -102,8 +102,17 @@ defmodule LemonControlPlane.Methods.AgentIdempotencyTest do
     %{key: key, session_key: session_key}
   end
 
+  # Admits the request for real in the background, then loses the reply the
+  # way a call that outlives its timeout does.
+  defmodule LostReplyRouter do
+    def submit_with_receipt(request) do
+      {:ok, _pid} = Task.start(fn -> LemonRouter.submit_with_receipt(request) end)
+      exit({:timeout, {GenServer, :call, [LemonRouter.RunOrchestrator, :redacted, 20_000]}})
+    end
+  end
+
   defp params(ctx),
-    do: %{"prompt" => "hello", "session_key" => ctx.session_key, "idempotency_key" => ctx.key}
+    do: %{"prompt" => "hello", "sessionKey" => ctx.session_key, "idempotency_key" => ctx.key}
 
   @tag timeout: 60_000
   test "a Store timeout on the idempotency key fails closed and never submits", ctx do
@@ -129,42 +138,56 @@ defmodule LemonControlPlane.Methods.AgentIdempotencyTest do
     assert_receive {:submitted, run_id}, 2_000
     refute_receive {:submitted, _other}, 500
 
-    for {:ok, result} <- results, do: assert(result["run_id"] == run_id)
+    for {:ok, result} <- results, do: assert(result["runId"] == run_id)
 
     # A completed key replays the original run without resubmitting.
-    assert {:ok, %{"run_id" => ^run_id}} = Agent.handle(params(ctx), %{})
+    assert {:ok, %{"runId" => ^run_id}} = Agent.handle(params(ctx), %{})
     refute_receive {:submitted, _again}, 200
   end
 
-  # The coordinator outlasts the orchestrator's 20 s serialized call window.
-  @tag timeout: 90_000
-  test "delayed router admission returns an unknown-outcome receipt with the fixed run id", ctx do
-    RecordingCoordinator.stall(21_000)
+  # #620: the router admits the run, but the caller's call times out first.
+  test "a submit timeout carries the fixed run id; a same-key retry yields exactly one run",
+       ctx do
+    assert {:error,
+            {:unavailable, _message,
+             %{"code" => "SUBMISSION_OUTCOME_UNKNOWN", "runId" => run_id, "retrySafe" => false}}} =
+             Agent.handle(params(ctx), %{router_mod: LostReplyRouter})
+
+    # The admitted submission still executes under the allocated run ID.
+    assert_receive {:submitted, ^run_id}, 5_000
+
+    # Reusing the key reconciles to that run and never submits again.
+    assert {:ok, %{"runId" => ^run_id, "state" => "accepted"}} = Agent.handle(params(ctx), %{})
+    assert {:ok, %{"runId" => ^run_id}} = Agent.handle(params(ctx), %{})
+    refute_receive {:submitted, _again}, 300
+  end
+
+  test "a submit timeout without an idempotency key still reports its run id", ctx do
+    params = Map.delete(params(ctx), "idempotency_key")
 
     assert {:error,
             {:unavailable, _message,
              %{"code" => "SUBMISSION_OUTCOME_UNKNOWN", "runId" => run_id, "retrySafe" => false}}} =
-             Agent.handle(params(ctx), %{})
+             Agent.handle(params, %{router_mod: LostReplyRouter})
 
-    # The queued submission still executes under the allocated run ID.
-    assert_receive {:submitted, ^run_id}, 15_000
-    RecordingCoordinator.stall(0)
-
-    # Reusing the key reconciles to that run and never submits again.
-    assert {:ok, %{"run_id" => ^run_id}} = Agent.handle(params(ctx), %{})
-    refute_receive {:submitted, _again}, 300
+    assert_receive {:submitted, ^run_id}, 5_000
   end
 
-  @tag timeout: 90_000
-  test "delayed admission without an idempotency key still reports its run id", ctx do
-    RecordingCoordinator.stall(21_000)
-    params = Map.delete(params(ctx), "idempotency_key")
+  test "a recorded rejection releases the pending agent claim without resubmitting", ctx do
+    run_id = LemonCore.Id.run_id()
+    pending = %{"run_id" => run_id, "session_key" => ctx.session_key}
+    assert {:new, _} = LemonCore.Idempotency.begin(:agent, ctx.key, pending)
+    table = LemonRouter.RunOrchestrator.admission_table()
+    assert :ok = Store.put(table, run_id, %{state: "rejected", terminal: true})
+    on_exit(fn -> Store.delete(table, run_id) end)
 
     assert {:error,
-            {:unavailable, _message, %{"code" => "SUBMISSION_OUTCOME_UNKNOWN", "runId" => run_id}}} =
-             Agent.handle(params, %{})
+            {:conflict, _message,
+             %{"code" => "SUBMISSION_REJECTED", "runId" => ^run_id, "retrySafe" => true}}} =
+             Agent.handle(params(ctx), %{})
 
-    assert_receive {:submitted, ^run_id}, 15_000
+    assert {:new, _} = LemonCore.Idempotency.begin(:agent, ctx.key, pending)
+    refute_receive {:submitted, _}, 100
   end
 
   test "an unknown outcome keeps its run id past the TTL and is never resubmitted", ctx do

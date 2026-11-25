@@ -1,7 +1,7 @@
 defmodule LemonGateway.ApplicationTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
-  import LemonGateway.AsyncHelpers, only: [assert_eventually: 1, assert_eventually: 2]
+  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1, assert_eventually: 2]
 
   alias Elixir.LemonGateway.ExecutionRequest
 
@@ -76,7 +76,6 @@ defmodule LemonGateway.ApplicationTest do
     Application.delete_env(:lemon_gateway, Elixir.LemonGateway.Config)
     Application.delete_env(:lemon_gateway, :transports)
     Application.delete_env(:lemon_gateway, :config_path)
-    Application.delete_env(:lemon_gateway, :gateway_ingress_enabled)
     restore_executor_config()
 
     Application.put_env(:lemon_core, LemonCore.Store, @store_config)
@@ -214,7 +213,7 @@ defmodule LemonGateway.ApplicationTest do
       end
     end
 
-    test "legacy ingress children are not started by default" do
+    test "ingress children are not started by default" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
@@ -225,8 +224,14 @@ defmodule LemonGateway.ApplicationTest do
       end
     end
 
-    test "legacy ingress children start when explicitly enabled" do
-      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
+    test "ingress children start when explicitly enabled" do
+      config = Application.fetch_env!(:lemon_gateway, Elixir.LemonGateway.Config)
+
+      Application.put_env(
+        :lemon_gateway,
+        Elixir.LemonGateway.Config,
+        Map.put(config, :ingress, %{enabled: true})
+      )
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -309,17 +314,15 @@ defmodule LemonGateway.ApplicationTest do
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      config = Elixir.LemonGateway.Config.get()
-      assert config.max_concurrent_runs == 10
+      assert {:ok, %{max: 10}} = LemonGateway.Slots.stats()
     end
 
-    test "Config.get/1 returns defaults and configured overrides" do
+    test "gateway settings use defaults and configured overrides" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{})
       Application.put_env(:lemon_gateway, :transports, [])
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      assert Elixir.LemonGateway.Config.get(:max_concurrent_runs) == 2
-      assert Elixir.LemonGateway.Config.get(:auto_resume) == false
+      assert {:ok, %{max: 2}} = LemonGateway.Slots.stats()
 
       stop_application()
 
@@ -332,8 +335,8 @@ defmodule LemonGateway.ApplicationTest do
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      assert Elixir.LemonGateway.Config.get(:max_concurrent_runs) == 7
-      assert Elixir.LemonGateway.Config.get(:enable_telegram) == true
+      assert {:ok, %{max: 7}} = LemonGateway.Slots.stats()
+      assert LemonCore.GatewayConfig.get(:enable_telegram) == true
     end
   end
 
@@ -354,10 +357,9 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "enable_telegram: false disables telegram transport in TransportRegistry" do
-      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
-
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
+        ingress: %{enabled: true},
         enable_telegram: false
       })
 
@@ -427,13 +429,11 @@ defmodule LemonGateway.ApplicationTest do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       # Verify processes are registered
-      assert is_pid(Process.whereis(Elixir.LemonGateway.Config))
       assert is_pid(Process.whereis(Elixir.LemonGateway.Slots))
 
       :ok = Application.stop(:lemon_gateway)
 
       # Names should be freed
-      assert Process.whereis(Elixir.LemonGateway.Config) == nil
       assert Process.whereis(Elixir.LemonGateway.Slots) == nil
     end
 
@@ -446,7 +446,6 @@ defmodule LemonGateway.ApplicationTest do
 
       # Verify running
       assert is_pid(Process.whereis(Elixir.LemonGateway.Supervisor))
-      assert is_pid(Process.whereis(Elixir.LemonGateway.Config))
     end
 
     test "RunSupervisor starts without children after clean shutdown" do
@@ -524,8 +523,14 @@ defmodule LemonGateway.ApplicationTest do
       assert Process.whereis(Elixir.LemonGateway.TransportSupervisor) == nil
     end
 
-    test "TransportSupervisor is registered when legacy ingress is enabled" do
-      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
+    test "TransportSupervisor is registered when ingress is enabled" do
+      config = Application.fetch_env!(:lemon_gateway, Elixir.LemonGateway.Config)
+
+      Application.put_env(
+        :lemon_gateway,
+        Elixir.LemonGateway.Config,
+        Map.put(config, :ingress, %{enabled: true})
+      )
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -612,24 +617,6 @@ defmodule LemonGateway.ApplicationTest do
       end)
 
       :ok
-    end
-
-    test "Config process is restarted if it crashes" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      original_pid = Process.whereis(Elixir.LemonGateway.Config)
-      assert is_pid(original_pid)
-
-      # Kill the process
-      Process.exit(original_pid, :kill)
-
-      new_pid = await_restart(Elixir.LemonGateway.Config, original_pid)
-      assert is_pid(new_pid)
-      assert new_pid != original_pid
-
-      # Should still be functional
-      config = Elixir.LemonGateway.Config.get()
-      assert is_map(config)
     end
 
     test "Slots process is restarted if it crashes" do

@@ -14,34 +14,33 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
 
   alias LemonCore.{RunStore, SessionKey, SessionLifecycle, SessionMetadataStore}
 
+  # A deliberately partial runtime: the callbacks it omits exercise the
+  # never-reached path, so it does not declare the full provider behaviour.
   defmodule Provider do
-    @behaviour LemonCore.AgentRuntime.Provider
-
-    @impl true
     def session_create(key, cwd) do
       send(self(), {:create, key, cwd})
-      Process.get(:create_result)
+
+      case Process.get(:create_result) do
+        :raise_after_create -> raise "private failure after create"
+        result -> result
+      end
     end
 
-    @impl true
     def session_tree(key, cwd, opts) do
       send(self(), {:tree, key, cwd, opts})
       Process.get(:tree_result)
     end
 
-    @impl true
     def session_navigate(key, cwd, entry, opts) do
       send(self(), {:navigate, key, cwd, entry, opts})
       mutation_result(:navigate_result, {:navigate, key, entry})
     end
 
-    @impl true
     def session_label(key, cwd, entry, label) do
       send(self(), {:label, key, cwd, entry, label})
       mutation_result(:label_result, {:label, key, entry, label})
     end
 
-    @impl true
     def session_rewind(key, cwd, entry, opts) do
       send(self(), {:rewind, key, cwd, entry, opts})
       mutation_result(:rewind_result, {:rewind, key, entry})
@@ -63,13 +62,11 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
       end
     end
 
-    @impl true
     def session_fork(key, cwd, destination) do
       send(self(), {:fork, key, cwd, destination})
       Process.get(:fork_result, :ok)
     end
 
-    @impl true
     def session_history(key, cwd) do
       send(self(), {:history, key, cwd})
       Process.get(:history_result, {:error, :session_not_found})
@@ -119,6 +116,21 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
              Registry.dispatch("sessions.create", Map.delete(target(), "cwd"), ctx([:write]))
 
     refute_receive {:create, _, _}
+  end
+
+  test "a provider whose session_create raises yields outcome_unknown, not unavailable" do
+    Process.put(:create_result, :raise_after_create)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error,
+                {:unavailable, _message, %{"reason" => "outcome_unknown", "retrySafe" => false}}} =
+                 Registry.dispatch("sessions.create", target(), ctx([:write]))
+      end)
+
+    assert_receive {:create, "agent:native_methods:main", "/workspace"}
+    assert log =~ "AgentRuntime mutation callback failed"
+    refute log =~ "private failure"
   end
 
   test "registered tree delegates pagination and projects only native tree fields" do

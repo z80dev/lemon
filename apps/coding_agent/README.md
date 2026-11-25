@@ -113,7 +113,6 @@ CodingAgent.Supervisor (one_for_one)
   +-- SessionTree (rest_for_one)
   |     +-- SessionRegistry
   |     +-- SessionSupervisor (DynamicSupervisor)
-  +-- AdvisorSupervisor (DynamicSupervisor; temporary session reviewers)
   +-- BackgroundRun.Tree (rest_for_one)
   |     +-- BackgroundRun.Registry
   |     +-- BackgroundRun.Supervisor (DynamicSupervisor)

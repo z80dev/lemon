@@ -66,8 +66,9 @@ defmodule LemonCore.Config.ModularTest do
     assert Modular.load(project_dir: root, validate: false).agent.default_thinking_level ==
              "private-unknown-choice"
 
+    # The terminal client owns theme names (#640): an unknown one still loads.
     File.write!(path, "[tui]\ntheme = \"private-unknown-choice\"\n")
-    assert_raise ValidationError, fn -> Modular.load(project_dir: root) end
+    assert Modular.load(project_dir: root).tui.theme == "private-unknown-choice"
   end
 
   test "removed settings and legacy warnings name the originating file" do

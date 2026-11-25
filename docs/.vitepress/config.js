@@ -41,7 +41,6 @@ export default {
       { text: "Integrations", items: [
         { text: "Add a channel", link: "/getting-started/add-a-channel" },
         { text: "Gateway (Telegram, Discord)", link: "/platform/lemon_gateway" },
-        { text: "OpenAI-compatible API", link: "/tools/openai-compatible-api" },
         { text: "ACP editors", link: "/tools/acp" },
         { text: "Extensions & MCP", link: "/extensions" },
         { text: "Delegating to omp", link: "/user-guide/omp" },
@@ -177,7 +176,6 @@ export default {
           { text: "Add a channel", link: "/getting-started/add-a-channel" },
           { text: "lemon_gateway", link: "/platform/lemon_gateway" },
           { text: "Lemon in Tern", link: "/user-guide/tern" },
-          { text: "OpenAI-compatible API", link: "/tools/openai-compatible-api" },
           { text: "ACP editor integration", link: "/tools/acp" },
           { text: "Extensions & MCP clients", link: "/extensions" },
           { text: "Delegating to omp", link: "/user-guide/omp" },

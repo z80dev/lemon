@@ -268,8 +268,9 @@ defmodule LemonMCP.Transport.Stdio do
   defp stop_server(state) do
     os_pid = Map.get(state, :os_pid)
 
-    if is_integer(os_pid) and match?({:unix, _}, :os.type()),
-      do: LemonCore.ProcessGroup.terminate(os_pid, grace_ms: @term_grace_ms)
+    _ =
+      if is_integer(os_pid) and match?({:unix, _}, :os.type()),
+        do: LemonCore.ProcessGroup.terminate(os_pid, grace_ms: @term_grace_ms)
 
     close_port(Map.get(state, :port))
     :ok

@@ -40,7 +40,7 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 | `quality` | `mix compile --warnings-as-errors`, `mix format --check-formatted`, `mix credo`, the skip-tag guard, `scripts/check_changelog`, `python3 scripts/test_changed_tests.py`, the docs source-reference check (`scripts/check_docs_source_refs.mjs` and its tests), `shellcheck` on the test/install/update/launcher scripts, `scripts/test_lemon_tui_auth.sh`, `scripts/test_lemon_launcher_reuse.sh`, `scripts/test_lemonup.sh`, `mix lemon.skill.lint`, `mix lemon.quality`, and the quality/eval-harness tests. |
 | `clients` | `clients/tui`: `bun install --frozen-lockfile`, `bun run check`, `bun run lint`, `bun test`. `clients/lemon-browser-node`: `npm ci`, `typecheck`, `lint`, `build`, `npm test`. |
 | `lemon_bot` | Frozen Bun installs in `products/lemon_bot/backend` and `web`; backend `bun test`, then web `bun run build` and `bun run test`. |
-| `coverage` | `mix compile --warnings-as-errors`, then `mix test --exclude integration --cover` with each app's `test_coverage` threshold. |
+| `coverage` | `mix compile --warnings-as-errors`, then `mix test --exclude integration --cover` in a separate VM per app (paths select apps; other arguments go to every run), each with its app's `test_coverage` threshold; the lane fails if any app fails. A shared VM would re-cover-compile apps under already-running processes and fail only under `--cover`. |
 | `eval-fast` | `mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}` (deterministic eval harness). |
 | `live-eval` | `mix lemon.eval --live-model`; needs a live credential (see below). |
 | `smoke` | Prints how to run `scripts/product_smoke_local` (`--release` for release-boot parity). |
@@ -147,7 +147,7 @@ No live provider calls are needed for `premerge` or `changed`.
 | `nightly.yml` | daily + dispatch | the full `ci.yml`; `scripts/test coverage` over every app; the prompt/skill/overflow regression files with `--repeat-until-failure 5`; `scripts/test eval-fast` with 20 iterations; the `nightly-red` issue |
 | `product-smoke.yml` | PRs touching `apps/**`, weekly, dispatch | Boots a `lemon_runtime_full` release against a local deterministic provider |
 | `release-smoke.yml` | release paths, weekly, dispatch | Release assembly and boot matrix |
-| `osv-scanner.yml` | lockfile changes, weekly | The only dependency-vulnerability scan (Mix, npm, Bun lockfiles) |
+| `osv-scanner.yml` | lockfile changes, weekly | The only dependency-vulnerability scan (Mix, npm, Bun, Cargo, SwiftPM lockfiles). Blocking: any finding not accepted (reason + expiry) in `osv-scanner.toml` fails it; `scripts/test_ci_gates.py` (quality lane) pins that every shipped lockfile is scanned and filtered. |
 | `docs-site.yml` | `docs/**` changes | VitePress build and link check |
 | `release.yml` | tag / dispatch | Skips the gates when `scripts/ci_verified_commit` finds (or waits up to 30 minutes for) a green `ci.yml` push run on the release commit or on an ancestor it differs from only by version fields and changelogs; otherwise calls `ci.yml` itself, so the release runs the same sharded jobs. Then builds and publishes artifacts. |
 | `live-eval.yml` | dispatch | `scripts/test live-eval` with repository secrets |
@@ -205,10 +205,12 @@ rather than polling for global ingest to pick up changed feature flags.
 
 Session fixtures pass a per-test `workspace_dir` as well as a temporary working
 directory: the isolated test HOME is still shared by concurrent modules.
-`CodingAgent.SessionSupervisor` accepts a second scope-options argument with
-`:supervisor` and `:registry` targets for isolated session trees. Start those
-targets under the test supervisor, and query/stop only that tree rather than
-enumerating or clearing the application's global sessions.
+For an isolated session tree, start a `CodingAgent.SessionSupervisor` (with
+`name:`) and a unique `Registry` under the test supervisor, and pass them as
+`supervisor:` and `registry:` to `start_session/1` and to `stop_session/2`,
+`lookup/2` and `list_sessions/1`. Query and stop only that tree rather than
+enumerating or clearing the application's global sessions; test the real
+module this way, never an in-file copy of it.
 
 Session/branch/lifecycle fixtures inject `extension_inventory: {[], []}` and
 `mcp_tools: []` when discovery is not under test, avoiding shared extension
@@ -219,13 +221,11 @@ does not inherit repository-local resources.
 The two approval-event broadcast cases remain in the small synchronous
 `SessionApprovalEventsTest` module because they publish to a shared Bus topic.
 
-Shared Elixir helpers live in `LemonCore.Testing.HermeticEnv`:
-
-- `credential_env_vars/0` returns the canonical scrub list.
-- `scrub_unit_credentials!/1` deletes those variables unless live credentials
-  are explicitly allowed.
-- `with_restored_env/2` snapshots and restores env vars around synchronous
-  tests that mutate process-wide env.
+Ambient provider/platform credentials are scrubbed before the BEAM starts, from
+the single `SCRUB_CREDENTIAL_ENV_VARS` list in `scripts/test`; no Elixir copy
+of that list exists. `LemonCore.Testing.HermeticEnv.with_restored_env/2`
+snapshots and restores env vars around synchronous tests that mutate
+process-wide env.
 
 Tests that call `System.put_env/2` or `System.delete_env/1` should be
 `async: false` and restore their changes.

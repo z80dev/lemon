@@ -670,9 +670,17 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
           task = Task.async(fn -> module.handle(params, %{conn_pid: owner}) end)
           assert_receive {:node_event, "node.invoke.request", %{"invokeId" => invocation}}, 1_000
           assert :ok = NodeRegistry.complete_session(node, owner, 1, invocation, result)
-          assert {:error, {:unavailable, _, details}} = Task.await(task)
-          assert details["retrySafe"] == false
+          assert {:error, {:unavailable, "Provider management unavailable"}} = Task.await(task)
         end
+
+        {:ok, cancel} = Registry.lookup("node.providers.management.device.cancel")
+        task = Task.async(fn -> cancel.handle(params, %{conn_pid: owner}) end)
+        assert_receive {:node_event, "node.invoke.request", %{"invokeId" => invocation}}, 1_000
+        assert :ok = NodeRegistry.complete_session(node, owner, 1, invocation, %{})
+
+        assert {:error,
+                {:unavailable, _, %{"retrySafe" => false, "mutationMayHaveApplied" => true}}} =
+                 Task.await(task)
 
         task = Task.async(fn -> module.handle(params, %{conn_pid: owner}) end)
         assert_receive {:node_event, "node.invoke.request", %{"invokeId" => invocation}}, 1_000
@@ -680,8 +688,7 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
         assert :ok =
                  NodeRegistry.complete_session(node, owner, 1, invocation, %{"error" => secret})
 
-        assert {:error, {:unavailable, _, details}} = Task.await(task)
-        refute inspect(details) =~ secret
+        assert {:error, {:unavailable, "Provider management unavailable"}} = Task.await(task)
 
         for {reason, expected} <- [{"forbidden", :forbidden}, {secret, :unavailable}] do
           task = Task.async(fn -> module.handle(params, %{conn_pid: owner}) end)

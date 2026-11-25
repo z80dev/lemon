@@ -1,8 +1,7 @@
 defmodule LemonGateway.M6IntegrationTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.{BindingResolver, Config}
-  alias LemonCore.{ChatScope, ChatState, ChatStateStore}
+  alias LemonCore.{BindingResolver, ChatScope, ChatState, ChatStateStore, GatewayConfig}
 
   setup do
     test_toml_dir =
@@ -25,6 +24,7 @@ defmodule LemonGateway.M6IntegrationTest do
     Application.delete_env(:lemon_gateway, :config_path)
 
     on_exit(fn ->
+      LemonCore.ConfigCache.clear()
       Application.delete_env(:lemon_gateway, LemonGateway.Config)
       Application.delete_env(:lemon_gateway, :config_path)
       File.rm_rf!(test_toml_dir)
@@ -35,7 +35,7 @@ defmodule LemonGateway.M6IntegrationTest do
   end
 
   describe "full M6 integration" do
-    test "config loader parses TOML and populates Config", %{test_toml_dir: test_toml_dir} do
+    test "the gateway reads [gateway] from the canonical config", %{test_toml_dir: test_toml_dir} do
       project_root = Path.join(test_toml_dir, "project")
       File.mkdir_p!(project_root)
 
@@ -59,29 +59,29 @@ defmodule LemonGateway.M6IntegrationTest do
       File.write!(toml_path, toml_content)
       Application.put_env(:lemon_gateway, :config_path, toml_path)
 
+      LemonCore.ConfigCache.clear()
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      # Verify gateway config
-      assert Config.get(:max_concurrent_runs) == 8
-      refute Map.has_key?(Config.get(), :default_engine)
-      refute Map.has_key?(Config.get(), :engines)
+      # The running gateway's execution limit comes from the file.
+      assert {:ok, %{max: 8}} = LemonGateway.Slots.stats()
+      refute Map.has_key?(GatewayConfig.load(), :default_engine)
+      refute Map.has_key?(GatewayConfig.load(), :engines)
 
-      # Verify projects loaded
-      projects = Config.get_projects()
+      projects = GatewayConfig.get(:projects)
       assert map_size(projects) == 1
-      assert projects["myproject"].root == project_root
+      assert GatewayConfig.fetch(projects["myproject"], :root, nil) == project_root
 
-      # Verify bindings loaded
-      bindings = Config.get_bindings()
-      assert length(bindings) == 1
-      [binding] = bindings
-      assert binding.transport == :telegram
+      binding =
+        BindingResolver.resolve_binding(%ChatScope{transport: :telegram, chat_id: 123_456},
+          bindings: GatewayConfig.get(:bindings)
+        )
+
       assert binding.chat_id == 123_456
       assert binding.project == "myproject"
       assert binding.queue_mode == :followup
     end
 
-    test "binding resolver uses config for resolution", %{test_toml_dir: test_toml_dir} do
+    test "binding resolution reads the live config", %{test_toml_dir: test_toml_dir} do
       project_root = Path.join(test_toml_dir, "project2")
       File.mkdir_p!(project_root)
 
@@ -103,20 +103,21 @@ defmodule LemonGateway.M6IntegrationTest do
       """)
 
       Application.put_env(:lemon_gateway, :config_path, toml_path)
+      LemonCore.ConfigCache.clear()
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       scope = %ChatScope{transport: :telegram, chat_id: 555}
 
       # Check binding resolution
-      binding = BindingResolver.resolve_binding(scope)
+      binding = BindingResolver.resolve_binding(scope, resolver_opts())
       assert binding.project == "myapp"
 
       # Check cwd resolution
-      cwd = BindingResolver.resolve_cwd(scope)
+      cwd = BindingResolver.resolve_cwd(scope, resolver_opts())
       assert cwd == project_root
 
       # Check queue_mode resolution
-      queue_mode = BindingResolver.resolve_queue_mode(scope)
+      queue_mode = BindingResolver.resolve_queue_mode(scope, resolver_opts())
       assert queue_mode == :collect
     end
 
@@ -152,15 +153,16 @@ defmodule LemonGateway.M6IntegrationTest do
       """)
 
       Application.put_env(:lemon_gateway, :config_path, toml_path)
+      LemonCore.ConfigCache.clear()
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       chat_scope = %ChatScope{transport: :telegram, chat_id: 777}
       topic_scope = %ChatScope{transport: :telegram, chat_id: 777, topic_id: 123}
 
-      assert BindingResolver.resolve_binding(chat_scope).project == "chat"
-      assert BindingResolver.resolve_binding(topic_scope).project == "topic"
-      assert BindingResolver.resolve_cwd(topic_scope) == topic_root
-      assert BindingResolver.resolve_queue_mode(topic_scope) == :interrupt
+      assert BindingResolver.resolve_binding(chat_scope, resolver_opts()).project == "chat"
+      assert BindingResolver.resolve_binding(topic_scope, resolver_opts()).project == "topic"
+      assert BindingResolver.resolve_cwd(topic_scope, resolver_opts()) == topic_root
+      assert BindingResolver.resolve_queue_mode(topic_scope, resolver_opts()) == :interrupt
     end
 
     test "chat state persistence works", %{test_toml_dir: _test_toml_dir} do
@@ -197,5 +199,12 @@ defmodule LemonGateway.M6IntegrationTest do
       assert get_val.(retrieved, :last_engine) == "test_engine"
       assert get_val.(retrieved, :last_resume_token) == "test_token_123"
     end
+  end
+
+  defp resolver_opts do
+    [
+      bindings: GatewayConfig.get(:bindings),
+      config_provider: fn -> GatewayConfig.get(:projects) end
+    ]
   end
 end

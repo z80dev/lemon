@@ -12,6 +12,4 @@ lock_dir =
 _ = File.mkdir_p(lock_dir)
 System.put_env("LEMON_LOCK_DIR", lock_dir)
 
-Code.require_file("support/async_helpers.ex", __DIR__)
-
 ExUnit.start(capture_log: true)

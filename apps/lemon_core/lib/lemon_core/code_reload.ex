@@ -19,17 +19,31 @@ defmodule LemonCore.CodeReload do
           failed: non_neg_integer()
         }
 
-  @doc "Runs the configured session refresher; zero counts when none is wired."
-  @spec refresh_sessions() :: session_counts()
+  @doc """
+  Runs the configured session refresher; zero counts when none is wired.
+
+  A refresher that raises, exits or throws may already have rebuilt some
+  sessions: that is `{:error, :outcome_unknown}`, logged once and never retried.
+  """
+  @spec refresh_sessions() :: session_counts() | {:error, :outcome_unknown}
   def refresh_sessions do
     refresher =
       :lemon_core |> Application.get_env(__MODULE__, []) |> Keyword.get(:session_refresher)
 
-    if is_atom(refresher) and not is_nil(refresher) and Code.ensure_loaded?(refresher) and
-         function_exported?(refresher, :refresh_sessions, 0) do
-      refresher.refresh_sessions()
-    else
-      %{refreshed: 0, busy: 0, failed: 0}
+    case LemonCore.RuntimeSeam.invoke(refresher, :refresh_sessions, [],
+           unavailable: %{refreshed: 0, busy: 0, failed: 0},
+           exception: {:error, :outcome_unknown},
+           exit: {:error, :outcome_unknown},
+           throw: {:error, :outcome_unknown},
+           log: "CodeReload session refresh"
+         ) do
+      %{refreshed: refreshed, busy: busy, failed: failed} = counts
+      when is_integer(refreshed) and refreshed >= 0 and is_integer(busy) and busy >= 0 and
+             is_integer(failed) and failed >= 0 ->
+        counts
+
+      _ ->
+        {:error, :outcome_unknown}
     end
   end
 

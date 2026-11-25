@@ -1,7 +1,8 @@
 defmodule LemonChannels.Adapters.Discord.VoiceHandler do
   @moduledoc "Transcribes authorized Discord audio attachments using shared channel voice settings."
 
-  alias LemonChannels.{GatewayConfig, ImageDownload, VoiceTranscriber}
+  alias LemonChannels.{ImageDownload, VoiceTranscriber}
+  alias LemonCore.GatewayConfig
 
   def config do
     telegram = GatewayConfig.get(:telegram, %{}) || %{}

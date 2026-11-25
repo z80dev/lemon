@@ -289,7 +289,9 @@ defmodule CodingAgent.TaskRuntime.Child do
 
   def handle_event(:cast, :cancel, phase, data), do: cancel(phase, data)
 
-  def handle_event(:info, {:lemon_abort, signal, _kind}, phase, %{parent_signal: signal} = data),
+  # A redirect interrupts only the parent's in-flight model request; it never
+  # cancels children. Redirect wakeups fall through to the catch-all below.
+  def handle_event(:info, {:lemon_abort, signal, :abort}, phase, %{parent_signal: signal} = data),
     do: cancel(phase, data)
 
   # -- messages -------------------------------------------------------------------

@@ -4,7 +4,7 @@ defmodule LemonCore.EngineInfoBridge do
 
   Channels and the control plane use the gateway runtime
   (`:lemon_gateway` in the reference runtime) for transport-registry ops
-  introspection and any full-replacement gateway config it holds. Before this
+  introspection and SMS inbox operations. Before this
   bridge each caller reached back with a hardcoded `:"Elixir.LemonGateway.*"`
   atom; now the gateway configures itself here at boot and callers ask core.
 
@@ -14,7 +14,7 @@ defmodule LemonCore.EngineInfoBridge do
 
       LemonCore.EngineInfoBridge.configure(
         transport_registry: LemonGateway.TransportRegistry,
-        gateway_config: LemonGateway.Config
+        sms_inbox: LemonGateway.Sms.Inbox
       )
 
   Every function answers `{:error, :unavailable}` (or the documented empty
@@ -23,9 +23,9 @@ defmodule LemonCore.EngineInfoBridge do
   """
 
   @bridge_key :engine_info_bridge
-  @config_keys [:transport_registry, :gateway_config, :sms_inbox]
+  @config_keys [:transport_registry, :sms_inbox]
 
-  @type capability :: :transport_registry | :gateway_config | :sms_inbox
+  @type capability :: :transport_registry | :sms_inbox
   @type config :: %{optional(capability()) => module()}
 
   @doc """
@@ -82,19 +82,6 @@ defmodule LemonCore.EngineInfoBridge do
   def get_transport(id), do: registry_call(:get_transport, [id])
 
   @doc """
-  A full-replacement gateway config map, or `:none`.
-
-  The gateway runtime may hold a config that replaces the canonical one
-  wholesale (used by tests and by embedders that drive the gateway directly).
-  """
-  @spec gateway_config() :: {:ok, map()} | :none
-  def gateway_config do
-    :gateway_config
-    |> call(:replacement_config, [], :none)
-    |> normalize_config()
-  end
-
-  @doc """
   Operator preview of a forced SMS inbox clear: the current holder and a
   single-use confirm token bound to it (see `LemonGateway.Sms.Inbox.preview_clear/0`).
   """
@@ -102,12 +89,18 @@ defmodule LemonCore.EngineInfoBridge do
   def sms_inbox_preview_clear, do: sms_inbox_call(:preview_clear, [])
 
   @doc """
-  Confirms a previewed SMS inbox clear for the exact holder. An exit after the
-  call was sent is `{:error, :outcome_unknown}`: the clear may have happened.
+  Confirms a previewed SMS inbox clear for the exact holder. A raise, exit or
+  throw after the call was reached is `{:error, :outcome_unknown}`: the clear
+  may have happened.
   """
   @spec sms_inbox_confirm_clear(binary(), binary()) :: :ok | {:error, term()}
   def sms_inbox_confirm_clear(holder, token),
-    do: sms_inbox_call(:confirm_clear, [holder, token], exit: {:error, :outcome_unknown})
+    do:
+      sms_inbox_call(:confirm_clear, [holder, token],
+        exception: {:error, :outcome_unknown},
+        exit: {:error, :outcome_unknown},
+        throw: {:error, :outcome_unknown}
+      )
 
   defp sms_inbox_call(function, args, opts \\ []) do
     if running?(:sms_inbox) do
@@ -136,18 +129,6 @@ defmodule LemonCore.EngineInfoBridge do
   defp call(capability, function, args, fallback) do
     LemonCore.RuntimeSeam.invoke(impl(capability), function, args, unavailable: fallback)
   end
-
-  defp normalize_config(config) when is_map(config), do: {:ok, config}
-
-  defp normalize_config(config) when is_list(config) do
-    if Keyword.keyword?(config) do
-      {:ok, Enum.into(config, %{})}
-    else
-      {:ok, %{bindings: config}}
-    end
-  end
-
-  defp normalize_config(_config), do: :none
 
   defp current_config, do: LemonCore.RuntimeSeam.config(@bridge_key, @config_keys)
 end

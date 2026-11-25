@@ -6,16 +6,6 @@ defmodule CodingAgent.SessionSupervisorTest do
 
   import CodingAgent.AsyncHelpers
 
-  defp stop_all_sessions do
-    for pid <- SessionSupervisor.list_sessions() do
-      SessionSupervisor.stop_session(pid)
-    end
-
-    assert_eventually(fn -> SessionSupervisor.list_sessions() == [] end,
-      message: "sessions were not stopped"
-    )
-  end
-
   defp kill_and_await(pid) do
     ref = Process.monitor(pid)
     Process.exit(pid, :kill)
@@ -192,5 +182,111 @@ defmodule CodingAgent.SessionSupervisorTest do
     ref2 = Process.monitor(pid2)
     assert :ok = SessionSupervisor.stop_session(stats2.session_id)
     assert_receive {:DOWN, ^ref2, :process, ^pid2, _}, 1_000
+  end
+
+  describe "supervisor and registry overrides" do
+    setup do
+      unique = System.unique_integer([:positive])
+      registry = Module.concat([__MODULE__, "Registry#{unique}"])
+      supervisor = Module.concat([__MODULE__, "Supervisor#{unique}"])
+      start_supervised!({Registry, keys: :unique, name: registry})
+      start_supervised!({SessionSupervisor, name: supervisor})
+      {:ok, target: [supervisor: supervisor, registry: registry]}
+    end
+
+    defp start_isolated(target, opts \\ []) do
+      [
+        cwd: session_cwd(),
+        model: mock_model(),
+        tools: [],
+        extension_inventory: {[], []},
+        mcp_tools: []
+      ]
+      |> Keyword.merge(target)
+      |> Keyword.merge(opts)
+      |> SessionSupervisor.start_session()
+    end
+
+    test "start_session(supervisor:) starts the session under the supplied supervisor", %{
+      target: target
+    } do
+      session_id = "override-#{System.unique_integer([:positive])}"
+      {:ok, pid} = start_isolated(target, session_id: session_id)
+
+      assert SessionSupervisor.list_sessions(target) == [pid]
+      refute pid in SessionSupervisor.list_sessions()
+      assert {:ok, ^pid} = SessionSupervisor.lookup(session_id, target)
+      assert :error = SessionSupervisor.lookup(session_id)
+      assert {:error, :not_found} = SessionSupervisor.stop_session(session_id)
+
+      ref = Process.monitor(pid)
+      assert :ok = SessionSupervisor.stop_session(session_id, target)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 2_000
+      assert SessionSupervisor.list_sessions(target) == []
+
+      # Registry cleanup: the id is released once the session is gone.
+      assert_eventually(fn -> SessionSupervisor.lookup(session_id, target) == :error end,
+        message: "session id still registered"
+      )
+    end
+
+    test "unknown ids and stopped pids return {:error, :not_found}", %{target: target} do
+      assert :error = SessionSupervisor.lookup("unknown-session", target)
+      assert {:error, :not_found} = SessionSupervisor.stop_session("unknown-session", target)
+
+      {:ok, pid} = start_isolated(target)
+      assert :ok = SessionSupervisor.stop_session(pid, target)
+      assert {:error, :not_found} = SessionSupervisor.stop_session(pid, target)
+    end
+
+    test "a crashed session is not restarted and leaves its siblings running", %{target: target} do
+      session_id = "crash-#{System.unique_integer([:positive])}"
+      {:ok, crashed} = start_isolated(target, session_id: session_id)
+      {:ok, sibling} = start_isolated(target)
+      supervisor = GenServer.whereis(target[:supervisor])
+
+      kill_and_await(crashed)
+
+      assert_eventually(fn -> SessionSupervisor.list_sessions(target) == [sibling] end,
+        message: "crashed session still listed or restarted"
+      )
+
+      assert_eventually(fn -> SessionSupervisor.lookup(session_id, target) == :error end,
+        message: "crashed session id still registered"
+      )
+
+      assert Process.alive?(sibling)
+      assert GenServer.whereis(target[:supervisor]) == supervisor
+    end
+
+    test "list_sessions returns [] when the supervisor is not running" do
+      assert SessionSupervisor.list_sessions(supervisor: Module.concat(__MODULE__, Missing)) == []
+    end
+
+    test "very long session ids get a bounded journal file name", %{target: target} do
+      long_id =
+        String.duplicate("a", 256) <> Integer.to_string(System.unique_integer([:positive]))
+
+      {:ok, pid} = start_isolated(target, session_id: long_id)
+
+      assert {:ok, ^pid} = SessionSupervisor.lookup(long_id, target)
+      state = CodingAgent.Session.get_state(pid)
+      assert File.regular?(state.session_file)
+      assert byte_size(Path.basename(state.session_file)) < 255
+      assert {:ok, journal} = CodingAgent.SessionManager.load_from_file(state.session_file)
+      assert journal.header.id == long_id
+    end
+
+    test "native identities cannot escape the session journal directory", %{target: target} do
+      session_id = "../escaped-session-#{System.unique_integer([:positive])}"
+      {:ok, pid} = start_isolated(target, session_id: session_id)
+      state = CodingAgent.Session.get_state(pid)
+
+      assert Path.dirname(state.session_file) ==
+               CodingAgent.SessionManager.get_session_dir(state.cwd)
+
+      assert {:ok, journal} = CodingAgent.SessionManager.load_from_file(state.session_file)
+      assert journal.header.id == session_id
+    end
   end
 end

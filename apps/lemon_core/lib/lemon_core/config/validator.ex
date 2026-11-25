@@ -25,7 +25,7 @@ defmodule LemonCore.Config.Validator do
   - Logging: valid log levels, writable paths
   - Providers: valid API key formats
   - Tools: valid timeout values
-  - TUI: valid theme names
+  - TUI: a non-blank theme name (the terminal client owns the names)
 
   The generic scalar checks (`validate_boolean/3`, `validate_positive_integer/3`,
   `validate_ratio/3`, `env_var_reference?/1`, ...) are public so channel
@@ -37,8 +37,6 @@ defmodule LemonCore.Config.Validator do
   alias LemonCore.Config.Tools.Bash
 
   @valid_log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
-  @valid_themes [:default, :dark, :light, :high_contrast, :lemon]
-
   @doc """
   Validates a complete modular configuration.
 
@@ -79,6 +77,8 @@ defmodule LemonCore.Config.Validator do
         Map.get(config.skills, :allowed_private_git_hosts, []),
         "skills.allowed_private_git_hosts"
       )
+
+    errors = validate_learning_nudge(errors, Map.get(config.skills, :learning_nudge, %{}))
 
     errors = validate_automation(config.automation, errors)
 
@@ -186,15 +186,25 @@ defmodule LemonCore.Config.Validator do
   """
   @spec deprecation_warnings(map()) :: [String.t()]
   def deprecation_warnings(settings) when is_map(settings) do
-    if LegacyAgentMigration.legacy?(settings) do
-      [
-        "[agent] is deprecated and is read as [defaults], [runtime] and [tui]. " <>
-          "Run `lemon config migrate` to rewrite it (the original is kept as a backup)."
-      ]
-    else
-      []
-    end
+    legacy_agent =
+      if LegacyAgentMigration.legacy?(settings) do
+        [
+          "[agent] is deprecated and is read as [defaults], [runtime] and [tui]. " <>
+            "Run `lemon config migrate` to rewrite it (the original is kept as a backup)."
+        ]
+      else
+        []
+      end
+
+    legacy_agent ++ removed_gateway_queue_warnings(settings)
   end
+
+  # Nothing ever read `[gateway.queue]`; it is ignored rather than rejected so
+  # existing configs keep loading.
+  defp removed_gateway_queue_warnings(%{"gateway" => %{"queue" => _}}),
+    do: ["[gateway.queue] has no effect and was removed; delete the section."]
+
+  defp removed_gateway_queue_warnings(_settings), do: []
 
   @removed_engine_keys ~w(
     engine
@@ -306,6 +316,67 @@ defmodule LemonCore.Config.Validator do
     |> validate_task_config(Map.get(agent, :task))
     |> validate_compaction_thresholds(Map.get(agent, :compaction))
     |> validate_git_path(Map.get(agent, :git_path))
+    |> validate_max_tool_turns(Map.get(agent, :max_tool_turns, :infinity))
+  end
+
+  defp validate_max_tool_turns(errors, :infinity), do: errors
+  defp validate_max_tool_turns(errors, turns) when is_integer(turns) and turns > 0, do: errors
+
+  defp validate_max_tool_turns(errors, _turns) do
+    ["runtime.max_tool_turns: must be a non-negative integer (0 or unset = unlimited)" | errors]
+  end
+
+  @doc """
+  Validates the raw `[profiles.<id>]` tables: a `tool_policy` or
+  `tool_policy_json` that does not parse is an error rather than a silent
+  `deny_all` policy. Returns the error list (empty when valid).
+  """
+  @spec profile_errors(map()) :: [String.t()]
+  def profile_errors(settings) when is_map(settings) do
+    case settings["profiles"] do
+      nil ->
+        []
+
+      profiles when is_map(profiles) ->
+        profiles
+        |> Enum.sort_by(fn {id, _cfg} -> to_string(id) end)
+        |> Enum.flat_map(fn {id, cfg} -> profile_policy_errors(to_string(id), cfg) end)
+
+      _ ->
+        ["profiles: must be a table"]
+    end
+  end
+
+  defp profile_policy_errors(id, cfg) when is_map(cfg) do
+    cond do
+      Map.has_key?(cfg, "tool_policy_json") ->
+        tool_policy_json_errors(id, cfg["tool_policy_json"])
+
+      is_nil(cfg["tool_policy"]) ->
+        []
+
+      true ->
+        tool_policy_errors(id, "tool_policy", cfg["tool_policy"])
+    end
+  end
+
+  defp profile_policy_errors(id, _cfg), do: ["profiles.#{id}: must be a table"]
+
+  defp tool_policy_json_errors(id, json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, policy} when is_map(policy) -> tool_policy_errors(id, "tool_policy_json", policy)
+      _ -> ["profiles.#{id}.tool_policy_json: must be a JSON tool policy object"]
+    end
+  end
+
+  defp tool_policy_json_errors(id, _json),
+    do: ["profiles.#{id}.tool_policy_json: must be a JSON tool policy object"]
+
+  defp tool_policy_errors(id, key, policy) do
+    case LemonCore.ToolPolicy.parse(policy) do
+      {:ok, _policy} -> []
+      {:error, reason} -> ["profiles.#{id}.#{key}: invalid tool policy (#{inspect(reason)})"]
+    end
   end
 
   defp validate_git_path(errors, nil), do: errors
@@ -402,14 +473,26 @@ defmodule LemonCore.Config.Validator do
     )
     |> validate_boolean(Map.get(gateway, :auto_resume), "gateway.auto_resume")
     |> validate_boolean(Map.get(gateway, :enable_webhook), "gateway.enable_webhook")
+    |> validate_ingress(Map.get(gateway, :ingress))
     |> validate_channel_flags(gateway)
     |> validate_channel_sections(gateway)
     |> validate_email_config(Map.get(gateway, :email))
     |> validate_sms_config(Map.get(gateway, :sms))
     |> validate_voice_config(Map.get(gateway, :voice))
-    |> validate_queue_config(Map.get(gateway, :queue))
     |> validate_webhook_section(Map.get(gateway, :webhook))
   end
+
+  defp validate_ingress(errors, nil), do: errors
+
+  defp validate_ingress(errors, ingress) when is_map(ingress) do
+    errors = validate_boolean(errors, toml_value(ingress, :enabled), "gateway.ingress.enabled")
+
+    if Enum.all?(Map.keys(ingress), &(&1 in [:enabled, "enabled"])),
+      do: errors,
+      else: ["gateway.ingress: only the enabled key is supported" | errors]
+  end
+
+  defp validate_ingress(errors, _), do: ["gateway.ingress: must be a table" | errors]
 
   defp validate_webhook_section(errors, webhook) when is_nil(webhook) or is_map(webhook),
     do: errors
@@ -807,55 +890,6 @@ defmodule LemonCore.Config.Validator do
   end
 
   @doc """
-  Validates queue configuration.
-  """
-  @spec validate_queue_config([String.t()], map() | nil) :: [String.t()]
-  def validate_queue_config(errors, nil), do: errors
-
-  def validate_queue_config(errors, queue) when is_map(queue) do
-    errors
-    |> validate_queue_mode(Map.get(queue, :mode))
-    |> validate_optional_positive_integer(Map.get(queue, :cap), "gateway.queue.cap")
-    |> validate_queue_drop(Map.get(queue, :drop))
-  end
-
-  def validate_queue_config(errors, _), do: ["gateway.queue: must be a map" | errors]
-
-  defp validate_queue_mode(errors, nil), do: errors
-
-  defp validate_queue_mode(errors, mode) when is_binary(mode) do
-    valid_modes = ["fifo", "lifo", "priority", "collect"]
-
-    if mode in valid_modes do
-      errors
-    else
-      [
-        "gateway.queue.mode: invalid mode. Valid: #{Enum.join(valid_modes, ", ")}"
-        | errors
-      ]
-    end
-  end
-
-  defp validate_queue_mode(errors, _), do: ["gateway.queue.mode: must be a string" | errors]
-
-  defp validate_queue_drop(errors, nil), do: errors
-
-  defp validate_queue_drop(errors, drop) when is_binary(drop) do
-    valid_drops = ["oldest", "newest", "reject"]
-
-    if drop in valid_drops do
-      errors
-    else
-      [
-        "gateway.queue.drop: invalid drop policy. Valid: #{Enum.join(valid_drops, ", ")}"
-        | errors
-      ]
-    end
-  end
-
-  defp validate_queue_drop(errors, _), do: ["gateway.queue.drop: must be a string" | errors]
-
-  @doc """
   Validates logging configuration.
   """
   @spec validate_logging(map(), [String.t()]) :: [String.t()]
@@ -1117,6 +1151,47 @@ defmodule LemonCore.Config.Validator do
   defp git_host?(host),
     do: is_binary(host) and Regex.match?(~r/\A[A-Za-z0-9_][A-Za-z0-9_.-]{0,252}\z/, host)
 
+  @learning_nudge_keys ~w(enabled memory_turn_interval skill_tool_threshold background_review)
+  @background_review_keys ~w(enabled model min_interval_ms timeout_ms max_tool_turns max_digest_bytes)
+
+  defp validate_learning_nudge(errors, %{} = nudge) do
+    path = "skills.learning_nudge"
+
+    errors
+    |> validate_known_keys(nudge, @learning_nudge_keys, path)
+    |> validate_boolean(nudge["enabled"], "#{path}.enabled")
+    |> validate_positive_integer(nudge["memory_turn_interval"], "#{path}.memory_turn_interval")
+    |> validate_positive_integer(nudge["skill_tool_threshold"], "#{path}.skill_tool_threshold")
+    |> validate_background_review(nudge["background_review"], "#{path}.background_review")
+  end
+
+  defp validate_learning_nudge(errors, _nudge),
+    do: ["skills.learning_nudge: must be a table" | errors]
+
+  defp validate_background_review(errors, nil, _path), do: errors
+
+  defp validate_background_review(errors, %{} = review, path) do
+    errors
+    |> validate_known_keys(review, @background_review_keys, path)
+    |> validate_boolean(review["enabled"], "#{path}.enabled")
+    |> validate_non_empty_string(review["model"], "#{path}.model")
+    |> validate_positive_integer(review["timeout_ms"], "#{path}.timeout_ms")
+    |> validate_positive_integer(review["max_tool_turns"], "#{path}.max_tool_turns")
+    |> validate_positive_integer(review["max_digest_bytes"], "#{path}.max_digest_bytes")
+    |> validate_positive_integer(review["min_interval_ms"], "#{path}.min_interval_ms")
+  end
+
+  defp validate_background_review(errors, _review, path),
+    do: ["#{path}: must be a table" | errors]
+
+  defp validate_known_keys(errors, table, known, path) do
+    table
+    |> Map.keys()
+    |> Enum.reject(&(&1 in known))
+    |> Enum.sort()
+    |> Enum.reduce(errors, &["#{path}.#{&1}: unknown key" | &2])
+  end
+
   @doc """
   Validates the `[automation]` section.
   """
@@ -1193,20 +1268,6 @@ defmodule LemonCore.Config.Validator do
     ["#{path}: must be a non-negative integer" | errors]
   end
 
-  defp validate_optional_positive_integer(errors, nil, _path), do: errors
-
-  defp validate_optional_positive_integer(errors, value, path) when is_integer(value) do
-    if value > 0 do
-      errors
-    else
-      ["#{path}: must be a positive integer" | errors]
-    end
-  end
-
-  defp validate_optional_positive_integer(errors, _value, path) do
-    ["#{path}: must be a positive integer" | errors]
-  end
-
   @doc "Prepends an error unless `value` is `nil` or a number in `0.0..1.0`."
   @spec validate_ratio([String.t()], term(), String.t()) :: [String.t()]
   def validate_ratio(errors, nil, _path), do: errors
@@ -1268,26 +1329,17 @@ defmodule LemonCore.Config.Validator do
     ["#{path}: must be a string" | errors]
   end
 
+  # The terminal client owns theme names (`/theme`, clients/tui): core only
+  # requires a non-blank name, so a value the client adds can never make config
+  # loading fail. See test/fixtures/tui_theme_values.json.
   defp validate_theme(errors, nil, _path), do: errors
-
-  defp validate_theme(errors, value, path) when is_atom(value) do
-    if value in @valid_themes do
-      errors
-    else
-      valid_themes = Enum.join(@valid_themes, ", ")
-      ["#{path}: invalid theme. Valid: #{valid_themes}" | errors]
-    end
-  end
+  defp validate_theme(errors, value, _path) when is_atom(value), do: errors
 
   defp validate_theme(errors, value, path) when is_binary(value) do
-    if String.downcase(value) in Enum.map(@valid_themes, &Atom.to_string/1),
-      do: errors,
-      else: ["#{path}: invalid theme. Valid: #{Enum.join(@valid_themes, ", ")}" | errors]
+    if String.trim(value) == "", do: ["#{path}: cannot be empty" | errors], else: errors
   end
 
-  defp validate_theme(errors, _value, path) do
-    ["#{path}: must be a valid theme" | errors]
-  end
+  defp validate_theme(errors, _value, path), do: ["#{path}: must be a string" | errors]
 
   defp validate_providers_map(errors, nil), do: errors
 

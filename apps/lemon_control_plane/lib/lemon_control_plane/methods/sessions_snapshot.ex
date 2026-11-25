@@ -140,7 +140,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
       {:ok, session} when is_nil(session) or is_map(session) ->
         # Fresh admitted runs have a native owner before their first finalized
         # run creates the durable lifecycle index. That index is not live authority.
-        case AgentRuntime.call(:session_recovery_snapshot, [key, cwd], {:error, :unavailable}) do
+        case AgentRuntime.query(:session_recovery_snapshot, [key, cwd]) do
           {:ok, native} when is_map(native) ->
             compose(key, native, limit, ctx, continuation)
 
@@ -567,7 +567,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
   end
 
   defp approval_runs(key, run_id, owner) when is_binary(run_id) and run_id != "" do
-    case AgentRuntime.call(:list_tasks, [], :unavailable) do
+    case AgentRuntime.query(:list_tasks, []) do
       tasks when is_list(tasks) ->
         tasks =
           Enum.filter(tasks, fn {_id, task} ->
@@ -612,7 +612,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
   end
 
   defp children(key, owner, content?) do
-    case AgentRuntime.call(:list_tasks, [], :unavailable) do
+    case AgentRuntime.query(:list_tasks, []) do
       tasks when is_list(tasks) ->
         items =
           tasks
@@ -649,7 +649,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
   defp child_answer(_), do: nil
 
   defp processes(owner) do
-    case AgentRuntime.call(:session_process_receipts, [owner], {:error, :unavailable}) do
+    case AgentRuntime.query(:session_process_receipts, [owner]) do
       {:ok, receipts} when is_list(receipts) ->
         items =
           Enum.map(receipts, fn receipt ->
@@ -669,7 +669,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
   end
 
   defp todos(key, cwd, content?) do
-    case AgentRuntime.call(:session_todos, [key, cwd], {:error, :unavailable}) do
+    case AgentRuntime.query(:session_todos, [key, cwd]) do
       {:ok, items, revision} when is_list(items) ->
         fields = if content?, do: @todo_fields, else: @metadata_todo_fields
         items = Enum.map(items, &public_fields(&1, fields))

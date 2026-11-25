@@ -53,7 +53,7 @@ defmodule LemonAgent.GenAISpans do
         config = {exporter, Keyword.get(opts, :exporter_config)}
         # A hard-killed attachment cannot run terminate/2. Reclaim its fixed id
         # on supervised restart rather than leaving a duplicate handler behind.
-        :telemetry.detach(__MODULE__)
+        _ = :telemetry.detach(__MODULE__)
         :ok = :telemetry.attach_many(__MODULE__, @events, &__MODULE__.handle_event/4, config)
         {:ok, config}
 

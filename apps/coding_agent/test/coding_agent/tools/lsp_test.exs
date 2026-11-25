@@ -512,6 +512,51 @@ defmodule CodingAgent.Tools.LspTest do
     assert message =~ "is not installed. Install clangd and put it on PATH."
   end
 
+  test "a non-UTF-8 file is refused without restarting the shared server", ctx do
+    before = raw_result(ctx, "fake/pid")
+    File.write!(Path.join(ctx.tmp, "src/latin1.c"), <<"/* caf", 0xE9, " */ int x;\n">>)
+
+    assert {:error, message} = run(ctx, %{"action" => "diagnostics", "file" => "src/latin1.c"})
+    assert message =~ "src/latin1.c to the language server: the file is not valid UTF-8 text"
+    refute message =~ "retry"
+    assert raw_result(ctx, "fake/pid") == before
+  end
+
+  test "files in different apps of an umbrella share one server at the umbrella root", ctx do
+    elixir_env = "LEMON_LSP_ELIXIR_LS_COMMAND"
+    previous = System.get_env(elixir_env)
+    System.put_env(elixir_env, System.get_env(@env))
+
+    on_exit(fn ->
+      if previous, do: System.put_env(elixir_env, previous), else: System.delete_env(elixir_env)
+    end)
+
+    File.write!(Path.join(ctx.tmp, "mix.exs"), "def project, do: [apps_path: \"apps\"]\n")
+
+    pids =
+      for app <- ~w(a b) do
+        File.mkdir_p!(Path.join(ctx.tmp, "apps/#{app}/lib"))
+
+        File.write!(
+          Path.join(ctx.tmp, "apps/#{app}/mix.exs"),
+          "def project, do: [app: :#{app}]\n"
+        )
+
+        file = "apps/#{app}/lib/#{app}.ex"
+        File.write!(Path.join(ctx.tmp, file), "defmodule #{String.upcase(app)} do\nend\n")
+        result = run(ctx, %{"action" => "request", "file" => file, "query" => "fake/pid"})
+        [_header, json] = String.split(text!(result), "\n", parts: 2)
+        Jason.decode!(json)
+      end
+
+    assert [same, same] = pids
+
+    assert [%{root: root}] =
+             Enum.filter(Client.list(ctx.session_id), &(&1.server_id == :elixir_ls))
+
+    assert root == ctx.tmp
+  end
+
   test "servers stop when the owning session process exits", ctx do
     assert %AgentToolResult{} =
              run(ctx, %{"action" => "hover", "file" => "src/main.c", "line" => 1})

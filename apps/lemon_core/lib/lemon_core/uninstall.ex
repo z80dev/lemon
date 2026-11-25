@@ -328,7 +328,7 @@ defmodule LemonCore.Uninstall do
       :ok
     else
       _ ->
-        File.rm(temporary)
+        _ = File.rm(temporary)
         {:error, :rc_write_failed}
     end
   end

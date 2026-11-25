@@ -7,7 +7,9 @@ rollback procedure if problems arise.
 > **History:** these two flags previously shipped as `"opt-in"` behind a
 > quantitative graduation gate (`LemonRouter.RolloutGate`). Both features were
 > promoted to `"default-on"` by decision on 2026-08-14 and the gate machinery
-> was removed; this guide now documents only states and rollback.
+> was removed. `routing_feedback` returned to off by default in 2026-11, after
+> its history was found to override a changed `[defaults] model`; see
+> [Adaptive Behavior](adaptive.md#how-it-influences-routing).
 
 ---
 
@@ -30,21 +32,22 @@ off ↔ default-on
 ```toml
 [features]
 session_search         = "default-on"  # durable memory ingest/search kill switch
-routing_feedback       = "default-on"  # task fingerprinting + routing feedback recording
+routing_feedback       = "off"         # task fingerprinting + routing feedback (enable with "on")
 skill_synthesis_drafts = "default-on"  # scheduled skill-draft generation
 ```
 
-All three are on out of the box; each exists as an operator kill switch.
+`session_search` and `skill_synthesis_drafts` are on out of the box and their
+flags are operator kill switches; `routing_feedback` must be enabled.
 
 ---
 
-## Disabling a Feature (Operator)
+## Enabling or Disabling a Feature (Operator)
 
-1. Turn the feature off in `config.toml`:
+1. Set the feature in the global `config.toml`:
 
 ```toml
 [features]
-routing_feedback       = "off"
+routing_feedback       = "on"
 skill_synthesis_drafts = "off"
 ```
 
@@ -52,7 +55,7 @@ skill_synthesis_drafts = "off"
    overrides TOML):
 
 ```bash
-export LEMON_FEATURE_ROUTING_FEEDBACK=off
+export LEMON_FEATURE_ROUTING_FEEDBACK=on
 export LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off
 ```
 
@@ -74,8 +77,8 @@ lemon doctor
 
 ## Observing the Learning Loop
 
-There is no gate to evaluate anymore — the flags are on. To inspect what the
-loop is actually doing:
+There is no gate to evaluate anymore. To inspect what the loop is actually
+doing (routing feedback records only while its flag is on):
 
 - `mix lemon.feedback stats` / `list` / `inspect KEY` — routing feedback store
   totals, per-fingerprint success rates, and confidence annotations.
@@ -94,4 +97,4 @@ loop is actually doing:
 - [`docs/user-guide/memory.md`](memory.md) — memory documents and session search
 - `LemonCore.Config.Features` — flag states, defaults, and env-var overrides
 
-*Last reviewed: 2026-10-15*
+*Last reviewed: 2026-11-23*

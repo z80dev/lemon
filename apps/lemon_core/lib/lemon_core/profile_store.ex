@@ -539,7 +539,7 @@ defmodule LemonCore.ProfileStore do
   end
 
   defp rollback_create(config, original, created_home, reason) do
-    if is_binary(created_home), do: File.rm_rf(created_home)
+    _ = if is_binary(created_home), do: File.rm_rf(created_home)
 
     case atomic_write(config, original) do
       :ok -> {:error, reason}

@@ -124,19 +124,6 @@ config :lemon_control_plane, :node_gateway,
     ),
   ip: bind_ip.("LEMON_CONTROL_PLANE_NODE_BIND_IP", "127.0.0.1")
 
-remote_http_apis =
-  (normalized_env.("LEMON_CONTROL_PLANE_REMOTE_HTTP") || "")
-  |> String.split(",", trim: true)
-  |> Enum.map(fn api ->
-    case String.trim(api) do
-      "openai" -> :openai
-      "acp" -> :acp
-      _ -> raise "LEMON_CONTROL_PLANE_REMOTE_HTTP accepts only openai,acp"
-    end
-  end)
-
-config :lemon_control_plane, :remote_http_apis, remote_http_apis
-
 config :lemon_control_plane,
        :allowed_origins,
        (normalized_env.("LEMON_CONTROL_PLANE_ALLOWED_ORIGINS") || "")

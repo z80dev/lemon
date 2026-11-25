@@ -8,13 +8,8 @@ defmodule LemonChannels.VoiceReplyDelivery do
 
   use GenServer
 
-  alias LemonChannels.{
-    Registry,
-    GatewayConfig,
-    OutboundPayload,
-    Outbox,
-    VoiceReply
-  }
+  alias LemonChannels.{Registry, OutboundPayload, Outbox, VoiceReply}
+  alias LemonCore.GatewayConfig
 
   alias LemonChannels.Outbox.Chunker
   alias LemonCore.DeliveryIntent

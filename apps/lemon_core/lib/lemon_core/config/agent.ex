@@ -122,7 +122,7 @@ defmodule LemonCore.Config.Agent do
             max_retries: integer(),
             base_delay_ms: integer()
           },
-          max_tool_turns: pos_integer() | :infinity,
+          max_tool_turns: pos_integer() | :infinity | term(),
           shell: %{
             path: String.t() | nil,
             command_prefix: String.t() | nil
@@ -271,16 +271,21 @@ defmodule LemonCore.Config.Agent do
     normalize_max_tool_turns(settings["max_tool_turns"])
   end
 
+  # Unset or 0 is unlimited. Anything else that is not a positive integer is
+  # kept raw so the validator reports it instead of it silently meaning
+  # "unlimited".
+  defp normalize_max_tool_turns(nil), do: :infinity
+  defp normalize_max_tool_turns(0), do: :infinity
   defp normalize_max_tool_turns(value) when is_integer(value) and value > 0, do: value
 
   defp normalize_max_tool_turns(value) when is_binary(value) do
     case Integer.parse(String.trim(value)) do
-      {parsed, ""} -> normalize_max_tool_turns(parsed)
-      _ -> :infinity
+      {parsed, ""} when parsed >= 0 -> normalize_max_tool_turns(parsed)
+      _ -> value
     end
   end
 
-  defp normalize_max_tool_turns(_value), do: :infinity
+  defp normalize_max_tool_turns(value), do: value
 
   defp resolve_provider_routing(settings) do
     routing = ensure_map(settings["provider_routing"])

@@ -53,13 +53,16 @@ defmodule LemonGateway.SecretFailClosedTest do
     System.put_env("TWILIO_AUTH_TOKEN", @ambient_token)
     start_supervised!(LemonGateway.Sms.Inbox)
 
-    original = :sys.get_state(LemonGateway.Config)
+    env_key = :"Elixir.LemonGateway.Config"
+    original = Application.get_env(:lemon_gateway, env_key)
 
-    :sys.replace_state(LemonGateway.Config, fn state ->
-      Map.put(state, :sms, %{auth_token_secret: "sms_tripwire_token"})
-    end)
+    Application.put_env(
+      :lemon_gateway,
+      env_key,
+      Map.put(Map.new(original || []), :sms, %{auth_token_secret: "sms_tripwire_token"})
+    )
 
-    on_exit(fn -> :sys.replace_state(LemonGateway.Config, fn _ -> original end) end)
+    on_exit(fn -> Application.put_env(:lemon_gateway, env_key, original) end)
 
     url = "http://www.example.com/webhooks/twilio/sms"
     sid = "SMtrip-#{System.unique_integer([:positive])}"

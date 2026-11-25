@@ -1292,6 +1292,18 @@ defmodule LemonCore.Env.Declarations do
       apps: [:lemon_core, :lemon_gateway]
     },
     %{
+      name: :lemon_gateway_ingress_enabled,
+      env_var: "LEMON_GATEWAY_INGRESS_ENABLED",
+      aliases: [],
+      type: :boolean,
+      default: false,
+      doc: "Whether to start the gateway-owned ingress supervisor.",
+      secret?: false,
+      required?: false,
+      area: :gateway,
+      apps: [:lemon_core, :lemon_gateway]
+    },
+    %{
       name: :lemon_gateway_max_concurrent_runs,
       env_var: "LEMON_GATEWAY_MAX_CONCURRENT_RUNS",
       aliases: [],

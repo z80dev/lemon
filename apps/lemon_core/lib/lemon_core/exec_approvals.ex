@@ -477,6 +477,7 @@ defmodule LemonCore.ExecApprovals do
         id when is_binary(id) and id != "" ->
           case LemonCore.RunStore.fetch(id) do
             {:ok, %{summary: summary}} when is_map(summary) -> {:ok, true}
+            {:error, :evicted} -> {:ok, true}
             {:ok, _} -> {:ok, false}
             {:error, _} = error -> error
           end
@@ -705,9 +706,10 @@ defmodule LemonCore.ExecApprovals do
       decision == :deny ->
         result = finish_resolution(approval_id, claim, :denied, decision)
 
-        settle(result, approval_id, pending, fn ->
-          emit_resolution(approval_id, pending, :deny)
-        end)
+        _ =
+          settle(result, approval_id, pending, fn ->
+            emit_resolution(approval_id, pending, :deny)
+          end)
 
         result
 
@@ -794,6 +796,7 @@ defmodule LemonCore.ExecApprovals do
       id when is_binary(id) and id != "" ->
         case LemonCore.RunStore.fetch(id) do
           {:ok, %{summary: summary}} when is_map(summary) -> {:ok, true}
+          {:error, :evicted} -> {:ok, true}
           {:ok, _} -> {:ok, false}
           {:error, _} = error -> error
         end

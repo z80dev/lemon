@@ -1,7 +1,16 @@
 name: OSV Scanner
 
-# The single dependency-vulnerability surface for Mix, npm, and Bun lockfiles.
-# Other workflows do not run `npm audit`; add new lockfiles here instead.
+# The single dependency-vulnerability gate for the Mix, npm, Bun, Cargo and
+# SwiftPM lockfiles Lemon ships. Other workflows do not run `npm audit`; add
+# every new lockfile to both `paths` lists and `scan-args` below.
+#
+# A known vulnerability fails the job. Accepted findings are listed, each with a
+# reason and an expiry date, in osv-scanner.toml; an expired entry fails again.
+# A scan that errors fails the job too (the pinned reusable workflow refuses to
+# report "no vulnerabilities" when the scanner wrote no results).
+#
+# rel/python.lock.json is not scanned: it pins a python-build-standalone CPython
+# archive by URL and sha256, not a package lockfile OSV can parse.
 
 on:
   pull_request:
@@ -15,8 +24,27 @@ on:
       - "clients/tui/bun.lock"
       - "apps/lemon_channels/priv/package.json"
       - "apps/lemon_channels/priv/package-lock.json"
+      - "apps/lemon_web/assets/package.json"
+      - "apps/lemon_web/assets/package-lock.json"
       - "docs/package.json"
       - "docs/package-lock.json"
+      - "native/lemon-wasm-runtime/Cargo.lock"
+      - "native/wasm-tools/cast-call/Cargo.lock"
+      - "native/wasm-tools/cast-send/Cargo.lock"
+      - "native/wasm-tools/cast-wallet-address/Cargo.lock"
+      - "native/wasm-tools/cast-wallet-sign/Cargo.lock"
+      - "native/wasm-tools/common/Cargo.lock"
+      - "native/wasm-tools/forge-create/Cargo.lock"
+      - "native/wasm-tools/forge-script/Cargo.lock"
+      - "native/wasm-tools/json-transform/Cargo.lock"
+      - "products/lemon_bot/backend/package.json"
+      - "products/lemon_bot/backend/bun.lock"
+      - "products/lemon_bot/web/package.json"
+      - "products/lemon_bot/web/bun.lock"
+      - "products/lemon_bot/sdk/ts/package.json"
+      - "products/lemon_bot/sdk/ts/bun.lock"
+      - "products/lemon_bot/apple/LemonBotKit/Package.resolved"
+      - "osv-scanner.toml"
       - ".github/workflows/osv-scanner.yml"
   push:
     branches: [main]
@@ -29,8 +57,27 @@ on:
       - "clients/tui/bun.lock"
       - "apps/lemon_channels/priv/package.json"
       - "apps/lemon_channels/priv/package-lock.json"
+      - "apps/lemon_web/assets/package.json"
+      - "apps/lemon_web/assets/package-lock.json"
       - "docs/package.json"
       - "docs/package-lock.json"
+      - "native/lemon-wasm-runtime/Cargo.lock"
+      - "native/wasm-tools/cast-call/Cargo.lock"
+      - "native/wasm-tools/cast-send/Cargo.lock"
+      - "native/wasm-tools/cast-wallet-address/Cargo.lock"
+      - "native/wasm-tools/cast-wallet-sign/Cargo.lock"
+      - "native/wasm-tools/common/Cargo.lock"
+      - "native/wasm-tools/forge-create/Cargo.lock"
+      - "native/wasm-tools/forge-script/Cargo.lock"
+      - "native/wasm-tools/json-transform/Cargo.lock"
+      - "products/lemon_bot/backend/package.json"
+      - "products/lemon_bot/backend/bun.lock"
+      - "products/lemon_bot/web/package.json"
+      - "products/lemon_bot/web/bun.lock"
+      - "products/lemon_bot/sdk/ts/package.json"
+      - "products/lemon_bot/sdk/ts/bun.lock"
+      - "products/lemon_bot/apple/LemonBotKit/Package.resolved"
+      - "osv-scanner.toml"
       - ".github/workflows/osv-scanner.yml"
   schedule:
     - cron: "0 9 * * 1"
@@ -48,12 +95,28 @@ concurrency:
 jobs:
   scan:
     name: Scan lockfiles
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@c51854704019a247608d928f370c98740469d4b5
+    # v2.7.1
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@32d3cd482bdadfb38b186c0ad1b031902d55d932
     with:
       scan-args: |-
+        --config=osv-scanner.toml
         --lockfile=mix.lock
         --lockfile=clients/tui/bun.lock
         --lockfile=clients/lemon-browser-node/package-lock.json
         --lockfile=apps/lemon_channels/priv/package-lock.json
+        --lockfile=apps/lemon_web/assets/package-lock.json
         --lockfile=docs/package-lock.json
-      fail-on-vuln: false
+        --lockfile=native/lemon-wasm-runtime/Cargo.lock
+        --lockfile=native/wasm-tools/cast-call/Cargo.lock
+        --lockfile=native/wasm-tools/cast-send/Cargo.lock
+        --lockfile=native/wasm-tools/cast-wallet-address/Cargo.lock
+        --lockfile=native/wasm-tools/cast-wallet-sign/Cargo.lock
+        --lockfile=native/wasm-tools/common/Cargo.lock
+        --lockfile=native/wasm-tools/forge-create/Cargo.lock
+        --lockfile=native/wasm-tools/forge-script/Cargo.lock
+        --lockfile=native/wasm-tools/json-transform/Cargo.lock
+        --lockfile=products/lemon_bot/backend/bun.lock
+        --lockfile=products/lemon_bot/web/bun.lock
+        --lockfile=products/lemon_bot/sdk/ts/bun.lock
+        --lockfile=products/lemon_bot/apple/LemonBotKit/Package.resolved
+      fail-on-vuln: true

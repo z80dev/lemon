@@ -216,7 +216,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "sessionKey" => :string,
         "agentId" => :string,
         "queueMode" => :string,
+        "runId" => :string,
         "model" => :string,
+        "cwd" => :string,
+        "idempotency_key" => :string,
         "project_memory_capture" => :boolean,
         "session_mode" => :string,
         "persona" => :boolean
@@ -540,6 +543,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "sessions.reset" => %{
       required: %{
         "sessionKey" => :string
+      },
+      optional: %{
+        "dryRun" => :boolean,
+        "confirmToken" => :string
       }
     },
     "sessions.delete" => %{
@@ -567,15 +574,6 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "session.detail" => %{
       required: %{
         "sessionKey" => :string
-      },
-      optional: %{
-        "limit" => :integer,
-        "historyLimit" => :integer,
-        "eventLimit" => :integer,
-        "toolCallLimit" => :integer,
-        "includeFullText" => :boolean,
-        "includeRawEvents" => :boolean,
-        "includeRunRecord" => :boolean
       }
     },
 
