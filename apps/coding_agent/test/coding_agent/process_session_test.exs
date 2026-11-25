@@ -12,7 +12,7 @@ defmodule CodingAgent.ProcessSessionTest do
 
   alias CodingAgent.{ProcessManager, ProcessSession, ProcessStore}
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   defp await_status(process_id, statuses) do
     assert_eventually(

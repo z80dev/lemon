@@ -45,7 +45,7 @@ history, compaction and supervised delegation. The loop/model runtime comes from
   descriptor-bound helpers (`LemonCore.ConfinedFS`, rooted at the same trusted
   boundary), never by reopening the validated path, so a directory swapped for a
   symlink after the check is refused. Only explicit `allow_symlinks: true` keeps
-  path-based I/O. Swap regressions use `LemonCore.Testing.FileServerTap`.
+  path-based I/O. Swap regressions use `LemonPlatformTest.Testing.FileServerTap`.
   After a write, record the committed bytes in `FileReadTracker` (never re-read
   the path); formatters and checkers get Lemon's bytes through a private
   `CheckerStaging` directory, never a workspace path they write.

@@ -1,5 +1,5 @@
 defmodule LemonCore.Secrets.ExternalTest do
-  use LemonCore.Testing.Case, async: false, with_store: true
+  use LemonPlatformTest.Testing.Case, async: false, with_store: true
 
   import ExUnit.CaptureLog
 

@@ -124,6 +124,26 @@ applicable, `telemetry: [handler_id]` for fresh test-owned handlers. For
 fixtures that must outlive `setup`, `setup_app_restart/2` defers restoration
 until `on_exit`. Existing env settings, including configured `nil` values, are
 preserved; pre-existing dependencies and unrelated apps are not restarted.
+## Shared test helpers
+
+Add `{:lemon_platform_test, "~> 0.3.0", only: :test}` to use the helpers
+under `LemonPlatformTest.Testing`:
+
+```elixir
+defmodule MyApp.ConfigTest do
+  use LemonPlatformTest.Testing.Case, async: false
+
+  test "writes a fixture", %{harness: harness} do
+    file = temp_file!(harness, "fixture.txt", "test content")
+    assert File.read!(file) == "test content"
+  end
+end
+```
+
+Add `lemon_core` on the same release line if you request Store support
+with `with_store: true` (or a `with_store` tag). The kit also provides
+`Testing.AsyncHelpers` for synchronization, `Testing.HermeticEnv` for
+environment snapshots, and `Testing.FileServerTap` for file race tests.
 
 ## In this repo
 

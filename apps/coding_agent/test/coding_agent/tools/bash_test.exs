@@ -7,7 +7,7 @@ defmodule CodingAgent.Tools.BashTest do
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   @moduletag :tmp_dir
 

@@ -5,3 +5,5 @@
 if node = System.find_executable("node"), do: System.cmd(node, ["-e", "0"])
 
 ExUnit.start(capture_log: true)
+
+Code.require_file("../../lemon_platform_test/test_support.exs", __DIR__)

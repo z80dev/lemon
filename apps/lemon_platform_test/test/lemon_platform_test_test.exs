@@ -52,6 +52,7 @@ defmodule LemonPlatformTest.HelpersTest do
                compare_and_delete_many: 2,
                compare_and_swap: 5,
                confirm_durable: 1,
+               durable?: 0,
                list_recent: 3,
                ping: 1,
                read_keys: 2,

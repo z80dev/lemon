@@ -1,4 +1,4 @@
-Code.require_file("../../../lemon_core/test/support/crash_model.exs", __DIR__)
+Code.require_file("../../../lemon_platform_test/test/support/crash_model.exs", __DIR__)
 
 defmodule LemonChannels.OutboxCrashModelTest do
   use ExUnit.Case, async: true
@@ -6,7 +6,7 @@ defmodule LemonChannels.OutboxCrashModelTest do
   alias LemonChannels.OutboundPayload
   alias LemonChannels.Outbox.{Dedupe, QueueStore}
   alias LemonCore.Store
-  alias LemonCore.Testing.CrashModel
+  alias LemonPlatformTest.Testing.CrashModel
 
   @moduletag :crash_model
   @moduletag :tmp_dir

@@ -2,7 +2,7 @@ defmodule LemonGateway.RuntimeAdmissionTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.{Event, ExecutionRequest, Runtime, Slots}
-  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1]
+  import LemonPlatformTest.Testing.AsyncHelpers, only: [assert_eventually: 1]
 
   defmodule GatedExecutor do
     @behaviour LemonGateway.Executor

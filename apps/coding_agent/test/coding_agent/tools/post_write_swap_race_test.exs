@@ -15,7 +15,7 @@ defmodule CodingAgent.Tools.PostWriteSwapRaceTest do
   alias CodingAgent.FileReadTracker
   alias CodingAgent.Tools.{Edit, Patch, Write}
   alias LemonAgent.Types.AgentToolResult
-  alias LemonCore.Testing.FileServerTap
+  alias LemonPlatformTest.Testing.FileServerTap
 
   @moduletag :tmp_dir
 

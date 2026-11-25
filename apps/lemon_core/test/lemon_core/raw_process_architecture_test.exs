@@ -33,9 +33,9 @@ defmodule LemonCore.RawProcessArchitectureTest do
     "apps/lemon_core/lib/lemon_core/drain.ex" =>
       {2,
        "VM drain coordinator and deadline failsafe must survive application supervisor shutdown to stop the VM."},
-    "apps/lemon_core/lib/lemon_core/testing/async_helpers.ex" =>
+    "apps/lemon_platform_test/lib/lemon_platform_test/testing/async_helpers.ex" =>
       {1, "Documentation-only latch example; no production task is launched by this literal."},
-    "apps/lemon_core/lib/lemon_core/testing/file_server_tap.ex" =>
+    "apps/lemon_platform_test/lib/lemon_platform_test/testing/file_server_tap.ex" =>
       {1,
        "Test-only :file_server_2 proxy for async: false race tests; with_tap/2 restores the real server and kills the proxy."},
     "apps/lemon_gateway/lib/lemon_gateway/transports/webhook/response.ex" =>

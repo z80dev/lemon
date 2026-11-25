@@ -1,7 +1,7 @@
-defmodule LemonCore.Testing.HermeticEnvTest do
+defmodule LemonPlatformTest.Testing.HermeticEnvTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.Testing.HermeticEnv
+  alias LemonPlatformTest.Testing.HermeticEnv
 
   setup do
     keys = ["OPENAI_API_KEY", "OPENROUTER_API_KEY", "NON_SECRET_TEST_VALUE"]

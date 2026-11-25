@@ -15,7 +15,7 @@ defmodule LemonAgent.AgentRegistryTest do
 
   alias LemonAgent.AgentRegistry
 
-  import LemonCore.Testing.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   # Helper to generate unique session IDs for test isolation
   defp unique_session_id do

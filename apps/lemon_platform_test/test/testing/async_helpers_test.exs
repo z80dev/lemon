@@ -1,7 +1,7 @@
-defmodule LemonCore.Testing.AsyncHelpersTest do
+defmodule LemonPlatformTest.Testing.AsyncHelpersTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.Testing.AsyncHelpers
+  alias LemonPlatformTest.Testing.AsyncHelpers
 
   describe "assert_eventually/2" do
     test "returns :ok immediately when condition is true" do

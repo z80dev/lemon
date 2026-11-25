@@ -2,7 +2,7 @@ defmodule LemonCore.Config.ModularTest do
   @moduledoc """
   Tests for the Config.Modular module.
   """
-  use LemonCore.Testing.Case, async: false
+  use LemonPlatformTest.Testing.Case, async: false
 
   alias LemonCore.Config.Modular
   alias LemonCore.Config.ValidationError

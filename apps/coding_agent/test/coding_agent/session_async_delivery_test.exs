@@ -3,7 +3,7 @@ defmodule CodingAgent.SessionAsyncDeliveryTest do
   # request-budget tests. Keep it out of concurrent session teardown traffic.
   use ExUnit.Case, async: false
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias CodingAgent.Session
   alias CodingAgent.Tools.Task, as: TaskTool

@@ -120,7 +120,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
         end
       )
 
-    CodingAgent.AsyncHelpers.assert_eventually(fn ->
+    LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(fn ->
       match?({:ok, %{status: :cancelled}}, TaskStore.get_record(result.details.task_id))
     end)
 

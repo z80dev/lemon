@@ -21,11 +21,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   exqlite 0.43 requires 1.17). CI proves the floor on Elixir 1.17.3 / OTP 26.2,
   and `LemonCore.ConfinedFS.Stat` moved to its own file so the package compiles
   there (#730).
-- **Breaking:** the test harness (`LemonCore.Testing`, `Testing.Case`,
-  `Testing.HermeticEnv`, `Testing.AsyncHelpers`, `Testing.FileServerTap`) is no
-  longer shipped in the Hex package; it serves the lemon repository's own
-  suites. `use LemonCore.Testing.Case, with_store: true` now starts
-  `LemonCore.Store` (the option was ignored), and
+- **Breaking:** the `LemonCore.Testing` helpers have moved to
+  `LemonPlatformTest.Testing` in `lemon_platform_test` (#730).
+  `Testing.Case, with_store: true` now starts `LemonCore.Store` (the option
+  was ignored), and
   `HermeticEnv.credential_env_vars/0`, `scrub_unit_credentials!/1` and the
   `:test_credential_env_vars` setting are removed: `scripts/test` holds the one
   credential scrub list (#713).

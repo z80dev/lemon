@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.EvalTest do
   # loaded test machine from starving kernel startup.
   use ExUnit.Case, async: false
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias CodingAgent.Eval.{Kernel, KernelSupervisor}
   alias CodingAgent.Tools.Eval

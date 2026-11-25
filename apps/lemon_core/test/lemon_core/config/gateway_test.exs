@@ -25,7 +25,7 @@ defmodule LemonCore.Config.GatewayTest do
   lives with that platform (in lemon_channels' adapter config tests). These
   tests prove the generic routing mechanism with a stub channel only.
   """
-  use LemonCore.Testing.Case, async: false
+  use LemonPlatformTest.Testing.Case, async: false
 
   alias LemonCore.Config.Gateway
   alias LemonCore.Config.Validator

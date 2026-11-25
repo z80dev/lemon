@@ -9,6 +9,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 ### Added
 
 - `LemonPlatformTest.AppRestart` restores the original OTP app lifecycle and declared application env, OS env, and telemetry ownership after a non-async test (#736).
+- `LemonPlatformTest.Testing` now owns the shared ExUnit harness, async
+  synchronization, environment isolation, and file race helpers moved from
+  `LemonCore.Testing` (#730).
 
 ### Removed
 

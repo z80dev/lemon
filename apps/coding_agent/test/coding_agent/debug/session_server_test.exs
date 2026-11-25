@@ -1,7 +1,7 @@
 defmodule CodingAgent.Debug.SessionServerTest do
   use ExUnit.Case, async: true
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias CodingAgent.Debug.Client
   alias CodingAgent.Debug.SessionServer

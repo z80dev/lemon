@@ -4,7 +4,7 @@ defmodule CodingAgent.SessionSupervisorTest do
   alias CodingAgent.SessionRegistry
   alias CodingAgent.SessionSupervisor
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   defp kill_and_await(pid) do
     ref = Process.monitor(pid)

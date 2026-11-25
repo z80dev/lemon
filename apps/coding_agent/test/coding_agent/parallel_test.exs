@@ -4,7 +4,7 @@ defmodule CodingAgent.ParallelTest do
   alias CodingAgent.Parallel
   alias CodingAgent.Parallel.Semaphore
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   defp await_waiters(sem, count) do
     assert_eventually(fn -> :queue.len(:sys.get_state(sem).waiters) == count end,

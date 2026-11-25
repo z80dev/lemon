@@ -159,7 +159,7 @@ defmodule LemonCore.ExecApprovalExpiryTest do
 
     restart_child(Store)
 
-    LemonCore.Testing.AsyncHelpers.assert_eventually(
+    LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(
       fn -> ExecApprovalExpiry.ensure_ready() == :ok end,
       timeout: 5_000
     )
@@ -190,7 +190,7 @@ defmodule LemonCore.ExecApprovalExpiryTest do
 
     Process.exit(owner, :kill)
 
-    LemonCore.Testing.AsyncHelpers.assert_eventually(
+    LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(
       fn ->
         {:ok, owners} = ExecApprovalStore.fetch_session_owners()
         not List.keymember?(owners, "slow-store", 0)

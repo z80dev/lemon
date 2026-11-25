@@ -6,7 +6,7 @@ defmodule LemonSkills.Synthesis.DraftStoreConfinedTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonCore.Testing.FileServerTap
+  alias LemonPlatformTest.Testing.FileServerTap
   alias LemonSkills.Synthesis.DraftStore
 
   @moduletag :tmp_dir

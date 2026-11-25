@@ -12,7 +12,7 @@ defmodule CodingAgent.Tools.AstGrepSwapRaceTest do
 
   alias CodingAgent.MutationLock
   alias CodingAgent.Tools.AstGrep
-  alias LemonCore.Testing.FileServerTap
+  alias LemonPlatformTest.Testing.FileServerTap
 
   @moduletag :tmp_dir
 

@@ -4,7 +4,7 @@ defmodule LemonRouter.IntrospectionTest do
   """
   use ExUnit.Case, async: false
 
-  import LemonCore.Testing.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias LemonCore.Introspection
 

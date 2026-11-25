@@ -34,6 +34,7 @@
 #      calls an undefined module of a published package or a function this
 #      Elixir/OTP lacks (xref), and runs the packaged doctor: the runtime check
 #      must pass on this toolchain and no doctor check may crash. CI runs it on
+#      It also runs an ExUnit suite using the packaged test harness.
 #      the packages' declared Elixir floor as well as the current toolchain.
 #   3. The installer generates the base and --memory project shapes against the
 #      same unpacked packages (`--packages-path`), compiles them with
@@ -223,10 +224,10 @@ EOF
 
 echo
 echo "==> consumer: deps.get"
-(cd "$CONSUMER" && consumer mix deps.get >/dev/null)
+(cd "$CONSUMER" && consumer env MIX_ENV=test mix deps.get >/dev/null)
 
 echo "==> consumer: compile"
-(cd "$CONSUMER" && consumer mix compile 2>&1) | tee "$TMP/consumer_compile.log"
+(cd "$CONSUMER" && consumer env MIX_ENV=test mix compile 2>&1) | tee "$TMP/consumer_compile.log"
 # Mix only warns when a dependency requires a newer Elixir than the running
 # one; for the packages' declared floor that is a failure.
 if grep -n 'requires Elixir' "$TMP/consumer_compile.log"; then
@@ -234,17 +235,36 @@ if grep -n 'requires Elixir' "$TMP/consumer_compile.log"; then
   exit 1
 fi
 
+echo "==> consumer: run packaged test support"
+mkdir -p "$CONSUMER/test"
+cat >"$CONSUMER/test/test_helper.exs" <<'EOF'
+ExUnit.start()
+EOF
+cat >"$CONSUMER/test/testing_smoke_test.exs" <<'EOF'
+defmodule PackagesConsumer.TestingSmokeTest do
+  use LemonPlatformTest.Testing.Case, async: false, with_store: true
+
+  import LemonPlatformTest.Testing.AsyncHelpers, only: [assert_eventually: 1]
+
+  test "the packaged kit provides a working harness", %{harness: harness} do
+    assert harness.store == LemonCore.Store
+    assert_eventually(fn -> is_pid(Process.whereis(harness.store)) end)
+    assert File.read!(temp_file!(harness, "fixture.txt", "fixture")) == "fixture"
+  end
+end
+EOF
+(cd "$CONSUMER" && consumer mix test --warnings-as-errors)
+
 echo "==> consumer: boot and inspect"
-(cd "$CONSUMER" && consumer mix run -e '
+(cd "$CONSUMER" && consumer env MIX_ENV=test mix run -e '
   {:ok, _} = Application.ensure_all_started(:lemon_agent)
 
   for module <- [LemonAi, LemonCore.Store, LemonAgent, LemonMemory.Store, LemonPlatformTest.BackendCase] do
     Code.ensure_loaded?(module) || raise "#{inspect(module)} is missing from the packages"
   end
 
-  # Repo-only tooling and the in-repo test harness are excluded from the
-  # lemon_core tarball (apps/lemon_core/mix.exs); PluginCase, whose target is
-  # unpublished, from lemon_platform_test.
+  # Repo-only tooling is excluded from lemon_core; PluginCase targets an
+  # unpublished app. The test helpers have one home: lemon_platform_test.
   for module <- [
         LemonCore.Quality.ArchitectureCheck,
         LemonCore.Update.Version,
@@ -254,9 +274,20 @@ echo "==> consumer: boot and inspect"
         LemonCore.Testing.Case,
         LemonCore.Testing.HermeticEnv,
         LemonCore.Testing.AsyncHelpers,
+        LemonCore.Testing.FileServerTap,
         LemonPlatformTest.PluginCase
       ] do
     Code.ensure_loaded?(module) && raise "#{inspect(module)} leaked into the packages"
+  end
+
+  for module <- [LemonPlatformTest.Testing, LemonPlatformTest.Testing.Case,
+                 LemonPlatformTest.Testing.Harness, LemonPlatformTest.Testing.Helpers,
+                 LemonPlatformTest.Testing.AsyncHelpers, LemonPlatformTest.Testing.FileServerTap,
+                 LemonPlatformTest.Testing.HermeticEnv] do
+    module in Application.spec(:lemon_platform_test, :modules) ||
+      raise "#{inspect(module)} is not owned by lemon_platform_test"
+    module in Application.spec(:lemon_core, :modules) &&
+      raise "#{inspect(module)} leaked into lemon_core"
   end
 
   started = for {id, _pid, _type, _modules} <- Supervisor.which_children(LemonCore.Supervisor), do: id
@@ -267,29 +298,6 @@ echo "==> consumer: boot and inspect"
   end
 
   # No packaged module may call a module or function of a published package
-  # that the packages do not contain, nor a function the running Elixir/OTP
-  # lacks (String.replace_invalid/2 before Elixir 1.16): each is a raise
-  # waiting for a consumer. Calls into an absent optional dependency (Sentry,
-  # Phoenix.PubSub, ...) are guarded by the callers and are not counted.
-  published = [:lemon_ai, :lemon_core, :lemon_agent, :lemon_memory, :lemon_platform_test]
-  namespaces = ~w(LemonAi LemonCore LemonAgent LemonMemory LemonPlatformTest Mix.Tasks.Lemon)
-
-  {:ok, xref} = :xref.start(xref_mode: :functions)
-  :ok = :xref.set_default(xref, verbose: false, warnings: false)
-  :ok = :xref.set_library_path(xref, :code.get_path())
-  for app <- published, do: {:ok, ^app} = :xref.add_application(xref, :code.lib_dir(app))
-  {:ok, calls} = :xref.analyze(xref, :undefined_function_calls)
-  :xref.stop(xref)
-
-  ours? = fn module ->
-    name = inspect(module)
-    Enum.any?(namespaces, &(name == &1 or String.starts_with?(name, &1 <> ".")))
-  end
-
-  case for({from, {module, _, _} = to} <- calls, ours?.(module) or Code.ensure_loaded?(module), do: {from, to}) do
-    [] -> :ok
-    broken -> raise "packaged code calls what the packages or Elixir #{System.version()} do not provide:\n#{inspect(broken, pretty: true)}"
-  end
 
   # The packaged doctor runs: its runtime check must pass on this toolchain
   # (whatever Elixir the packages admit), and no doctor check may crash. A
@@ -313,6 +321,29 @@ echo "==> consumer: boot and inspect"
   case Enum.filter(LemonCore.Doctor.checks(), &(&1.name == "doctor.check_failed")) do
     [] -> :ok
     crashed -> raise "packaged doctor checks crashed: #{inspect(crashed)}"
+  end
+  # that the packages do not contain, nor a function the running Elixir/OTP
+  # lacks (String.replace_invalid/2 before Elixir 1.16): each is a raise
+  # waiting for a consumer. Calls into an absent optional dependency (Sentry,
+  # Phoenix.PubSub, ...) are guarded by the callers and are not counted.
+  published = [:lemon_ai, :lemon_core, :lemon_agent, :lemon_memory, :lemon_platform_test]
+  namespaces = ~w(LemonAi LemonCore LemonAgent LemonMemory LemonPlatformTest Mix.Tasks.Lemon)
+
+  {:ok, xref} = :xref.start(xref_mode: :functions)
+  :ok = :xref.set_default(xref, verbose: false, warnings: false)
+  :ok = :xref.set_library_path(xref, :code.get_path())
+  for app <- published, do: {:ok, ^app} = :xref.add_application(xref, :code.lib_dir(app))
+  {:ok, calls} = :xref.analyze(xref, :undefined_function_calls)
+  :xref.stop(xref)
+
+  ours? = fn module ->
+    name = inspect(module)
+    Enum.any?(namespaces, &(name == &1 or String.starts_with?(name, &1 <> ".")))
+  end
+
+  case for({from, {module, _, _} = to} <- calls, ours?.(module) or Code.ensure_loaded?(module), do: {from, to}) do
+    [] -> :ok
+    broken -> raise "packaged code calls what the packages or Elixir #{System.version()} do not provide:\n#{inspect(broken, pretty: true)}"
   end
 
   IO.puts("consumer ok: packages compile, :lemon_agent boots on :core services, repo tooling excluded, doctor runs")

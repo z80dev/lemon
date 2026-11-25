@@ -3,7 +3,7 @@ defmodule LemonCore.Secrets.FailClosedResolutionTest do
   Only a definite store miss may defer to an external source or the ambient
   environment. Every other store, key or source-config failure fails closed.
   """
-  use LemonCore.Testing.Case, async: false, with_store: true
+  use LemonPlatformTest.Testing.Case, async: false, with_store: true
 
   alias LemonCore.Clock
   alias LemonCore.Config.Secrets.Source

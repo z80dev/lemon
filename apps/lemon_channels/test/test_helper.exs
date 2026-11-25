@@ -14,3 +14,5 @@ exclude_tags =
   if case_insensitive_fs?, do: exclude_tags, else: [:case_insensitive_fs | exclude_tags]
 
 ExUnit.start(capture_log: true, exclude: exclude_tags)
+
+Code.require_file("../../lemon_platform_test/test_support.exs", __DIR__)

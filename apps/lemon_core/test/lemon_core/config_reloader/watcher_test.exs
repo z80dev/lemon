@@ -5,7 +5,7 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.ConfigReloader.Watcher
-  import LemonCore.Testing.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   @short_debounce_ms 50
   @short_poll_ms 5_000

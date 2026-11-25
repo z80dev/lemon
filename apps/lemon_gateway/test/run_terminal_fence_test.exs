@@ -9,7 +9,7 @@ defmodule LemonGateway.RunTerminalFenceTest do
   alias LemonCore.{Bus, Event, RunStore}
   alias LemonGateway.Event, as: EngineEvent
   alias LemonGateway.{ExecutionRequest, Runtime, Slots}
-  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1]
+  import LemonPlatformTest.Testing.AsyncHelpers, only: [assert_eventually: 1]
 
   defmodule ObservedExecutor do
     @moduledoc false

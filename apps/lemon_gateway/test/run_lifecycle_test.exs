@@ -9,7 +9,7 @@ defmodule LemonGateway.RunLifecycleTest do
 
   alias LemonCore.{Bus, Event, RunStore}
   alias LemonGateway.{ExecutionRequest, Run, Runtime, Slots}
-  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1]
+  import LemonPlatformTest.Testing.AsyncHelpers, only: [assert_eventually: 1]
 
   defmodule GatedExecutor do
     @moduledoc false

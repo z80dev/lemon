@@ -8,7 +8,7 @@ defmodule CodingAgent.SessionToolResourcesLifecycleTest do
   """
   use ExUnit.Case, async: true
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias CodingAgent.Debug.SessionServer
   alias CodingAgent.Session

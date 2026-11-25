@@ -318,7 +318,7 @@ defmodule LemonGatewayTest do
 
     submit_request(crash_request)
 
-    LemonCore.Testing.AsyncHelpers.assert_eventually(fn ->
+    LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(fn ->
       LemonGateway.Runtime.run_pid(crash_request.run_id) == nil
     end)
 
@@ -341,7 +341,7 @@ defmodule LemonGatewayTest do
                    2_000
 
     # Wait for the previous run to release its session claim.
-    LemonCore.Testing.AsyncHelpers.assert_eventually(fn ->
+    LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(fn ->
       LemonGateway.Runtime.run_pid(request1.run_id) == nil
     end)
 

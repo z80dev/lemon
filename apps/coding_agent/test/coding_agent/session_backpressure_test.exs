@@ -1,7 +1,7 @@
 defmodule CodingAgent.SessionBackpressureTest do
   use ExUnit.Case, async: true
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias CodingAgent.Session
   alias LemonAgent.EventStream

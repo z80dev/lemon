@@ -1,4 +1,4 @@
-defmodule LemonCore.Testing.CrashModel do
+defmodule LemonPlatformTest.Testing.CrashModel do
   @moduledoc false
 
   # A deliberately small persistence model, not an alternative production backend.

@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.Task.EarlyCancelTest do
   use ExUnit.Case, async: false
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias CodingAgent.{
     BudgetTracker,

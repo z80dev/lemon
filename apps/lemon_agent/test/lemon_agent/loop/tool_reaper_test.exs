@@ -6,7 +6,7 @@ defmodule LemonAgent.Loop.ToolReaperTest do
   """
   use ExUnit.Case, async: true
 
-  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 2]
+  import LemonPlatformTest.Testing.AsyncHelpers, only: [assert_eventually: 2]
 
   alias LemonAgent.{AbortSignal, EventStream, Loop}
   alias LemonAgent.Test.Mocks

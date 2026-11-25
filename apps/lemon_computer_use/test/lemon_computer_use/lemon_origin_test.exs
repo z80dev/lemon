@@ -6,7 +6,7 @@ defmodule LemonComputerUse.LemonOriginTest do
 
   alias LemonComputerUse.Approval
   alias LemonCore.{ExecApprovals, ExecApprovalStore}
-  alias LemonCore.Testing.AsyncHelpers
+  alias LemonPlatformTest.Testing.AsyncHelpers
 
   defp origin_request(origin) do
     %{

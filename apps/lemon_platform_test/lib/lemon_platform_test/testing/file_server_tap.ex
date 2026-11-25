@@ -1,4 +1,4 @@
-defmodule LemonCore.Testing.FileServerTap do
+defmodule LemonPlatformTest.Testing.FileServerTap do
   @moduledoc """
   Deterministic interleaving for path-based file races in tests.
 

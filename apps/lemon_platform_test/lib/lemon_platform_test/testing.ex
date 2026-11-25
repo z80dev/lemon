@@ -1,4 +1,4 @@
-defmodule LemonCore.Testing do
+defmodule LemonPlatformTest.Testing do
   @moduledoc """
   Test harness for constructing test environments with sensible defaults.
 
@@ -8,18 +8,21 @@ defmodule LemonCore.Testing do
   ## Usage
 
       defmodule MyTest do
-        use LemonCore.Testing.Case, async: true
+        use LemonPlatformTest.Testing.Case, async: true
 
         test "something", %{harness: harness} do
           # Use harness.tmp_dir, harness.store, etc.
         end
       end
 
+  Add `lemon_core` to your test dependencies if you use `with_store: true`
+  or `Helpers.clear_store_table/1`.
+
   Or use the builder directly:
 
-      harness = LemonCore.Testing.Harness.new()
-        |> LemonCore.Testing.Harness.with_env("KEY", "value")
-        |> LemonCore.Testing.Harness.build()
+      harness = LemonPlatformTest.Testing.Harness.new()
+        |> LemonPlatformTest.Testing.Harness.with_env("KEY", "value")
+        |> LemonPlatformTest.Testing.Harness.build()
   """
 
   defmodule Harness do
@@ -33,6 +36,9 @@ defmodule LemonCore.Testing do
       * `:original_env` - Original environment values for restoration
     """
     defstruct [:tmp_dir, :store, :env_vars, :original_env]
+
+    # Core is optional unless a test requests Store support.
+    @compile {:no_warn_undefined, LemonCore.Store}
 
     @doc """
     Creates a new harness builder with defaults.
@@ -166,7 +172,7 @@ defmodule LemonCore.Testing do
     ## Usage
 
         defmodule MyTest do
-          use LemonCore.Testing.Case, async: true
+          use LemonPlatformTest.Testing.Case, async: true
 
           # Harness is available in context
           test "example", %{harness: harness} do
@@ -189,21 +195,23 @@ defmodule LemonCore.Testing do
       with_store = Keyword.get(opts, :with_store, false)
 
       quote do
-        import LemonCore.Testing
-        import LemonCore.Testing.Helpers
+        import LemonPlatformTest.Testing
+        import LemonPlatformTest.Testing.Helpers
 
         setup ctx do
-          LemonCore.Testing.Case.__harness__(ctx, unquote(with_store))
+          LemonPlatformTest.Testing.Case.__harness__(ctx, unquote(with_store))
         end
       end
     end
 
     @doc false
     def __harness__(ctx, default_with_store) do
-      LemonCore.Testing.Harness.new()
-      |> LemonCore.Testing.Harness.set_async(Map.get(ctx, :async, false))
-      |> LemonCore.Testing.Harness.with_store(Map.get(ctx, :with_store, default_with_store))
-      |> LemonCore.Testing.Harness.build()
+      LemonPlatformTest.Testing.Harness.new()
+      |> LemonPlatformTest.Testing.Harness.set_async(Map.get(ctx, :async, false))
+      |> LemonPlatformTest.Testing.Harness.with_store(
+        Map.get(ctx, :with_store, default_with_store)
+      )
+      |> LemonPlatformTest.Testing.Harness.build()
     end
   end
 
@@ -211,6 +219,7 @@ defmodule LemonCore.Testing do
     @moduledoc """
     Helper functions for tests.
     """
+    @compile {:no_warn_undefined, LemonCore.Store}
 
     @doc """
     Generates a unique token for test isolation.

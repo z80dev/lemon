@@ -6,7 +6,7 @@ defmodule LemonCore.ExecApprovalsGrantOrderTest do
   The real `LemonCore.Store` process is stalled on one exact request with a
   `:sys` debug hook, so each test interleaves at the real store boundary.
   """
-  use LemonCore.Testing.Case, async: false
+  use LemonPlatformTest.Testing.Case, async: false
   @moduletag with_store: true
 
   alias LemonCore.ExecApprovals
@@ -515,7 +515,7 @@ defmodule LemonCore.ExecApprovalsGrantOrderTest do
   defp release({_store, ref}, pid), do: send(pid, {ref, :release})
 
   defp await_queued(store, predicate) do
-    LemonCore.Testing.AsyncHelpers.assert_eventually(
+    LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(
       fn ->
         {:messages, messages} = Process.info(store, :messages)
 

@@ -1,10 +1,10 @@
-Code.require_file("../../../lemon_core/test/support/crash_model.exs", __DIR__)
+Code.require_file("../../../lemon_platform_test/test/support/crash_model.exs", __DIR__)
 
 defmodule LemonRouter.CrashModelTest do
   use ExUnit.Case, async: true
 
   alias LemonCore.{ExecutionCommand, RunRequest, Store}
-  alias LemonCore.Testing.CrashModel
+  alias LemonPlatformTest.Testing.CrashModel
   alias LemonRouter.{RestartCarryover, SessionState, SessionTransitions, Submission}
 
   @moduletag :crash_model

@@ -1,5 +1,7 @@
 ExUnit.start(exclude: [:integration], capture_log: true)
 
+Code.require_file("../../lemon_platform_test/test_support.exs", __DIR__)
+
 # Isolate HOME so lemon_skills tests don't touch user-level skills/config.
 home =
   Path.join(

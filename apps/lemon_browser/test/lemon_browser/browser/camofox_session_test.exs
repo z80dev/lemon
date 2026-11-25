@@ -1,7 +1,7 @@
 defmodule LemonBrowser.CamofoxSessionTest do
   use ExUnit.Case, async: false
 
-  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1]
+  import LemonPlatformTest.Testing.AsyncHelpers, only: [assert_eventually: 1]
 
   alias LemonBrowser.CamofoxSession
 

@@ -16,7 +16,7 @@ defmodule LemonAgent.AgentQueueTest do
   alias LemonAgent.Agent, as: CoreAgent
   alias LemonAgent.Test.Mocks
 
-  import LemonCore.Testing.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   # ============================================================================
   # Setup Helpers

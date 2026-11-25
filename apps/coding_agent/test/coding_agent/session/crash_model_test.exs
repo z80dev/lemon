@@ -1,4 +1,4 @@
-Code.require_file("../../../../lemon_core/test/support/crash_model.exs", __DIR__)
+Code.require_file("../../../../lemon_platform_test/test/support/crash_model.exs", __DIR__)
 
 defmodule CodingAgent.Session.CrashModelTest do
   use ExUnit.Case, async: true
@@ -7,7 +7,7 @@ defmodule CodingAgent.Session.CrashModelTest do
   alias CodingAgent.SessionManager
   alias LemonAgent.Loop.TranscriptValidator
   alias LemonAi.Types.{AssistantMessage, ToolCall, ToolResultMessage}
-  alias LemonCore.Testing.CrashModel
+  alias LemonPlatformTest.Testing.CrashModel
 
   @moduletag :crash_model
   @moduletag :tmp_dir

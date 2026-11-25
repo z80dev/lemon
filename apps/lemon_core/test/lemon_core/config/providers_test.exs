@@ -2,7 +2,7 @@ defmodule LemonCore.Config.ProvidersTest do
   @moduledoc """
   Tests for the Config.Providers module.
   """
-  use LemonCore.Testing.Case, async: false
+  use LemonPlatformTest.Testing.Case, async: false
 
   alias LemonCore.Config.Providers
 

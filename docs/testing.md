@@ -226,9 +226,14 @@ The two approval-event broadcast cases remain in the small synchronous
 
 Ambient provider/platform credentials are scrubbed before the BEAM starts, from
 the single `SCRUB_CREDENTIAL_ENV_VARS` list in `scripts/test`; no Elixir copy
-of that list exists. `LemonCore.Testing.HermeticEnv.with_restored_env/2`
+of that list exists. `LemonPlatformTest.Testing.HermeticEnv.with_restored_env/2`
 snapshots and restores env vars around synchronous tests that mutate
 process-wide env.
+
+Umbrella suites load the shared `LemonPlatformTest.Testing` helpers from
+`apps/lemon_platform_test/test_support.exs` in `test_helper.exs`. This avoids
+a Mix dependency back to the contract-test kit, which itself depends on the
+apps whose contracts it tests.
 
 Tests that call `System.put_env/2` or `System.delete_env/1` should be
 `async: false` and restore their changes.
@@ -329,7 +334,7 @@ decodes the surviving bytes independently: a valid but silently truncated
 transcript is not sufficient.
 
 The Store-backed models use the test-only
-`apps/lemon_core/test/support/crash_model.exs` backend. Its length-framed journal
+`apps/lemon_platform_test/test/support/crash_model.exs` backend. Its length-framed journal
 records a stable byte fence only on Store sync. A crash kills the isolated Store,
 retains an arbitrary prefix **at or after that fence**, drops the unsynced suffix,
 and reopens through the real Store/domain APIs. Partial final frames are ignored

@@ -160,15 +160,16 @@ needs it: run without it, the deps are still `in_umbrella` and hex refuses to
 build ("Dependencies excluded from the package"). `scripts/verify_packages` and
 `scripts/release_package` set it for you.
 
-`lemon_core`'s package `exclude_patterns` leave this repository's tooling and test
-harness out of the tarball: `LemonCore.Quality.*`, `LemonCore.Update.*`,
-`LemonCore.Testing*`, and the `lemon.quality`, `lemon.architecture.docs`,
-`lemon.check_duplicate_tests`, `lemon.update`, `lemon.bench` and `lemon.help`
+`lemon_core`'s package `exclude_patterns` leave this repository's tooling
+out of the tarball: `LemonCore.Quality.*`, `LemonCore.Update.*`, and the
+`lemon.quality`, `lemon.architecture.docs`, `lemon.check_duplicate_tests`,
+`lemon.update`, `lemon.bench` and `lemon.help`
 tasks. The build identity the doctor reports (`LemonCore.BuildInfo.version/0`,
 `identity/0`, `describe/0`) ships; the Lemon application's Elixir floor is a
 `lemon doctor` check in `lemon_cli` (`LemonCli.Doctor.Toolchain`), so the packaged
 runtime check passes on every Elixir the packages admit.
 `lemon_platform_test` excludes `PluginCase`, whose target is unpublished.
+It ships `LemonPlatformTest.Testing`, the shared ExUnit helpers formerly in core.
 
 ## Proving the tarballs work
 
@@ -186,8 +187,9 @@ checks the repo-only modules are absent, fails if xref finds a packaged call int
 a published namespace the packages do not define or a function the running
 Elixir/OTP lacks, and runs the packaged doctor: `LemonCore.Doctor.Checks.Runtime`
 must report the build identity with no failure on the running toolchain, and no
-doctor check may crash. Finally it runs `mix lemon.new --packages-path` for the
-base and `--memory` shapes against the same tarballs and runs their tests. It
+doctor check may crash. The scratch consumer also runs an ExUnit suite against
+the packaged test harness. Finally the script runs `mix lemon.new --packages-path`
+for the base and `--memory` shapes against the same tarballs and runs their tests. It
 needs Hex and network access to hex.pm. `.github/workflows/packaging.yml` runs it
 on pull requests that touch the packages and nightly, on Elixir 1.20.5 / OTP
 29.1.2 and on the declared floor, Elixir 1.17.3 / OTP 26.2; both legs are

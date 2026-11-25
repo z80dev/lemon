@@ -1,4 +1,4 @@
-defmodule LemonCore.Testing.HermeticEnv do
+defmodule LemonPlatformTest.Testing.HermeticEnv do
   @moduledoc """
   Environment snapshot/restore helpers for tests that mutate process-wide env.
 
