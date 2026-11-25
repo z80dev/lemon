@@ -110,9 +110,10 @@ This ordering depends on the **private OTP 29 `:erl_distribution` and `:auth`
 APIs**, not a public OTP cookie-before-distribution API. Only OTP 29 is
 supported by this bootstrap. A different OTP major, changed supervisor contract,
 or missing boot guard fails closed with an OTP-versioned error; there is no
-argv-cookie fallback. `scripts/test_lemon_launcher_cookie.sh` pins that
-contract, checks real `ps` and native OS argv (`/proc/PID/cmdline` on Linux,
-`KERN_PROCARGS2` on macOS), and connects actual source and packaged nodes.
+argv-cookie fallback. `scripts/test_lemon_launcher_cookie.sh`, run by
+`scripts/test quality`, pins that contract, checks real `ps` and native OS argv
+(`/proc/PID/cmdline` on Linux, `KERN_PROCARGS2` on macOS), and connects actual
+source and packaged nodes.
 
 The release assembly step removes the stock Elixir launcher's four `--cookie`
 options and inserts the initializer immediately after kernel startup in both

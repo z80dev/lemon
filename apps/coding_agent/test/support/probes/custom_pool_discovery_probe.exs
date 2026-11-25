@@ -1,4 +1,4 @@
-defmodule LemonScripts.CustomPoolDiscoveryProbe do
+defmodule CodingAgent.TestSupport.CustomPoolDiscoveryProbe do
   alias LemonAgent.ModelRuntime.{CustomProviders, ModelCatalog, ProviderNames}
 
   @pool_env "LEMON_CUSTOM_DISCOVERY_POOL_A"

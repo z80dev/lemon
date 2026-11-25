@@ -96,8 +96,7 @@ steps.
 - [ ] When the release touches a real external integration, run the matching
       manual smoke: `scripts/live_telegram_matrix.py`,
       `scripts/live_discord_matrix.py`, `scripts/live_provider_fallback_smoke.exs`,
-      `scripts/live_provider_ownership_smoke.exs`, or
-      `scripts/live_cron_runtime_restart_smoke.exs`. MCP has no live smoke
+      or `scripts/live_cron_runtime_restart_smoke.exs`. MCP has no live smoke
       script; its client and transports are covered by `apps/lemon_mcp/test`.
 - [ ] Run `scripts/verify_docs_site`. It installs docs dependencies in a temp
       copy, builds the VitePress site, and

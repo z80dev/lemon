@@ -80,8 +80,9 @@ Canonical test lanes:
              downstream apps to test files naming a module defined in a changed file
   premerge   Stop-on-failure diff checks: [--base REF] (default: origin/main); runs `changed --narrow`:
              changed apps whole, downstream apps only tests naming a changed module
-  quality    CI check lane: compile -Werror, format check, credo, skip-tag guard, shellcheck, launcher
-             script tests, changelog guard, selector self-test, docs source-reference check, skill lint,
+  quality    CI check lane: compile -Werror, format check, credo, skip-tag guard, shellcheck, launcher,
+             CLI, node-join, tunnel and release-verifier script tests, changelog guard, selector
+             self-test, docs source-reference check, crash-model mutation anchors, skill lint,
              mix lemon.quality, focused quality tests;
              [--base REF] (PR CI) limits format/credo to files changed since REF unless the diff is full scope
   clients    CI client lane: tui (typecheck, lint, bun test) and lemon-browser-node (typecheck, lint, build, vitest)
@@ -290,14 +291,22 @@ run_quality() {
   check_skipped_tests
   scripts/check_changelog
   python3 scripts/test_changed_tests.py
+  python3 scripts/check_crash_model_mutations.py --anchors
   node --test scripts/check_docs_source_refs.test.mjs
   node scripts/check_docs_source_refs.mjs
   run_shellcheck
   bash scripts/test_lemon_tui_auth.sh
   bash scripts/test_lemon_launcher_reuse.sh
   bash scripts/test_lemon_launcher_master_key.sh
+  bash scripts/test_lemon_launcher_cookie.sh
   bash scripts/test_launcher_dotenv.sh
+  bash scripts/test_bind_loopback_launchers.sh
+  bash scripts/test_lemon_cli_stdio.sh
   bash scripts/test_lemonup.sh
+  python3 scripts/test_join_node.py
+  python3 scripts/test_lemon_tunnel.py
+  python3 scripts/test_verify_apple_release.py
+  python3 scripts/test_verify_release_artifacts.py
   mix lemon.skill.lint
   mix lemon.quality
   mix test apps/lemon_core/test/lemon_core/quality apps/lemon_evals/test/lemon_evals/harness_test.exs

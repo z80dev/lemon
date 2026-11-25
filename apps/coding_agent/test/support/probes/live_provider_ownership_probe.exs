@@ -1,4 +1,4 @@
-defmodule LemonScripts.LiveProviderOwnershipProbe do
+defmodule CodingAgent.TestSupport.LiveProviderOwnershipProbe do
   @moduledoc false
   alias CodingAgent.{Session, SessionManager, SettingsManager}
   alias LemonAgent.ModelRuntime.{CredentialHealth, Credentials, CustomProviders, StreamOptions}

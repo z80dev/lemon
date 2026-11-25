@@ -1,4 +1,4 @@
-defmodule LemonScripts.PresetNativeScopeProbe do
+defmodule CodingAgent.TestSupport.PresetNativeScopeProbe do
   alias CodingAgent.Session.ModelResolver
   alias CodingAgent.SettingsManager
   alias LemonAgent.ModelRuntime.{ModelCatalog, ProviderNames}
@@ -68,8 +68,7 @@ defmodule LemonScripts.PresetNativeScopeProbe do
     end
   end
 
-  # Shared by deterministic consumer regressions and the standalone no-ExUnit
-  # smoke. All discovery uses real HTTP and the public catalog/native boundary.
+  # All discovery uses real HTTP and the public catalog/native boundary.
   def run!(home) do
     saved_env = Map.new(env_names(), &{&1, System.get_env(&1)})
     saved_req = Req.default_options()

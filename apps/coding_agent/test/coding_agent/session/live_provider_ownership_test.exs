@@ -1,12 +1,10 @@
-Code.require_file(
-  Path.expand("../../../../../scripts/support/live_provider_ownership_probe.exs", __DIR__)
-)
+Code.require_file(Path.expand("../../support/probes/live_provider_ownership_probe.exs", __DIR__))
 
 defmodule CodingAgent.Session.LiveProviderOwnershipTest do
   use ExUnit.Case, async: false
 
+  alias CodingAgent.TestSupport.LiveProviderOwnershipProbe
   alias LemonAgent.ModelRuntime.{CredentialHealth, SessionPins}
-  alias LemonScripts.LiveProviderOwnershipProbe
 
   setup do
     root =

@@ -1,4 +1,4 @@
-defmodule LemonScripts.SetupOnboardingProbe do
+defmodule LemonCli.TestSupport.SetupOnboardingProbe do
   @moduledoc false
 
   alias LemonCli.Setup.{Provider, Verification, Wizard}
