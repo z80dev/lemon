@@ -35,6 +35,27 @@ defmodule CodingAgent.Session.CompactionManager do
     }
   end
 
+  @doc """
+  Whether the session only grew since `signature` was captured: same session,
+  turn and model, and the captured leaf is still on the active branch (entries
+  such as steering or follow-up inputs were appended after it). A compaction
+  computed for that snapshot still applies.
+  """
+  @spec appended_since?(map(), session_signature()) :: boolean()
+  def appended_since?(state, {id, leaf, _count, turn, provider, model} = signature) do
+    case session_signature(state) do
+      ^signature ->
+        true
+
+      {^id, _leaf, _count, ^turn, ^provider, ^model} ->
+        is_nil(leaf) or
+          Enum.any?(SessionManager.get_branch(state.session_manager), &(&1.id == leaf))
+
+      _ ->
+        false
+    end
+  end
+
   # ============================================================================
   # Auto Compaction State Management
   # ============================================================================
@@ -117,6 +138,14 @@ defmodule CodingAgent.Session.CompactionManager do
             partial_state: nil
         }
     }
+  end
+
+  @doc "Stop overflow recovery: kill its summary task and clear its state."
+  @spec cancel_overflow_recovery(map(), term()) :: map()
+  def cancel_overflow_recovery(state, reason) do
+    state
+    |> maybe_kill_background_task(state.overflow_recovery.task_pid, reason)
+    |> clear_overflow_recovery_state()
   end
 
   @spec cancel_compaction_tasks(map(), term()) :: map()

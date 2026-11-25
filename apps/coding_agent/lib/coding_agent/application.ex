@@ -20,6 +20,9 @@ defmodule CodingAgent.Application do
         8
       )
 
+    background_max_concurrency =
+      Application.get_env(:coding_agent, :background_run_max_concurrency, 8)
+
     children = [
       CodingAgent.RuntimeTables,
       LemonCore.Supervision.subtree(CodingAgent.ToolResourceSupervisor, [
@@ -55,7 +58,7 @@ defmodule CodingAgent.Application do
       {LemonCore.TaskSupervisor, name: CodingAgent.TaskSupervisor},
       {CodingAgent.TaskStoreServer, name: CodingAgent.TaskStoreServer},
       CodingAgent.AsyncFollowups,
-      CodingAgent.Tools.Task.Control,
+      CodingAgent.TaskRuntime,
       CodingAgent.Tools.Task.Speculation,
       {CodingAgent.TaskProgressBindingServer, name: CodingAgent.TaskProgressBindingServer},
       {CodingAgent.ParentQuestionStoreServer, name: CodingAgent.ParentQuestionStoreServer},
@@ -71,15 +74,21 @@ defmodule CodingAgent.Application do
       ]),
       LemonCore.Supervision.subtree(CodingAgent.SessionTree, [
         {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
-        CodingAgent.SessionSupervisor,
-        CodingAgent.Tools.Task.LiveBridgeSupervisor
+        CodingAgent.SessionSupervisor
       ]),
       {DynamicSupervisor, name: CodingAgent.AdvisorSupervisor, strategy: :one_for_one},
       LemonCore.Supervision.subtree(CodingAgent.BackgroundRun.Tree, [
         {Registry, keys: :unique, name: CodingAgent.BackgroundRun.Registry},
         CodingAgent.BackgroundRun.Supervisor
       ]),
-      {CodingAgent.Parallel.Semaphore, max: task_max_concurrency, name: CodingAgent.TaskSemaphore}
+      {CodingAgent.Parallel.Semaphore,
+       max: task_max_concurrency, name: CodingAgent.TaskSemaphore},
+      %{
+        id: CodingAgent.BackgroundRunSemaphore,
+        start:
+          {CodingAgent.Parallel.Semaphore, :start_link,
+           [[max: background_max_concurrency, name: CodingAgent.BackgroundRunSemaphore]]}
+      }
     ]
 
     opts = [strategy: :one_for_one, name: CodingAgent.Supervisor]

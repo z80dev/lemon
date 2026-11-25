@@ -81,8 +81,8 @@ defmodule LemonCli.MigrateCommand do
 
   defp start_apps do
     Enum.reduce_while([:yaml_elixir, :lemon_core], :ok, fn app, :ok ->
-      case Application.ensure_all_started(app) do
-        {:ok, _started} ->
+      case LemonCore.CLI.start(app) do
+        :ok ->
           {:cont, :ok}
 
         {:error, reason} ->

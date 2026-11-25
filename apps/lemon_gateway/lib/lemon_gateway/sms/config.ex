@@ -127,21 +127,12 @@ defmodule LemonGateway.Sms.Config do
     normalize_blank(LemonCore.Env.get(name)) || normalize_blank(config_value)
   end
 
+  # `[gateway.sms]` keeps TOML's string keys; the test replacement layer may
+  # use atoms. `LemonCore.GatewayConfig.fetch/3` reads both.
   defp sms_cfg(key) when is_atom(key) do
-    sms = sms_config()
-    Map.get(sms, key)
-  end
-
-  defp sms_config do
-    try do
-      case LemonGateway.Config.get(:sms) do
-        %{} = sms -> sms
-        _ -> %{}
-      end
-    rescue
-      e ->
-        Logger.warning("Failed to load SMS config: #{Exception.message(e)}")
-        %{}
+    case LemonCore.GatewayConfig.get(:sms, %{}) do
+      %{} = sms -> LemonCore.GatewayConfig.fetch(sms, key, nil)
+      _ -> nil
     end
   end
 

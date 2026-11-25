@@ -737,7 +737,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
 
   defp put_model_picker(state, key, picker) when is_map(picker) do
     token = make_ref()
-    Process.send_after(self(), {:model_picker_expired, key, token}, @model_picker_ttl_ms)
+
+    Process.send_after(
+      LemonChannels.Adapters.Telegram.Transport.Owner.pid(),
+      {:model_picker_expired, key, token},
+      @model_picker_ttl_ms
+    )
 
     picker =
       Map.merge(picker, %{

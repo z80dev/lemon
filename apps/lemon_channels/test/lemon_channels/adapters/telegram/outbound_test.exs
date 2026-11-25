@@ -25,6 +25,22 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
     end
   end
 
+  defmodule LimitApi do
+    # Enforces Telegram's 4096 UTF-16 limit and entity bounds like the real API.
+    def send_message(_token, _chat_id, text, opts, _parse_mode) do
+      units = text |> :unicode.characters_to_binary(:utf8, :utf16) |> byte_size() |> div(2)
+      entities = (opts || %{})[:entities] || []
+
+      if units > 4096 or Enum.any?(entities, &(&1["offset"] + &1["length"] > units)) do
+        {:error,
+         {:http_error, 400, ~s({"ok":false,"description":"Bad Request: message is too long"})}}
+      else
+        send(self(), {:limit_api_sent, units})
+        {:ok, %{"message_id" => 1}}
+      end
+    end
+  end
+
   test "voice preserves Ogg and MP3 bytes, MIME, filename, reply and topic" do
     put_telegram_config(%{bot_token: "token", api_mod: ScriptedApi})
 
@@ -67,6 +83,30 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
       assert {:error, {:outcome_unknown, ^reason}} = Outbound.deliver(payload)
       assert_receive {:accepted_write, :send_message, _}
       refute_receive {:accepted_write, _, _}, 0
+    end
+  end
+
+  test "split ZWJ-emoji and table replies stay within a limit-enforcing API" do
+    family = "👩‍👩‍👧‍👦"
+
+    rows =
+      for i <- 1..150, do: "| #{i} | #{if i == 1, do: String.duplicate("w", 50), else: "v"} |"
+
+    replies = [
+      String.duplicate(family <> " ", 1_000),
+      Enum.join(["| k | v |", "| --- | --- |" | rows], "\n")
+    ]
+
+    for use_markdown <- [true, false], reply <- replies do
+      put_telegram_config(%{bot_token: "token", api_mod: LimitApi, use_markdown: use_markdown})
+
+      for chunk <- LemonChannels.Telegram.Truncate.split_messages(reply) do
+        payload =
+          OutboundPayload.text("telegram", "acct", %{kind: :dm, id: "123", thread_id: nil}, chunk)
+
+        assert {:ok, %{"message_id" => 1}} = Outbound.deliver(payload)
+        assert_receive {:limit_api_sent, units} when units <= 4096
+      end
     end
   end
 

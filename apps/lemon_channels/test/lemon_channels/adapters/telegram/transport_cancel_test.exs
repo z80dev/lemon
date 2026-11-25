@@ -116,7 +116,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
       case {state[:poll_task], :persistent_term.get(@updates_key, [])} do
         {nil, []} ->
-          :ok
+          await_worker(pid, state)
 
         {%Task{pid: worker}, _updates} ->
           monitor = Process.monitor(worker)
@@ -132,6 +132,25 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
         {nil, _updates} ->
           send(pid, :poll)
           await_updates(pid)
+      end
+    end
+
+    # Fetched updates are applied by the transport's event worker.
+    defp await_worker(pid, state) do
+      case state[:event_task] do
+        {%Task{pid: worker}, _event} ->
+          monitor = Process.monitor(worker)
+
+          receive do
+            {:DOWN, ^monitor, :process, ^worker, _reason} -> await_updates(pid)
+          after
+            10_000 ->
+              Process.demonitor(monitor, [:flush])
+              raise "Telegram event worker did not finish"
+          end
+
+        _idle ->
+          :ok
       end
     end
 
@@ -883,7 +902,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     key = {chat_id, nil, "99"}
     assert %{expiry_token: token, catalog: _} = :sys.get_state(pid).model_pickers[key]
     send(pid, {:model_picker_expired, key, token})
-    assert :sys.get_state(pid).model_pickers == %{}
+    assert await_idle(pid).model_pickers == %{}
 
     CancelMockAPI.set_updates([message_update(chat_id, user_msg_id + 1, "/model")])
     assert_receive {:send_message, ^chat_id, _text, _opts, _parse_mode}
@@ -899,6 +918,26 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     assert_receive {:inbound, msg}, 1_000
     assert msg.message.text == choice
     assert :sys.get_state(pid).model_pickers == %{}
+  end
+
+  # Timer events run in the transport's event worker; wait until it is idle.
+  defp await_idle(pid, attempts \\ 200) do
+    state = :sys.get_state(pid)
+    idle? = is_nil(state[:event_task]) and :queue.is_empty(state[:event_queue] || :queue.new())
+
+    cond do
+      idle? ->
+        state
+
+      attempts == 0 ->
+        flunk("Telegram event worker did not go idle")
+
+      true ->
+        receive do
+        after
+          50 -> await_idle(pid, attempts - 1)
+        end
+    end
   end
 
   defp group_transport_config(chat_id) do

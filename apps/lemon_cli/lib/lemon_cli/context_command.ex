@@ -36,7 +36,7 @@ defmodule LemonCli.ContextCommand do
 
         result =
           LogSilencer.with_quiet_logs(json?, fn ->
-            _ = Application.ensure_all_started(:lemon_core)
+            _ = LemonCore.CLI.start(:lemon_core)
             service_opts = service_opts(opts)
 
             if action == "preview",

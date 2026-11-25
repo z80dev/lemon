@@ -260,8 +260,8 @@ defmodule LemonCli.Onboarding.Runner do
   def ensure_required_apps! do
     [:lemon_core, :lemon_ai]
     |> Enum.each(fn app ->
-      case Application.ensure_all_started(app) do
-        {:ok, _started} ->
+      case LemonCore.CLI.start(app) do
+        :ok ->
           :ok
 
         {:error, _reason} ->

@@ -1,7 +1,78 @@
 defmodule LemonChannels.Outbox.ChunkerTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias LemonChannels.Outbox.Chunker
+
+  describe "sentence boundaries" do
+    test "a reversed-only sentence end falls back to the word break, then the hard break" do
+      # Matches `[.!?]\\s` only when reversed; the old chunker raised ArithmeticError.
+      assert Chunker.chunk("x ?yyyyyyyyyyyy", chunk_size: 10) ==
+               ["x ", "?yyyyyyyyy", "yyy"]
+    end
+
+    test "a chunk window ending exactly at a sentence end makes progress" do
+      # The old chunker computed break point 0 and recursed forever.
+      assert Chunker.chunk("Hello wo. yyyyyyy", chunk_size: 10) == ["Hello wo. ", "yyyyyyy"]
+    end
+
+    test "breaks after the last sentence end, counted in graphemes" do
+      # The old chunker split at `length - last_end` ("Hi. th").
+      assert Chunker.chunk("Hi. there friend", chunk_size: 10) ==
+               ["Hi. ", "there ", "friend"]
+
+      # Multi-byte text made the old byte-based break negative, splitting from
+      # the end of the whole remaining text.
+      assert Chunker.chunk("ééééé. ab cdefgh", chunk_size: 10) == ["ééééé. ", "ab cdefgh"]
+    end
+
+    test "rejects a non-positive chunk size instead of looping" do
+      assert_raise ArgumentError, fn -> Chunker.chunk("abc", chunk_size: 0) end
+      assert_raise ArgumentError, fn -> Chunker.chunk("abc", chunk_size: nil) end
+    end
+  end
+
+  describe "properties" do
+    @alphabet ["a", "b", "é", "語", "👩‍👩‍👧", ".", "!", "?", " ", "  ", "\n", "\r\n", "\t"]
+
+    property "chunks fit the limit and lose only whitespace at chunk starts" do
+      check all(
+              parts <- list_of(member_of(@alphabet), max_length: 200),
+              chunk_size <- integer(1..40),
+              preserve_words <- boolean(),
+              preserve_sentences <- boolean(),
+              max_runs: 500
+            ) do
+        text = Enum.join(parts)
+
+        chunks =
+          Chunker.chunk(text,
+            chunk_size: chunk_size,
+            preserve_words: preserve_words,
+            preserve_sentences: preserve_sentences
+          )
+
+        assert chunks != []
+        assert Enum.all?(chunks, &(String.length(&1) <= chunk_size))
+        assert_reassembles(text, chunks)
+      end
+    end
+
+    # Every chunk is a non-empty prefix of what remains; only whitespace that
+    # would start a next chunk (or trail the last one) is dropped.
+    defp assert_reassembles("", [""]), do: :ok
+    defp assert_reassembles(remaining, []), do: assert(remaining == "")
+
+    defp assert_reassembles(text, [chunk | rest]) do
+      assert chunk != ""
+      assert String.starts_with?(text, chunk)
+
+      text
+      |> binary_part(byte_size(chunk), byte_size(text) - byte_size(chunk))
+      |> String.trim_leading()
+      |> assert_reassembles(rest)
+    end
+  end
 
   describe "chunk/2" do
     test "returns single chunk for short text" do

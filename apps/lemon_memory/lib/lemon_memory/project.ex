@@ -106,10 +106,18 @@ defmodule LemonMemory.Project do
   defp history_root(%Document{index: {_, _, _, _, root}}) when is_binary(root), do: root
   defp history_root(doc), do: repository_root(doc.workspace_key)
 
-  @doc "Search proven native history with ownership and repository filters before the limit."
+  @doc """
+  Search native history with ownership and repository filters before the limit.
+
+  A proven private context searches exactly its own history; a legacy context
+  (no ownership claim at all) searches legacy history. Both run as one owned
+  SQLite query that applies agent, assistant home, owner, history-kind and
+  repository filters before `LIMIT`, so ineligible rows never take a result
+  slot. Unproven or partial claims return `{:error, :unproven_context}`.
+  """
   def search_history(context, query, requested_scope \\ :agent, opts \\ []) do
     with {:ok, identity} <- scope(context),
-         {:ok, {:private, _} = owner} <- ContextScope.scope(context),
+         {:ok, owner} <- ContextScope.scope(context),
          true <- requested_scope in [:agent, :workspace, :project] do
       if LemonMemory.SessionSearch.enabled?() do
         limit =
@@ -137,7 +145,6 @@ defmodule LemonMemory.Project do
       end
     else
       false -> {:error, :invalid_scope}
-      {:ok, :legacy} -> {:error, :unproven_context}
       error -> error
     end
   end

@@ -10,7 +10,9 @@ defmodule LemonGateway.Executor do
   Executors send lifecycle events to the supplied sink as
   `{:engine_event, run_ref, event}` and streamed text as
   `{:engine_delta, run_ref, text}`. Control operations that an executor cannot
-  perform must return `{:error, :unsupported}`.
+  perform must return `{:error, :unsupported}`. `cancel/1` only requests
+  cancellation and must not block: the Run keeps its permit and engine-session
+  claim until the executor process exits or the 15-second drain deadline passes.
   """
 
   alias LemonGateway.ExecutionRequest

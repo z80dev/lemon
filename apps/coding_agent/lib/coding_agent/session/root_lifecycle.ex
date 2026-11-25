@@ -18,30 +18,34 @@ defmodule CodingAgent.Session.RootLifecycle do
   def idle_ttl_ms, do: @idle_ttl_ms
   def max_idle_roots, do: @max_idle_roots
 
-  # No singleton owns session state or waits for journal I/O. Serialize admission
-  # and cap eviction on this node so a checked-out root cannot be evicted.
+  # No singleton owns session state or waits for journal I/O. The node-wide
+  # lock covers only the registry lookup and the cap decision, never a call
+  # into a Session: preparing one root (which may open profile MCP or reload
+  # tools) must not make another conversation's checkout time out. Eviction
+  # cannot strand a checked-out root without the lock: `{:park_root, token}`
+  # is fenced by the idle token that `prepare_root_turn` clears, and a root
+  # that parked before the call is reported `:missing` and restored.
   def checkout(id, opts) do
-    locked(fn ->
-      case SessionRegistry.lookup(id) do
-        {:ok, pid} ->
-          case call(pid, {:prepare_root_turn, opts}) do
-            :ok -> {:ok, pid}
-            {:error, :session_lost} -> :missing
-            error -> error
-          end
+    case locked(fn -> SessionRegistry.lookup(id) end) do
+      {:ok, pid} ->
+        case call(pid, {:prepare_root_turn, opts}) do
+          :ok -> {:ok, pid}
+          {:error, :session_lost} -> :missing
+          error -> error
+        end
 
-        :error ->
-          :missing
-      end
-    end)
+      :error ->
+        :missing
+
+      {:error, :lock_timeout} = error ->
+        error
+    end
   end
 
   def retain(pid) do
-    locked(fn ->
-      with :ok <- call(pid, {:retain_root, @idle_ttl_ms}) do
-        enforce_cap(@max_idle_roots)
-      end
-    end)
+    with :ok <- call(pid, {:retain_root, @idle_ttl_ms}) do
+      locked(fn -> enforce_cap(@max_idle_roots) end)
+    end
   end
 
   @doc false

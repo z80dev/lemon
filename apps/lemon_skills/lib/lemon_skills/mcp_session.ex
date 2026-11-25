@@ -6,7 +6,7 @@ defmodule LemonSkills.McpSession do
   every handshake and tool discovery to succeed. Definitions are ACP JSON maps:
   stdio `name`, `command`, `args`, `env`, or HTTP/SSE `type`, `name`, `url`,
   `headers`. Environment/header entries accept name/value arrays or JSON maps.
-  Shared configuration options, including stdio `cwd`, OAuth and sampling,
+  Shared configuration options, including stdio `cwd` and OAuth,
   retain the same parser and validation as configured servers. Session
   definitions default to requiring approval; local per-tool policy is exposed
   separately from untrusted remote tool metadata.
@@ -658,10 +658,7 @@ defmodule LemonSkills.McpSession do
       not Map.has_key?(raw, "cwd") or
         (valid_string?(raw["cwd"]) and String.trim(raw["cwd"]) != "")
 
-    cwd_valid? and
-      Enum.all?(["oauth", "sampling"], fn key ->
-        not Map.has_key?(raw, key) or is_map(raw[key])
-      end)
+    cwd_valid? and (not Map.has_key?(raw, "oauth") or is_map(raw["oauth"]))
   end
 
   defp volatile_config({:http, url, opts}),

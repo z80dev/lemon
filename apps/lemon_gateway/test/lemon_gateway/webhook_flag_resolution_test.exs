@@ -24,6 +24,7 @@ defmodule LemonGateway.WebhookFlagResolutionTest do
   alias Plug.Test
 
   @token "flag-test-token"
+  @config_key :"Elixir.LemonGateway.Config"
 
   setup do
     {:ok, _} = Application.ensure_all_started(:lemon_core)
@@ -39,12 +40,10 @@ defmodule LemonGateway.WebhookFlagResolutionTest do
         router: original_bridge && original_bridge[:router]
       )
 
-    config_pid = Process.whereis(LemonGateway.Config) || start_supervised!(LemonGateway.Config)
-    original_state = :sys.get_state(config_pid)
+    original_config = Application.get_env(:lemon_gateway, @config_key)
 
     on_exit(fn ->
-      if Process.alive?(config_pid),
-        do: :sys.replace_state(config_pid, fn _ -> original_state end)
+      Application.put_env(:lemon_gateway, @config_key, original_config)
 
       if original_bridge,
         do: Application.put_env(:lemon_core, :router_bridge, original_bridge),
@@ -55,16 +54,16 @@ defmodule LemonGateway.WebhookFlagResolutionTest do
         else: Application.delete_env(:lemon_gateway, :webhook_flag_test_pid)
     end)
 
-    %{config_pid: config_pid}
+    :ok
   end
 
-  defp put_webhook_config(%{config_pid: pid}, global, integration_id, integration) do
+  defp put_webhook_config(_ctx, global, integration_id, integration) do
     integration =
       Map.merge(%{agent_id: "webhook-test", mode: "async", token: @token}, integration)
 
-    :sys.replace_state(pid, fn state ->
-      Map.put(state, :webhook, Map.put(global, :integrations, %{integration_id => integration}))
-    end)
+    Application.put_env(:lemon_gateway, @config_key, %{
+      webhook: Map.put(global, :integrations, %{integration_id => integration})
+    })
   end
 
   defp integration_id, do: "flags-#{System.unique_integer([:positive])}"

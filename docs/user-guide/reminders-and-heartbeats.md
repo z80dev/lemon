@@ -29,9 +29,18 @@ before dispatch is allowed. A confirmed durable pause instead preserves stored
 schedules until explicit resume.
 
 A paired chat is needed only for chat delivery. Run history retains the latest
-100 terminal runs per job, cleaned up hourly; active attempts and pending
-retries are never pruned. Configure `automation.run_retention_per_job` to change
-that limit.
+100 terminal runs per job, cleaned up hourly; active attempts, runs whose
+outcome is unknown and pending retries are never pruned, however old. Configure
+`automation.run_retention_per_job` to change that limit. The cron audit log
+keeps the newest 10,000 events; `cron.audit` returns `nextBeforeMs` when more
+events exist, which you pass back as `beforeMs` to read the next page.
+
+A run whose result Lemon cannot confirm (the agent may still be working) stays
+running and blocks that job's later slots until it is reconciled or you abort
+it. A run that was claimed but never handed to the agent, for example because
+Lemon restarted during the job's jitter delay, is instead recorded as failed
+("cron run was never submitted"), retried if the job allows retries, and does
+not hold up the next slot.
 
 ---
 
@@ -430,6 +439,17 @@ completed summaries and router run IDs remain in `cron` → `runs` history.
 Manual runs are single-shot. A timeout or lost acknowledgement is not proof of
 failure: Lemon retains the fixed run ID and reconciles completion rather than
 launching a duplicate coding session.
+
+Numeric job fields must be whole numbers within these ranges; anything else,
+including a number sent as non-numeric text, is rejected when the job is added
+or updated:
+
+| Field | Range |
+|---|---|
+| `jitterSec` | 0 – 86,400 (one day) |
+| `timeoutMs` | 1,000 – 3,600,000 (one hour) |
+| `maxRetries` | 0 – 10 |
+| `retryBackoffMs` | 0 – 86,400,000 (one day) |
 
 These jobs edit the target directory directly; they do not create or merge Git
 worktrees automatically. Point `cwd` at a dedicated worktree when other agents

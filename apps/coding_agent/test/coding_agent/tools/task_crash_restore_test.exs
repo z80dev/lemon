@@ -698,7 +698,11 @@ defmodule CodingAgent.Tools.TaskCrashRestoreTest do
     supervisor = Process.whereis(CodingAgent.Supervisor)
     descendants = supervised_processes(supervisor)
     :ok = :sys.suspend(supervisor)
-    :ok = :sys.suspend(Process.whereis(Control))
+
+    for {_, owner, _, _} <- DynamicSupervisor.which_children(CodingAgent.TaskRuntime.Supervisor),
+        is_pid(owner),
+        do: :ok = :sys.suspend(owner)
+
     :ok = :sys.suspend(Process.whereis(TaskStoreServer))
     refs = Enum.map([supervisor | descendants], &{Process.monitor(&1), &1})
     Enum.each(descendants, &Process.exit(&1, :kill))

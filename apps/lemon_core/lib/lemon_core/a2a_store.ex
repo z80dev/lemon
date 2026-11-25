@@ -149,17 +149,29 @@ defmodule LemonCore.A2AStore do
   never returned, so no inbound lookup, list, subscription or cancel sees them.
   """
   @spec get_task(binary(), keyword()) :: map() | nil
-  def get_task(task_id, opts \\ []), do: inbound_task(store(opts), task_id)
+  def get_task(task_id, opts \\ []) do
+    case fetch_task(task_id, opts) do
+      {:ok, task} -> task
+      {:error, _reason} -> nil
+    end
+  end
+
+  @doc """
+  Like `get_task/2`, but an unreadable store is `{:error, :store_unavailable}`
+  rather than an unknown task. Peer-facing reads use this.
+  """
+  @spec fetch_task(binary(), keyword()) :: {:ok, map() | nil} | {:error, :store_unavailable}
+  def fetch_task(task_id, opts \\ []), do: inbound_task(store(opts), task_id)
 
   @spec update_task(binary(), (map() -> map()), keyword()) :: {:ok, map()} | {:error, term()}
   def update_task(task_id, fun, opts \\ []) when is_function(fun, 1) do
     server = store(opts)
 
     case inbound_task(server, task_id) do
-      nil ->
+      {:ok, nil} ->
         {:error, :not_found}
 
-      current ->
+      {:ok, current} ->
         replacement =
           current
           |> fun.()
@@ -170,25 +182,32 @@ defmodule LemonCore.A2AStore do
           {:error, :mismatch} -> update_task(task_id, fun, opts)
           {:error, reason} -> {:error, reason}
         end
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
-  @spec list_tasks(binary(), keyword()) :: [map()]
+  @doc "A peer's newest inbound tasks, or `{:error, :store_unavailable}` when unreadable."
+  @spec list_tasks(binary(), keyword()) :: {:ok, [map()]} | {:error, :store_unavailable}
   def list_tasks(peer_id, opts \\ []) do
     limit = opts |> Keyword.get(:limit, 100) |> min(@max_list) |> max(1)
 
-    store(opts)
-    |> Store.list(@tasks)
-    |> Enum.map(&elem(&1, 1))
-    |> Enum.filter(&(&1.direction == :inbound and &1.peer_id == peer_id))
-    |> Enum.sort_by(&{&1.updated_at_ms, &1.id}, :desc)
-    |> Enum.take(limit)
+    with {:ok, entries} <- Store.fetch_all(store(opts), @tasks) do
+      {:ok,
+       entries
+       |> Enum.map(&elem(&1, 1))
+       |> Enum.filter(&(&1.direction == :inbound and &1.peer_id == peer_id))
+       |> Enum.sort_by(&{&1.updated_at_ms, &1.id}, :desc)
+       |> Enum.take(limit)}
+    end
   end
 
   defp inbound_task(server, task_id) do
-    case Store.get(server, @tasks, task_id) do
-      %{direction: :inbound} = task -> task
-      _ -> nil
+    case Store.fetch(server, @tasks, task_id) do
+      {:ok, %{direction: :inbound} = task} -> {:ok, task}
+      {:ok, _absent_or_outbound} -> {:ok, nil}
+      {:error, _reason} = error -> error
     end
   end
 

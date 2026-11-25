@@ -26,15 +26,15 @@ defmodule LemonRouter.RunProcess do
 
   | State | Event | Next state / timeout |
   | --- | --- | --- |
-  | submitting | runtime unavailable | submitting / named retry; deadline unchanged |
+  | submitting | runtime unavailable or engine session busy | submitting / named retry; deadline unchanged |
   | submitting | submission accepted | awaiting start / submission timers cancelled, gateway run monitored |
   | submitting | outcome unknown | awaiting start / gateway run adopted, bind grace if it is not found |
   | submitting | deadline, definite rejection or activation refusal | completing / one synthetic completion |
   | awaiting start | run started | running / idle state timeout |
   | awaiting start | gateway run DOWN | completion grace / named timeout |
   | running or confirming idle | output, action, keepalive | running / fresh idle timeout |
-  | running | idle expiry | confirming idle, or completing if no prompt can be delivered |
-  | confirming idle | confirmation expiry or cancel | completing / synthetic completion |
+  | running | idle expiry | confirming idle, or aborting if no prompt can be delivered |
+  | confirming idle | confirmation expiry or cancel | aborting / gateway cancel with the real reason |
   | active | abort or restart boundary | aborting / bounded missing-executor grace |
   | active or aborting | executor DOWN/missing | completion grace / named timeout |
   | any | run completed | stopped normally |
@@ -224,6 +224,7 @@ defmodule LemonRouter.RunProcess do
         artifact_tracker: opts[:artifact_tracker] || ArtifactTracker,
         effectful_actions: %{},
         restart_suspend: nil,
+        abort_reason: nil,
         receipt_store: opts[:receipt_store] || LemonCore.Store
       }
 
@@ -302,6 +303,11 @@ defmodule LemonRouter.RunProcess do
 
             {:error, :runtime_unavailable} ->
               retry_runtime_submission(state, :runtime_unavailable, "Engine runtime unavailable")
+
+            # The previous run of this engine session may still be draining
+            # its cancellation; the claim frees when it terminalizes.
+            {:error, :session_in_use} ->
+              retry_runtime_submission(state, :session_in_use, "Engine session busy")
 
             {:error, :outcome_unknown} ->
               adopt_ambiguous_submission(state)
@@ -538,15 +544,11 @@ defmodule LemonRouter.RunProcess do
          [{:state_timeout, state.run_watchdog_confirm_timeout_ms, :confirmation}]}
 
       :error ->
-        Watchdog.fail_run_for_idle_timeout(state)
-        await_completion(state)
+        idle_abort(state)
     end
   end
 
-  def handle_event(:state_timeout, :confirmation, :confirming_idle, state) do
-    Watchdog.fail_run_for_idle_timeout(state)
-    await_completion(state)
-  end
+  def handle_event(:state_timeout, :confirmation, :confirming_idle, state), do: idle_abort(state)
 
   # Give a real completion a grace window before synthesizing executor failure.
   def handle_event(
@@ -577,7 +579,7 @@ defmodule LemonRouter.RunProcess do
               Events.Completion.new(%{
                 ok: false,
                 error: {:gateway_run_down, reason},
-                meta: %{cancelled: phase == :aborting},
+                meta: cancellation_meta(phase, state),
                 answer: ""
               }),
             duration_ms: nil
@@ -614,7 +616,7 @@ defmodule LemonRouter.RunProcess do
                 Events.Completion.new(%{
                   ok: false,
                   error: reason,
-                  meta: %{cancelled: true},
+                  meta: %{cancelled: true, cancel_reason: reason},
                   answer: ""
                 }),
               duration_ms: nil
@@ -675,7 +677,7 @@ defmodule LemonRouter.RunProcess do
                 Events.Completion.new(%{
                   ok: false,
                   error: :gateway_run_missing_after_start,
-                  meta: %{cancelled: phase == :aborting},
+                  meta: cancellation_meta(phase, state),
                   answer: ""
                 }),
               duration_ms: nil
@@ -738,12 +740,14 @@ defmodule LemonRouter.RunProcess do
 
   def handle_event(:cast, {:watchdog_keep_alive, decision}, _phase, state)
       when decision in [:cancel, :stop, :kill] do
-    Watchdog.fail_run_for_user_cancel(state)
-    await_completion(state)
+    do_abort(state, :user_requested)
   end
 
   def handle_event(_type, _event, _phase, _state), do: :keep_state_and_data
 
+  # Every cancellation waits for the gateway's real completion or its DOWN, so
+  # the next run cannot start while the cancelled one still holds its engine
+  # session; only a run with no gateway process is synthesized after a grace.
   defp do_abort(state, reason) do
     Logger.debug(
       "RunProcess #{state.run_id} aborting: #{LemonCore.StatusRedaction.inspect_reason(reason)}"
@@ -756,9 +760,19 @@ defmodule LemonRouter.RunProcess do
         do: [{{:timeout, :abort_completion}, @abort_completion_grace_ms, reason}],
         else: []
 
-    {:next_state, :aborting, %{state | restart_suspend: nil},
+    {:next_state, :aborting, %{state | restart_suspend: nil, abort_reason: reason},
      [{{:timeout, :submission_retry}, :cancel} | actions]}
   end
+
+  defp idle_abort(state) do
+    Watchdog.log_idle_timeout(state)
+    do_abort(state, :run_idle_watchdog_timeout)
+  end
+
+  defp cancellation_meta(:aborting, state),
+    do: %{cancelled: true, cancel_reason: state.abort_reason}
+
+  defp cancellation_meta(_phase, _state), do: %{cancelled: false}
 
   defp await_completion(state) do
     actions =

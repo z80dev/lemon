@@ -146,7 +146,7 @@ thinking or tool update, even if later partials erase the content. Metadata-only
 failed attempts do not leave dangling transcript starts, and reported usage from
 failed attempts remains charged to the cumulative agent budget.
 
-### Preconnect and opt-in hedging
+### Preconnect
 
 `LemonAi.preconnect(model)` asynchronously hints the stock `Req.Finch` pool with
 an unauthenticated `HEAD /` to the model's origin. It never generates tokens or
@@ -155,55 +155,20 @@ each origin for 30 seconds and permits eight distinct origins per window, with
 eight concurrent tasks maximum. Servers may close connections; bounded live
 measurements below are not a latency guarantee.
 
-Request hedging is **off for every provider by default**, including subscription
-providers whose quotas count duplicate calls. Enable only selected providers:
-
-```elixir
-config :lemon_ai, LemonAi.CallDispatcher, hedging: %{openai: true}
-```
-
-The dispatcher retains the latest 100 first-content-event latencies per
-provider/model (caller policy), using their nearest-rank p90 as the deadline.
-There is no hedge until an observation exists. At most one duplicate can start
-after that deadline, only through normal circuit/rate admission and a
-**zero-wait concurrency acquisition**. Failed admission never queues or bypasses
-the provider authority. The first content event or terminal result selects the
-winning stream; the losing stream and its provider task are cancelled. No output
-from the losing stream reaches the caller. Tools and unlabelled callbacks never
-hedge.
-
-An atomic per-model budget permits no more than `floor(requests / 10)` duplicates,
-including duplicates that fail after admission. The cap is cumulative since
-dispatcher startup, not a rolling rate; restart resets the latency/budget window.
-The duplicate input is conservatively estimated using the existing prompt-size
-heuristic, added to the returned message's known input/total-token counters, and
-recorded in `CallDispatcher.hedging_state(provider, model).duplicate_input_tokens`.
-It is not measured vendor billing; unknown usage remains unknown and cost fields
-remain vendor-reported. Each admitted transport retains its own model-call span;
-the separate `:hedge_started` telemetry records the estimate, avoiding duplicate
-logical usage in those spans.
-
-Published-package API additions: `LemonAi.preconnect/1`,
-`LemonAi.CallDispatcher.hedging_state/2`, per-provider `:hedging` configuration,
-and the dispatch option `:hedge_input_tokens` (zero-arity estimate callback;
-supplied automatically by `LemonAi.stream/3` and `complete/3`).
-
 #### Bounded live latency comparison (2026-11-16)
 
-At source revision `abc566dcdb83f35d311fb9c2c66b889e3b6fcc9d`, each comparison
+At source revision `abc566dcdb83f35d311fb9c2c66b889e3b6fcc9d`, the comparison
 used ten paired requests per arm through production `LemonAi.stream/3` and
 `EventStream`, with `openai-codex:gpt-6.1-sol`, low reasoning and a short synthetic
-request. Arm order alternated by pair; all 40 logical requests succeeded.
+request. Arm order alternated by pair; all 20 requests succeeded.
 Controls disabled the feature at the same revision. Pre-epic `4d94b3c8e` has
-neither preconnect/hedging nor this helper; no historical or arena harness
+neither preconnect nor this helper; no historical or arena harness
 comparison is claimed.
 
 | Experiment / request latency | Feature off, n=10 | Feature on, n=10 |
 | --- | ---: | ---: |
 | Preconnect first-content median / nearest-rank p90 (ms) | 2,424.35 / 2,568.68 | 1,910.57 / 2,178.07 |
 | Preconnect terminal median / nearest-rank p90 (ms) | 2,458.93 / 2,689.25 | 1,974.80 / 2,224.24 |
-| Hedging first-content median / nearest-rank p90 (ms) | 1,938.03 / 2,259.22 | 2,029.52 / 3,234.00 |
-| Hedging terminal median / nearest-rank p90 (ms) | 2,014.51 / 2,380.72 | 2,093.59 / 3,303.62 |
 
 **Preconnect:** every request used a fresh BEAM/Finch pool. The enabled arm called
 `LemonAi.preconnect(model)` with **1,500 ms** lead time before the timed model
@@ -217,21 +182,6 @@ variability cannot be separated from warming. An instrumentation-only helper
 syntax interruption occurred between the two halves of pair 6; the remaining
 calls resumed without repeating completed requests.
 
-**Hedging:** one BEAM retained the production latency/budget window across both
-arms. Configuration enabled only `openai_codex` on enabled requests; observations
-were real, not injected, and admission/cap/deadline behavior was unchanged.
-**One duplicate** started across **20 logical requests (5%)**; another deadline
-crossing emitted `hedge_skipped` with `budget_exhausted`. The admitted duplicate
-used the observed **2,608 ms p90 deadline** and charged **14 estimated duplicate
-input tokens**. Logical input totals were **210 off / 224 on**, including that
-estimate; output totals were **50 per arm**. The estimate is not vendor billing
-for the cancelled/losing request. The median within-pair on-minus-off difference
-was **+383.63 ms** to first content and **+409.44 ms** to terminal completion.
-The enabled arm did not demonstrate a tail-latency win. One duplicate is
-insufficient to assess efficacy; winning-transport identity, loser cancellation
-and loser billing were not independently observed, and saturated admission was
-not exercised.
-
 Commands used (numerical-output redirection omitted):
 
 ```sh
@@ -241,7 +191,6 @@ for pair in {1..10}; do
     ERL_FLAGS='+S 2:2' mix run --no-compile --no-deps-check --no-start .transport_measure.exs preconnect "$arm" "$pair"
   done
 done
-ERL_FLAGS='+S 2:2' mix run --no-compile --no-deps-check --no-start .transport_measure.exs hedge
 ```
 
 The temporary helper and numerical scratch files were removed after publication;
@@ -660,7 +609,7 @@ cap waits in a FIFO queue for a free slot (default up to 120s,
 `{:error, :max_concurrency}` is returned.
 
 Each provider has an independent slot authority. Caps and live leases survive
-authority and dispatcher restarts. While an authority is unavailable, admission
+authority restarts. While an authority is unavailable, admission
 **fails closed** with `{:error, :admission_unavailable}` without invoking the
 callback; `LemonAi.Error` classifies this as transient. The provider's cap is never
 silently bypassed, and other providers can continue admitting calls.
@@ -1046,13 +995,12 @@ LemonAi.stream/3  or  LemonAi.complete/3
 Supervision tree:
 
 ```
-LemonAi.Supervisor (one_for_one; owns the retained slot lease/cap ETS table)
+LemonAi.Supervisor (one_for_one; owns the retained slot lease/cap and provider failure-summary ETS tables)
   ├── Task.Supervisor (LemonAi.StreamTaskSupervisor)
   ├── Registry (LemonAi.RateLimiterRegistry)
   ├── Registry (LemonAi.CircuitBreakerRegistry)
   ├── Registry (LemonAi.CallDispatcherRegistry)
   ├── DynamicSupervisor (LemonAi.ProviderSupervisor) -- per-provider breakers/limiters/slots
-  ├── LemonAi.CallDispatcher -- provider failure summaries
   ├── LemonAi.ModelCache -- model availability ETS owner
   ├── LemonAi.Auth.Cache -- token and fingerprint ETS owner
   └── LemonAi.Auth.OmpAuthBroker -- broker snapshot ETS owner and watchers

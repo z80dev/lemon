@@ -19,7 +19,7 @@ defmodule LemonGateway.Voice.ConfigTest do
     :ok
   end
 
-  test "reads canonical gateway voice config before legacy app env" do
+  test "reads canonical gateway voice config" do
     Application.put_env(:lemon_gateway, @gateway_config_key, %{
       voice: %{
         enabled: true,
@@ -29,20 +29,20 @@ defmodule LemonGateway.Voice.ConfigTest do
       }
     })
 
-    Application.put_env(:lemon_gateway, :voice_enabled, false)
-    Application.put_env(:lemon_gateway, :voice_silence_timeout_ms, 9999)
-
     assert Config.enabled?() == true
     assert Config.websocket_port() == 4101
     assert Config.silence_timeout_ms() == 2345
     assert Config.llm_model() == "gpt-4.1-mini"
   end
 
-  test "an explicit enabled = false is not overridden by legacy voice_enabled" do
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{voice: %{enabled: false}})
+  # #697: voice reads only [gateway.voice]; the old app-env keys are ignored.
+  test "legacy application env keys are not read" do
+    Application.put_env(:lemon_gateway, @gateway_config_key, %{voice: %{}})
     Application.put_env(:lemon_gateway, :voice_enabled, true)
+    Application.put_env(:lemon_gateway, :voice_silence_timeout_ms, 9999)
 
     refute Config.enabled?()
+    assert Config.silence_timeout_ms() == 5000
   end
 
   test "a public_url that passes validation reaches the consumer unchanged as https" do

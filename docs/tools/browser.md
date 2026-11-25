@@ -24,7 +24,7 @@ provider = "auto"
 
 `LEMON_BROWSER_PROVIDER` overrides this setting. Providers are `auto`, `tern`,
 `lcu`, `relay`, `local`, `cdp`, `browserbase`, `browser_use`, `firecrawl`,
-`camofox`, `controller`, and `hybrid`. For an invocation bound to a local Tern
+and `camofox`. For an invocation bound to a local Tern
 pane, `auto` first checks **Tern's native PiP browser**, then probes
 **LCU → authenticated MV3 relay → managed local Chrome**. Other invocations
 retain that latter order. Paid hosted providers are never selected automatically.
@@ -101,7 +101,7 @@ Environment variables read by `lemon_browser` (from
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `LEMON_BROWSER_PROVIDER` | `auto` | Unified provider selection; see [Choosing a browser provider](#choosing-a-browser-provider). |
-| `LEMON_BROWSER_BACKEND` | `local` | Backend id: `local`, `controller`, `hybrid`, `browserbase`, `browser_use`, `firecrawl`, or `camofox`. |
+| `LEMON_BROWSER_BACKEND` | `local` | Backend id: `local`, `tern`, `browserbase`, `browser_use`, `firecrawl`, or `camofox`. |
 | `LEMON_BROWSER_DRIVER_PATH` | unset | Path to the driver program. Otherwise the driver bundled in a release (`lemon_browser` `priv/driver`) is used, then `clients/lemon-browser-node/dist/local-driver.js` under the source checkout (`LEMON_PATH`). The working directory is not searched. |
 | `LEMON_BROWSER_CDP_ENDPOINT` | unset | CDP websocket endpoint to attach to instead of launching a browser. |
 | `LEMON_BROWSER_ATTACH_ONLY` | `false` | Attach only; never launch a browser. |
@@ -109,8 +109,6 @@ Environment variables read by `lemon_browser` (from
 | `LEMON_BROWSER_CDP_PORT` | `18800` | Local CDP port to attach to in attach-only mode without an endpoint. A managed browser never uses it: Lemon launches it on a free port. Only positive integers are accepted. |
 | `LEMON_BROWSER_USER_DATA_DIR` | `~/.lemon/browser/default/user-data` | Chrome user-data directory for managed launches, using its cookies/logins. Default browser data directories are refused. |
 | `LEMON_BROWSER_PROFILE_DIRECTORY` | unset | Profile inside that data directory, e.g. `Default` or `Profile 1`. |
-| `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | `local` | Backend for local/private targets under `hybrid`. |
-| `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | unset | Required under `hybrid`; backend for public targets. |
 | `LEMON_BROWSER_RELAY_TOKEN` | unset | Shared secret for the loopback MV3 relay. Secret. |
 | `LEMON_BROWSER_RELAY_PORT` | `9224` | Loopback port for the MV3 relay. |
 | `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | unset | Browserbase hosted sessions. |
@@ -172,13 +170,6 @@ supervision tree stays up.
   a replacement browser, and stopping the session never closes the user's browser.
   Legacy backend overrides can retain their own attachment configuration; prefer
   the explicit `cdp` provider for consistent selection and diagnostics.
-- `controller`: dispatches only to an authenticated controller bound to an exact
-  controller, browser profile, session, and optional run. Tickets are single-use,
-  short-lived, and carry an allowlisted capability set (`tabs`, `navigate`,
-  `inspect`, `interact`, `evaluate`, `cookies`, `files`, `state`).
-- `hybrid`: routes local/private URLs to `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` and
-  public URLs to `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND`. It requires the public
-  backend to be set.
 - `browserbase`, `browser_use`, `firecrawl`: hosted CDP sessions, created lazily
   for an exact Lemon session/profile/run scope and released after idle time.
 - `camofox`: Camofox REST/Firefox server. Snapshot refs such as `@e5` work as
@@ -481,8 +472,4 @@ Notes:
   re-run after a lost tab.
 - Attach mode fails: confirm `LEMON_BROWSER_CDP_ENDPOINT` is reachable. Attach-only
   mode will not launch a replacement browser.
-- Hybrid requests fail: set `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` to a configured
-  hosted backend.
 - Hosted backends fail: verify the matching API key variable and network access.
-- `missing_browser_controller_binding`: a controller request is missing
-  `controller_id`, `browser_profile_id`, or `session_id`.

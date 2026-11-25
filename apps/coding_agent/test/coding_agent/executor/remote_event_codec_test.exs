@@ -110,6 +110,115 @@ defmodule CodingAgent.Executor.RemoteEventCodecTest do
              RemoteEventCodec.decode(%{"type" => "started", "title" => deep})
   end
 
+  test "oversized deltas split at UTF-8 boundaries into events within the budget" do
+    text = "start " <> String.duplicate("é€😀", 20_000) <> " end"
+    budget = 4_096
+
+    texts =
+      Stream.unfold(text, fn
+        "" ->
+          nil
+
+        rest ->
+          assert {:ok, event, rest} = RemoteEventCodec.take_delta(rest, budget)
+          assert byte_size(Jason.encode!(event)) <= budget
+          assert {:ok, {:delta, chunk}} = RemoteEventCodec.decode(event)
+          assert String.valid?(chunk)
+          {chunk, rest}
+      end)
+      |> Enum.to_list()
+
+    assert length(texts) > 1
+    assert Enum.join(texts) == text
+
+    # JSON escaping can make the encoded text wider than its byte count.
+    escaped = String.duplicate(<<1>>, 1_000)
+    assert {:ok, event, rest} = RemoteEventCodec.take_delta(escaped, 512)
+    assert byte_size(Jason.encode!(event)) <= 512
+    assert byte_size(rest) > 0
+
+    assert {:error, {:max_bytes, _}} = RemoteEventCodec.take_delta("😀", 8)
+  end
+
+  test "oversized action detail is elided to the budget, keeping identity" do
+    content = String.duplicate("a", 128 * 1_024)
+
+    action =
+      Event.action_event(%{
+        engine: "lemon",
+        phase: :completed,
+        ok: true,
+        message: String.duplicate("m", 100 * 1_024),
+        action:
+          Event.action(%{
+            id: "tool_call-1",
+            kind: "file_change",
+            title: "Write big.txt",
+            detail: %{
+              name: "write",
+              tool_call_id: "call-1",
+              args: %{"path" => "big.txt", "content" => content},
+              result_full: content,
+              details: %{diff: content, lines: Enum.to_list(1..20_000)}
+            }
+          })
+      })
+
+    assert {:ok, wire} = RemoteEventCodec.encode_engine(action)
+    assert byte_size(Jason.encode!(wire)) <= RemoteEventCodec.max_bytes()
+    detail = wire["action"]["detail"]
+    assert detail["args"]["path"] == "big.txt"
+    assert detail["args"]["content"] =~ "bytes omitted"
+    assert detail["result_full"] =~ "bytes omitted"
+    assert is_list(detail["details"]["lines"])
+    assert {:ok, {:engine, %{action: %{id: "tool_call-1"}}}} = RemoteEventCodec.decode(wire)
+
+    # A budget below any elided projection (here: wide keys survive every
+    # collection limit) keeps only the identifying fields.
+    wide_keys = Map.new(1..5, &{String.duplicate("k", 200) <> "#{&1}", "v"})
+    action = update_in(action.action.detail, &Map.merge(&1, wide_keys))
+    action = %{action | message: nil}
+    assert {:ok, wire} = RemoteEventCodec.encode_engine(action, 300)
+    assert byte_size(Jason.encode!(wire)) <= 300
+
+    assert wire["action"]["detail"] == %{
+             "elided" => true,
+             "name" => "write",
+             "tool_call_id" => "call-1"
+           }
+
+    assert {:ok, {:engine, _}} = RemoteEventCodec.decode(wire)
+  end
+
+  test "oversized checkpoint path lists are elided, never rejected" do
+    paths = Enum.map(1..20_000, &"dir/file-#{&1}.txt")
+
+    assert {:ok, wire} =
+             RemoteEventCodec.encode_checkpoint(:checkpoint_created, %{
+               checkpoint_id: "cp-1",
+               path_count: 20_000,
+               paths: paths
+             })
+
+    assert wire["checkpointId"] == "cp-1"
+    assert wire["pathCount"] == 20_000
+    assert length(wire["paths"]) < 20_000
+    assert {:ok, {:checkpoint, :checkpoint_created, _}} = RemoteEventCodec.decode(wire)
+  end
+
+  test "approval requests are refused rather than elided" do
+    pending = %{
+      id: "approval-big",
+      tool: "bash",
+      action: %{"command" => String.duplicate("x", RemoteEventCodec.max_bytes())},
+      rationale: nil,
+      expires_at_ms: nil,
+      once_only: true
+    }
+
+    assert {:error, {:max_bytes, _}} = RemoteEventCodec.encode_approval(pending)
+  end
+
   test "approval requests carry a required boolean onceOnly flag" do
     pending = %{
       id: "approval-1",

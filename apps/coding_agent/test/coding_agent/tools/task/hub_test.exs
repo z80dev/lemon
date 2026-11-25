@@ -293,7 +293,7 @@ defmodule CodingAgent.Tools.Task.HubTest do
 
     on_exit(fn ->
       Control.command(id, "cancel", nil, opts)
-      Control.complete(id)
+      CodingAgent.TaskRuntimeHelpers.stop(id)
       TaskStore.delete_task(id)
     end)
 

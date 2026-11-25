@@ -2280,15 +2280,17 @@ defmodule LemonGateway.RunTest do
 
       assert_receive {:engine_started, _run_ref}, 5000
 
-      # The second request with the same resume token should time out (different scope, same claim key).
+      # The second request shares the claim key (same resume token, different
+      # scope): it is refused synchronously, with no Run and no terminal record.
       resume2 = %ResumeToken{engine: "test", value: resume_value}
-      request2 = make_request(scope2, resume: resume2, text: "will timeout")
-      _result = start_run_direct(request2)
+      request2 = make_request(scope2, resume: resume2, text: "refused")
 
-      # The first request holds the claim, so the second gets a claim timeout.
-      assert_receive {:lemon_gateway_run_completed, ^request2,
-                      %{__event__: :completed, error: :session_in_use}},
-                     5000
+      assert {:error, :session_in_use} =
+               LemonGateway.Runtime.submit_execution(ExecutionRequest.to_command(request2))
+
+      assert LemonGateway.Runtime.run_pid(request2.run_id) == nil
+      assert {:ok, nil} = LemonCore.RunStore.fetch(request2.run_id)
+      refute_received {:lemon_gateway_run_completed, ^request2, _}
     end
 
     test "completion event carries a resume token when cancelled after start" do

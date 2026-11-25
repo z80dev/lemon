@@ -26,10 +26,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   config. `lemon setup` offers it when omp is installed; `lemon setup omp
   status` and `disconnect` inspect and undo it.
 - Epic #543 wave 3 (additive, unless marked **Breaking**):
-  - Providers preconnect and offer opt-in request hedging, with
-    `hedge_started`/`hedge_skipped` dispatcher telemetry (#567); OpenAI
-    Responses over WebSocket with `previous_response_id` chaining is opt-in via
-    `responses_websocket = true` (#566).
+  - Providers preconnect (#567); OpenAI Responses over WebSocket with
+    `previous_response_id` chaining is opt-in via `responses_websocket = true`
+    (#566).
   - Subagents return structured results through a `submit_result` tool (#602);
     task-tool action usage is measured by telemetry only, with no behavior
     change (#604); idle subagent processes hibernate and completions are
@@ -131,6 +130,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   require `provider`; omitting it returns `provider is required` instead of a
   fabricated local preview. Provider-backed calls get provider-sized default
   timeouts (2–15 minutes) instead of the local-preview defaults (#664).
+- Native session journals store the system prompt once per digest on a branch,
+  as a `lemon.prompt_snapshot` entry, instead of twice in every assistant entry;
+  assistant entries reference it by digest and plan revision. With a 56 KiB
+  prompt, 100 assistant messages now take 121 KB of journal instead of 11.5 MB.
+  Older journals with inline snapshots still resume unchanged (#676).
+- Native journal appends, checkpoints and rewrites no longer go through a
+  per-directory SQLite index and `:global` lock, so a maintenance run can no
+  longer crash a live session's append. `CodingAgent.SessionIndex` and
+  `SessionManager.list_sessions/1` (no callers) are removed; leftover
+  `.index.sqlite3` files in session directories are unused (#695).
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
@@ -211,6 +220,43 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- One-shot CLI commands (`lemon doctor`, `config`, `secrets`, `usage`, `context`,
+  `learn`, `learning`, `mcp`, `update`, `migrate`, `providers`, `setup`, and the
+  `mix lemon.secrets*`/`lemon.config`/`lemon.usage` tasks) boot the core in a
+  client mode that no longer expires a running daemon's pending approvals, sweeps
+  its store, starts a second config reloader or run-history store, or installs a
+  SIGTERM trap; read-only commands also open the store read-only. A runtime only
+  reconciles approvals while it holds the store's ownership lock
+  (`<store>.runtime.lock`), so a second runtime on the same store (for example a
+  node worker) leaves the owner's approvals alone. `lemon migrate hermes` confirms
+  every imported session document and reports unconfirmed writes as
+  `outcome_unknown` (#667).
+- Exec approvals are indexed by run and session, so run and session end read
+  only that owner's approvals instead of the whole approval table. Terminal
+  approval receipts are swept after 24 hours
+  (`:exec_approval_receipt_retention_ms`); resolving a swept ID returns
+  `not_found`. Approval recovery at boot no longer stops `:lemon_core` when the
+  store is unavailable (it retries with backoff and refuses resolution
+  meanwhile), and native session start gets an error instead of a crash when
+  the approval worker does not answer within 2 seconds (#694).
+- Config: `[tui] theme = "auto"` (what `/theme auto` writes) and `"system"` no
+  longer fail config validation and break every config read and the next
+  daemon start; the terminal client owns theme names and core only requires a
+  non-blank string (#640).
+- Config: after an invalid edit a running Lemon serves the last good config,
+  logs the failure once and stops re-reading the file until it changes, instead
+  of re-parsing and raising on every config read. Invalid `[features]` states,
+  `[runtime] max_tool_turns` values and profile tool policies are validation
+  errors instead of silently becoming `off`, unlimited or deny-all. An
+  unloadable config fails gateway and channel startup instead of starting with
+  every channel disabled (#617).
+- Gateway: `[gateway]` is read live from the canonical config, so a reload
+  reaches every gateway reader (including `max_concurrent_runs` for the running
+  gateway) without a restart. `[gateway.queue] mode = "fifo"` (or any other
+  value `lemon config validate` accepted) no longer crashes boot: the section
+  was never read and is now ignored with a warning. Binding transports from
+  config no longer create atoms, and TOML project roots resolve for channel
+  bindings (#697).
 - Discord boots again: `lemon_channels` now starts `:gun`, which Nostrum needs
   for its gateway and REST connections; previously a configured bot token
   failed with `:noproc` and no Discord service started (#670).
@@ -221,6 +267,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   preferences act on the session the thread's runs use. Reactions and
   system replies land in the thread. A channel that cannot be looked up is
   not routed under a guessed key (#649).
+- One voice note or file transfer no longer stalls every chat on a channel
+  account. Telegram transcribes voice notes and downloads images in the poll
+  task and applies updates in a supervised worker, so pairing allowlist
+  updates and runtime drains are answered while a note transcribes. Discord
+  acknowledges slash commands and buttons on arrival (replies follow as edits
+  or follow-ups), so a queued command no longer misses the 3 s window, and
+  file transfers, thread creation and media preparation run beside the event
+  queue (#650).
 - Skill lockfile and audit-state writes wait up to ten seconds for their file
   lock instead of one, so concurrent skill installs in one runtime are no
   longer refused with `lock_timeout` while the lock is merely busy (#499).
@@ -333,6 +387,101 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `provider_options.azure_openai_responses` (the resolved API key wins over
   `api_key`); the `azure_*` keys in `thinking_budgets` are no longer set or
   read — **Breaking** for callers that passed Azure overrides there (#680).
+- Cron: `jitterSec`, `timeoutMs`, `maxRetries` and `retryBackoffMs` must be
+  integers within shared bounds (0–86,400 s; 1 s–1 h; 0–10; 0–1 day) on add and
+  update through the API, agent tool and blueprints; the agent tool rejects bad
+  values instead of silently using defaults. Retry and schedule timers are
+  capped at 5 minutes, so one bad job can no longer crash-loop the scheduler
+  (#657). **Breaking** for callers that sent values outside those ranges.
+- Cron: a scheduled run claimed but never submitted (restart during jitter,
+  worker crash before submit) is released as a retryable failure with a
+  `claim_released` audit instead of locking its job as `outcome_unknown`;
+  aborting such a run no longer calls the router (#624).
+- Cron history: the core store sweep no longer deletes cron runs after 48 hours,
+  so running and outcome-unknown runs and pending retries survive;
+  `automation.run_retention_per_job` is now the only run-history limit. The
+  cron audit log is capped at the newest 10,000 events, pruned hourly, and
+  `cron.audit` pages with `beforeMs`/`nextBeforeMs` (#675).
+- Channel replies that hit a sentence end near the chunk limit no longer crash
+  or hang the outbox: the chunker counts sentence breaks in graphemes, always
+  makes progress and rejects a non-positive chunk size, and the outbox splits
+  replies in the enqueueing process instead of its queue owner (#627).
+- Telegram replies are sized by their rendered UTF-16 length (and their
+  Markdown source), so padded tables and ZWJ emoji no longer exceed the
+  4096-unit limit and get rejected. Splitting never cuts a code fence or a
+  table row: oversized fences become several closed fences and oversized
+  tables repeat their header in every message (#651).
+- Honcho no longer auto-retries calls that change remote state: a slow
+  dialectic question (`honcho_reasoning`, the dialectic cadence) is billed once,
+  and a timed-out message upload or conclusion write is never duplicated. Such a
+  call that got no answer reports that its outcome is unknown. Reads still retry
+  transient failures, with a server's `Retry-After` capped at one second per
+  pause and two seconds per call (#622).
+- A memory transfer whose apply fails definitely (the destination changed after
+  the preview, an identity conflict, the destination's preference lock was busy,
+  or any verified rollback) now reports that reason instead of
+  `transfer_pending`, removes its `.memory-transfer-*` staging directory from the
+  agent workspace and frees the mutation id, so the same transfer can be
+  previewed and applied again; only genuinely uncertain outcomes stay pending.
+  The transfer journal no longer keeps memory after it is gone: a frozen source
+  snapshot (summaries, preference facts, `USER.md`/`MEMORY.md` bytes) is deleted
+  once the receipt is recorded, when any document it captured is deleted, erased
+  by scope or aged out, and after the new `transfer_ttl_ms` Store setting
+  (default 24 hours, capped at `retention_ms`) (#623).
+- An agent run whose loop forwarder dies (killed, linked exit, failed state
+  call) now delivers exactly one terminal `{:error, {:loop_crashed, reason}, _}`
+  event, stops the run and leaves the agent idle, so a coding session no longer
+  stays `:session_busy` and router run streams complete (#638).
+- Tool tasks no longer outlive their agent loop: when the loop is killed,
+  raises, or its `Loop.stream/4` consumer stops, the run's abort signal is set
+  and pending tools (bash, writes, external calls) are terminated after a short
+  grace instead of running on unbounded. Per-tool deadlines are enforced even
+  when the loop is stalled (#681).
+- `bash` selects the code-mode Python stream relay only when code-mode is
+  actually enabled (`enabled: true` and the `code_mode` profile, via
+  `CodeMode.enabled?/1`); a disabled `code_mode` profile stays on managed bash,
+  and a missing `python3` returns a clear error instead of crashing the call.
+  Code-mode remains opt-in per the #598 evaluation (#674).
+- A Tern browser pane reconnects to the daemon after its client dies (daemon
+  restart or socket error) instead of failing every later request with
+  `:closed`; an unopened pane whose daemon is gone falls back like any other
+  unavailable Tern connection (#661).
+- Remote (named-node) runs no longer abort on event size, delta count or
+  delta rate: oversized tool actions (for example a 128 KiB `write`) and
+  checkpoint path lists are elided to the event budget, long deltas are split
+  at UTF-8 boundaries, deltas that queue behind a slow acknowledgement coalesce
+  (bounded by bytes), and the 10,000-delta cap is gone. The completed answer
+  is the run's own answer, not a concatenation of streamed deltas (#635).
+- Named-node `node.process.*` no longer stops admitting work after 1,000 runs:
+  terminal receipts (`completed`, `cancelled`, `failed`) fence their ID for 24
+  hours and then retire, only unresolved `running`/`outcome_unknown` receipts
+  count toward the 1,000 limit, a spawn or pre-exec failure is reported as the
+  new terminal state `failed` instead of `outcome_unknown`, and operators can
+  prune receipts preview-first with `ProcessService.prune/2` (#679).
+- Instruction files, `@` imports and rule files are bounded and cached: each
+  instruction file contributes at most 64 KiB and all of them 256 KiB; rule files
+  are read up to 64 KiB, always-apply bodies share 128 KiB, at most 256 rule
+  files are read and rulebook descriptions are one line of at most 300
+  characters. Truncation leaves a marker naming the file and is logged.
+  Sessions no longer re-read every source on each turn: reads are cached per
+  session and revalidated by file stat, so an unchanged turn reads no
+  instruction or rule file and an edit still reaches the next turn.
+  `[:coding_agent, :prompt_sources, :read | :load]` telemetry reports loader
+  reads, bytes and time (#693).
+- The assistant workspace is seeded from its templates once, by the first
+  chat/persona session (marked by `.lemon-workspace-seeded`), instead of on
+  every session start: a deleted `BOOTSTRAP.md` (whose template asks to be
+  deleted when done), `HEARTBEAT.md` or `memory/topics/TEMPLATE.md` is no longer
+  re-created. Templates are copied via a temporary file and rename, so a failed
+  copy leaves no partial file; coding sessions no longer write the workspace, and
+  an unwritable assistant home no longer fails session start (#672).
+- Rule frontmatter (`.cursor/rules/*.mdc` and the other rule sources) is parsed
+  without `YamlElixir.read_from_string`, which called
+  `Application.start(:yamerl)` on every read and could deadlock session start
+  against a stopping application. Skills, subagents and rules now share one
+  parser (`LemonSkills.Frontmatter`); a rule or skill manifest that repeats a
+  frontmatter key, or a rule whose frontmatter exceeds 16 KiB (skills: 64 KiB),
+  is rejected with a warning instead of resolving last-wins (#671).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
@@ -450,9 +599,88 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   approvals now carry `command`, `path`, `plan` and an argument preview with
   `truncated`/`planTruncated` flags; a truncated card or plan cannot be approved
   until the full request loads (#654).
+- Each native task child now has its own supervised owner instead of one
+  node-wide coordinator: a child whose session shutdown blocks no longer stalls
+  any other child's cancel, message or completion, the worker sends its
+  completion followup before its owner sees the turn end (so a slow or
+  restarted owner can neither lose nor repeat it), a crashed owner adopts its
+  live worker and session (a second crash terminalizes the child), and terminal
+  children are pruned after five minutes (#634).
+- Task slots are re-entrant per lineage, so a child that waits on its own
+  descendants no longer deadlocks the eight-slot pool; `/bg` sessions use their
+  own `background_run_max_concurrency` pool; joins without a timeout yield after
+  `task_join_timeout_ms` (default 30 minutes) instead of waiting forever (#631).
+- Control-plane reads fail closed: an unreadable store or runtime makes
+  `exec.approvals.get`, `config.get`, `logs.tail`, `sessions.preview`,
+  `chat.history`, `session.detail`, `cron.runs`, the task lists, ACP session
+  listing/lookup and A2A task reads return `UNAVAILABLE` instead of empty or
+  not-found results; `cron.status` reports unreadable sections with `null`
+  counters and `enabled: null` instead of a disabled scheduler; and an execution
+  node whose registry read fails gets a retryable `UNAVAILABLE` instead of being
+  parked as `node_not_found` (#619).
+- A native session that is slow to start (for example while connecting its
+  profile MCP servers) no longer blocks other session starts, stops or listing:
+  the session supervisor only admits journal ownership and the session finishes
+  initializing in its own process. Root checkout locks only the registry lookup
+  and idle-cap decision, so a slow `prepare_root_turn` no longer times out other
+  conversations, and `lemon sessions maintain` previews take no lock; confirmed
+  runs hash candidates before taking the session-root lock (#632).
+- Web blueprint activation that raises, times out or returns an unparseable
+  reply no longer says "Nothing changed": a failed call shows an unknown
+  outcome (may have been applied, not retried) and locks that bundle/profile
+  until a fresh preview reads it; an unparseable success reports "applied;
+  details unavailable"; both refresh the catalog. Inspect, validate and preview
+  report unconfirmed results as such (#621).
+- MCP Streamable HTTP and legacy SSE clients run each request in a supervised
+  worker: a slow tool call no longer blocks `state/1`, status probes or other
+  calls (so the MCP source stops killing busy clients), a deadline returns
+  `:outcome_unknown` after the request worker is stopped, and a 401 refreshes
+  the grant once in the background instead of freezing the client. OAuth moved
+  to `LemonMCP.HTTP.OAuth` (#662).
+- The MCP source releases a project's MCP servers when the last session that
+  discovered them exits and keeps at most 16 project scopes loaded
+  (`:mcp_max_project_scopes`), so stdio subprocesses no longer accumulate per
+  directory. Opening a session elsewhere no longer clears other sessions'
+  cached MCP tools. Session start serves the cached snapshot and waits at most
+  10 seconds (`:mcp_discovery_wait_ms`) for servers still connecting, which now
+  connect in parallel; failed startups use the same jittered backoff and crash
+  breaker as lost connections instead of retrying on every tick (#688).
+- A watchdog stop or keep-alive cancel no longer lets the next queued message
+  fail with `:session_in_use` while the cancelled run's executor is still
+  draining: watchdog and keep-alive cancels take the normal abort path and wait
+  for the gateway's real completion, which reports the real reason in
+  `meta.cancel_reason` (`:run_idle_watchdog_timeout`, `:user_requested`) instead
+  of `:run_watchdog_timeout`. A busy engine session refuses the gateway start
+  synchronously and the router retries it within its pre-start deadline.
+  Gateway cancellation is an asynchronous request that holds the permit and
+  claim until the executor exits or the 15-second drain deadline passes, and
+  completion persists before releasing them exactly once (#643).
+- Compaction (auto, manual and overflow recovery) works again after a
+  checkpoint/rewind or branch summary: journal entries are read through the
+  canonical message deserializer, so a `branch_summary` entry no longer crashes
+  token estimation, and compaction summaries keep each tool result's tool
+  name (#629).
+- Sessions no longer stay busy after overflow recovery or a compaction
+  recovery-band block: abort during recovery ends the run with `canceled`,
+  steering or follow-ups journaled while the summary runs no longer strand the
+  run, a recovery-band block releases the session for `/compact` and the next
+  executor turn, and a late terminal event from an earlier agent run can no
+  longer end (or let a second prompt overwrite) a newly accepted prompt (#630).
 
 ### Removed
 
+- **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
+  `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
+  recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.
+  Memory providers are write targets only (`put/2`). `recall` now filters ownership
+  in SQL before its result limit for legacy sessions too, so `scope: project` no
+  longer comes back empty when matches exist, and it never pays for a remote
+  provider search whose results it discarded (#656).
+- **Breaking:** the unreachable `controller` and `hybrid` browser backends,
+  `ControllerBroker`, `HybridRouter`, their provider ids/status strings and the
+  `LEMON_BROWSER_HYBRID_LOCAL_BACKEND`/`LEMON_BROWSER_HYBRID_PUBLIC_BACKEND`
+  settings. Configs naming them now fail validation instead of reporting a
+  backend that could never serve a request (#702).
 - The unenforced `sandbox` tool-policy field; legacy input is ignored with a
   warning and never changes authority (#605).
 - `[:lemon, :control_plane, :event_bridge, :dropped]` and
@@ -462,9 +690,40 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `LemonCore.Store.JsonlBackend` (lemon_core 0.3.0). Run
   `mix lemon.store.migrate_jsonl_to_sqlite` before upgrading a JSONL store (#608).
 - Obsolete Telegram `outbound_send_delay_ms` and poller stale-time settings (#580).
+- **Breaking:** `[gateway.queue]` (never read; now ignored with a warning) and the gateway's
+  second config plane: `LemonGateway.Config`, `LemonGateway.ConfigLoader`,
+  `LemonGateway.Cwd`, `LemonGateway.BindingResolver`/`Binding`,
+  `LemonGateway.Project`, `LemonChannels.GatewayConfig` and
+  `LemonCore.EngineInfoBridge.gateway_config/0`. Read `LemonCore.GatewayConfig`
+  and `LemonCore.Cwd`. The voice config no longer falls back to
+  `:lemon_gateway` application env keys (#617, #697).
+- **Breaking:** MCP sampling, which could never produce a result. `LemonMCP.Sampling`
+  and the `:sampling_policy`/`:sampling_handler` client options are gone, a
+  server `sampling` config entry is ignored, no client handshake advertises
+  `sampling`, and a server's `sampling/createMessage` receives method-not-found
+  (#703).
+- **Breaking (`lemon_ai` 0.3.0):** opt-in request hedging (#567) is retired
+  (#696, decided under epic #543): its bounded live measurement showed no
+  tail-latency win and nothing enabled it. `config :lemon_ai,
+  LemonAi.CallDispatcher, hedging: ...` is no longer read and the
+  `hedge_started`/`hedge_skipped` dispatcher telemetry is gone; delete the key.
+  Model calls no longer make a synchronous call to a shared dispatcher process:
+  provider failure summaries live in ETS.
+- **Breaking** (coding_agent): the compaction-only `CodingAgent.Messages`
+  user/assistant/tool-result/bash/compaction-summary and content structs,
+  `Messages.get_text/1`, `get_tool_calls/1` and `total_tokens/1`; coding
+  messages are `LemonAi.Types` structs plus `CustomMessage` and
+  `BranchSummaryMessage` (#629).
 
 ### Security
 
+- Archive reads and in-place archive writes (`read`/`write` on `x.zip:member`,
+  `.tar`, `.tar.gz`, `.tgz`) and SVGZ decoding now inflate through one
+  streaming, abort-aware bound: members are rejected as soon as decoded bytes
+  pass their declared size or `:format_max_member_bytes`, compressed TARs and
+  write-side rebuilds stop at `:format_max_decoded_bytes` (256 MiB), and
+  archives over `:format_max_archive_entries` are refused, so a zip/gzip bomb
+  can no longer exhaust node memory (#678).
 - Model file tools, browser and media outputs and checkpoint restore refuse
   Lemon operator state (`~/.lemon`, the agent directory, configured
   config/key/store/checkpoint/bot paths, extension roots) and the toolchain

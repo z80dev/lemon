@@ -98,7 +98,12 @@ CodingAgent.Supervisor (one_for_one)
   |     +-- ExecutionNode.ToolSession.Supervisor (DynamicSupervisor)
   +-- Wasm.SidecarSupervisor
   +-- TaskSupervisor (bounded Task.Supervisor)
-  +-- TaskStoreServer, AsyncFollowups, Tools.Task.Control, Tools.Task.Speculation
+  +-- TaskStoreServer, AsyncFollowups
+  +-- TaskRuntime.Tree (rest_for_one)
+  |     +-- TaskRuntime.Journal (owner snapshots for crash adoption)
+  |     +-- TaskRuntime.Registry, TaskRuntime.Parents
+  |     +-- TaskRuntime.Supervisor (DynamicSupervisor; one TaskRuntime.Child per task)
+  +-- Tools.Task.Speculation
   +-- TaskProgressBindingServer, ParentQuestionStoreServer, RunGraphServer
   +-- ProcessSupervisor (rest_for_one)
   |     +-- ProcessRegistry
@@ -109,7 +114,6 @@ CodingAgent.Supervisor (one_for_one)
   +-- SessionTree (rest_for_one)
   |     +-- SessionRegistry
   |     +-- SessionSupervisor (DynamicSupervisor)
-  |     +-- Tools.Task.LiveBridgeSupervisor
   +-- AdvisorSupervisor (DynamicSupervisor; temporary session reviewers)
   +-- BackgroundRun.Tree (rest_for_one)
   |     +-- BackgroundRun.Registry
@@ -972,8 +976,13 @@ working directory. Automatic resume refuses a missing or corrupt mapped journal
 instead of replacing that session's history with a fresh conversation. Unbound
 automatic native tokens retain their fresh-session fallback.
 
-Each assistant message also stores a versioned `system-prompt-digest` snapshot in
-the same JSONL append: the digest, exact ordered prompt blocks and resume metadata.
+Each assistant message also stores a versioned `system-prompt-digest` reference:
+the prompt digest and the plan revision it was composed under. The exact ordered
+prompt blocks are journaled once per digest on a branch, as a
+`lemon.prompt_snapshot` custom entry appended just before the first reply that
+used them (with a separate base prompt only when a plan overlay makes one
+differ). Journals written before this format embed the blocks in every reply and
+are still read.
 The digest includes block order and directory-derived flags, not just flattened
 text. Resume and branch restoration adopt a rebuilt prompt only when its digest
 matches the selected branch's latest reply; otherwise they retain the journaled

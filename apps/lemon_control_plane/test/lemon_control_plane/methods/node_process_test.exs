@@ -282,7 +282,7 @@ defmodule LemonControlPlane.Methods.NodeProcessTest do
   end
 
   test "get is strictly a lookup and preserves unavailable outputs and original receipt", ctx do
-    for state <- ~w(running outcome_unknown not_found completed cancelled) do
+    for state <- ~w(running outcome_unknown not_found completed cancelled failed) do
       changes = if state == "completed", do: %{"exitCode" => 0}, else: %{}
       result = receipt(ctx, state, changes)
 
@@ -328,6 +328,7 @@ defmodule LemonControlPlane.Methods.NodeProcessTest do
             "outputTruncated" => false
           }),
           receipt(ctx, "cancelled", %{"outputTruncated" => false}),
+          receipt(ctx, "failed", %{"exitCode" => 1}),
           Map.put(empty, "stdoutBase64", Base.encode64("xx"))
         ] do
       assert {:error,

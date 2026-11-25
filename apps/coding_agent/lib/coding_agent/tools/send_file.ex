@@ -205,14 +205,10 @@ defmodule CodingAgent.Tools.SendFile do
   defp too_large(max_bytes), do: {:error, "File is too large. Max allowed is #{max_bytes} bytes."}
 
   defp channel_config(%{config: key}) do
-    case LemonGateway.Config.get_or_env(key, %{}) do
+    case LemonCore.GatewayConfig.get(key, %{}) do
       cfg when is_map(cfg) or is_list(cfg) -> cfg
       _ -> %{}
     end
-  rescue
-    _ -> %{}
-  catch
-    :exit, _ -> %{}
   end
 
   defp files_config(cfg) do

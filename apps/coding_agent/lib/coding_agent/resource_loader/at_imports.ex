@@ -37,6 +37,7 @@ defmodule CodingAgent.ResourceLoader.AtImports do
 
   require Logger
 
+  alias CodingAgent.ResourceLoader.SourceReader
   alias LemonCore.TrustedRoot
 
   @max_depth 5
@@ -208,8 +209,9 @@ defmodule CodingAgent.ResourceLoader.AtImports do
     with {:ok, real} <- admit(import_path, resolved, state),
          false <- MapSet.member?(state.visited, identity(real)),
          true <- state.budget > 0,
-         {:ok, content} <- read_import(real, state.root) do
-      content = bound(content, min(@max_import_bytes, state.budget))
+         {:ok, %{content: content, truncated: truncated}} <-
+           SourceReader.read(real, state.root, max_bytes: @max_import_bytes) do
+      content = bound(content, truncated, min(@max_import_bytes, state.budget))
       state = %{state | visited: MapSet.put(state.visited, identity(real))}
       state = %{state | budget: state.budget - byte_size(content)}
       {expanded, state} = expand_content(content, Path.dirname(real), depth + 1, state)
@@ -250,38 +252,10 @@ defmodule CodingAgent.ResourceLoader.AtImports do
     end
   end
 
-  defp read_import(path, root) do
-    with {:ok, content} <- read_target(path, root),
-         true <- String.valid?(content) do
-      {:ok, content}
-    else
-      _ -> :error
-    end
-  end
+  defp bound(content, false, limit) when byte_size(content) <= limit, do: content
 
-  defp read_target(path, :unconfined) do
-    if File.regular?(path), do: File.read(path), else: :error
-  end
-
-  defp read_target(path, root) do
-    case TrustedRoot.read(path, root) do
-      {:ok, content, _real} -> {:ok, content}
-      :error -> :error
-    end
-  end
-
-  defp bound(content, limit) when byte_size(content) <= limit, do: content
-
-  defp bound(content, limit) do
-    content
-    |> binary_part(0, limit)
-    |> valid_prefix()
-    |> Kernel.<>("\n[... imported file truncated at #{limit} bytes]")
-  end
-
-  defp valid_prefix(binary) do
-    if String.valid?(binary),
-      do: binary,
-      else: valid_prefix(binary_part(binary, 0, byte_size(binary) - 1))
+  defp bound(content, _truncated, limit) do
+    SourceReader.truncate_utf8(content, limit) <>
+      "\n[... imported file truncated at #{limit} bytes]"
   end
 end

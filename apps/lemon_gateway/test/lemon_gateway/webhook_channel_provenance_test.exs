@@ -24,7 +24,6 @@ defmodule LemonGateway.WebhookChannelProvenanceTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.RunRequest
-  alias LemonGateway.ConfigLoader
   alias LemonGateway.Transports.Webhook
   alias LemonGateway.Transports.Webhook.Idempotency
   alias Plug.Conn
@@ -57,13 +56,8 @@ defmodule LemonGateway.WebhookChannelProvenanceTest do
         router: original_bridge && original_bridge[:router]
       )
 
-    config_pid = Process.whereis(LemonGateway.Config) || start_supervised!(LemonGateway.Config)
-    original_state = :sys.get_state(config_pid)
-
     on_exit(fn ->
-      if Process.alive?(config_pid),
-        do: :sys.replace_state(config_pid, fn _ -> original_state end)
-
+      LemonCore.ConfigCache.clear()
       restore_env(:lemon_core, :router_bridge, original_bridge)
       restore_env(:lemon_gateway, :webhook_provenance_test_pid, original_pid)
       restore_env(:lemon_gateway, LemonGateway.Config, original_override)
@@ -76,7 +70,7 @@ defmodule LemonGateway.WebhookChannelProvenanceTest do
       File.rm_rf!(home)
     end)
 
-    {:ok, config_pid: config_pid, home: home}
+    {:ok, home: home}
   end
 
   test "an authenticated webhook run carries provenance derived from its integration", ctx do
@@ -123,9 +117,9 @@ defmodule LemonGateway.WebhookChannelProvenanceTest do
              request.meta[:channel_context]
   end
 
-  # Writes one integration into a real global config file, loads it through
-  # the gateway config loader and installs the loaded webhook section. Each
-  # call uses a fresh home so no cached earlier file can be loaded instead.
+  # Writes one integration into a real global config file that the webhook
+  # then reads through the canonical config. Each call uses a fresh home so no
+  # cached earlier file can be loaded instead.
   defp configure(ctx, integration_settings) do
     id = "provenance-#{System.unique_integer([:positive])}"
     home = Path.join(ctx.home, id)
@@ -142,10 +136,8 @@ defmodule LemonGateway.WebhookChannelProvenanceTest do
     System.put_env("HOME", home)
     Application.delete_env(:lemon_gateway, LemonGateway.Config)
     Application.delete_env(:lemon_gateway, :config_path)
-    webhook = ConfigLoader.load().webhook
+    webhook = LemonCore.GatewayConfig.get(:webhook)
     assert Map.has_key?(webhook.integrations, id)
-
-    :sys.replace_state(ctx.config_pid, fn state -> Map.put(state, :webhook, webhook) end)
     id
   end
 

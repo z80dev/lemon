@@ -141,7 +141,7 @@ defmodule LemonControlPlane.Methods.Status do
     %{
       "version" => LemonControlPlane.server_version(),
       "build" =>
-        optional(%{"runtimeMode" => "source-dev", "channel" => nil, "commit" => nil}, fn ->
+        optional(%{"runtimeMode" => nil, "channel" => nil, "commit" => nil}, fn ->
           info = LemonCore.BuildInfo.current(include_git: false)
 
           %{

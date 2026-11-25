@@ -39,9 +39,15 @@ defmodule LemonControlPlane.Methods.ContentScopeTest do
   defmodule LogRing do
     @moduledoc false
     def get_logs(_limit, _level),
-      do: [
-        %{level: "info", message: :persistent_term.get({__MODULE__, :message}), timestamp_ms: 1}
-      ]
+      do:
+        {:ok,
+         [
+           %{
+             level: "info",
+             message: :persistent_term.get({__MODULE__, :message}),
+             timestamp_ms: 1
+           }
+         ]}
   end
 
   setup do

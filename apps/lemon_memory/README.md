@@ -17,7 +17,7 @@ agent platform. It is usable on its own — its only Lemon dependency is
 | `LemonMemory.Project` | Bounded repository/assistant-home/agent-scoped coding learnings in the same durable store |
 | `LemonMemory.ContextScope` | Admitted native ownership proof and explicit private/shared management selectors |
 | `LemonMemory.Preferences` | Full-byte private or intentionally shared user/memory notes in the existing Store |
-| `LemonMemory.Providers` | Fan-out registry — queries every registered provider, isolates failures and timeouts |
+| `LemonMemory.Providers` | Write fan-out registry — hands every finished run to each registered provider, isolating failures and timeouts |
 | `LemonMemory.Providers.Local` | The built-in provider over `LemonMemory.Store` |
 | `LemonMemory.Ingest` | Writes finished runs into memory, invoked from the store's finalize-run hook |
 | `LemonMemory.Safety` | Redaction and size limits applied before anything is persisted |
@@ -101,17 +101,28 @@ and preview truncation, so keywords beyond the displayed excerpt remain searchab
 
 Full profile copying uses `LemonSkills.ProfileMemoryTransfer`, not redacted
 lifecycle projections. Store's typed `transfer_snapshot/4`, `transfer_get/2`,
-`transfer_put_new/3`, and `transfer_import/8` (or `/9` with local boundary/rollback
-options) own its private durable journal and SQLite transaction. The Store process
+`transfer_put_new/3`, `transfer_release/2` and `transfer_import/8` (or `/9` with
+local boundary/rollback/release options) own its private durable journal and SQLite
+transaction. The Store process
 owns the filesystem boundary lock across publication, commit and known rollback.
 Import rechecks exact selected row revisions, rejects foreign identity collisions,
 replaces only the chosen agent/home scope, and commits the receipt together with
 the rows and FTS updates. A durable pending
 intent is never a successful import and must not be automatically replayed.
+A definite failure (a boundary that never ran, or a verified rollback of SQLite
+and publication) returns its reason unchanged and deletes exactly that pending
+intent, so the mutation id can be applied again; an unverified rollback or
+intent cleanup returns `:transfer_pending`.
 Transfer calls have a five-second deadline, including Store queueing. An import
 timeout returns `:transfer_pending`, not proof of rollback: queued publication or
 commit may still finish. Reconcile the same durable operation key and receipt;
 never automatically retry an uncertain journal mutation as a new operation.
+Frozen source snapshots (journal entries with a `snapshot`) carry memory content
+and are pruned with it: deleting a captured document deletes them in the same
+transaction, scope erasure, retention and per-scope pruning delete snapshots of
+the documents they removed (agent erasure deletes the agent's snapshots), and
+snapshots and previews expire after `transfer_ttl_ms` (default 24 hours, capped
+at `retention_ms`). Destination intents and receipts are never pruned.
 Snapshot callbacks execute in the capped `LemonMemory.TaskSupervisor`, over
 immutable documents rather than the SQLite connection. Store retains the
 transaction and queues ordinary operations until the callback completes;
@@ -193,8 +204,9 @@ newline-separated UTF-8 bytes. Consolidation guidance appears strictly above
 `Project.read/2` combines only the exact private project and explicitly shared
 curated project namespace, within its existing fact/byte budget.
 `Project.search_history(context, query, requested_scope, opts)` searches local
-history with profile, private key, history kind, and optional repository filters
-before its limit; the existing `session_search` feature policy still applies.
+history with profile, owner (proven private key, or legacy for contexts with no
+ownership claim), history kind, and optional repository filters before its
+limit; unproven or partial claims are `{:error, :unproven_context}`; the existing `session_search` feature policy still applies.
 `:agent`, `:workspace`, and `:project` are supported; `:store` and `:limit` select
 the server and bounded result count. Recall uses that same owning API, full
 preference metadata before bounded rendering, and canonical shared bootstrap
@@ -247,10 +259,11 @@ LemonMemory.Providers.register_provider(%{
 })
 ```
 
-Searches then fan out to it alongside the local store. Read the behaviour's
-moduledoc first — it documents the contract in prose, including the rules that
-are easy to get wrong (`search/2` returns a bare list, must not raise on user
-input, and must ignore options it does not recognise).
+Every finished run's document is then handed to it alongside the local store.
+Providers are write targets only: recall reads the owned local index through
+`Project.search_history/4`, which filters ownership before its result limit, and
+never searches providers. Read the behaviour's moduledoc first — `put/2` returns
+`:ok` or `{:error, reason}` and must ignore options it does not recognise.
 
 Verify your provider against the platform's compliance suite:
 

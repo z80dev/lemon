@@ -9,7 +9,6 @@ defmodule LemonAi.Application do
     - `LemonAi.RateLimiterRegistry` - Registry for per-provider rate limiters
     - `LemonAi.CircuitBreakerRegistry` - Registry for per-provider circuit breakers
     - `LemonAi.CallDispatcherRegistry` - Registry for per-provider slot authorities
-    - `LemonAi.CallDispatcher` - Provider error diagnostics
     - `LemonAi.ProviderSupervisor` - Dynamic supervisor for per-provider services
     - `LemonAi.ModelCache` - ETS model availability cache owner
     - `LemonAi.Auth.Cache` - ETS token and auth fingerprint cache owner
@@ -25,8 +24,9 @@ defmodule LemonAi.Application do
 
   - **Admission**: Per-provider circuit breakers, rate limiters and slot
     authorities are registered through their own registries and started on demand.
-    The root supervisor owns the slot lease/cap ETS table so restarting a child
-    cannot forget requests that are still running.
+    The root supervisor owns the slot lease/cap ETS table, so restarting a child
+    cannot forget requests that are still running. It also owns the provider
+    failure-summary table read by `LemonAi.CallDispatcher.last_error/1`.
   """
 
   use Application
@@ -51,8 +51,6 @@ defmodule LemonAi.Application do
         {DynamicSupervisor, name: LemonAi.ProviderSupervisor, strategy: :one_for_one},
         id: LemonAi.ProviderSupervisor
       ),
-      # Provider error diagnostics (admission uses independent provider authorities)
-      {LemonAi.CallDispatcher, []},
       # Model availability cache (ETS-backed)
       LemonAi.ModelCache,
       # Expiring tokens and lazily discovered auth fingerprints (ETS-backed)
