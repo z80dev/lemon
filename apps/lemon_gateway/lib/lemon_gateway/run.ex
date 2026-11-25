@@ -224,6 +224,14 @@ defmodule LemonGateway.Run do
   end
 
   defp terminal_fence(state) do
+    case LemonCore.TerminalOutbox.decision(state.run_id) do
+      {:ok, %{} = _decision} -> :terminal
+      {:ok, nil} -> legacy_terminal_fence(state)
+      _ -> :unavailable
+    end
+  end
+
+  defp legacy_terminal_fence(state) do
     case RunStore.fetch(state.run_id) do
       {:ok, %{summary: %{completed: completed}}} when is_map(completed) -> :terminal
       {:ok, nil} -> :open
@@ -772,6 +780,10 @@ defmodule LemonGateway.Run do
              run_id: state.run_id,
              completed_at_ms: System.system_time(:millisecond),
              run_ref: state.run_ref,
+             attempt_id:
+               state.execution_request.execution_context &&
+                 state.execution_request.execution_context.attempt_id,
+             presentation_cwd: state.execution_request.cwd,
              prompt: state.execution_request.prompt,
              duration_ms: duration_ms,
              engine: @engine_provenance,
@@ -790,14 +802,16 @@ defmodule LemonGateway.Run do
         Map.get(completed, :ok)
       )
 
-      emit_to_bus(
+      LemonCore.TerminalOutbox.publish(
         state.run_id,
-        :run_completed,
-        Events.RunCompleted.new(%{
-          completed: completed_to_bus_map(completed),
-          duration_ms: duration_ms
-        }),
-        build_event_meta(state)
+        LemonCore.Event.new(
+          :run_completed,
+          Events.RunCompleted.new(%{
+            completed: completed_to_bus_map(completed),
+            duration_ms: duration_ms
+          }),
+          Map.put(build_event_meta(state), :run_id, state.run_id)
+        )
       )
     end
 

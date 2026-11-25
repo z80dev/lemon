@@ -361,7 +361,7 @@ defmodule LemonRouter.SurfaceManagerTest do
 
     assert_receive {:dispatched_intent,
                     %DeliveryIntent{
-                      intent_id: "run-fallback:finalize-fallback",
+                      intent_id: "run-fallback:terminal-answer",
                       kind: :final_text,
                       body: %{text: "Fallback answer", seq: 0},
                       meta: %{surface: :answer, inbound_voice: true, terminal_answer: true},
@@ -410,7 +410,7 @@ defmodule LemonRouter.SurfaceManagerTest do
 
     assert_receive {:dispatched_intent,
                     %DeliveryIntent{
-                      intent_id: "run-streamed-final:streamed-finalize",
+                      intent_id: "run-streamed-final:terminal-answer",
                       kind: :stream_finalize,
                       body: %{text: "Streamed final answer", seq: 0},
                       meta: %{surface: :answer, inbound_voice: true, terminal_answer: true},

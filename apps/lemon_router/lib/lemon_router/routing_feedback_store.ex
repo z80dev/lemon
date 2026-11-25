@@ -68,8 +68,9 @@ defmodule LemonRouter.RoutingFeedbackStore do
   """
 
   @insert_sql """
-  INSERT INTO routing_feedback (fingerprint_key, outcome, duration_ms, recorded_at_ms)
-  VALUES (?1, ?2, ?3, ?4)
+  INSERT INTO routing_feedback (fingerprint_key, outcome, duration_ms, recorded_at_ms, run_id)
+  VALUES (?1, ?2, ?3, ?4, ?5)
+  ON CONFLICT(run_id) DO NOTHING
   """
 
   @aggregate_sql """
@@ -242,7 +243,7 @@ defmodule LemonRouter.RoutingFeedbackStore do
 
   @impl true
   def handle_cast({:record, fingerprint_key, outcome_str, duration_ms}, state) do
-    {:noreply, record_sample(state, fingerprint_key, outcome_str, duration_ms)}
+    {:noreply, record_sample(state, fingerprint_key, outcome_str, duration_ms, nil)}
   end
 
   @impl true
@@ -292,12 +293,16 @@ defmodule LemonRouter.RoutingFeedbackStore do
             fingerprint_key: fingerprint_key,
             outcome: outcome,
             duration_ms: duration_ms
-          }
+          },
+          meta: meta
         },
         state
       )
       when is_binary(fingerprint_key) and is_atom(outcome) do
-    {:noreply, record_sample(state, fingerprint_key, Atom.to_string(outcome), duration_ms)}
+    run_id = if is_map(meta) and is_binary(meta[:run_id]), do: meta[:run_id]
+
+    {:noreply,
+     record_sample(state, fingerprint_key, Atom.to_string(outcome), duration_ms, run_id)}
   end
 
   # Legacy free-form payload, accepted for one deprecation cycle. See
@@ -349,21 +354,28 @@ defmodule LemonRouter.RoutingFeedbackStore do
 
   # ── Private helpers ────────────────────────────────────────────────────────────
 
-  defp record_sample(state, fingerprint_key, outcome_str, duration_ms) do
+  defp record_sample(state, fingerprint_key, outcome_str, duration_ms, run_id) do
     case ensure_open(state) do
       {:ok, state} ->
-        do_record_sample(state, fingerprint_key, outcome_str, duration_ms)
+        do_record_sample(state, fingerprint_key, outcome_str, duration_ms, run_id)
 
       {:error, _reason, state} ->
         state
     end
   end
 
-  defp do_record_sample(state, fingerprint_key, outcome_str, duration_ms) do
+  defp do_record_sample(state, fingerprint_key, outcome_str, duration_ms, run_id) do
     now = System.system_time(:millisecond)
 
     with :ok <- Sqlite3.reset(state.stmts.insert),
-         :ok <- Sqlite3.bind(state.stmts.insert, [fingerprint_key, outcome_str, duration_ms, now]),
+         :ok <-
+           Sqlite3.bind(state.stmts.insert, [
+             fingerprint_key,
+             outcome_str,
+             duration_ms,
+             now,
+             run_id
+           ]),
          :done <- Sqlite3.step(state.conn, state.stmts.insert) do
       :ok
     else
@@ -525,8 +537,31 @@ defmodule LemonRouter.RoutingFeedbackStore do
          :ok <- Sqlite3.execute(conn, "PRAGMA temp_store=MEMORY"),
          :ok <- Sqlite3.execute(conn, "PRAGMA busy_timeout=5000"),
          :ok <- Sqlite3.execute(conn, @schema_sql),
-         :ok <- Sqlite3.execute(conn, @index_sql) do
+         :ok <- Sqlite3.execute(conn, @index_sql),
+         :ok <- add_run_identity(conn),
+         :ok <-
+           Sqlite3.execute(
+             conn,
+             "CREATE UNIQUE INDEX IF NOT EXISTS idx_routing_feedback_run_id ON routing_feedback (run_id)"
+           ) do
       :ok
+    end
+  end
+
+  defp add_run_identity(conn) do
+    with {:ok, stmt} <- Sqlite3.prepare(conn, "PRAGMA table_info(routing_feedback)") do
+      result =
+        try do
+          Sqlite3.fetch_all(conn, stmt)
+        after
+          Sqlite3.release(conn, stmt)
+        end
+
+      with {:ok, columns} <- result do
+        if Enum.any?(columns, fn column -> Enum.at(column, 1) == "run_id" end),
+          do: :ok,
+          else: Sqlite3.execute(conn, "ALTER TABLE routing_feedback ADD COLUMN run_id TEXT")
+      end
     end
   end
 

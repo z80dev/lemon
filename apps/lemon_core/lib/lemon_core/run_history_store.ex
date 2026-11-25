@@ -140,10 +140,10 @@ defmodule LemonCore.RunHistoryStore do
   Pass a store instance name as a leading argument to target a non-default
   history store: `{LemonCore.RunHistoryStore, :handle_finalize_run, [:my_history]}`.
   """
-  @spec handle_finalize_run(map()) :: :ok
+  @spec handle_finalize_run(map()) :: :ok | {:error, term()}
   def handle_finalize_run(event), do: handle_finalize_run(__MODULE__, event)
 
-  @spec handle_finalize_run(server(), map()) :: :ok
+  @spec handle_finalize_run(server(), map()) :: :ok | {:error, term()}
   def handle_finalize_run(server, %{
         run_id: run_id,
         session_key: session_key,
@@ -152,13 +152,15 @@ defmodule LemonCore.RunHistoryStore do
         summary: summary
       })
       when is_binary(session_key) and session_key != "" do
-    put(server, session_key, started_at, run_id, %{
+    data = %{
       events: Map.get(record, :events, []),
       summary: summary,
       session_key: session_key,
       run_id: run_id,
       started_at: started_at
-    })
+    }
+
+    GenServer.call(server, {:put, session_key, started_at, run_id, data})
   end
 
   def handle_finalize_run(_server, _event), do: :ok
@@ -282,12 +284,18 @@ defmodule LemonCore.RunHistoryStore do
 
   @impl true
   def handle_cast({:put, session_key, started_at_ms, run_id, data}, state) do
+    persist_history(state, session_key, started_at_ms, run_id, data)
+    {:noreply, state}
+  end
+
+  defp persist_history(state, session_key, started_at_ms, run_id, data) do
     run_id_str = normalize_run_id(run_id)
     encoded = encode(data)
 
     case do_put(state, session_key, started_at_ms, run_id_str, encoded) do
       :ok ->
         maybe_trim_session(state, session_key)
+        :ok
 
       {:error, reason} ->
         if blob_too_big?(reason) do
@@ -297,16 +305,23 @@ defmodule LemonCore.RunHistoryStore do
           Logger.warning("[RunHistoryStore] payload too large, retrying compact write")
 
           case do_put(state, session_key, started_at_ms, run_id_str, compact_encoded) do
-            :ok -> :ok
-            {:error, r} -> Logger.error("[RunHistoryStore] compact put failed: #{inspect(r)}")
+            :ok ->
+              :ok
+
+            {:error, r} = error ->
+              Logger.error("[RunHistoryStore] compact put failed: #{inspect(r)}")
+              error
           end
         else
           Logger.error("[RunHistoryStore] put failed: #{inspect(reason)}")
+          {:error, reason}
         end
     end
-
-    {:noreply, state}
   end
+
+  @impl true
+  def handle_call({:put, session_key, started_at_ms, run_id, data}, _from, state),
+    do: {:reply, persist_history(state, session_key, started_at_ms, run_id, data), state}
 
   @impl true
   def handle_call({:delete_session, session_key}, _from, state) do

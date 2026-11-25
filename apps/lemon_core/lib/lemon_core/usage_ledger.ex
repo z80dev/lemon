@@ -67,21 +67,23 @@ defmodule LemonCore.UsageLedger do
   end
 
   @doc """
-  `LemonCore.Store` finalize-run hook. Never blocks or raises in the store.
+  `LemonCore.Store` finalize-run hook, called outside the Store.
   """
-  @spec handle_finalize_run(map()) :: :ok
+  @spec handle_finalize_run(map()) :: :ok | {:error, term()}
   def handle_finalize_run(event), do: handle_finalize_run(__MODULE__, event)
 
-  @spec handle_finalize_run(GenServer.server(), map()) :: :ok
+  @spec handle_finalize_run(GenServer.server(), map()) :: :ok | {:error, term()}
   def handle_finalize_run(server, %{run_id: run_id, summary: summary} = event)
       when is_map(summary) do
     entries = entries(run_id, Map.get(event, :session_key), summary)
     store = Map.get(event, :store, LemonCore.Store)
-    Enum.each(entries, &GenServer.cast(server, {:record, &1, store}))
 
-    :ok
-  catch
-    :exit, _ -> :ok
+    Enum.reduce_while(entries, :ok, fn entry, :ok ->
+      case GenServer.call(server, {:record, entry, store}) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
   end
 
   def handle_finalize_run(_server, _event), do: :ok
@@ -216,6 +218,9 @@ defmodule LemonCore.UsageLedger do
   @impl true
   def handle_call({:record, entry}, _from, state),
     do: {:reply, do_record(entry, state.store), state}
+
+  def handle_call({:record, entry, store}, _from, state),
+    do: {:reply, do_record(entry, store), state}
 
   defp do_record(%{run_id: run_id} = entry, store) when is_binary(run_id) and run_id != "" do
     record = occurrence_record(entry)

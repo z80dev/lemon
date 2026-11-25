@@ -221,6 +221,7 @@ defmodule LemonRouter.SurfaceManager do
           |> maybe_put_resume(resume)
           |> Map.merge(extra_meta)
           |> Map.put(:terminal_answer, true)
+          |> Map.put(:durable_terminal, true)
 
         if state[:saw_delta] == true do
           resolved_final_text = streamed_final_text(state, channel_id, final_text)
@@ -291,7 +292,7 @@ defmodule LemonRouter.SurfaceManager do
     :ok
   end
 
-  @spec fanout_final_answer(map(), Event.t()) :: :ok
+  @spec fanout_final_answer(map(), Event.t()) :: :ok | {:error, :fanout_dispatch_failed}
   def fanout_final_answer(state, %Event{} = event) do
     with answer when is_binary(answer) <- CompactionTrigger.extract_completed_answer(event),
          true <- String.trim(answer) != "",
@@ -304,7 +305,7 @@ defmodule LemonRouter.SurfaceManager do
       |> Enum.uniq_by(&fanout_route_signature/1)
       |> Enum.reject(&(fanout_route_signature(&1) == primary_signature))
       |> Enum.with_index(1)
-      |> Enum.each(fn {route, index} ->
+      |> Enum.reduce(:ok, fn {route, index}, status ->
         intent = %DeliveryIntent{
           intent_id: "#{state.run_id}:fanout:#{index}",
           run_id: state.run_id,
@@ -322,17 +323,19 @@ defmodule LemonRouter.SurfaceManager do
 
         case dispatcher().dispatch(intent) do
           :ok ->
-            :ok
+            status
 
           {:error, reason} ->
             Logger.warning(
               "Failed to dispatch fanout output for run_id=#{inspect(state.run_id)} route=#{inspect(route)} reason=#{inspect(reason)}"
             )
+
+            {:error, :fanout_dispatch_failed}
         end
       end)
+    else
+      _ -> :ok
     end
-
-    :ok
   end
 
   defp coalescer_meta(%{execution_request: %LemonCore.ExecutionCommand{} = request}) do
@@ -605,7 +608,7 @@ defmodule LemonRouter.SurfaceManager do
     case DeliveryRouteResolver.resolve(state.session_key, channel_id, meta) do
       {:ok, route} ->
         intent = %DeliveryIntent{
-          intent_id: "#{state.run_id}:streamed-finalize",
+          intent_id: "#{state.run_id}:terminal-answer",
           run_id: state.run_id,
           session_key: state.session_key,
           route: route,
@@ -651,7 +654,7 @@ defmodule LemonRouter.SurfaceManager do
     case DeliveryRouteResolver.resolve(state.session_key, channel_id, meta) do
       {:ok, route} ->
         intent = %DeliveryIntent{
-          intent_id: "#{state.run_id}:finalize-fallback",
+          intent_id: "#{state.run_id}:terminal-answer",
           run_id: state.run_id,
           session_key: state.session_key,
           route: route,

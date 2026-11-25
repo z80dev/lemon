@@ -1583,6 +1583,19 @@ capabilities and named-node executions are not automatically re-issued; they
 converge to interrupted/unknown instead. Graceful restart carryover still works
 independently of this flag.
 
+A committed terminal decision survives restart even when the live run record
+does not. Lemon does not resume or abandon those completed runs. It retries
+pending completion publication and finalization effects in bounded batches
+without invoking the executor. Run-topic notifications may repeat with the
+same `run_completed:<run_id>` event ID. Channel delivery is not exactly once.
+From the operator console, `LemonCore.TerminalOutbox.decision(run_id)` reads
+the content-free execution status and `LemonCore.TerminalOutbox.repair(run_id)`
+retries pending history, memory, usage and session-index projections.
+`LemonCore.TerminalOutbox.delivery_status(run_id)` shows the independent effect
+statuses. After the automatic projection retry budget is exhausted, call
+`repair(run_id)` or `repair_delivery(run_id)` on the same module once the
+underlying storage or delivery problem has been resolved.
+
 From a local operator console,
 `LemonRouter.RestartCarryover.CrashRecovery.operator_view(limit: 20)` returns recent
 resumed/abandoned run IDs, attempt counts, bounded reason classifications and

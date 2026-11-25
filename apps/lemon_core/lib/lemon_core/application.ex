@@ -87,6 +87,7 @@ defmodule LemonCore.Application do
         LemonCore.NodeRegistry,
         {LemonCore.ConfigCache, config_cache_opts},
         LemonCore.Store,
+        LemonCore.TerminalOutbox,
         LemonCore.SessionActivity,
         LemonCore.Secrets.Usage,
         LemonCore.UsageLedger,

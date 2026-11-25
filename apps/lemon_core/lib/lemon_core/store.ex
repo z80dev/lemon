@@ -170,7 +170,11 @@ defmodule LemonCore.Store do
            key: run_id
          ) do
       {:finalized, hooks, payload} ->
-        Hooks.invoke_bounded(hooks, payload, op: :finalize_run, store: server)
+        case Hooks.invoke_bounded(hooks, payload, op: :finalize_run, store: server) do
+          :ok -> LemonCore.TerminalOutbox.ack(server, run_id, :projections)
+          {:error, _} -> LemonCore.TerminalOutbox.failed(server, run_id, :projections)
+        end
+
         :ok
 
       other ->
@@ -480,6 +484,18 @@ defmodule LemonCore.Store do
       op: :fetch_all,
       table: table,
       key: :all
+    )
+  end
+
+  @doc false
+  def terminal_pending_page(server, cursor, limit) do
+    safe_store_call(
+      server,
+      {:terminal_pending_page, cursor, limit},
+      {:error, :store_unavailable},
+      op: :terminal_pending_page,
+      table: :run_terminal_pending,
+      key: :page
     )
   end
 
@@ -905,6 +921,33 @@ defmodule LemonCore.Store do
 
       other ->
         log_backend_unexpected(:fetch, :runs, run_id, other)
+        {:reply, {:error, :store_unavailable}, state}
+    end
+  end
+
+  def handle_call({:terminal_pending_page, cursor, limit}, _from, state) do
+    table = :run_terminal_pending
+
+    result =
+      if function_exported?(state.backend, :list_page, 4) do
+        state.backend.list_page(state.backend_state, table, cursor, limit)
+      else
+        with {:ok, entries, backend_state} <- state.backend.list(state.backend_state, table) do
+          page =
+            entries
+            |> Enum.filter(fn {key, _} -> is_nil(cursor) or key > cursor end)
+            |> Enum.sort_by(&elem(&1, 0))
+            |> Enum.take(limit)
+
+          {:ok, page, backend_state}
+        end
+      end
+
+    case result do
+      {:ok, entries, backend_state} ->
+        {:reply, {:ok, entries}, %{state | backend_state: backend_state}}
+
+      _ ->
         {:reply, {:error, :store_unavailable}, state}
     end
   end
@@ -1340,23 +1383,121 @@ defmodule LemonCore.Store do
   end
 
   defp ensure_final_record(state, run_id, summary) do
-    case state.backend.get(state.backend_state, :runs, run_id) do
-      {:ok, existing, backend_state} ->
-        case final_record(existing, run_id, summary) do
-          {:persist, record} -> persist_final_record(state, backend_state, run_id, record)
-          {:existing, record} -> {:ok, record, backend_state}
-          {:error, reason} -> {:error, reason, backend_state}
-        end
+    digest = :crypto.hash(:sha256, :erlang.term_to_binary(summary, [:deterministic]))
 
-      {:error, reason} ->
-        log_backend_error(:get, :runs, run_id, reason)
-        {:error, reason}
-
-      other ->
-        log_backend_unexpected(:get, :runs, run_id, other)
-        {:error, {:unexpected_backend_response, other}}
+    with {:ok, decision, backend_state} <-
+           state.backend.get(state.backend_state, :run_terminals, run_id),
+         :ok <- check_terminal_digest(decision, digest, run_id),
+         {:ok, existing, backend_state} <- state.backend.get(backend_state, :runs, run_id),
+         {:ok, record, backend_state} <-
+           final_record_for_commit(state, backend_state, existing, decision, run_id, summary),
+         {:ok, backend_state} <-
+           ensure_terminal_commit(state, backend_state, decision, run_id, digest, record) do
+      persist_final_record(state, backend_state, run_id, record)
     end
   end
+
+  defp check_terminal_digest(nil, _digest, _run_id), do: :ok
+  defp check_terminal_digest(%{digest: digest}, digest, _run_id), do: :ok
+
+  defp check_terminal_digest(%{digest: _}, _digest, run_id),
+    do: {:error, {:already_finalized, run_id}}
+
+  defp check_terminal_digest(%{finalized_at_ms: _}, _digest, run_id),
+    do: {:error, {:already_finalized, run_id}}
+
+  defp check_terminal_digest(_, _, _), do: {:error, :invalid_terminal_decision}
+
+  defp final_record_for_commit(state, backend_state, existing, decision, run_id, summary) do
+    case final_record(existing, run_id, summary) do
+      {:persist, record} when is_map(decision) ->
+        with {:ok, pending, backend_state} <-
+               state.backend.get(backend_state, :run_terminal_pending, run_id) do
+          case {decision, pending} do
+            {%{digest: digest}, %{digest: digest, record: original}} ->
+              {:ok, original, backend_state}
+
+            {%{started_at: started_at}, nil} ->
+              {:ok, %{record | started_at: started_at}, backend_state}
+
+            _ ->
+              {:error, :invalid_terminal_payload, backend_state}
+          end
+        end
+
+      {status, record} when status in [:existing, :persist] ->
+        {:ok, record, backend_state}
+
+      {:error, reason} ->
+        {:error, reason, backend_state}
+    end
+  end
+
+  defp ensure_terminal_commit(_state, backend_state, %{}, _run_id, _digest, _record),
+    do: {:ok, backend_state}
+
+  defp ensure_terminal_commit(state, backend_state, nil, run_id, digest, record) do
+    outcome = LemonCore.RunOutcome.infer(record.summary)
+
+    decision = %{
+      run_id: run_id,
+      attempt_id: terminal_attempt_id(record.summary, run_id),
+      outcome: outcome,
+      status: terminal_status(outcome),
+      digest: digest,
+      started_at: record.started_at,
+      committed_at_ms: System.system_time(:millisecond)
+    }
+
+    pending = %{
+      record: record,
+      digest: digest,
+      indexed: false,
+      projections: :pending,
+      notification:
+        if(is_binary(run_id) and is_map(record.summary[:completed]), do: :pending, else: :done),
+      presentation:
+        if(match?(%{meta: %{router_owned: true}}, record.summary), do: :pending, else: :done)
+    }
+
+    write = fn ->
+      run_atomically(state, backend_state, fn ->
+        with {:ok, backend_state} <-
+               state.backend.put(backend_state, :run_terminal_pending, run_id, pending),
+             {:ok, backend_state} <-
+               state.backend.put_new(backend_state, :run_terminals, run_id, decision) do
+          if function_exported?(state.backend, :with_durability, 2) or
+               not function_exported?(state.backend, :sync, 1),
+             do: {:ok, backend_state},
+             else: state.backend.sync(backend_state)
+        else
+          {:exists, next_state} -> {:error, {:already_finalized, run_id}, next_state}
+          error -> error
+        end
+      end)
+    end
+
+    if function_exported?(state.backend, :with_durability, 2),
+      do: state.backend.with_durability(backend_state, write),
+      else: write.()
+  end
+
+  defp run_atomically(state, backend_state, operation) do
+    if function_exported?(state.backend, :atomic, 2),
+      do: state.backend.atomic(backend_state, operation),
+      else: operation.()
+  end
+
+  defp terminal_attempt_id(%{attempt_id: id}, _run_id)
+       when is_binary(id) and byte_size(id) <= 256,
+       do: id
+
+  defp terminal_attempt_id(_summary, run_id) when is_binary(run_id), do: "#{run_id}:attempt:1"
+  defp terminal_attempt_id(_summary, _run_id), do: nil
+
+  defp terminal_status(outcome) when outcome in [:success, :partial], do: :completed
+  defp terminal_status(:failure), do: :failed
+  defp terminal_status(outcome), do: outcome
 
   defp final_record(nil, _run_id, summary) do
     {:persist, %{events: [], summary: summary, started_at: System.system_time(:millisecond)}}
@@ -1396,27 +1537,48 @@ defmodule LemonCore.Store do
   defp finalize_run_session(state, backend_state, run_id, record, summary) do
     session_key = Map.get(summary, :session_key)
 
-    if is_binary(session_key) and session_key != "" do
-      update_sessions_index(
-        state,
-        backend_state,
-        session_key,
-        run_id,
-        summary,
-        record.started_at
-      )
-    else
-      {:ok, backend_state}
+    with {:ok, pending, backend_state} <-
+           state.backend.get(backend_state, :run_terminal_pending, run_id) do
+      case pending do
+        %{indexed: false} ->
+          with {:ok, {backend_state, entry}} <-
+                 run_atomically(state, backend_state, fn ->
+                   with {:ok, backend_state, entry} <-
+                          maybe_update_sessions_index(
+                            state,
+                            backend_state,
+                            session_key,
+                            run_id,
+                            summary,
+                            record.started_at
+                          ),
+                        {:ok, backend_state} <-
+                          state.backend.put(backend_state, :run_terminal_pending, run_id, %{
+                            pending
+                            | indexed: true
+                          }) do
+                     {:ok, {backend_state, entry}}
+                   end
+                 end) do
+            if entry, do: ReadCache.put(state.read_cache, :sessions_index, session_key, entry)
+            {:ok, backend_state}
+          end
+
+        _ ->
+          {:ok, backend_state}
+      end
     end
   end
 
-  # Update sessions_index when a run is finalized. `:__recent_run_ids__` holds
-  # the ids of the last `@session_index_recent_runs` runs counted into the entry,
-  # newest first. It is the idempotency marker that lets a retried finalization
-  # repair a partial failure without counting its run twice, and it is bounded
-  # so a long-lived session's entry stays a fixed size: a retry that arrives
-  # after that many newer runs of the same session were indexed counts again.
-  # Typed public listings strip the marker before returning session entries.
+  defp maybe_update_sessions_index(state, backend_state, session_key, run_id, summary, started_at) do
+    if is_binary(session_key) and session_key != "",
+      do: update_sessions_index(state, backend_state, session_key, run_id, summary, started_at),
+      else: {:ok, backend_state, nil}
+  end
+
+  # SQLite commits the durable per-run index acknowledgement and this update
+  # together. Keep the bounded recent-run marker for older data and backends
+  # without a transaction API.
   defp update_sessions_index(state, backend_state, session_key, run_id, summary, timestamp) do
     case state.backend.get(backend_state, :sessions_index, session_key) do
       {:ok, existing, backend_state} ->
@@ -1428,7 +1590,7 @@ defmodule LemonCore.Store do
             put_session_index(state, backend_state, session_key, session_entry)
 
           :already_indexed ->
-            {:ok, backend_state}
+            {:ok, backend_state, nil}
 
           {:error, reason} ->
             {:error, reason, backend_state}
@@ -1491,8 +1653,7 @@ defmodule LemonCore.Store do
   defp put_session_index(state, backend_state, session_key, session_entry) do
     case state.backend.put(backend_state, :sessions_index, session_key, session_entry) do
       {:ok, backend_state} ->
-        ReadCache.put(state.read_cache, :sessions_index, session_key, session_entry)
-        {:ok, backend_state}
+        {:ok, backend_state, session_entry}
 
       {:error, reason} ->
         log_backend_error(:put, :sessions_index, session_key, reason)

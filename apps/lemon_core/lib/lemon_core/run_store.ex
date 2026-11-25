@@ -72,12 +72,11 @@ defmodule LemonCore.RunStore do
   @doc """
   Finalize a run synchronously.
 
-  `:ok` means both the immutable final summary and its derived session index
-  were written. Retrying the same summary repairs partial index failures
-  without double-counting the run, provided fewer than 32 newer runs of the
-  same session were indexed in between (the session entry remembers only its
-  most recent run ids, so its size stays fixed). Finalize hooks use
-  at-least-once delivery, so hook implementations must be idempotent by run id.
+  `:ok` means the terminal decision, final run summary and eligible session
+  index were written. The content-free decision survives loss of live run data;
+  a conflicting retry is rejected. An identical retry repairs an incomplete
+  index without counting it again. Finalize hooks use at-least-once delivery
+  and must be idempotent by run ID. See `LemonCore.TerminalOutbox` for repair.
   """
   @spec finalize(Store.server(), term(), map()) :: :ok | {:error, term()}
   def finalize(server \\ Store, run_id, summary),
@@ -134,17 +133,18 @@ defmodule LemonCore.RunStore do
   @doc "Delete a session's run history; see `LemonCore.RunHistoryStore.delete_session/2`."
   @spec delete_history(term()) :: :ok | {:error, atom()}
   def delete_history(session_key) do
-    cutoff = System.monotonic_time()
-    result = RunHistoryStore.delete_session(session_key)
+    LemonCore.TerminalOutbox.with_history_deletion(session_key, fn ->
+      cutoff = System.monotonic_time()
 
-    if result == :ok,
-      do:
+      with :ok <- RunHistoryStore.delete_session(session_key) do
         LemonCore.Bus.broadcast(
           "sessions:lifecycle",
           {:session_history_deleted, session_key, cutoff}
         )
 
-    result
+        :ok
+      end
+    end)
   end
 
   @doc """

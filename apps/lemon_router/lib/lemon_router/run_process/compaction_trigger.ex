@@ -208,7 +208,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
          false <- context_length_exceeded_error?(error),
          key when is_binary(key) <- state.session_key,
          %ExecutionCommand{} = request <- state.execution_request,
-         :ok <- ResumeResolver.bind(resume, request) do
+         :ok <- bind_completion_resume(state, request, resume) do
       LemonCore.ChatStateStore.put(key, %LemonCore.ChatState{
         last_engine: resume.engine,
         last_resume_token: resume.value,
@@ -220,6 +220,11 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   end
 
   def maybe_store_chat_state(_state, _event), do: :ok
+
+  defp bind_completion_resume(%{terminal_replay: true} = state, request, resume),
+    do: ResumeResolver.bind_from_run(resume, state.run_id, request.session_key)
+
+  defp bind_completion_resume(_state, request, resume), do: ResumeResolver.bind(resume, request)
 
   @spec maybe_mark_pending_compaction_near_limit(map(), LemonCore.Event.t() | term()) :: :ok
   def maybe_mark_pending_compaction_near_limit(state, %LemonCore.Event{} = event) do

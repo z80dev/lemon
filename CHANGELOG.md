@@ -171,6 +171,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Preserve committed run outcomes across restarts, retry pending completion
+  notifications and projections, and never report an already-completed run
+  as failed because answer presentation crashed (#75, #76, #77, #84).
+
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

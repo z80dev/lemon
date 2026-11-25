@@ -1,7 +1,7 @@
 defmodule LemonRouter.RunCompletion do
   @moduledoc false
 
-  alias LemonCore.{Bus, ExecutionCommand, RunStore}
+  alias LemonCore.{ExecutionCommand, RunStore, TerminalOutbox}
   alias LemonRouter.RunProcess.CompactionTrigger
 
   # Runs removed before an executor owns them still need the same durable
@@ -19,6 +19,8 @@ defmodule LemonRouter.RunCompletion do
       session_key: command.session_key,
       run_id: command.run_id,
       prompt: command.prompt,
+      presentation_cwd: command.cwd,
+      attempt_id: command.execution_context && command.execution_context.attempt_id,
       duration_ms: event.payload.duration_ms,
       engine: "lemon",
       meta: command.meta
@@ -49,19 +51,43 @@ defmodule LemonRouter.RunCompletion do
           %{run_id: command.run_id, session_key: command.session_key, engine: "lemon"}
         )
 
-        Bus.broadcast(Bus.run_topic(command.run_id), event)
+        TerminalOutbox.publish(command.run_id, event)
 
       {:error, {:already_finalized, run_id}} when run_id == command.run_id ->
-        # A late gateway completion may have won during the grace window.
-        # Reconcile this owner from the durable result without broadcasting a
-        # contradictory second terminal event to clients.
-        {:ok, %{summary: existing}} = RunStore.fetch(run_id)
         :ok = LemonRouter.RunReceiptStore.retain_terminal_evidence(run_id)
-        send(self(), %{event | payload: %{event.payload | completed: existing.completed}})
-        :ok
+
+        case committed_summary(run_id) do
+          {:ok, summary} ->
+            reconciled = TerminalOutbox.event(run_id, summary)
+            send(self(), reconciled)
+            TerminalOutbox.publish(run_id, reconciled)
+
+          {:error, _} ->
+            exit(:terminal_persistence_failed)
+        end
 
       {:error, _reason} ->
         exit(:terminal_persistence_failed)
+    end
+  end
+
+  defp committed_summary(run_id) do
+    case RunStore.fetch(run_id) do
+      {:ok, %{summary: %{completed: completed} = summary}} when is_map(completed) ->
+        {:ok, summary}
+
+      result when elem(result, 0) == :ok or result == {:error, :evicted} ->
+        case TerminalOutbox.pending(run_id) do
+          {:ok, %{record: %{summary: %{completed: completed} = summary}}}
+          when is_map(completed) ->
+            {:ok, summary}
+
+          _ ->
+            {:error, :missing_completion}
+        end
+
+      error ->
+        error
     end
   end
 end

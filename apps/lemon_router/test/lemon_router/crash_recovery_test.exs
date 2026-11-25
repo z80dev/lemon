@@ -171,6 +171,28 @@ defmodule LemonRouter.CrashRecoveryTest do
     assert Process.alive?(resumed)
   end
 
+  test "boot never resumes or abandons a committed run whose live summary was lost", ctx do
+    {request, pid} = start_run(ctx.cwd)
+
+    assert :ok =
+             RunStore.finalize(request.run_id, %{
+               session_key: request.session_key,
+               completed: %{ok: true, answer: "committed before VM loss"}
+             })
+
+    assert :ok = Store.delete(:runs, request.run_id)
+    brutal_restart(pid)
+    await_replayer()
+
+    refute_receive {:execution, _, _}
+    assert {:ok, %{status: :completed}} = LemonCore.TerminalOutbox.decision(request.run_id)
+
+    assert {:ok, %{terminal: true}} =
+             Store.fetch(RunOrchestrator.admission_table(), request.run_id)
+
+    assert {:ok, []} = CrashRecovery.operator_view()
+  end
+
   test "an ambiguous continuation acknowledgement never re-drives in the same boot", ctx do
     {request, pid} = start_run(ctx.cwd)
     Application.put_env(:lemon_router, :crash_test_ack, {:error, :outcome_unknown})

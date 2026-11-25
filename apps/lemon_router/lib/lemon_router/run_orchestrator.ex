@@ -791,13 +791,15 @@ defmodule LemonRouter.RunOrchestrator do
   defp recover_crashed_admission(run_id, expected, state, disposition \\ nil) do
     with {:ok, tombstone} <- Store.fetch(@abort_tombstone_table, run_id),
          {:ok, current} <- Store.fetch(@run_admission_table, run_id),
-         {:ok, run} <- RunStore.fetch(run_id),
+         {:ok, decision} <- LemonCore.TerminalOutbox.decision(run_id),
+         {:ok, run} <- if(is_map(decision), do: {:ok, nil}, else: RunStore.fetch(run_id)),
          {:ok, receipt} <- LemonRouter.RunReceiptStore.fetch(run_id) do
       cond do
         not is_map(current) or current != expected ->
           {{:ok, :skipped}, state}
 
-        MapHelpers.get_key(current, :terminal) == true or terminal_summary?(run) ->
+        MapHelpers.get_key(current, :terminal) == true or is_map(decision) or
+            terminal_summary?(run) ->
           with :ok <- LemonRouter.RunReceiptStore.retain_terminal_evidence(run_id),
                :ok <- CrashRecovery.settle(Store, run_id) do
             {{:ok, :skipped}, state}

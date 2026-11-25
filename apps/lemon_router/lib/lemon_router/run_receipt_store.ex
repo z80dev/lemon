@@ -71,23 +71,24 @@ defmodule LemonRouter.RunReceiptStore do
 
   @doc false
   def retain_terminal_evidence(server \\ Store, run_id) do
-    case Store.fetch(server, :runs, run_id) do
-      {:ok, record} when is_map(record) ->
-        if is_map(MapHelpers.get_key(record, :summary)) do
-          with :ok <- mark_terminal(server, LemonRouter.RunOrchestrator.admission_table(), run_id),
-               :ok <- mark_terminal(server, @table, run_id),
-               :ok <- LemonRouter.RestartCarryover.CrashRecovery.settle(server, run_id) do
-            :ok
-          end
-        else
-          :ok
+    with {:ok, decision} <- LemonCore.TerminalOutbox.decision(server, run_id),
+         {:ok, terminal?} <- terminal_evidence?(server, run_id, decision) do
+      if terminal? do
+        with :ok <- mark_terminal(server, LemonRouter.RunOrchestrator.admission_table(), run_id),
+             :ok <- mark_terminal(server, @table, run_id) do
+          LemonRouter.RestartCarryover.CrashRecovery.settle(server, run_id)
         end
-
-      {:ok, _nonterminal_or_absent} ->
+      else
         :ok
+      end
+    end
+  end
 
-      {:error, _reason} = error ->
-        error
+  defp terminal_evidence?(_server, _run_id, decision) when is_map(decision), do: {:ok, true}
+
+  defp terminal_evidence?(server, run_id, nil) do
+    with {:ok, record} <- Store.fetch(server, :runs, run_id) do
+      {:ok, is_map(record) and is_map(MapHelpers.get_key(record, :summary))}
     end
   end
 
