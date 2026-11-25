@@ -349,7 +349,7 @@ defmodule CodingAgent.Tools.TaskTest do
       refute TaskStore.auto_followup_suppressed?(task_b)
     end
 
-    test "aborted and failed joins leave no permanent suppression" do
+    test "aborted joins release suppression while returned child errors suppress followup" do
       {aborted_task, _run_id} = running_task("abort")
       signal = AbortSignal.new()
 
@@ -385,9 +385,20 @@ defmodule CodingAgent.Tools.TaskTest do
         end)
 
       wait_until(fn -> TaskStore.auto_followup_suppressed?(failed_task) end)
-      RunGraph.fail(failed_run, :boom)
-      assert %LemonAgent.Types.AgentToolResult{} = Elixir.Task.await(failed_joiner, 1_000)
-      refute TaskStore.auto_followup_suppressed?(failed_task)
+      :ok = TaskStore.fail(failed_task, "boom")
+      :ok = RunGraph.fail(failed_run, "boom")
+
+      assert %LemonAgent.Types.AgentToolResult{
+               details: %{
+                 mode: "wait_all",
+                 tasks: [%{task_id: ^failed_task, status: "error", error: "boom"}]
+               }
+             } = Elixir.Task.await(failed_joiner, 1_000)
+
+      assert {:ok, %{auto_followup_suppressed_at: suppressed_at, auto_followup_join_tokens: []}} =
+               TaskStore.get_record(failed_task)
+
+      assert is_integer(suppressed_at)
     end
   end
 
