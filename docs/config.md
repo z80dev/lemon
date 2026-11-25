@@ -380,6 +380,9 @@ mock_mode = false
 allowed_inboxes = ["<sender inbox id>"]
 # allow_all = true               # explicit opt-out: accept every sender when allowed_inboxes is empty
 
+[gateway.ingress]
+enabled = false
+
 [gateway.voice]
 enabled = false
 websocket_port = 4047
@@ -3359,7 +3362,8 @@ Top-level `[gateway]` keys (defaults from `LemonCore.Config.Gateway`):
 | `max_concurrent_runs` | `2` | Positive gateway-wide execution permit limit (`LEMON_GATEWAY_MAX_CONCURRENT_RUNS`), owned by `LemonGateway.Slots`. |
 | `default_cwd` | unset | Fallback working directory for unbound chats (`LEMON_GATEWAY_DEFAULT_CWD`). |
 | `auto_resume` | `false` | Resume interrupted sessions on start. |
-| `enable_telegram`, `enable_discord`, `enable_xmtp`, `enable_webhook`, `enable_a2a` | `false` | Enable the named channel; `enable_<id>` is read per registered channel (and `LEMON_GATEWAY_ENABLE_<ID>` overrides it). |
+| `enable_telegram`, `enable_discord`, `enable_xmtp`, `enable_a2a` | `false` | Enable the named channel (`LEMON_GATEWAY_ENABLE_<ID>` overrides it). |
+| `enable_webhook` | `false` | Enable the built-in generic webhook listener when gateway ingress is enabled (`LEMON_GATEWAY_ENABLE_WEBHOOK`). |
 
 `enable_webhook` is validated as a boolean. Invalid execution capacity fails
 startup; there is no fallback to 10. Engine-session ownership is always a
@@ -3379,6 +3383,35 @@ RunProcesses, including those waiting for gateway permits. It is independent of
 `max_concurrent_runs`. See the canonical
 [admission inventory](architecture/admission-gates.md) for every gate and
 saturation behavior.
+
+## Gateway ingress
+
+Gateway startup runs execution only by default. In the operator's global
+`~/.lemon/config.toml`, set:
+
+```toml
+[gateway.ingress]
+enabled = true
+```
+
+`enabled` must be a boolean and defaults to `false`.
+`LEMON_GATEWAY_INGRESS_ENABLED=true` or `false` overrides it. Project TOML
+cannot enable ingress. Restart the runtime after changing listener enablement,
+bind addresses or ports. This gate does not affect messaging adapters in
+`lemon_channels`.
+
+If you previously opted in via the `:gateway_ingress_enabled` application
+setting, move that opt-in to `[gateway.ingress]`.
+
+| Surface | Per-surface enablement and authentication | Default listener |
+| --- | --- | --- |
+| Generic webhook | `[gateway] enable_webhook = true`, plus a token in `[gateway.webhook.integrations.<id>]`. Send `Authorization: Bearer <token>` to `POST /webhooks/<id>`. No transport registration is needed. | Loopback, `4046` |
+| Twilio SMS | `[gateway.sms] webhook_enabled = true` (or `LEMON_SMS_WEBHOOK_ENABLED=true`) and a Twilio auth token (`auth_token_secret` or `TWILIO_AUTH_TOKEN`). Set `webhook_url` to the exact public callback URL when behind a proxy. | Loopback, `4041` |
+| Twilio voice | `[gateway.voice] enabled = true`. Configure an HTTPS `public_url` and a Twilio auth token to authenticate requests. | Loopback, `4047` |
+
+Keep the listeners on loopback and forward only the required routes through a
+TLS reverse proxy or tunnel. See the [gateway README](https://github.com/z80dev/lemon/blob/main/apps/lemon_gateway/README.md#transports)
+for webhook policy and SMS behavior, and [Voice](#voice) for signed callbacks.
 
 ## A2A peers
 
@@ -3564,7 +3597,7 @@ Earlier releases accepted every XMTP sender. After upgrading, an XMTP adapter wi
 
 ## Voice
 
-Voice transport is configured under `[gateway.voice]`.
+Voice requires both `[gateway.ingress] enabled = true` and `[gateway.voice] enabled = true`.
 
 ```toml
 [gateway.voice]
@@ -3584,8 +3617,8 @@ max_call_duration_seconds = 600
 silence_timeout_ms = 5000
 ```
 
-Canonical voice settings are loaded from `gateway.voice`. Legacy `:lemon_gateway` app env
-fallbacks remain only as temporary compatibility shims and should not be used for new setup.
+Voice settings are loaded from `[gateway.voice]`; no application environment
+configuration is needed.
 
 Every voice webhook and the media-stream WebSocket handshake must carry a valid
 `X-Twilio-Signature` made with the configured Twilio auth token over the URL derived

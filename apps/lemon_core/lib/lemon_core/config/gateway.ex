@@ -44,6 +44,7 @@ defmodule LemonCore.Config.Gateway do
     :default_cwd,
     :auto_resume,
     :enable_webhook,
+    :ingress,
     :projects,
     :bindings,
     :sms,
@@ -89,6 +90,7 @@ defmodule LemonCore.Config.Gateway do
           default_cwd: String.t() | nil,
           auto_resume: boolean(),
           enable_webhook: boolean(),
+          ingress: %{required(String.t()) => boolean()},
           projects: map(),
           bindings: [binding()],
           sms: map(),
@@ -115,6 +117,7 @@ defmodule LemonCore.Config.Gateway do
       auto_resume: resolve_auto_resume(gateway_settings),
       enable_webhook:
         resolve_enable_flag(gateway_settings, "enable_webhook", :lemon_gateway_enable_webhook),
+      ingress: resolve_ingress(gateway_settings["ingress"]),
       projects: resolve_projects(gateway_settings),
       bindings: resolve_bindings(gateway_settings),
       sms: resolve_sms(gateway_settings),
@@ -151,6 +154,20 @@ defmodule LemonCore.Config.Gateway do
   defp resolve_enable_flag(settings, key, name) do
     Env.get(name, default: if(is_nil(settings[key]), do: false, else: settings[key]))
   end
+
+  defp resolve_ingress(nil), do: resolve_ingress(%{})
+
+  defp resolve_ingress(ingress) when is_map(ingress) do
+    case Map.get(ingress, "enabled", false) do
+      enabled when is_boolean(enabled) ->
+        Map.put(ingress, "enabled", Env.get(:lemon_gateway_ingress_enabled, default: enabled))
+
+      _invalid ->
+        ingress
+    end
+  end
+
+  defp resolve_ingress(ingress), do: ingress
 
   defp resolve_enabled_channels(settings, modules) do
     Map.new(modules, fn module ->
@@ -332,6 +349,7 @@ defmodule LemonCore.Config.Gateway do
       "default_cwd" => nil,
       "auto_resume" => false,
       "enable_webhook" => false,
+      "ingress" => %{"enabled" => false},
       "projects" => %{},
       "bindings" => [],
       "sms" => %{},

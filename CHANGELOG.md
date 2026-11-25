@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Gateway-native webhook, Twilio SMS and voice can now start from global
+  `[gateway.ingress]` TOML and per-surface settings, with
+  `LEMON_GATEWAY_INGRESS_ENABLED` as the startup override. The generic webhook
+  ships pre-registered; all three listeners remain opt-in (#698).
 - `lemon browser stop` (admin control-plane method `browser.stop`) stops the
   local browser driver and the Chrome it launched (#660).
 - `lemon setup omp` reuses the provider logins and API keys omp already holds:

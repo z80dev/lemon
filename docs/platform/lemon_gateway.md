@@ -16,9 +16,10 @@ by the task lifecycle. Subagents do not consume Gateway top-level
 execution slots, and there are no vendor CLI subprocess runners.
 
 Gateway-native webhook, SMS, and voice transport glue remains alongside the
-execution runtime and starts only when `:gateway_ingress_enabled` is set for
-`:lemon_gateway` (off by default). External channel adapters — Telegram, Discord,
-XMTP and Email — live in `lemon_channels`.
+execution runtime and starts only with the global
+[`[gateway.ingress]`](../config.md#gateway-ingress) opt-in and the individual
+surface enable flags. External channel adapters — Telegram, Discord, XMTP and
+Email — live in `lemon_channels`.
 
 ## Execution path
 
