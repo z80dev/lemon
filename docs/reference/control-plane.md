@@ -347,6 +347,29 @@ next browser request starts a fresh driver. `lemon browser stop` calls it.
 The result is `{"stopped": true}`. If the driver does not confirm in time the
 method fails with `TIMEOUT`; whether it stopped is then unknown.
 
+## `secrets.set` and `secrets.delete`
+
+Scope: `operator.admin` only. Write-only access to the runtime's encrypted
+secret store for one-shot CLI clients: while a runtime owns the store,
+`lemon secrets set|delete|import-env` and the bot-token step of
+`lemon setup gateway` send their write here instead of writing the store from a
+second VM. `secrets.set` takes `name` and `value` (non-empty strings, at most
+256 bytes and 1 MiB) and optional `provider` and `expiresAt` (epoch ms);
+`secrets.delete` takes `name`.
+
+```json
+{"type":"req","id":"secrets-set-1","method":"secrets.set","params":{"name":"GITHUB_TOKEN","value":"<value>"}}
+```
+
+`secrets.set` returns `{"name", "owner", "provider", "expiresAt"}` and never
+the value; `secrets.delete` returns `{"name", "deleted": true}` (deleting an
+absent secret succeeds). A store refusal is `UNAVAILABLE` (`INVALID_REQUEST`
+for a bad name or value) with `details.reason` (`missing_master_key`,
+`weak_master_key`, `keychain_failed`, `master_key_mismatch`,
+`key_rotation_incomplete`, `secrets_locked`, `stale_revision`,
+`secret_store_failed`, ...) and `mutationMayHaveApplied: false`. An error
+without that flag, or no response, may have written: check before retrying.
+
 ## `system.restart` and `system.stop`
 
 Scope: `operator.admin` only. Parameters: `{}` (unknown/nonempty parameters are

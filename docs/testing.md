@@ -446,7 +446,7 @@ scripts/test live-eval
 variables name a Lemon secret, so local runs can use the encrypted store:
 
 ```bash
-mix lemon.secrets.set release_eval_api_key <token>
+./bin/lemon secrets set release_eval_api_key <token>
 LEMON_EVAL_API_KEY_SECRET=release_eval_api_key scripts/test live-eval
 ```
 

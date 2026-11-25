@@ -416,7 +416,8 @@ defmodule LemonCli.CommandRegistry do
         option("--json", ["--json"], "Emit redacted source readiness JSON")
       ],
       details: [
-        "rotate-key previews by default and changes nothing. Applying requires the exact preview token, refuses while a Lemon runtime is running, and re-encrypts every stored secret under a new master key written to the Keychain entry or key file that supplied the current one."
+        "rotate-key previews by default and changes nothing. Applying requires the exact preview token, refuses while a Lemon runtime is running, and re-encrypts every stored secret under a new master key written to the Keychain entry or key file that supplied the current one.",
+        "While a running runtime owns the store, set, delete and import-env send the write to it over the control plane (admin scope) instead of writing the store directly."
       ]
     },
     %{

@@ -63,7 +63,8 @@ defmodule Mix.Tasks.Lemon.Update do
         aliases: [c: :check, v: :verbose]
       )
 
-    Mix.Tasks.Lemon.Secrets.ensure_started!()
+    Mix.Task.run("loadpaths")
+    LemonCore.CLI.start!(:lemon_core)
 
     check_only? = opts[:check] || false
     verbose? = opts[:verbose] || false

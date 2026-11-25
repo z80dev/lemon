@@ -4,6 +4,12 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Admin `secrets.set` / `secrets.delete`: write-only secret store mutations for
+  one-shot CLI clients beside the runtime; refusals carry a bounded
+  `details.reason` and `mutationMayHaveApplied: false` (#667).
+
 ### Fixed
 
 - A method with any scope beyond `:read` that raises, throws or whose async task

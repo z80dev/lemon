@@ -27,8 +27,7 @@ defmodule Mix.Tasks.Lemon.Help do
      ~w(lemon.new lemon.setup lemon.onboard lemon.onboard.anthropic lemon.onboard.codex
         lemon.onboard.copilot lemon.onboard.gemini lemon.onboard.antigravity lemon.providers
         lemon.workspace lemon.update)},
-    {"Secrets", ~w(lemon.secrets.init lemon.secrets.set lemon.secrets.list lemon.secrets.status
-        lemon.secrets.check lemon.secrets.delete lemon.secrets.import_env lemon.voice.secrets)},
+    {"Secrets (`lemon secrets` manages the store)", ~w(lemon.voice.secrets)},
     {"Diagnostics",
      ~w(lemon.doctor lemon.config lemon.channels lemon.usage lemon.media lemon.models
         lemon.introspection lemon.feedback)},

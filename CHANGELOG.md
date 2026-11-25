@@ -10,6 +10,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- One-shot CLI commands beside a running runtime never become a second store
+  writer: their client store defers every write to the runtime that owns the
+  database, and `lemon secrets set|delete|import-env` and `lemon setup
+  gateway` token storage go through the new admin `secrets.set` /
+  `secrets.delete` control-plane methods; other store writes (provider
+  credentials in `lemon setup`/`lemon model`) refuse until `lemon stop` (#667).
+- `lemon secrets` is the only secrets command-line implementation; the
+  `mix lemon.secrets.*` tasks and their twin tests are removed (#717).
 - `lemon browser stop` (admin control-plane method `browser.stop`) stops the
   local browser driver and the Chrome it launched (#660).
 - `lemon setup omp` reuses the provider logins and API keys omp already holds:

@@ -1143,6 +1143,13 @@ defmodule LemonControlPlane.Protocol.Schemas do
       }
     },
 
+    # Secrets (write-only)
+    "secrets.set" => %{
+      required: %{"name" => :string, "value" => :string},
+      optional: %{"provider" => :string, "expiresAt" => :integer}
+    },
+    "secrets.delete" => %{required: %{"name" => :string}},
+
     # Usage methods
     "usage.status" => %{optional: %{}},
     "usage.cost" => %{

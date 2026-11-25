@@ -252,6 +252,9 @@ defmodule LemonControlPlane.Methods.Registry do
     # Config
     LemonControlPlane.Methods.ConfigGet,
     LemonControlPlane.Methods.ConfigSet,
+    # Secrets (write-only, for one-shot CLI clients beside the runtime)
+    LemonControlPlane.Methods.SecretsSet,
+    LemonControlPlane.Methods.SecretsDelete,
     # Connect challenge (node pairing handshake)
     LemonControlPlane.Methods.ConnectChallenge,
     # omp delegate sessions

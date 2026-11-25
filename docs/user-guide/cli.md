@@ -540,11 +540,18 @@ One-shot commands (`doctor`, `config`, `secrets`, `usage`, `context`, `learn`,
 services in client mode, so running them next to a daemon is safe: they never
 expire the daemon's pending approvals, sweep its store, run its config reloader
 or run history, or install a SIGTERM handler. `doctor`, `config show`/`validate`,
-`usage` and `secrets status`/`list`/`check` also open the store read-only.
-Commands that change stored state, such as `secrets set`, still write the shared
-store directly. Only the first runtime to open a store owns it
-(`<store>.runtime.lock`); a second runtime on the same store, such as a node
-worker, leaves the owner's approvals alone.
+`usage` and `secrets status`/`list`/`check`/`init` also open the store read-only.
+Only the first runtime to open a store owns it (`<store>.runtime.lock`); a
+second runtime on the same store, such as a node worker, leaves the owner's
+approvals alone. While a runtime owns the store, a one-shot command never
+writes it: `secrets set`, `secrets delete`, `secrets import-env` and the bot
+token step of `setup gateway` send the write to that runtime over its control
+plane (`secrets.set` / `secrets.delete`, admin scope; set
+`LEMON_CONTROL_PLANE_OPERATOR_TOKEN` when the runtime requires one). An
+unreachable runtime writes nothing; an unconfirmed write is reported as such,
+so check `lemon secrets list` before retrying. Other store writes without a
+runtime route, such as saving provider credentials in `lemon setup` or
+`lemon model`, are refused; stop the runtime (`lemon stop`) and re-run them.
 
 ## Help and exit codes
 

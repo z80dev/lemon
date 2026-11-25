@@ -6,6 +6,13 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Added
 
+- `LemonCli.SecretsCommand` is the single `lemon secrets` implementation, with
+  `CLI.run/1` tests for stdout, stderr and exit codes of every subcommand and a
+  golden `list` (#717). `LemonCli.SecretWriter` sends `secrets set|delete|
+  import-env` and gateway bot-token writes to a running runtime that owns the
+  store (`secrets.set` / `secrets.delete`); unreachable runtimes write nothing
+  and unconfirmed writes report outcome unknown. Provider-credential saves
+  refuse with `lemon stop` guidance while a runtime owns the store (#667).
 - `lemon browser stop` stops the runtime's local browser driver and the
   Chrome it launched through the admin `browser.stop` method (#660).
 - `lemon setup omp [status|disconnect]` connects Lemon providers to omp's auth

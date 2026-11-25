@@ -12,7 +12,10 @@ defmodule LemonCore.RuntimeOwner do
   cannot be shared, so its VM always owns it.
 
   One-shot CLI VMs boot `:lemon_core` in client mode (see
-  `LemonCore.Application`) and never start this process.
+  `LemonCore.Application`) and never start this process. Their store calls
+  `held?/1`, which takes and immediately releases the lock, to defer every
+  write to a running owner; a runtime booting meanwhile waits up to a second
+  for such a probe to finish instead of becoming a follower.
   """
 
   use GenServer
@@ -22,6 +25,7 @@ defmodule LemonCore.RuntimeOwner do
   alias LemonCore.Service.Lock
 
   @acquire_timeout_ms 5_000
+  @contention_timeout_ms 1_000
 
   @doc false
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -40,6 +44,26 @@ defmodule LemonCore.RuntimeOwner do
   @doc "The ownership lock path for a store database file."
   @spec lock_path(Path.t()) :: Path.t()
   def lock_path(database) when is_binary(database), do: database <> ".runtime.lock"
+
+  @doc """
+  Whether a live runtime holds the ownership lock at `lock_path`. Takes the
+  lock without waiting and releases it at once; a lock that cannot be checked
+  counts as held (fail closed). Probes from a separate unlinked process, so a
+  caller that traps exits (the store) never receives exits from the lock's
+  liveness-check helpers.
+  """
+  @spec held?(Path.t()) :: boolean()
+  def held?(lock_path) when is_binary(lock_path) do
+    {pid, ref} =
+      spawn_monitor(fn ->
+        exit({:probed, Lock.with_lock_path(lock_path, [], fn -> :free end)})
+      end)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, {:probed, result}} -> result != :free
+      {:DOWN, ^ref, :process, ^pid, _crashed} -> true
+    end
+  end
 
   @impl true
   def init(opts) do
@@ -95,7 +119,7 @@ defmodule LemonCore.RuntimeOwner do
     holder =
       spawn_link(fn ->
         result =
-          Lock.with_lock_path(path, [], fn ->
+          Lock.with_lock_path(path, [timeout: @contention_timeout_ms], fn ->
             send(parent, {ref, :locked})
 
             receive do

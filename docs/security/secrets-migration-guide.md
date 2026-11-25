@@ -19,7 +19,7 @@ The encrypted secrets store provides:
 See which secrets are currently resolved from environment vs the encrypted store:
 
 ```bash
-mix lemon.secrets.check
+lemon secrets check
 ```
 
 Example output:
@@ -40,13 +40,13 @@ Import all secrets that are currently set in your environment:
 
 ```bash
 # Preview what would be imported (dry run)
-mix lemon.secrets.import_env --dry-run
+lemon secrets import-env --dry-run
 
 # Actually import (skips secrets already in store)
-mix lemon.secrets.import_env
+lemon secrets import-env
 
 # Force import even if already in store
-mix lemon.secrets.import_env --force
+lemon secrets import-env --force
 ```
 
 ### 3. Verify Migration
@@ -54,7 +54,7 @@ mix lemon.secrets.import_env --force
 Run the check again to confirm secrets are now in the store:
 
 ```bash
-mix lemon.secrets.check
+lemon secrets check
 ```
 
 ### 4. Clean Up Environment
@@ -74,13 +74,13 @@ If you prefer to migrate secrets one at a time:
 
 ```bash
 # Set a secret manually
-mix lemon.secrets.set ANTHROPIC_API_KEY "sk-ant-..."
+lemon secrets set ANTHROPIC_API_KEY "sk-ant-..."
 
 # Verify it was stored
-mix lemon.secrets.list
+lemon secrets list
 
 # Test resolution
-mix lemon.secrets.check
+lemon secrets check
 ```
 
 ## Supported Secret Names
@@ -112,7 +112,7 @@ The following secrets are recognized by the migration tooling:
 If a secret resolves as `:missing` after migration:
 
 1. Check the exact name matches (case-sensitive)
-2. Verify the secret was actually imported: `mix lemon.secrets.list`
+2. Verify the secret was actually imported: `lemon secrets list`
 3. Check for typos in the secret name
 
 ### Import fails with "missing_master_key"
@@ -120,7 +120,7 @@ If a secret resolves as `:missing` after migration:
 Initialize the secrets store first:
 
 ```bash
-mix lemon.secrets.init
+lemon secrets init
 ```
 
 ### Backward compatibility
@@ -129,7 +129,7 @@ If you need to temporarily fall back to environment variables:
 
 ```bash
 # Secrets store will be skipped, env vars used directly
-LEMON_SECRETS_MASTER_KEY=invalid mix lemon.secrets.check
+LEMON_SECRETS_MASTER_KEY=invalid lemon secrets check
 ```
 
 Or disable secrets store in config:
@@ -157,17 +157,14 @@ mix lemon.config --show-secrets-source
 2. **Rotate imported secrets** - After migration, consider rotating API keys
 3. **Use expiration** - Set expiration dates for temporary credentials:
    ```bash
-   mix lemon.secrets.set TEMP_KEY "value" --expires-at 1735689600000
+   lemon secrets set TEMP_KEY "value" --expires-at 1735689600000
    ```
-4. **Audit access** - Check which secrets are being used:
+4. **Audit access** - Check which secrets are being used (`usage=` counts):
    ```bash
-   mix lemon.secrets.list --with-usage
+   lemon secrets list
    ```
 
 ## See Also
 
 - [`docs/security/secrets-and-keychain.md`](secrets-and-keychain.md) - Resolution and fallback contract
-- `mix help lemon.secrets.init` - Initialize secrets store
-- `mix help lemon.secrets.set` - Store a secret
-- `mix help lemon.secrets.check` - Check secret sources
-- `mix help lemon.secrets.import_env` - Bulk import from environment
+- `lemon help secrets` - Every `lemon secrets` subcommand and option

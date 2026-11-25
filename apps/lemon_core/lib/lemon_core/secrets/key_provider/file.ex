@@ -17,7 +17,7 @@ defmodule LemonCore.Secrets.KeyProvider.File do
   or restored from a backup that lost its mode — is warned about once per path
   and then used. Refusing it would lock you out of your own secrets over
   something `chmod 600` fixes, and `put/2` will not overwrite an existing key
-  unless passed `force: true` (`mix lemon.secrets.init --force`, key rotation).
+  unless passed `force: true` (`lemon secrets init --force`, key rotation).
   Pass `check_permissions: false` to silence the check.
   """
 

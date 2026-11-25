@@ -54,10 +54,14 @@ defmodule LemonCore.Store do
   ## Client options
 
   One-shot client VMs (see `LemonCore.Application` boot modes) start the store
-  with `sweep: false`, leaving sweeps to the runtime that owns the database, and
-  read-only commands add `read_only: true`: every mutation then returns
-  `{:error, :read_only}` without reaching the backend, and run/introspection
-  appends are dropped.
+  with `sweep: false`, leaving sweeps to the runtime that owns the database.
+  Writable clients add `defer_to_runtime: true`: when a live runtime holds the
+  database's ownership lock (`LemonCore.RuntimeOwner.held?/1`, checked once at
+  start), every mutation returns `{:error, :runtime_owned}` and the command must
+  ask that runtime to write instead, so the client is never a second writer
+  beside it. Read-only commands add `read_only: true`: every mutation returns
+  `{:error, :read_only}`. Refused mutations never reach the backend, and
+  run/introspection appends are dropped. `write_access/1` reports which applies.
 
   ## Read cache coherence
 
@@ -129,6 +133,14 @@ defmodule LemonCore.Store do
   """
   @spec location(server()) :: {module(), Path.t() | nil}
   def location(server \\ __MODULE__), do: GenServer.call(server, :location)
+
+  @doc """
+  Whether this store accepts mutations: `:ok`, `{:error, :read_only}` for a
+  read-only client, or `{:error, :runtime_owned}` for a client beside a running
+  runtime that owns the database (see "Client options").
+  """
+  @spec write_access(server()) :: :ok | {:error, :read_only | :runtime_owned}
+  def write_access(server \\ __MODULE__), do: GenServer.call(server, :write_access)
 
   # Run Events API
 
@@ -755,6 +767,7 @@ defmodule LemonCore.Store do
         # Schedule periodic sweep for expired entries (client VMs leave it to
         # the runtime that owns the store).
         if Keyword.get(config, :sweep, true), do: schedule_sweep()
+        write_refusal = write_refusal(config, backend_state)
 
         {:ok,
          %{
@@ -765,11 +778,29 @@ defmodule LemonCore.Store do
            backend: backend,
            backend_state: backend_state,
            introspection_retention_ms: @default_introspection_retention_ms,
-           read_only: Keyword.get(config, :read_only, false) == true
+           read_only: write_refusal != nil,
+           write_refusal: write_refusal
          }}
 
       {:error, reason} ->
         {:stop, {:backend_init_failed, reason}}
+    end
+  end
+
+  # A writable client defers to a runtime holding the database's ownership
+  # lock; an in-memory store cannot be shared, so it never defers.
+  defp write_refusal(config, backend_state) do
+    cond do
+      Keyword.get(config, :read_only, false) == true ->
+        :read_only
+
+      Keyword.get(config, :defer_to_runtime, false) == true and
+        match?(%{path: path} when is_binary(path), backend_state) and
+          LemonCore.RuntimeOwner.held?(LemonCore.RuntimeOwner.lock_path(backend_state.path)) ->
+        :runtime_owned
+
+      true ->
+        nil
     end
   end
 
@@ -797,7 +828,8 @@ defmodule LemonCore.Store do
       :cached_tables,
       :finalize_run_hooks,
       :sweep,
-      :read_only
+      :read_only,
+      :defer_to_runtime
     ])
     |> then(&Keyword.merge(env_config, &1))
   end
@@ -833,8 +865,9 @@ defmodule LemonCore.Store do
 
   defp merge_runtime_override(config, _override), do: config
 
-  # A read-only store (a one-shot client VM beside a running runtime) refuses
-  # every mutation before it reaches the backend, so it is never a second writer.
+  # A read-only store (a read-only one-shot client, or a writable one beside a
+  # running runtime) refuses every mutation before it reaches the backend, so it
+  # is never a second writer.
   @read_only_refused [
     :generic_put,
     :generic_put_new,
@@ -850,7 +883,12 @@ defmodule LemonCore.Store do
   @impl true
   def handle_call(request, _from, %{read_only: true} = state)
       when is_tuple(request) and elem(request, 0) in @read_only_refused,
-      do: {:reply, {:error, :read_only}, state}
+      do: {:reply, {:error, state.write_refusal}, state}
+
+  def handle_call(:write_access, _from, %{read_only: true} = state),
+    do: {:reply, {:error, state.write_refusal}, state}
+
+  def handle_call(:write_access, _from, state), do: {:reply, :ok, state}
 
   def handle_call(:location, _from, state) do
     path =

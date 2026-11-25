@@ -948,8 +948,17 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp persist!(config_path, changes, patch) do
     case LemonCli.Setup.ProviderManagement.persist(config_path, changes, patch) do
-      :ok -> :ok
-      {:error, _} -> fail!("Could not save provider credentials and config. Run `lemon doctor`.")
+      :ok ->
+        :ok
+
+      {:error, :runtime_owned} ->
+        fail!(
+          "A running Lemon runtime owns the credential store, so nothing was saved. " <>
+            "Stop it (`lemon stop`), then re-run this command."
+        )
+
+      {:error, _} ->
+        fail!("Could not save provider credentials and config. Run `lemon doctor`.")
     end
   end
 

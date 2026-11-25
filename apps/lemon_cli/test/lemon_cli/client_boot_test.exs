@@ -93,6 +93,32 @@ defmodule LemonCli.ClientBootTest do
     assert {:ok, :approved, _scope} = Task.await(task)
   end
 
+  test "a one-shot `lemon secrets set` beside the daemon never writes the store itself", c do
+    peer = start_peer(c)
+    # No control plane answers: the write must fail closed, not fall back locally.
+    :ok = :peer.call(peer, System, :put_env, ["LEMON_CONTROL_PLANE_PORT", closed_port()])
+
+    assert {1, ""} = run_cli(peer, ["secrets", "set", "PEER_SECRET", "peer-value"])
+
+    assert :peer.call(peer, LemonCore.Application, :boot_mode, []) == :client
+    assert %{write_refusal: :runtime_owned} = :peer.call(peer, :sys, :get_state, [Store])
+
+    assert {:error, :runtime_owned} =
+             :peer.call(peer, Store, :put, [LemonCore.Secrets.table(), :probe, :value])
+
+    :peer.stop(peer)
+
+    assert {:ok, nil} = Store.fetch(LemonCore.Secrets.table(), {"default", "PEER_SECRET"})
+    assert LemonCore.RuntimeOwner.owner?()
+  end
+
+  defp closed_port do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+    Integer.to_string(port)
+  end
+
   defp request do
     id = "client-boot-#{System.unique_integer([:positive])}"
 
