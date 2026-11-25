@@ -108,9 +108,9 @@ defmodule LemonRouter.NativeFollowupContextTest do
     suffix = Integer.to_string(System.unique_integer([:positive, :monotonic]))
     # unique_integer restarts with every VM: a random part keeps the root (and
     # the profiles persisted in its config) clear of an interrupted run's leftovers.
-    prefix =
-      "native-consumer-" <>
-        suffix <> "-" <> Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
+    # Keep the salt decimal so the bare profile key cannot contain 0b literals.
+    <<salt::32>> = :crypto.strong_rand_bytes(4)
+    prefix = "native-consumer-#{suffix}-#{salt}"
 
     profile_id = prefix <> "-profile"
     root = Path.join(System.tmp_dir!(), prefix)

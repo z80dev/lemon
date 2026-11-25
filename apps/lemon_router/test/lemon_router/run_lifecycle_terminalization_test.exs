@@ -153,6 +153,11 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
       router_monitor = Process.monitor(router)
       assert_receive %Event{type: :run_started, meta: %{run_id: ^first}}
 
+      # Both startup messages can arrive before the owner has installed its
+      # monitor. Killing before that point tests :noproc, not :killed.
+      assert {:running, %{executor_pid: ^runner, executor_ref: ref}} = :sys.get_state(router)
+      assert is_reference(ref)
+
       Process.exit(runner, :kill)
 
       assert_receive %Event{

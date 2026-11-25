@@ -97,8 +97,10 @@ defmodule LemonRouter.NativeLineageTest do
     # unique_integer restarts with every VM: a random part keeps the fixture's
     # root (and the profiles persisted in its config) from colliding with a
     # directory an interrupted earlier run left behind.
-    prefix =
-      "lineage-" <> suffix <> "-" <> Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
+    # Keep the salt decimal: the TOML lexer can mistake a hex substring such
+    # as 0b101 for a binary literal in the bare profile key.
+    <<salt::32>> = :crypto.strong_rand_bytes(4)
+    prefix = "lineage-#{suffix}-#{salt}"
 
     root = Path.join(System.tmp_dir!(), prefix)
     File.mkdir_p!(root)
