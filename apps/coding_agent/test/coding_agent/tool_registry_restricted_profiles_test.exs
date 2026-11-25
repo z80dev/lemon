@@ -61,8 +61,8 @@ defmodule CodingAgent.ToolRegistryRestrictedProfilesTest do
   end
 
   test "a satellite cannot register a tool reserved for platform builders" do
-    for name <- [:read, :discord_send_file, :submit_result, :tool_invoke] do
-      assert_raise ArgumentError, fn ->
+    for name <- [:read, :peer, :submit_result, :tool_invoke] do
+      assert_raise ArgumentError, "tool name #{name} is reserved for a platform tool", fn ->
         LemonAgent.ToolRegistry.register(name, __MODULE__.Contributed)
       end
     end
