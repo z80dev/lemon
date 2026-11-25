@@ -19,6 +19,7 @@ defmodule LemonControlPlane.EventProjection do
 
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.{Cost, ImageContent, TextContent, Usage}
+  alias LemonCore.Events.Usage, as: RunUsage
   alias LemonCore.Redact
 
   @max_bytes 32 * 1024
@@ -219,6 +220,9 @@ defmodule LemonControlPlane.EventProjection do
         depth,
         budget
       )
+
+  defp project(%RunUsage{} = value, depth, budget, _string_keys),
+    do: project_selected(value, RunUsage.fields(), depth, budget)
 
   defp project(%Cost{} = value, depth, budget, _string_keys),
     do:

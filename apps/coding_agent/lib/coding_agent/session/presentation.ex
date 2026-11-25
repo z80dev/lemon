@@ -1060,6 +1060,11 @@ defmodule CodingAgent.Session.Presentation do
     |> Enum.join("\n")
   end
 
+  @doc """
+  Run usage over provider calls (assistant messages or usage occurrences), as a
+  `LemonCore.Events.Usage`. Counters and cost sum every call; `context_tokens` is the
+  latest call's context alone, never the cumulative sum.
+  """
   def build_usage(messages) do
     usages =
       Enum.flat_map(messages, fn message ->
@@ -1075,6 +1080,7 @@ defmodule CodingAgent.Session.Presentation do
       [first | rest] ->
         Enum.reduce(rest, merge_usage(%{}, first), &merge_usage(&2, &1))
         |> Map.put(:context_tokens, latest_context_tokens(messages))
+        |> LemonCore.Events.Usage.from_map()
     end
   end
 

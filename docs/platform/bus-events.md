@@ -477,7 +477,8 @@ Nested payloads, never published alone (`LemonCore.Events.nested_modules/0`):
 
 | Module | Fields |
 |---|---|
-| `Completion` | **ok**, answer, error, engine, resume (`%{engine, value}`; top-level resumption accepts only `engine: "lemon"`), usage (a plain map owned by `LemonAi`), run_id, session_key, meta |
+| `Completion` | **ok**, answer, error, engine, resume (`%{engine, value}`; top-level resumption accepts only `engine: "lemon"`), usage (`Usage`), run_id, session_key, meta |
+| `Usage` | input, output, cache_read, cache_write, cache_write_long, total_tokens and cost (summed over the run's provider calls; `nil` is unreported), price_known, context_tokens (latest call only), context_budget, turns, tool_errors, occurrences (`%{model, provider, at_ms, usage}` per call). `Usage.context_tokens/1` is the context size; the cumulative counters are spend, never context |
 | `Action` | **id**, **kind** (`:tool`, `:command`, `:file_change`, `:web_search`, `:subagent`, `:reasoning`, `:note`, `:approval`, `:compaction`), **title**, detail |
 | `ApprovalPending` | **id**, run_id, session_id, session_key, agent_id, invocation_context_key (private: excluded from JSON), **tool**, tool_call_id, action, rationale, requested_at_ms, expires_at_ms |
 

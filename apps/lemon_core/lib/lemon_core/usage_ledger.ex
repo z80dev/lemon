@@ -50,16 +50,12 @@ defmodule LemonCore.UsageLedger do
 
   use GenServer
 
+  alias LemonCore.Events.Usage
   alias LemonCore.UsageStore
 
   @max_sessions_per_day 100
   @max_label_bytes 128
   @max_projection_attempts 8
-
-  @input_keys [:input_tokens, :input, :prompt_tokens]
-  @output_keys [:output_tokens, :output, :completion_tokens]
-  @cache_read_keys [:cache_read_input_tokens, :cached_input_tokens, :cache_read]
-  @cache_write_keys [:cache_creation_input_tokens, :cache_write_input_tokens, :cache_write]
 
   @doc false
   def start_link(opts \\ []) do
@@ -141,21 +137,17 @@ defmodule LemonCore.UsageLedger do
   @spec entry(term(), term(), map()) :: map() | nil
   def entry(run_id, session_key, summary) when is_map(summary) do
     completed = field(summary, :completed) || %{}
-    usage = completed |> field(:usage) |> plain_map()
+    usage = completed |> field(:usage) |> usage()
     meta = summary |> field(:meta) |> plain_map()
 
-    input = first_integer(usage, @input_keys)
-    output = first_integer(usage, @output_keys)
-
-    cache_read = first_integer(usage, @cache_read_keys)
-    cache_write = first_integer(usage, @cache_write_keys)
-    reported_total = first_integer(usage, [:total_tokens])
+    input = count(usage.input)
+    output = count(usage.output)
+    cache_read = count(usage.cache_read)
+    cache_write = count(usage.cache_write)
+    reported_total = count(usage.total_tokens)
 
     inclusive_input =
       cond do
-        cache_inclusive?(usage) ->
-          input
-
         is_integer(reported_total) and is_integer(output) and reported_total >= output ->
           reported_total - output
 
@@ -181,7 +173,7 @@ defmodule LemonCore.UsageLedger do
         model: model,
         input: inclusive_input,
         output: output,
-        uncached_input: if(cache_inclusive?(usage), do: nil, else: input),
+        uncached_input: input,
         cache_read: cache_read,
         cache_write: cache_write,
         cost: cost,
@@ -619,14 +611,14 @@ defmodule LemonCore.UsageLedger do
 
   defp label(_), do: nil
 
-  defp cost(usage) do
+  defp cost(%Usage{} = usage) do
     value =
-      case field(usage, :cost) do
+      case usage.cost do
         %{} = cost -> to_float(field(plain_map(cost), :total))
         cost -> to_float(cost)
       end
 
-    case field(usage, :price_known) do
+    case usage.price_known do
       false -> nil
       _ when is_number(value) and value > 0 -> value
       true -> if counters_known?(usage), do: value
@@ -634,12 +626,10 @@ defmodule LemonCore.UsageLedger do
     end
   end
 
-  defp counters_known?(usage) do
-    not is_nil(first_integer(usage, @input_keys)) and
-      not is_nil(first_integer(usage, @output_keys)) and
-      (not is_nil(first_integer(usage, [:total_tokens])) or cache_inclusive?(usage) or
-         (not is_nil(first_integer(usage, @cache_read_keys)) and
-            not is_nil(first_integer(usage, @cache_write_keys))))
+  defp counters_known?(%Usage{} = usage) do
+    Enum.all?([usage.input, usage.output], &count/1) and
+      (count(usage.total_tokens) != nil or
+         Enum.all?([usage.cache_read, usage.cache_write], &count/1))
   end
 
   defp timestamp(value) when is_integer(value) and value > 0, do: value
@@ -651,20 +641,11 @@ defmodule LemonCore.UsageLedger do
 
   defp identity(_), do: nil
 
-  # `:prompt_tokens` already includes cached input in the APIs that report it.
-  defp cache_inclusive?(usage) do
-    is_nil(first_integer(usage, [:input_tokens, :input])) and
-      is_integer(first_integer(usage, [:prompt_tokens]))
-  end
+  defp usage(usage) when is_map(usage), do: Usage.from_map(usage)
+  defp usage(_usage), do: %Usage{}
 
-  defp first_integer(usage, keys) do
-    Enum.find_value(keys, fn key ->
-      case field(usage, key) do
-        value when is_integer(value) and value >= 0 -> value
-        _ -> nil
-      end
-    end)
-  end
+  defp count(value) when is_integer(value) and value >= 0, do: value
+  defp count(_value), do: nil
 
   defp plain_map(%{__struct__: _} = struct), do: Map.from_struct(struct)
   defp plain_map(map) when is_map(map), do: map

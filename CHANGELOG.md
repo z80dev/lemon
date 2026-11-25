@@ -214,6 +214,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Preemptive compaction compares the context of a run's latest provider call
+  (`context_tokens`, else the last call's cache-inclusive input) with the
+  threshold, never the run's cumulative usage: a run of five 20K-context calls
+  no longer compacts the next prompt because it spent 100K input tokens. Run
+  usage is one typed `LemonCore.Events.Usage` read by its canonical field names;
+  the router, control plane and usage ledger no longer probe alternative
+  spellings (`input_tokens`, `prompt_tokens`, `cache_read_input_tokens`, …),
+  so a history record stored under them reports unknown counters. The
+  completion's `tokens`/`cost_usd` duplicates of `total_tokens`/`cost.total`
+  and the clients' cumulative `contextTokens` fallback are gone (#669).
 - One-shot CLI commands (`lemon doctor`, `config`, `secrets`, `usage`, `context`,
   `learn`, `learning`, `mcp`, `update`, `migrate`, `providers`, `setup`, and the
   `mix lemon.secrets*`/`lemon.config`/`lemon.usage` tasks) boot the core in a

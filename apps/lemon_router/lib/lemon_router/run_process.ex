@@ -357,12 +357,16 @@ defmodule LemonRouter.RunProcess do
 
   def handle_event(:info, %LemonCore.Event{type: :run_completed} = event, _phase, state) do
     {ok?, err} = CompactionTrigger.extract_completed_ok_and_error(event)
-    usage = CompactionTrigger.extract_completed_usage(event)
+
+    context_tokens =
+      event
+      |> CompactionTrigger.extract_completed_usage()
+      |> LemonCore.Events.Usage.context_tokens()
 
     Logger.info(
       "RunProcess completed run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} " <>
         "ok=#{inspect(ok?)} error=#{inspect(err)} saw_delta=#{inspect(state.saw_delta)} " <>
-        "usage_input_tokens=#{inspect(CompactionTrigger.usage_input_tokens(usage))}"
+        "context_tokens=#{inspect(context_tokens)}"
     )
 
     Logger.debug("RunProcess #{state.run_id} completed")

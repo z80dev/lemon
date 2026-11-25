@@ -13,6 +13,14 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking:** `LemonCore.Events.Completion.usage` is a typed
+  `LemonCore.Events.Usage` (nested payload; `Completion.from_map/1` coerces a
+  map) with canonical, nullable counters, `context_tokens`, `context_budget`,
+  `turns`, `tool_errors` and per-call `occurrences`.
+  `Usage.context_tokens/1` reads the latest call's context, never the
+  cumulative counters. `LemonCore.UsageLedger` reads only the canonical names:
+  `input_tokens`/`prompt_tokens`/`completion_tokens` and the
+  `cache_*_input_tokens` spellings are no longer usage (#669).
 - `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
   fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
   instead of launching a browser (#660).

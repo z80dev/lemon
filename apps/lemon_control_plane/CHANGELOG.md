@@ -6,6 +6,10 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Fixed
 
+- `LemonControlPlane.UsageTokens` reports `contextTokens` from the run's latest
+  provider call (`LemonCore.Events.Usage.context_tokens/1`) instead of the run's
+  cumulative cache-inclusive input, and reads only canonical usage field names.
+  `agent.wait` projects the typed run usage (#669).
 - A method with any scope beyond `:read` that raises, throws or whose async task
   dies now answers `INTERNAL_ERROR` with `details.retrySafe: false`, so clients
   never retry a mutation that may already have applied (#616).
