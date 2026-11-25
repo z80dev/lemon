@@ -386,9 +386,6 @@ defmodule LemonAgent.Loop.Streaming do
       # still sitting undrained in the steering queue, silently delaying it a
       # full turn.
 
-      # Surface very large contexts early (telemetry warning only; no truncation here).
-      _ = LemonAgent.Context.check_size(context.messages, context.system_prompt)
-
       # The untrusted fence runs last, on the provider-bound messages that
       # `convert_to_llm` produced, so no caller transform or conversion can
       # reintroduce an unfenced tool result.

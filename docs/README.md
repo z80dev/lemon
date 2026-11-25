@@ -76,7 +76,7 @@ overview and the app guides below, rather than keeping a second runtime catalog.
 - Architecture: [overview](architecture/overview.md), [app boundaries](architecture_boundaries.md),
   [BEAM lifecycle invariants](beam_agents.md), [bus events](platform/bus-events.md)
   and [execution policy](execution-policy.md)
-- [Context](context.md), [assistant bootstrap](assistant_bootstrap_contract.md) and
+- [Assistant bootstrap](assistant_bootstrap_contract.md) and
   [long-running harnesses](long-running-agent-harnesses.md)
 - [Hot reload](runtime-hot-reload.md), [telemetry](telemetry.md) and [error reporting](error-reporting.md)
 - [Testing lanes](testing.md), [deterministic test patterns](testing/deterministic-test-patterns.md),
