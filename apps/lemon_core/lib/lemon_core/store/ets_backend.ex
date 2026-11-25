@@ -9,6 +9,9 @@ defmodule LemonCore.Store.EtsBackend do
   @behaviour LemonCore.Store.Backend
 
   @impl true
+  def durable?, do: false
+
+  @impl true
   def init(_opts) do
     tables = %{
       chat: :ets.new(:lemon_core_chat, [:set, :protected]),

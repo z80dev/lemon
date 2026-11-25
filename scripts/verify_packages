@@ -24,7 +24,9 @@
 #   2. A scratch consumer project depends on those directories by path (the
 #      packages' own sibling requirements are hex requirements, so the path deps
 #      carry `override: true`), fetches the rest from hex.pm, compiles, boots
-#      :lemon_agent, and checks the repo-only tooling stayed out of lemon_core.
+#      :lemon_agent with only lemon_core's `:core` service group (no runtime
+#      control processes start), and checks the repo-only tooling stayed out of
+#      lemon_core.
 #   3. The installer generates the base and --memory project shapes against the
 #      same unpacked packages (`--packages-path`), compiles them with
 #      --warnings-as-errors and runs their tests.
@@ -137,6 +139,15 @@ end
 EOF
 } >"$CONSUMER/mix.exs"
 
+# A library consumer selects only lemon_core's :core service group, so none of
+# the assistant runtime's control processes start.
+mkdir -p "$CONSUMER/config"
+cat >"$CONSUMER/config/config.exs" <<'EOF'
+import Config
+
+config :lemon_core, :services, [:core]
+EOF
+
 echo
 echo "==> consumer: deps.get"
 (cd "$CONSUMER" && consumer mix deps.get >/dev/null)
@@ -157,7 +168,14 @@ echo "==> consumer: boot and inspect"
     Code.ensure_loaded?(module) && raise "#{inspect(module)} leaked into the lemon_core package"
   end
 
-  IO.puts("consumer ok: packages compile, :lemon_agent boots, repo tooling excluded")
+  started = for {id, _pid, _type, _modules} <- Supervisor.which_children(LemonCore.Supervisor), do: id
+  LemonCore.Store in started || raise "lemon_core did not start its :core services"
+
+  for runtime_control <- [LemonCore.Drain, LemonCore.NodeRegistry, LemonCore.SessionActivity, LemonCore.ExecApprovalExpiry, LemonCore.RunHistoryStore] do
+    runtime_control in started && raise "a [:core] consumer started #{inspect(runtime_control)}"
+  end
+
+  IO.puts("consumer ok: packages compile, :lemon_agent boots on :core services, repo tooling excluded")
 ')
 
 if [[ $GENERATOR -eq 0 ]]; then

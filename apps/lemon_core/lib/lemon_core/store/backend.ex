@@ -248,6 +248,15 @@ defmodule LemonCore.Store.Backend do
   """
   @callback close(state()) :: :ok | {:error, error_reason()}
 
+  @doc """
+  Whether data written through this backend survives a restart of the VM.
+
+  Optional; a backend that omits it is not durable. A product that requires
+  the `:durable_store` capability (`LemonCore.Capabilities`) refuses to boot
+  when the default store's configured backend is not durable.
+  """
+  @callback durable?() :: boolean()
+
   @optional_callbacks list_recent: 3,
                       ping: 1,
                       compare_and_delete_many: 2,
@@ -256,5 +265,6 @@ defmodule LemonCore.Store.Backend do
                       confirm_durable: 1,
                       sync: 1,
                       sweep: 3,
-                      close: 1
+                      close: 1,
+                      durable?: 0
 end
