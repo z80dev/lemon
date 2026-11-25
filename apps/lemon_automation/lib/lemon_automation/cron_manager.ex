@@ -1232,7 +1232,7 @@ defmodule LemonAutomation.CronManager do
         {:ok, jobs, slots, recovery_results(active_runs), retries, marker != nil}
       end
 
-    fallback = if initial? and match?({:error, _}, result), do: CronStore.list_jobs()
+    fallback = if initial? and match?({:error, _}, result), do: CronStore.list_jobs_result()
     {result, fallback, config.run_retention_per_job}
   end
 
@@ -1263,9 +1263,10 @@ defmodule LemonAutomation.CronManager do
 
         {:error, _} ->
           state =
-            if is_list(fallback),
-              do: %{state | jobs: Map.new(fallback, &{&1.id, &1})},
-              else: state
+            case fallback do
+              {:ok, jobs} -> %{state | jobs: Map.new(jobs, &{&1.id, &1})}
+              _unavailable -> state
+            end
 
           schedule_restoration(state)
       end
