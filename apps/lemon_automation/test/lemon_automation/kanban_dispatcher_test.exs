@@ -134,6 +134,17 @@ defmodule LemonAutomation.KanbanDispatcherTest do
              KanbanDispatcher.status(board.id, name: name)
 
     assert status.running_count == 0
+
+    # The batched read returns exactly what status/2 does, for every board.
+    assert {:ok, %{} = many} =
+             KanbanDispatcher.status_many([board.id, "board-not-dispatched"], name: name)
+
+    assert {:ok, many[board.id]} == KanbanDispatcher.status(board.id, name: name)
+
+    assert {:ok, many["board-not-dispatched"]} ==
+             KanbanDispatcher.status("board-not-dispatched", name: name)
+
+    assert %{running: false, dispatcher: nil} = many["board-not-dispatched"]
   end
 
   test "marks failed worker results as blocked" do

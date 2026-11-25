@@ -49,6 +49,14 @@ defmodule LemonAutomation.KanbanDispatcher do
     GenServer.call(Keyword.get(opts, :name, __MODULE__), {:status, board_id})
   end
 
+  @doc """
+  `status/2` for up to 100 boards in one call: `{:ok, %{board_id => status}}`
+  with every requested board present.
+  """
+  def status_many(board_ids, opts \\ []) when is_list(board_ids) and length(board_ids) <= 100 do
+    GenServer.call(Keyword.get(opts, :name, __MODULE__), {:status_many, board_ids})
+  end
+
   @doc "Operator path: grant operator authority to an idle (e.g. quarantined) board."
   def reauthorize_board(board_id, opts \\ []) do
     GenServer.call(
@@ -345,18 +353,11 @@ defmodule LemonAutomation.KanbanDispatcher do
   end
 
   def handle_call({:status, board_id}, _from, state) do
-    dispatcher = Map.get(state.boards, board_id)
-    reconcile_board(board_id, if(dispatcher, do: dispatcher.running, else: %{}))
+    {:reply, {:ok, board_status(board_id, state)}, state}
+  end
 
-    {:reply,
-     {:ok,
-      %{
-        running: not is_nil(dispatcher),
-        control_revision: control_revision(board_id, state),
-        reconciling_count:
-          length(unowned_runs(board_id, if(dispatcher, do: dispatcher.running, else: %{}))),
-        dispatcher: dispatcher && public_dispatcher(dispatcher)
-      }}, state}
+  def handle_call({:status_many, board_ids}, _from, state) do
+    {:reply, {:ok, Map.new(board_ids, &{&1, board_status(&1, state)})}, state}
   end
 
   @impl true
@@ -546,6 +547,19 @@ defmodule LemonAutomation.KanbanDispatcher do
 
         state
     end
+  end
+
+  defp board_status(board_id, state) do
+    dispatcher = Map.get(state.boards, board_id)
+    running = if(dispatcher, do: dispatcher.running, else: %{})
+    reconcile_board(board_id, running)
+
+    %{
+      running: not is_nil(dispatcher),
+      control_revision: control_revision(board_id, state),
+      reconciling_count: length(unowned_runs(board_id, running)),
+      dispatcher: dispatcher && public_dispatcher(dispatcher)
+    }
   end
 
   defp reconcile_board(board_id, running) do

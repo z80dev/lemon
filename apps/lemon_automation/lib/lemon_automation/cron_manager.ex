@@ -399,6 +399,17 @@ defmodule LemonAutomation.CronManager do
   end
 
   @doc """
+  Recent runs of up to 100 jobs in one call (`CronStore.list_runs_for/2`):
+  `{:ok, %{job_id => runs}}` or a store error, never false empty history.
+  `:limit` applies per job.
+  """
+  @spec runs_for([binary()], keyword()) ::
+          {:ok, %{binary() => [CronRun.t()]}} | {:error, term()}
+  def runs_for(job_ids, opts \\ []) when is_list(job_ids) and length(job_ids) <= 100 do
+    GenServer.call(__MODULE__, {:runs_for, job_ids, opts}, @call_timeout_ms)
+  end
+
+  @doc """
   Force a tick cycle (mainly for testing).
   """
   @spec tick() :: :ok
@@ -891,6 +902,10 @@ defmodule LemonAutomation.CronManager do
   def handle_call({:runs, job_id, opts}, _from, state) do
     runs = CronStore.list_runs(job_id, opts)
     {:reply, runs, state}
+  end
+
+  def handle_call({:runs_for, job_ids, opts}, _from, state) do
+    {:reply, CronStore.list_runs_for(job_ids, opts), state}
   end
 
   @impl true

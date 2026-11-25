@@ -201,6 +201,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   session discovery reads session keys only. **Breaking** for `lemon_core`
   callers: `:runs` cannot be listed whole, `UsageStore.fetch_runs/1` is gone,
   and introspection listing errors are `{:error, :store_unavailable}`.
+  tab makes no service calls and kanban changes appear immediately. Each load
+  makes seven batched reads whatever the number of boards, goals and cron jobs
+  (`KanbanStore.list_tasks_for/2`, `KanbanDispatcher.status_many/2`,
+  `GoalLoopManager.status_many/1`, `CronManager.runs_for/2`) (#687).
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14

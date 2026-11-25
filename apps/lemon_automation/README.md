@@ -587,6 +587,9 @@ LemonAutomation.CronManager.run_now(job.id)
 
 # Get run history (opts: limit, status, since_ms)
 LemonAutomation.CronManager.runs(job.id, limit: 10)
+
+# Recent runs of several jobs in one call (up to 100; :limit applies per job)
+{:ok, %{} = runs_by_job} = LemonAutomation.CronManager.runs_for([job.id], limit: 5)
 ```
 
 ### Wake (Immediate Triggering)

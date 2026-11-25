@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Batched reads for up to 100 rows in one call, each `{:ok, %{id => value}}`
+  with every requested id present: `KanbanDispatcher.status_many/2`,
+  `GoalLoopManager.status_many/1`, `CronManager.runs_for/2` and
+  `CronStore.list_runs_for/2` (`:limit` per job; a failed store read is an error,
+  never empty history). The web Automation page uses them so a load no longer
+  scales with boards, goals and cron jobs (#687).
+
 ### Changed
 
 - `CronManager` matches every `CronStore` write and delete result: a failed
