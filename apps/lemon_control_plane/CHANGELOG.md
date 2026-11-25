@@ -6,6 +6,14 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Removed
 
+- **Breaking:** `exec.approvals.get` no longer returns the never-written
+  `policy` map, `summary.policyCount` or `summary.cleanup.includesPolicy`; its
+  `approvals` list is the remembered `approve_global` grants (#709).
+
+- **Breaking:** `config.get`, `config.set` and `LemonControlPlane.ConfigStore`
+  (the `:system_config` table). The store had no reader besides `config.get`,
+  so a stored `logLevel` was reported but never applied (#712).
+
 - **Breaking:** the OpenAI-compatible `/v1` HTTP API, the single-shot
   `POST /acp` endpoint, their dedicated API-token principals
   (`Authorize.authenticate_api/3`, `LEMON_ACP_API_TOKEN` and the OpenAI-compat
@@ -16,41 +24,6 @@ All notable changes to `lemon_control_plane` are documented here.
 - `sessions.active.list` harness snapshots no longer include `requirements`
   (feature-requirement progress had no writer); an unreadable stopped-session
   todo history still fails the request explicitly (#706).
-### Added
-
-- Admin `secrets.set` / `secrets.delete`: write-only secret store mutations for
-  one-shot CLI clients beside the runtime; refusals carry a bounded
-  `details.reason` and `mutationMayHaveApplied: false` (#667).
-### Changed
-
-- `session.detail` resolves a channel session's model and thinking level from
-  its `PolicyStore` chat defaults too, reporting `modelSource: "chat"` (#714).
-
-### Removed
-
-- **Breaking:** `exec.approvals.get` no longer returns the never-written
-  `policy` map, `summary.policyCount` or `summary.cleanup.includesPolicy`; its
-  `approvals` list is the remembered `approve_global` grants (#709).
-
-### Fixed
-
-- `agent.wait` reports `UNAVAILABLE` when the run store cannot be read instead
-  of waiting out the timeout, never puts a raw exception message in error
-  details, and validates `runId`/`timeoutMs`. `cron.runs` never renders a
-  non-text output term onto the wire (#620).
-- `LemonControlPlane.UsageTokens` reports `contextTokens` from the run's latest
-  provider call (`LemonCore.Events.Usage.context_tokens/1`) instead of the run's
-  cumulative cache-inclusive input, and reads only canonical usage field names.
-  `agent.wait` projects the typed run usage (#669).
-- `agent.wait` projects a non-text run error as `{"kind", "status",
-  "message"}` (redacted, bounded) instead of `inspect`ing it, and a non-text
-  answer as `null`. `cron.run` fixes the cron run ID before calling the
-  scheduler and returns it as `runId` on `RUN_OUTCOME_UNKNOWN`; a trigger
-  refused because an earlier run is unresolved is `PRIOR_RUN_OUTCOME_UNKNOWN`
-  naming `priorRunId`, never the unused new ID (#620).
-- A method with any scope beyond `:read` that raises, throws or whose async task
-  dies now answers `INTERNAL_ERROR` with `details.retrySafe: false`, so clients
-  never retry a mutation that may already have applied (#616).
 
 ### Added
 
@@ -100,11 +73,9 @@ All notable changes to `lemon_control_plane` are documented here.
   `node.providers.management.import`) stays destination-local and maps missing or
   unusable logins to conflicts; listings optionally include readiness.
 
-### Removed
-
-- **Breaking:** `config.get`, `config.set` and `LemonControlPlane.ConfigStore`
-  (the `:system_config` table). The store had no reader besides `config.get`,
-  so a stored `logLevel` was reported but never applied (#712).
+- Admin `secrets.set` / `secrets.delete`: write-only secret store mutations for
+  one-shot CLI clients beside the runtime; refusals carry a bounded
+  `details.reason` and `mutationMayHaveApplied: false` (#667).
 
 ### Changed
 
@@ -134,6 +105,9 @@ All notable changes to `lemon_control_plane` are documented here.
 - ACP session metadata is stored on the canonical `SessionMetadataStore` record
   instead of a separate ACP table and is removed with the session; ACP sessions
   created before this release are not carried over (#652).
+
+- `session.detail` resolves a channel session's model and thinking level from
+  its `PolicyStore` chat defaults too, reporting `modelSource: "chat"` (#714).
 
 ### Fixed
 
@@ -180,3 +154,19 @@ All notable changes to `lemon_control_plane` are documented here.
 - Generic node invocation cannot bypass provider-management administration scopes.
   Provider-management exceptions and node transport diagnostics omit raw request
   values; uncertain mutation failures explicitly prohibit automatic retry.
+
+- `agent.wait` reports `UNAVAILABLE` when the run store cannot be read instead
+  of waiting out the timeout, never puts a raw exception message in error
+  details, and validates `runId`/`timeoutMs`. `cron.runs` never renders a
+  non-text output term onto the wire (#620).
+- `LemonControlPlane.UsageTokens` reports `contextTokens` from the run's latest
+  provider call (`LemonCore.Events.Usage.context_tokens/1`) instead of the run's
+  cumulative cache-inclusive input, and reads only canonical usage field names.
+  `agent.wait` projects the typed run usage (#669).
+- `agent.wait` projects a non-text run error as `{"kind", "status",
+  "message"}` (redacted, bounded) instead of `inspect`ing it, and a non-text
+  answer as `null`. `cron.run` fixes the cron run ID before calling the
+  scheduler and returns it as `runId` on `RUN_OUTCOME_UNKNOWN`; a trigger
+  refused because an earlier run is unresolved is `PRIOR_RUN_OUTCOME_UNKNOWN`
+  naming `priorRunId`, never the unused new ID (#620).
+

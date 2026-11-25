@@ -8,62 +8,6 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
-- Writable client stores (`defer_to_runtime: true`) write only while the
-  client's supervised `RuntimeOwner` (`client: true`) holds
-  `<db>.client.lock` and the runtime lock for the VM's lifetime; beside a
-  running runtime they refuse every mutation with `{:error, :runtime_owned}`,
-  and a runtime booting while a client holds them waits its lock deadline,
-  then refuses to start (`:store_held_by_client`) instead of writing.
-  `Store.write_access/1` reports it. `Secrets.list/1` on a client store hides
-  expired rows without pruning them (#667).
-
-### Removed
-
-- **Breaking:** retired WASM tool support (#707): `LemonCore.Config.Tools`
-  has no `wasm` field and no longer reads `[runtime.tools.wasm]`, the
-  `LEMON_WASM_*` declarations and the `:tools_wasm` area are gone, extension
-  manifests reject a `wasm` host type, doctor diagnostics report no `wasm`
-  host, `tool_auth` is no longer a catalogued tool, and the optional
-  `AgentRuntime.Provider.wasm_sidecar_running?/0` callback is removed.
-- `LemonCore.Store` no longer sweeps the `:openai_compat_run_owners` table; its
-  only owner, the control plane's OpenAI-compatible API, was removed (#711).
-- **Breaking:** the `feature_progress/1` agent-runtime provider callback and the
-  `report_issue`, `todoread` and `todowrite` tool-catalogue entries (#706).
-
-- **Breaking:** the `mix lemon.secrets.*` tasks; `lemon secrets` is the only
-  secrets command-line interface (#717).
-- **Breaking:** `LemonCore.PolicyStore` agent, channel and runtime scopes
-  (`fetch_agent/1`, `put_agent/2`, `fetch_channel/1`, `put_channel/2`,
-  `fetch_runtime/0`, `put_runtime/1`, `delete_runtime/0`): they had no writer.
-  `LemonCore.ExecApprovalStore` node grants (`get_node_policy/3`,
-  `put_node_policy/4`), the policy maps (`fetch_global_policy_map/0`,
-  `put_global_policy_map/1`, `get_node_policy_map/1`, `put_node_policy_map/2`)
-  and the `list_global_policies/0`, `list_agent_policies/0`,
-  `list_session_policies/0`, `list_node_policies/0` helpers; `ExecApprovals.request/1`
-  ignores `:node_id`. The remaining approval rows are documented as approval
-  memory, not policy (#709).
-- **Breaking:** `LemonCore.Doctor.ProviderDiagnostics` (#715). Doctor, setup
-  readiness and the support bundle's provider section ask the runtime's single
-  credential predicate through `LemonCore.CredentialReadiness` (registered as
-  the `:credential_readiness` doctor runtime module); the built-in provider
-  identity table and `public_name/1` move to `LemonCore.ProviderIdentity`.
-  `LemonCore.ProviderManagement.credential_ready?/2` is removed. New
-  `Secrets.presence/2` and `Secrets.External.declared?/2` answer presence
-  without decrypting, running a source or touching usage; a record under
-  another master key is `{:unusable, :master_key_mismatch}`. `lemon doctor`
-  now passes env-configured providers and keys under default secret names or
-  pools, and fails undecryptable ones.
-- **Breaking:** the `controller` and `hybrid` ids from
-  `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
-- **Breaking:** `LemonCore.Context`, `LemonCore.Context.Document` and
-  `LemonCore.Context.URLFetcher` no longer ship in `lemon_core`. Their only
-  consumers were the `lemon context` command and `LemonSkills.Learn`, so they
-  moved unchanged to `lemon_skills` as `LemonSkills.Context`,
-  `LemonSkills.Context.Document` and `LemonSkills.Context.URLFetcher`. URL
-  references still fetch through `LemonCore.Net.HTTP` (#724).
-
-### Changed
-
 - Dialyzer-clean (#734): `Lemon.Reload` no longer reports a successful
   code change as an error; extension manifests that are valid JSON but not an
   object are rejected as such instead of as oversized; several public typespecs
@@ -221,6 +165,78 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   controller health is established. Managed backend co-artifacts follow the
   runtime version and the previously running backend restarts last. Remote
   workers are never silently updated by another host.
+
+- Writable client stores (`defer_to_runtime: true`) write only while the
+  client's supervised `RuntimeOwner` (`client: true`) holds
+  `<db>.client.lock` and the runtime lock for the VM's lifetime; beside a
+  running runtime they refuse every mutation with `{:error, :runtime_owned}`,
+  and a runtime booting while a client holds them waits its lock deadline,
+  then refuses to start (`:store_held_by_client`) instead of writing.
+  `Store.write_access/1` reports it. `Secrets.list/1` on a client store hides
+  expired rows without pruning them (#667).
+
+### Removed
+
+- **Breaking:** the `controller` and `hybrid` ids from
+  `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
+
+- **Breaking (0.3.0):** `[gateway.queue]` (`Config.Gateway` `:queue`,
+  `Validator.validate_queue_config/2`); the section is ignored with a
+  deprecation warning (#697).
+- **Breaking (0.3.0):** `LemonCore.EngineInfoBridge.gateway_config/0` and the
+  `:gateway_config` capability (#697).
+- **Breaking (0.3.0):** `LemonCore.Store.JsonlBackend`. The
+  `mix lemon.store.migrate_jsonl_to_sqlite` task keeps a private legacy reader;
+  run it before upgrading a JSONL store (#608).
+
+- `LemonCore.Config.Automation` no longer has `daily_brief` or `parse_time/1`;
+  `[automation] daily_brief` is no longer recognized.
+- **Breaking:** `LemonCore.Runtime.Env` no longer has a sim UI port: the
+  `sim_port` struct field, `sim_port/0` and `LEMON_SIM_UI_PORT` resolution are
+  gone, and `:runtime_full` no longer lists `:lemon_sim_ui`. LemonSim lives in
+  [z80dev/lemon-sim](https://github.com/z80dev/lemon-sim).
+
+
+- **Breaking:** retired WASM tool support (#707): `LemonCore.Config.Tools`
+  has no `wasm` field and no longer reads `[runtime.tools.wasm]`, the
+  `LEMON_WASM_*` declarations and the `:tools_wasm` area are gone, extension
+  manifests reject a `wasm` host type, doctor diagnostics report no `wasm`
+  host, `tool_auth` is no longer a catalogued tool, and the optional
+  `AgentRuntime.Provider.wasm_sidecar_running?/0` callback is removed.
+- `LemonCore.Store` no longer sweeps the `:openai_compat_run_owners` table; its
+  only owner, the control plane's OpenAI-compatible API, was removed (#711).
+- **Breaking:** the `feature_progress/1` agent-runtime provider callback and the
+  `report_issue`, `todoread` and `todowrite` tool-catalogue entries (#706).
+
+- **Breaking:** the `mix lemon.secrets.*` tasks; `lemon secrets` is the only
+  secrets command-line interface (#717).
+- **Breaking:** `LemonCore.PolicyStore` agent, channel and runtime scopes
+  (`fetch_agent/1`, `put_agent/2`, `fetch_channel/1`, `put_channel/2`,
+  `fetch_runtime/0`, `put_runtime/1`, `delete_runtime/0`): they had no writer.
+  `LemonCore.ExecApprovalStore` node grants (`get_node_policy/3`,
+  `put_node_policy/4`), the policy maps (`fetch_global_policy_map/0`,
+  `put_global_policy_map/1`, `get_node_policy_map/1`, `put_node_policy_map/2`)
+  and the `list_global_policies/0`, `list_agent_policies/0`,
+  `list_session_policies/0`, `list_node_policies/0` helpers; `ExecApprovals.request/1`
+  ignores `:node_id`. The remaining approval rows are documented as approval
+  memory, not policy (#709).
+- **Breaking:** `LemonCore.Doctor.ProviderDiagnostics` (#715). Doctor, setup
+  readiness and the support bundle's provider section ask the runtime's single
+  credential predicate through `LemonCore.CredentialReadiness` (registered as
+  the `:credential_readiness` doctor runtime module); the built-in provider
+  identity table and `public_name/1` move to `LemonCore.ProviderIdentity`.
+  `LemonCore.ProviderManagement.credential_ready?/2` is removed. New
+  `Secrets.presence/2` and `Secrets.External.declared?/2` answer presence
+  without decrypting, running a source or touching usage; a record under
+  another master key is `{:unusable, :master_key_mismatch}`. `lemon doctor`
+  now passes env-configured providers and keys under default secret names or
+  pools, and fails undecryptable ones.
+- **Breaking:** `LemonCore.Context`, `LemonCore.Context.Document` and
+  `LemonCore.Context.URLFetcher` no longer ship in `lemon_core`. Their only
+  consumers were the `lemon context` command and `LemonSkills.Learn`, so they
+  moved unchanged to `lemon_skills` as `LemonSkills.Context`,
+  `LemonSkills.Context.Document` and `LemonSkills.Context.URLFetcher`. URL
+  references still fetch through `LemonCore.Net.HTTP` (#724).
 
 ### Security
 
@@ -564,27 +580,6 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   Restore validates selected snapshots and parent paths before mutation and
   removes newly created trees when the recorded root was absent. Defaults:
   10 MiB/file, 50 MiB aggregate, 10,000 entries, depth 128 per capture.
-
-### Removed
-
-- **Breaking:** the `controller` and `hybrid` ids from
-  `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
-
-- **Breaking (0.3.0):** `[gateway.queue]` (`Config.Gateway` `:queue`,
-  `Validator.validate_queue_config/2`); the section is ignored with a
-  deprecation warning (#697).
-- **Breaking (0.3.0):** `LemonCore.EngineInfoBridge.gateway_config/0` and the
-  `:gateway_config` capability (#697).
-- **Breaking (0.3.0):** `LemonCore.Store.JsonlBackend`. The
-  `mix lemon.store.migrate_jsonl_to_sqlite` task keeps a private legacy reader;
-  run it before upgrading a JSONL store (#608).
-
-- `LemonCore.Config.Automation` no longer has `daily_brief` or `parse_time/1`;
-  `[automation] daily_brief` is no longer recognized.
-- **Breaking:** `LemonCore.Runtime.Env` no longer has a sim UI port: the
-  `sim_port` struct field, `sim_port/0` and `LEMON_SIM_UI_PORT` resolution are
-  gone, and `:runtime_full` no longer lists `:lemon_sim_ui`. LemonSim lives in
-  [z80dev/lemon-sim](https://github.com/z80dev/lemon-sim).
 
 ## [0.2.0] - 2026-10-13
 

@@ -6,9 +6,71 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Changed
 
+- **Breaking:** `lemon bot https` and the setup wizard's Lemon Bot HTTPS step are
+  removed; Bot HTTPS is `lemon-bot https enable|status|disable` in the Lemon Bot
+  CLI. `LemonCli.Doctor.BotAdmission` stays read-only: it checks the explicit
+  origin, `LEMON_BOT_PUBLIC_URL` or the origin published in
+  `~/.lemon/bot-https.json`, and reads the effective allowlists from
+  `LemonRouter.NativeFollowupAdmission.allowed_origins/0` and
+  `LemonAutomation.CronAdmission.allowed_origins/0` through `:doctor_runtime`
+  instead of their application configuration (#723).
+- Consolidate onboarding prompt handling, runtime port resolution, and setup/doctor
+  provider recovery text. Doctor providers now register live checks without an
+  empty offline adapter.
+- Remove unused `CommandRegistry.names/0` and `command?/1`; provider recovery
+  text uses `ProviderLiveCheck.failure_message/2` with `:doctor` for doctor output.
+- Bot HTTPS commands parse once and no longer hide unexpected exceptions behind
+  a generic configuration error.
+
+- Setup replaces "Onboard an AI provider now?" with **Connect a model**, listing
+  detected Codex CLI ChatGPT logins and shell-exported provider keys first.
+  Nothing is imported without an explicit choice and stated consent.
+- Setup summaries distinguish a non-generating `verified` check from a `saved`
+  model that will be checked on the first message. Unreachable providers and
+  non-authentication check failures leave setup complete with the reason shown;
+  unavailable/deferred checks no longer incorrectly claim `--skip-verify`.
+  Both ready states offer **Open Lemon now?**, except an explicitly deferred `--skip-verify` check.
+- Setup reports progress before blocking application startup, import and provider
+  checks, and caches the secrets master key for the command lifetime across
+  `lemon setup`, `lemon setup model`, `lemon model` and `setup --if-required`.
+- One-shot CLI boot logs omit info messages but preserve warnings and errors.
+- Installation ends with one absolute-path next step; worker enrollment keeps
+  foreground/service guidance visible when the machine comes online.
+
+- `lemon setup` no longer asks about the runtime profile or a Hermes import,
+  and a first run no longer prints the step status or config/secret file
+  messages. It checks the control-plane (and, for the full runtime, web) port;
+  when another program holds one, it offers the next free port with a `[Y/n]`
+  prompt (automatic with `--non-interactive`) and saves it to
+  `~/.lemon/ports.env` via `LemonCli.Setup.Ports`. `lemon setup runtime` saves
+  ports to that file instead of printing `export` lines. Both launchers,
+  `lemonup` and `bin/lemon-tui` load it into unset port variables, and the
+  launchers export the resolved ports to child processes.
+
+- Removed `lemon setup --daily-brief`; schedule a brief as an ordinary cron job.
+
+- Terminal onboarding, logout and provider-management writes share per-config
+  serialization and compensated encrypted-secret/config persistence. Config is
+  bounded, TOML-validated and atomically replaced with private permissions in the
+  same directory; runtime configuration reloads when its global or project file
+  changes. Explicit onboarding files outside those paths are persisted and
+  verified independently, without rolling back valid credentials because an
+  unrelated runtime configuration cannot reload. Failed config
+  saves or reloads restore credential values, original expiry and security
+  metadata through the encrypted-store owner, plus config; a failed rollback
+  returns a distinct failure. This does not promise crash-atomicity across the
+  encrypted store and TOML file.
+- API-key writes remove stale auth-source/inline credential selectors from the
+  selected provider only. Disconnect is local removal, not provider revocation;
+  environment, project settings, pools, unrelated providers and Bot/profile
+  overrides remain untouched. Referenced shared secrets fail closed rather than
+  silently breaking another consumer, including references from the destination
+  project's providers and credential pools. Default selection is a separate operation.
+
 - `lemon policy` manages `LemonCore.PolicyStore` chat rows; `--peer` without
   `--account` names the `default` account and `--thread` requires `--peer`
   (#714).
+
 ### Added
 
 - `LemonCli.SecretsCommand` is the single `lemon secrets` implementation, with
@@ -117,69 +179,6 @@ All notable changes to `lemon_cli` are documented here.
   The default projection resolves actual project/environment precedence through
   the existing runtime config resolver; default mutations still change only the
   target's global configuration.
-
-### Changed
-
-- **Breaking:** `lemon bot https` and the setup wizard's Lemon Bot HTTPS step are
-  removed; Bot HTTPS is `lemon-bot https enable|status|disable` in the Lemon Bot
-  CLI. `LemonCli.Doctor.BotAdmission` stays read-only: it checks the explicit
-  origin, `LEMON_BOT_PUBLIC_URL` or the origin published in
-  `~/.lemon/bot-https.json`, and reads the effective allowlists from
-  `LemonRouter.NativeFollowupAdmission.allowed_origins/0` and
-  `LemonAutomation.CronAdmission.allowed_origins/0` through `:doctor_runtime`
-  instead of their application configuration (#723).
-- Consolidate onboarding prompt handling, runtime port resolution, and setup/doctor
-  provider recovery text. Doctor providers now register live checks without an
-  empty offline adapter.
-- Remove unused `CommandRegistry.names/0` and `command?/1`; provider recovery
-  text uses `ProviderLiveCheck.failure_message/2` with `:doctor` for doctor output.
-- Bot HTTPS commands parse once and no longer hide unexpected exceptions behind
-  a generic configuration error.
-
-- Setup replaces "Onboard an AI provider now?" with **Connect a model**, listing
-  detected Codex CLI ChatGPT logins and shell-exported provider keys first.
-  Nothing is imported without an explicit choice and stated consent.
-- Setup summaries distinguish a non-generating `verified` check from a `saved`
-  model that will be checked on the first message. Unreachable providers and
-  non-authentication check failures leave setup complete with the reason shown;
-  unavailable/deferred checks no longer incorrectly claim `--skip-verify`.
-  Both ready states offer **Open Lemon now?**, except an explicitly deferred `--skip-verify` check.
-- Setup reports progress before blocking application startup, import and provider
-  checks, and caches the secrets master key for the command lifetime across
-  `lemon setup`, `lemon setup model`, `lemon model` and `setup --if-required`.
-- One-shot CLI boot logs omit info messages but preserve warnings and errors.
-- Installation ends with one absolute-path next step; worker enrollment keeps
-  foreground/service guidance visible when the machine comes online.
-
-- `lemon setup` no longer asks about the runtime profile or a Hermes import,
-  and a first run no longer prints the step status or config/secret file
-  messages. It checks the control-plane (and, for the full runtime, web) port;
-  when another program holds one, it offers the next free port with a `[Y/n]`
-  prompt (automatic with `--non-interactive`) and saves it to
-  `~/.lemon/ports.env` via `LemonCli.Setup.Ports`. `lemon setup runtime` saves
-  ports to that file instead of printing `export` lines. Both launchers,
-  `lemonup` and `bin/lemon-tui` load it into unset port variables, and the
-  launchers export the resolved ports to child processes.
-
-- Removed `lemon setup --daily-brief`; schedule a brief as an ordinary cron job.
-
-- Terminal onboarding, logout and provider-management writes share per-config
-  serialization and compensated encrypted-secret/config persistence. Config is
-  bounded, TOML-validated and atomically replaced with private permissions in the
-  same directory; runtime configuration reloads when its global or project file
-  changes. Explicit onboarding files outside those paths are persisted and
-  verified independently, without rolling back valid credentials because an
-  unrelated runtime configuration cannot reload. Failed config
-  saves or reloads restore credential values, original expiry and security
-  metadata through the encrypted-store owner, plus config; a failed rollback
-  returns a distinct failure. This does not promise crash-atomicity across the
-  encrypted store and TOML file.
-- API-key writes remove stale auth-source/inline credential selectors from the
-  selected provider only. Disconnect is local removal, not provider revocation;
-  environment, project settings, pools, unrelated providers and Bot/profile
-  overrides remain untouched. Referenced shared secrets fail closed rather than
-  silently breaking another consumer, including references from the destination
-  project's providers and credential pools. Default selection is a separate operation.
 
 ### Fixed
 

@@ -4,12 +4,226 @@
 
 ### Added
 
+- `CodingAgent.CodeReload.refresh_sessions/0` rebuilds idle sessions' tools
+  after a source code reload so their closures run the new code.
+- Per-invocation `project_memory_capture: false` skips automatic fact extraction
+  after successful turns and compactions without disabling project-memory recall.
+  Print runs use this option; other sessions retain capture by default.
+- Cwd-scoped coding sessions now omit assistant-home persona bootstrap and
+  assistant-only memory/learning reminders. Main/chat sessions retain them;
+  native `session_mode` and `persona` options survive prompt refresh.
+- Coding sessions default to coding tool disclosure, with existing explicit
+  config/env/session opt-outs. Skill discovery descriptions are compact (96
+  characters); full metadata and instructions remain available via `read_skill`.
+- Per-Bot folder reads can skip human approval only when effective policy sets
+  `workspace_read_exempt == true` and the trusted worker folder, bound execution
+  scope and canonical `ProfileStore.paths(profile_id)["files"]` resolve to the
+  same directory. `read` and explicit-file ripgrep targets must be single-linked
+  regular files inside that folder; `ls` may list the folder. Directory grep,
+  internal URLs and `find` require approval. Memory-path aliases use the execution
+  resolver and approval binds the resolved target. Failed canonicalization,
+  including exhausted symlink traversal, never grants an exemption.
+  Before an exempt read, `CodingAgent.WorkspaceReads` durably fences the session
+  and every ancestor. Existing descendants consult ancestor fences, so streamed
+  task output and async results cannot escape through an unfenced parent/sibling.
+  `webfetch` and `websearch` then require approval even after restore, extension
+  reload or policy narrowing. Unreachable ancestors and lost mirrors fail closed.
+  Extension/config discovery uses the trusted config root, not Bot-written
+  `.lemon/config.toml` in the folder.
+- Configured local ACP/debug/eval/tool/Wasm launch adapters now participate in
+  opt-in durable native-process tracking. ACP creates and debugger launch/attach
+  dispatches retain external-work uncertainty even after errors; a missing ACP
+  client remains a proven pre-dispatch refusal. LSP diagnostics and formatting
+  keep their bounded BashExecutor path rather than reverting to unbounded commands.
+  JavaScript eval records whole-workload uncertainty before starting its host:
+  terminating the host alone cannot certify cleanup of the detached kernel.
+
+- Tool provenance survives registry construction and session initialization,
+  rebuild and reload. Custom/extra tools and extension constructors, callbacks
+  and hooks record durable native-work uncertainty before arbitrary code runs,
+  retaining that uncertainty after errors without fencing managed builtins.
+- Native Bash launches participate in opt-in durable evaluation tracking before
+  execution. Process sessions, eval kernels and document backends share core
+  process-group proofs without changing untracked launch behavior; PTY tracking
+  explicitly retains uncertainty about separately contained workloads.
+
+- Named workers advertise and execute Codex device login start/poll/cancel plus
+  internal single-use completion/settlement on the authenticated destination.
+  Writing completion stays bound to the initiating worker/controller generation
+  and a five-second authorization; non-writing settlement remains reachable after
+  node expiry/re-pairing without gating revocation. Exact binding rejections remain
+  provably non-writing through the control-plane adapter. Local execution-directory
+  options and exact login bindings are preserved; only public state is returned.
+
+- Opt-in `semantic_find` tool maps a plain-language behavior description to
+  `path:line` code locations. It is off by default and registered only when
+  `[runtime.tools.semantic_find] enabled = true` and an explicit small model
+  (`semantic_find.model`, else `model_roles.tiny`/`smol`) is configured; it never
+  uses the active session model. Candidate lines come from a bounded local scan
+  (no embedding index or second store), the model only chooses among numbered
+  candidates, and `max_tokens` (default 8000) caps every call. Provider-reported
+  usage is recorded through `LemonCore.UsageLedger` against the run and session,
+  with an unknown price left unknown. Distinct from `find` (file-name globs).
+  Complete role chains resolve without fallback. Prompt budgeting reserves a
+  byte-level upper bound and message overhead before completion; unaudited
+  provider/API pairs (including Codex without an output limit) fail closed.
+- `bash` keeps cwd and exported environment between foreground calls within a
+  session (in memory, confined to the workspace, fresh for new sessions); `reset:
+  true` or resetting the session clears it and invalidates in-flight captures.
+  State expires with its owning session, exported functions are excluded, and
+  private capture files are cleaned up even after detachment or queued cancellation.
+  Saved cwd validation follows symlinks before parent components and fails closed
+  on resolution errors, including directories replaced between calls.
+  ACP client-terminal calls remain stateless and receive no host-local capture
+  redirections, supporting clients with a separate filesystem.
+- Named workers advertise owner-authorized provider management methods and execute
+  them against destination-local provider configuration and encrypted credentials,
+  rejecting writes whose exact target identity belongs to another machine.
+  Project credential/default overrides are resolved from the worker's configured
+  execution directory; management RPCs cannot supply filesystem paths.
+- `CodingAgent.SettingsManager.model_routing` exposes the raw root
+  `[model_routing]` table (default `%{}`); sessions show the actual routed model
+  per assistant turn with run-unique activity identities, and an explicit model
+  choice bypasses automatic routing. Automatic selection provenance survives
+  session reset, save, resume, tree/entry navigation, committed rewinds, and plan
+  entry/exit or approval (including resume while planning); internal model
+  transitions reapply the automatic cost cap or explicit-selection bypass.
+  Parentless Coordinator and task callers also retain legacy explicit model
+  selections when provenance is omitted or nil; inherited provenance and an
+  explicit `false` continue to preserve automatic routing and its cost cap.
+  Delegated children preserve inherited selection provenance; persona model/role
+  and task-agent config defaults remain automatic rather than bypassing the cap.
+  Fallback candidates
+  rejected before provider invocation do not appear as the actual model in
+  activity events or the usage footer.
+
+- Truncated webfetch and browser snapshot/page-content results retain complete
+  sources as session-scoped artifacts and return readable `artifact://` handles.
+  Cached fetches register handles in the requesting session, never another caller.
+
+- `ast_grep` refuses scopes above `max_files` (default 1000), retains successful
+  files alongside bounded per-file parse/CLI errors, and exposes session artifact
+  handles for complete spilled match results.
+
+- `read file.json?q=filter` supports native jq-subset field/index traversal,
+  iteration, pipes, keys, length and scalar select comparisons, with ordinary
+  read-budget pagination and literal-filename precedence.
+
+- `write archive:member` adds or replaces ZIP/TAR/tar.gz/tgz members atomically,
+  preserving unrelated member data and enforcing physical archive mutation guards.
+
+- `write` supports parameterized SQLite row inserts, primary-key/rowid updates
+  and keyed deletes in existing databases, with JSON scalar/column validation
+  and the normal mutation guards.
+
+- LSP supports preview/apply file renames, server reload, advertised capabilities,
+  and bounded workspace diagnostics from running clients. Document language IDs
+  now come from the shared LemonLsp server catalog.
+
+- Local Go diagnostics run `go vet ./...` rather than executing tests. External
+  diagnostic checker deadlines now terminate the OS process tree on timeout.
+
+- Debug adds js-debug, CodeLLDB, netcoredbg and Ruby rdbg adapters, loopback
+  listening-adapter transport, capability-gated log points, data/instruction
+  breakpoints, memory reads and disassembly (128 KiB cap). Timeouts clamp to 5..300s.
+
+- Eval supports bounded rich `display` outputs (PNG/JPEG, Markdown and JSON) over
+  a stdout-independent side channel, Python `%pip install` / `%load` magics, and
+  interrupt-first timeout handling with a two-second grace before killing kernels.
+
+- Bare reads of source files with at least 300 lines and at most 2 MiB now return
+  bounded structural summaries with declarations and explicit omitted ranges.
+  Summaries are immutable, omit edit snapshots, and are rejected by overwrite
+  safety checks. Selectors, offset/limit, `summary: false`, or the host's
+  `structural_summary: false` option retain full reads; ACP unsaved buffers use
+  the same outline behavior.
+
+- Task batches honor each child's `async` and `thinking_level` overrides; mixed
+  batches join synchronous children while returning background receipts. Wait
+  yields a non-cancelling snapshot after 30 minutes or when steering arrives.
+
+- Foreground bash previews retain a 20 KiB head plus tail with an explicit middle
+  elision marker. Spill notices prefer session artifact handles over raw paths,
+  and unavailable PTYs report their fallback in both output and result details.
+
+- Local edit and patch support the same opt-in formatting as write and return
+  post-format snapshot tags. Anchored edits recover recent session/path tags
+  only when every referenced original range remains byte-identical and unique;
+  snapshot history is bounded, and text-edit staleness checks are unchanged.
+
+- Session-scoped `local://name` scratch files support read, write and bash URL
+  expansion. `proc://` lists owned processes; process URLs peek output, write
+  stdin or terminate through `/kill`.
+- Read supports GitHub `issue://` and `pr://` views and indexed PR diffs, preferring
+  authenticated `gh` for private repositories. `history://task_id` shows a bounded
+  visible transcript of an owned child task without hidden reasoning.
+
+- Find sorts the complete candidate set before applying `max_results`, with
+  `sort: "mtime"` for newest-first (path tie-breaks) or the existing default
+  `"path"`. Slash globs use full-path matching in fd as in the fallback;
+  scopes exceeding 100,000 candidates fail with a narrowing hint.
+
+- Grep and find accept semicolon-separated roots, merge/deduplicate results before
+  paging, and report missing roots without discarding existing ones. Grep long
+  lines now show a match-centered 500-character window and the original column.
+
+- Grep supports `output_mode: content|files|count`, with paged paths or per-file
+  matching-line counts and a total. Newline patterns search across lines in both backends.
+
+- Background process controls now support exact stdin writes and EOF through
+  `process_input`, non-consuming `bash_output` peeks, and graceful `kill_process`
+  SIGTERM with a two-second SIGKILL fallback (or explicit immediate kill).
+
+- Web-search requests sent directly to `api.perplexity.ai` now include an
+  `X-Pplx-Integration: lemon` header so Perplexity can attribute Lemon traffic.
+  Requests routed through OpenRouter or custom compatible endpoints are
+  unchanged.
+- Read accepts comma-separated line/range/count windows, sorts and merges them,
+  and preserves original line numbers with a single snapshot header. Single
+  non-raw bounded selectors include one preceding and three following context
+  lines; raw and comma-list windows remain exact. Overwrites reject selector
+  elision markers rather than copying omitted content into existing files.
+
 - `CodingAgent.SessionSupervisor.start_session/1` takes `:supervisor` (and the
   session's `:registry`); `stop_session/2`, `lookup/2` and `list_sessions/1`
   take the same targets, defaulting to the application's tree. The supervisor
   suites now exercise the real module instead of an in-file copy (#733).
 
 ### Changed
+
+- Removed the unused compaction hook service, aggregate session-health APIs and
+  scoped session-supervisor APIs. Session diagnostics remain available through
+  `CodingAgent.Session.diagnostics/1`.
+- Session transcripts now use only reverse-ordered internal storage; access them
+  through `SessionManager.entries/1`. Automatic compaction capacity calculations
+  share one implementation, and provider message budgets use fixed defaults.
+
+- Keep immutable execution-node service adapters separate from mutable worker
+  state so connection and invocation updates retain the BEAM's small-map layout.
+- Seen-line edit protection now defaults on: anchored edits to lines not shown in
+  a numbered read are refused. Disable with `[runtime.tools.edit]
+  enforce_seen_lines = false`. The Git guard remains on by default
+  (`[runtime.tools.bash] git_guard = false` disables it).
+- A native session that shuts down expires the approvals it still has pending
+  (`LemonCore.ExecApprovalExpiry.session_ended/1` from `terminate/2`), so an
+  orphaned approval is denied instead of staying answerable. An expired
+  approval's action reports `ok: false`, "expired because its run ended".
+
+- Normalize module aliases, implicit exception handling and direct function calls
+  in recently changed coding-agent modules and tests without changing runtime behavior.
+
+- Deadline-owning task/wait, agent delegation, bash, eval, debug, question and
+  browser tools explicitly retain their own limits under the agent runtime's
+  new five-minute default tool deadline and eight-call concurrency cap.
+
+- Todo plans preserve `blocked` and `abandoned` statuses, optional phase/blocker
+  notes and stable IDs in the journal and client projections. Writes keep only
+  the first in-progress task active; progress reports all statuses, and actionable
+  tasks exclude blocked/abandoned work. Terminal checklists show phases and notes.
+
+- Consolidate memory tools as `remember` (compact USER.md/MEMORY.md facts) and
+  `recall` (past conversations and longer workspace notes); remove the former
+  search, topic, and session-browse tool surfaces.
 
 - **Breaking:** native run completions carry a `LemonCore.Events.Usage`, and each
   usage occurrence's `usage` is one too (`Executor.Usage.occurrence/1`,
@@ -63,85 +277,6 @@
   (`inherited_execution_context/2`, `restrict_to_parent/3`,
   `child_execution_context/3`, `parent_session_state/1`). No aliases remain
   (#634).
-
-### Fixed
-
-- The `agent` tool lends the calling run's gateway permit while a sync run or
-  join waits, bounds joins by `timeout_ms`, applies `BudgetEnforcer` (refusal,
-  child reservation, `meta.delegated_budget` limits enforced by the child
-  session via the new `:delegated_budget` session option, usage charged back)
-  and aborts children when the delegating run aborts or a sync wait times out.
-  New `BudgetEnforcer.delegated_limits/1` and `apply_delegated_limits/2`. (#668)
-- Durable store owners get an ETS heir (`CodingAgent.RuntimeTables`): a crashed
-  owner's restart reclaims the live table, and restart normalization applies only
-  at boot. RunGraph normalizes `:queued` as well as `:running` runs at boot,
-  persists the outcome, and marks stale queued/running runs `:lost`
-  (`:run_graph_stale_ttl_seconds`). **Breaking:** `ProcessStoreServer.transaction/2`
-  is removed; `ProcessStore` mutations send data-only requests and may return
-  `{:error, :store_unavailable}`. `ProcessManager` now starts before
-  `ProcessStoreServer`. (#677)
-- A child whose session shutdown blocks no longer stalls other children's cancel,
-  message or completion. The worker persists its outcome and sends its followup
-  before its owner observes the turn end, and exactly one of worker and owner
-  finalizes each turn. A crashed owner adopts its live worker and session from
-  its journal; a second crash terminalizes the child. Terminal owners exit after
-  `:task_terminal_retention_ms` (default five minutes); broadcasts reserve every
-  recipient's capacity before delivering to any (#634).
-- `CodingAgent.SessionSupervisor.start_session/1` validates options and loads
-  the journal in the caller; `CodingAgent.Session.init/1` only admits journal
-  ownership and the rest of initialization (settings, extensions, WASM, profile
-  MCP) runs in `handle_continue/2`. `start_link/1` and `start_session/1` still
-  return after initialization, with `{:error, reason}` and no linked exit on
-  failure. `RootLifecycle` no longer calls a session while holding its lock,
-  and `SessionMaintenance.plan/1` takes no root lock (#632).
-- `bash` uses the code-mode stream relay only when `CodeMode.enabled?/1`
-  holds; `BashExecutor` returns `{:error, :python3_unavailable}` instead of
-  raising when the relay lacks `python3` (#674).
-- Archive member reads and in-place archive writes bound decompression while
-  inflating (declared size, `:format_max_member_bytes`,
-  `:format_max_decoded_bytes`, `:format_max_archive_entries`) instead of
-  checking sizes after whole-archive extraction (#678).
-- Named-node workers no longer abort runs on event size, delta count or delta
-  rate. `RemoteEventCodec` elides oversized action/checkpoint display data to
-  the event budget and splits deltas at UTF-8 boundaries (`take_delta/2`); the
-  `encode_*` functions take an optional byte budget. Deltas queued behind an
-  outstanding acknowledgement coalesce (bounded by bytes), and the worker
-  reports the run's own completed answer instead of accumulating deltas (#635).
-- `ExecutionNode.ProcessService` retires terminal receipts 24 hours after they
-  finish and counts only unresolved (`running`/`outcome_unknown`) receipts
-  against its 1,000 admission limit (20,000 retained in total), keeping a
-  durable per-node generation floor so superseded generations stay refused.
-  Provable pre-exec failures (the helper now reports `started:false`) are
-  recorded as `failed`. New preview-first `prune/2` removes receipts only with a
-  single-use confirmation token (#679).
-- `ResourceLoader`, `AtImports` and `Rules` read through the new bounded,
-  stat-validated per-session cache `ResourceLoader.SourceReader`, with
-  per-file and total limits (instructions 64/256 KiB, rules 64 KiB per file,
-  128 KiB always-apply, 256 files, 300-character descriptions), truncation
-  markers naming the path, and `[:coding_agent, :prompt_sources, :read |
-  :load]` telemetry. A turn with unchanged files performs no instruction or
-  rule file read (#693).
-- `Workspace.seed_workspace/1` seeds a workspace once (marker
-  `.lemon-workspace-seeded`); sessions call it only when they read bootstrap
-  files and never raise on an unwritable workspace. Deleted templates such as
-  `BOOTSTRAP.md` are not re-created; `ensure_workspace/1` (`mix lemon.workspace
-  init`) still restores missing templates explicitly. Templates are written via
-  temp file and rename (#672).
-- `CodingAgent.Rules` parses frontmatter through `LemonSkills.Frontmatter`
-  instead of `YamlElixir.read_from_string`, which started `:yamerl` on every read
-  inside session init. Repeated keys (also kebab/camel spellings of one key) and
-  frontmatter over 16 KiB reject the rule with a warning; it still shadows
-  lower-priority namesakes (#671).
-- `CodingAgent.Executor.cancel/1` (and the local and remote session runners'
-  `cancel/2`) is an asynchronous cast that returns `:ok` at once, so a gateway
-  Run never blocks on a busy session while cancelling (#643).
-- **Breaking:** removed the compaction-only `CodingAgent.Messages` structs
-  (`UserMessage`, `AssistantMessage`, `ToolResultMessage`, `BashExecutionMessage`,
-  `CompactionSummaryMessage`, `TextContent`, `ImageContent`, `ThinkingContent`,
-  `ToolCall`, `Usage`) and `Messages.get_text/1`, `get_tool_calls/1` and
-  `total_tokens/1`. Use the `LemonAi.Types` structs; `CustomMessage` and
-  `BranchSummaryMessage` remain. `Messages.to_llm/1` reads journal maps through
-  `MessageSerialization.deserialize_message/1` and drops unknown roles.
 
 ### Fixed
 
@@ -388,220 +523,80 @@
   Final results and full-output files are unchanged; this does not implement
   end-to-end mailbox or Port backpressure.
 
-### Added
+- The `agent` tool lends the calling run's gateway permit while a sync run or
+  join waits, bounds joins by `timeout_ms`, applies `BudgetEnforcer` (refusal,
+  child reservation, `meta.delegated_budget` limits enforced by the child
+  session via the new `:delegated_budget` session option, usage charged back)
+  and aborts children when the delegating run aborts or a sync wait times out.
+  New `BudgetEnforcer.delegated_limits/1` and `apply_delegated_limits/2`. (#668)
+- Durable store owners get an ETS heir (`CodingAgent.RuntimeTables`): a crashed
+  owner's restart reclaims the live table, and restart normalization applies only
+  at boot. RunGraph normalizes `:queued` as well as `:running` runs at boot,
+  persists the outcome, and marks stale queued/running runs `:lost`
+  (`:run_graph_stale_ttl_seconds`). **Breaking:** `ProcessStoreServer.transaction/2`
+  is removed; `ProcessStore` mutations send data-only requests and may return
+  `{:error, :store_unavailable}`. `ProcessManager` now starts before
+  `ProcessStoreServer`. (#677)
+- A child whose session shutdown blocks no longer stalls other children's cancel,
+  message or completion. The worker persists its outcome and sends its followup
+  before its owner observes the turn end, and exactly one of worker and owner
+  finalizes each turn. A crashed owner adopts its live worker and session from
+  its journal; a second crash terminalizes the child. Terminal owners exit after
+  `:task_terminal_retention_ms` (default five minutes); broadcasts reserve every
+  recipient's capacity before delivering to any (#634).
+- `CodingAgent.SessionSupervisor.start_session/1` validates options and loads
+  the journal in the caller; `CodingAgent.Session.init/1` only admits journal
+  ownership and the rest of initialization (settings, extensions, WASM, profile
+  MCP) runs in `handle_continue/2`. `start_link/1` and `start_session/1` still
+  return after initialization, with `{:error, reason}` and no linked exit on
+  failure. `RootLifecycle` no longer calls a session while holding its lock,
+  and `SessionMaintenance.plan/1` takes no root lock (#632).
+- `bash` uses the code-mode stream relay only when `CodeMode.enabled?/1`
+  holds; `BashExecutor` returns `{:error, :python3_unavailable}` instead of
+  raising when the relay lacks `python3` (#674).
+- Archive member reads and in-place archive writes bound decompression while
+  inflating (declared size, `:format_max_member_bytes`,
+  `:format_max_decoded_bytes`, `:format_max_archive_entries`) instead of
+  checking sizes after whole-archive extraction (#678).
+- Named-node workers no longer abort runs on event size, delta count or delta
+  rate. `RemoteEventCodec` elides oversized action/checkpoint display data to
+  the event budget and splits deltas at UTF-8 boundaries (`take_delta/2`); the
+  `encode_*` functions take an optional byte budget. Deltas queued behind an
+  outstanding acknowledgement coalesce (bounded by bytes), and the worker
+  reports the run's own completed answer instead of accumulating deltas (#635).
+- `ExecutionNode.ProcessService` retires terminal receipts 24 hours after they
+  finish and counts only unresolved (`running`/`outcome_unknown`) receipts
+  against its 1,000 admission limit (20,000 retained in total), keeping a
+  durable per-node generation floor so superseded generations stay refused.
+  Provable pre-exec failures (the helper now reports `started:false`) are
+  recorded as `failed`. New preview-first `prune/2` removes receipts only with a
+  single-use confirmation token (#679).
+- `ResourceLoader`, `AtImports` and `Rules` read through the new bounded,
+  stat-validated per-session cache `ResourceLoader.SourceReader`, with
+  per-file and total limits (instructions 64/256 KiB, rules 64 KiB per file,
+  128 KiB always-apply, 256 files, 300-character descriptions), truncation
+  markers naming the path, and `[:coding_agent, :prompt_sources, :read |
+  :load]` telemetry. A turn with unchanged files performs no instruction or
+  rule file read (#693).
+- `Workspace.seed_workspace/1` seeds a workspace once (marker
+  `.lemon-workspace-seeded`); sessions call it only when they read bootstrap
+  files and never raise on an unwritable workspace. Deleted templates such as
+  `BOOTSTRAP.md` are not re-created; `ensure_workspace/1` (`mix lemon.workspace
+  init`) still restores missing templates explicitly. Templates are written via
+  temp file and rename (#672).
+- `CodingAgent.Rules` parses frontmatter through `LemonSkills.Frontmatter`
+  instead of `YamlElixir.read_from_string`, which started `:yamerl` on every read
+  inside session init. Repeated keys (also kebab/camel spellings of one key) and
+  frontmatter over 16 KiB reject the rule with a warning; it still shadows
+  lower-priority namesakes (#671).
+- `CodingAgent.Executor.cancel/1` (and the local and remote session runners'
+  `cancel/2`) is an asynchronous cast that returns `:ok` at once, so a gateway
+  Run never blocks on a busy session while cancelling (#643).
+- **Breaking:** removed the compaction-only `CodingAgent.Messages` structs
+  (`UserMessage`, `AssistantMessage`, `ToolResultMessage`, `BashExecutionMessage`,
+  `CompactionSummaryMessage`, `TextContent`, `ImageContent`, `ThinkingContent`,
+  `ToolCall`, `Usage`) and `Messages.get_text/1`, `get_tool_calls/1` and
+  `total_tokens/1`. Use the `LemonAi.Types` structs; `CustomMessage` and
+  `BranchSummaryMessage` remain. `Messages.to_llm/1` reads journal maps through
+  `MessageSerialization.deserialize_message/1` and drops unknown roles.
 
-- `CodingAgent.CodeReload.refresh_sessions/0` rebuilds idle sessions' tools
-  after a source code reload so their closures run the new code.
-- Per-invocation `project_memory_capture: false` skips automatic fact extraction
-  after successful turns and compactions without disabling project-memory recall.
-  Print runs use this option; other sessions retain capture by default.
-- Cwd-scoped coding sessions now omit assistant-home persona bootstrap and
-  assistant-only memory/learning reminders. Main/chat sessions retain them;
-  native `session_mode` and `persona` options survive prompt refresh.
-- Coding sessions default to coding tool disclosure, with existing explicit
-  config/env/session opt-outs. Skill discovery descriptions are compact (96
-  characters); full metadata and instructions remain available via `read_skill`.
-- Per-Bot folder reads can skip human approval only when effective policy sets
-  `workspace_read_exempt == true` and the trusted worker folder, bound execution
-  scope and canonical `ProfileStore.paths(profile_id)["files"]` resolve to the
-  same directory. `read` and explicit-file ripgrep targets must be single-linked
-  regular files inside that folder; `ls` may list the folder. Directory grep,
-  internal URLs and `find` require approval. Memory-path aliases use the execution
-  resolver and approval binds the resolved target. Failed canonicalization,
-  including exhausted symlink traversal, never grants an exemption.
-  Before an exempt read, `CodingAgent.WorkspaceReads` durably fences the session
-  and every ancestor. Existing descendants consult ancestor fences, so streamed
-  task output and async results cannot escape through an unfenced parent/sibling.
-  `webfetch` and `websearch` then require approval even after restore, extension
-  reload or policy narrowing. Unreachable ancestors and lost mirrors fail closed.
-  Extension/config discovery uses the trusted config root, not Bot-written
-  `.lemon/config.toml` in the folder.
-- Configured local ACP/debug/eval/tool/Wasm launch adapters now participate in
-  opt-in durable native-process tracking. ACP creates and debugger launch/attach
-  dispatches retain external-work uncertainty even after errors; a missing ACP
-  client remains a proven pre-dispatch refusal. LSP diagnostics and formatting
-  keep their bounded BashExecutor path rather than reverting to unbounded commands.
-  JavaScript eval records whole-workload uncertainty before starting its host:
-  terminating the host alone cannot certify cleanup of the detached kernel.
-
-- Tool provenance survives registry construction and session initialization,
-  rebuild and reload. Custom/extra tools and extension constructors, callbacks
-  and hooks record durable native-work uncertainty before arbitrary code runs,
-  retaining that uncertainty after errors without fencing managed builtins.
-- Native Bash launches participate in opt-in durable evaluation tracking before
-  execution. Process sessions, eval kernels and document backends share core
-  process-group proofs without changing untracked launch behavior; PTY tracking
-  explicitly retains uncertainty about separately contained workloads.
-
-- Named workers advertise and execute Codex device login start/poll/cancel plus
-  internal single-use completion/settlement on the authenticated destination.
-  Writing completion stays bound to the initiating worker/controller generation
-  and a five-second authorization; non-writing settlement remains reachable after
-  node expiry/re-pairing without gating revocation. Exact binding rejections remain
-  provably non-writing through the control-plane adapter. Local execution-directory
-  options and exact login bindings are preserved; only public state is returned.
-
-- Opt-in `semantic_find` tool maps a plain-language behavior description to
-  `path:line` code locations. It is off by default and registered only when
-  `[runtime.tools.semantic_find] enabled = true` and an explicit small model
-  (`semantic_find.model`, else `model_roles.tiny`/`smol`) is configured; it never
-  uses the active session model. Candidate lines come from a bounded local scan
-  (no embedding index or second store), the model only chooses among numbered
-  candidates, and `max_tokens` (default 8000) caps every call. Provider-reported
-  usage is recorded through `LemonCore.UsageLedger` against the run and session,
-  with an unknown price left unknown. Distinct from `find` (file-name globs).
-  Complete role chains resolve without fallback. Prompt budgeting reserves a
-  byte-level upper bound and message overhead before completion; unaudited
-  provider/API pairs (including Codex without an output limit) fail closed.
-- `bash` keeps cwd and exported environment between foreground calls within a
-  session (in memory, confined to the workspace, fresh for new sessions); `reset:
-  true` or resetting the session clears it and invalidates in-flight captures.
-  State expires with its owning session, exported functions are excluded, and
-  private capture files are cleaned up even after detachment or queued cancellation.
-  Saved cwd validation follows symlinks before parent components and fails closed
-  on resolution errors, including directories replaced between calls.
-  ACP client-terminal calls remain stateless and receive no host-local capture
-  redirections, supporting clients with a separate filesystem.
-- Named workers advertise owner-authorized provider management methods and execute
-  them against destination-local provider configuration and encrypted credentials,
-  rejecting writes whose exact target identity belongs to another machine.
-  Project credential/default overrides are resolved from the worker's configured
-  execution directory; management RPCs cannot supply filesystem paths.
-- `CodingAgent.SettingsManager.model_routing` exposes the raw root
-  `[model_routing]` table (default `%{}`); sessions show the actual routed model
-  per assistant turn with run-unique activity identities, and an explicit model
-  choice bypasses automatic routing. Automatic selection provenance survives
-  session reset, save, resume, tree/entry navigation, committed rewinds, and plan
-  entry/exit or approval (including resume while planning); internal model
-  transitions reapply the automatic cost cap or explicit-selection bypass.
-  Parentless Coordinator and task callers also retain legacy explicit model
-  selections when provenance is omitted or nil; inherited provenance and an
-  explicit `false` continue to preserve automatic routing and its cost cap.
-  Delegated children preserve inherited selection provenance; persona model/role
-  and task-agent config defaults remain automatic rather than bypassing the cap.
-  Fallback candidates
-  rejected before provider invocation do not appear as the actual model in
-  activity events or the usage footer.
-
-- Truncated webfetch and browser snapshot/page-content results retain complete
-  sources as session-scoped artifacts and return readable `artifact://` handles.
-  Cached fetches register handles in the requesting session, never another caller.
-
-- `ast_grep` refuses scopes above `max_files` (default 1000), retains successful
-  files alongside bounded per-file parse/CLI errors, and exposes session artifact
-  handles for complete spilled match results.
-
-- `read file.json?q=filter` supports native jq-subset field/index traversal,
-  iteration, pipes, keys, length and scalar select comparisons, with ordinary
-  read-budget pagination and literal-filename precedence.
-
-- `write archive:member` adds or replaces ZIP/TAR/tar.gz/tgz members atomically,
-  preserving unrelated member data and enforcing physical archive mutation guards.
-
-- `write` supports parameterized SQLite row inserts, primary-key/rowid updates
-  and keyed deletes in existing databases, with JSON scalar/column validation
-  and the normal mutation guards.
-
-- LSP supports preview/apply file renames, server reload, advertised capabilities,
-  and bounded workspace diagnostics from running clients. Document language IDs
-  now come from the shared LemonLsp server catalog.
-
-- Local Go diagnostics run `go vet ./...` rather than executing tests. External
-  diagnostic checker deadlines now terminate the OS process tree on timeout.
-
-- Debug adds js-debug, CodeLLDB, netcoredbg and Ruby rdbg adapters, loopback
-  listening-adapter transport, capability-gated log points, data/instruction
-  breakpoints, memory reads and disassembly (128 KiB cap). Timeouts clamp to 5..300s.
-
-- Eval supports bounded rich `display` outputs (PNG/JPEG, Markdown and JSON) over
-  a stdout-independent side channel, Python `%pip install` / `%load` magics, and
-  interrupt-first timeout handling with a two-second grace before killing kernels.
-
-- Bare reads of source files with at least 300 lines and at most 2 MiB now return
-  bounded structural summaries with declarations and explicit omitted ranges.
-  Summaries are immutable, omit edit snapshots, and are rejected by overwrite
-  safety checks. Selectors, offset/limit, `summary: false`, or the host's
-  `structural_summary: false` option retain full reads; ACP unsaved buffers use
-  the same outline behavior.
-
-- Task batches honor each child's `async` and `thinking_level` overrides; mixed
-  batches join synchronous children while returning background receipts. Wait
-  yields a non-cancelling snapshot after 30 minutes or when steering arrives.
-
-- Foreground bash previews retain a 20 KiB head plus tail with an explicit middle
-  elision marker. Spill notices prefer session artifact handles over raw paths,
-  and unavailable PTYs report their fallback in both output and result details.
-
-- Local edit and patch support the same opt-in formatting as write and return
-  post-format snapshot tags. Anchored edits recover recent session/path tags
-  only when every referenced original range remains byte-identical and unique;
-  snapshot history is bounded, and text-edit staleness checks are unchanged.
-
-- Session-scoped `local://name` scratch files support read, write and bash URL
-  expansion. `proc://` lists owned processes; process URLs peek output, write
-  stdin or terminate through `/kill`.
-- Read supports GitHub `issue://` and `pr://` views and indexed PR diffs, preferring
-  authenticated `gh` for private repositories. `history://task_id` shows a bounded
-  visible transcript of an owned child task without hidden reasoning.
-
-- Find sorts the complete candidate set before applying `max_results`, with
-  `sort: "mtime"` for newest-first (path tie-breaks) or the existing default
-  `"path"`. Slash globs use full-path matching in fd as in the fallback;
-  scopes exceeding 100,000 candidates fail with a narrowing hint.
-
-- Grep and find accept semicolon-separated roots, merge/deduplicate results before
-  paging, and report missing roots without discarding existing ones. Grep long
-  lines now show a match-centered 500-character window and the original column.
-
-- Grep supports `output_mode: content|files|count`, with paged paths or per-file
-  matching-line counts and a total. Newline patterns search across lines in both backends.
-
-- Background process controls now support exact stdin writes and EOF through
-  `process_input`, non-consuming `bash_output` peeks, and graceful `kill_process`
-  SIGTERM with a two-second SIGKILL fallback (or explicit immediate kill).
-
-- Web-search requests sent directly to `api.perplexity.ai` now include an
-  `X-Pplx-Integration: lemon` header so Perplexity can attribute Lemon traffic.
-  Requests routed through OpenRouter or custom compatible endpoints are
-  unchanged.
-- Read accepts comma-separated line/range/count windows, sorts and merges them,
-  and preserves original line numbers with a single snapshot header. Single
-  non-raw bounded selectors include one preceding and three following context
-  lines; raw and comma-list windows remain exact. Overwrites reject selector
-  elision markers rather than copying omitted content into existing files.
-
-### Changed
-
-- Removed the unused compaction hook service, aggregate session-health APIs and
-  scoped session-supervisor APIs. Session diagnostics remain available through
-  `CodingAgent.Session.diagnostics/1`.
-- Session transcripts now use only reverse-ordered internal storage; access them
-  through `SessionManager.entries/1`. Automatic compaction capacity calculations
-  share one implementation, and provider message budgets use fixed defaults.
-
-- Keep immutable execution-node service adapters separate from mutable worker
-  state so connection and invocation updates retain the BEAM's small-map layout.
-- Seen-line edit protection now defaults on: anchored edits to lines not shown in
-  a numbered read are refused. Disable with `[runtime.tools.edit]
-  enforce_seen_lines = false`. The Git guard remains on by default
-  (`[runtime.tools.bash] git_guard = false` disables it).
-- A native session that shuts down expires the approvals it still has pending
-  (`LemonCore.ExecApprovalExpiry.session_ended/1` from `terminate/2`), so an
-  orphaned approval is denied instead of staying answerable. An expired
-  approval's action reports `ok: false`, "expired because its run ended".
-
-- Normalize module aliases, implicit exception handling and direct function calls
-  in recently changed coding-agent modules and tests without changing runtime behavior.
-
-- Deadline-owning task/wait, agent delegation, bash, eval, debug, question and
-  browser tools explicitly retain their own limits under the agent runtime's
-  new five-minute default tool deadline and eight-call concurrency cap.
-
-- Todo plans preserve `blocked` and `abandoned` statuses, optional phase/blocker
-  notes and stable IDs in the journal and client projections. Writes keep only
-  the first in-progress task active; progress reports all statuses, and actionable
-  tasks exclude blocked/abandoned work. Terminal checklists show phases and notes.
-
-- Consolidate memory tools as `remember` (compact USER.md/MEMORY.md facts) and
-  `recall` (past conversations and longer workspace notes); remove the former
-  search, topic, and session-browse tool surfaces.

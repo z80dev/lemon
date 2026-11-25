@@ -339,8 +339,10 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
     provider_cfg = ProviderNames.provider_config(config.providers, :google_vertex) || %{}
 
     resolved =
-      ProviderSettings.resolve(:google_vertex,
-      Map.merge(provider_cfg, %{cwd: cwd}))
+      ProviderSettings.resolve(
+        :google_vertex,
+        Map.merge(provider_cfg, %{cwd: cwd})
+      )
 
     %{
       access_token: Keyword.get(opts, :google_tts_access_token),

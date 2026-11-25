@@ -189,7 +189,13 @@ defmodule LemonCli.Onboarding.Runner do
 
     unless Credentials.provider_has_credentials?(
              spec.id,
-             %{spec.id => %{"auth_source" => "omp", "omp_path" => omp_path, "base_url" => base_url}},
+             %{
+               spec.id => %{
+                 "auth_source" => "omp",
+                 "omp_path" => omp_path,
+                 "base_url" => base_url
+               }
+             },
              mode: :resolve
            ) do
       fail!(

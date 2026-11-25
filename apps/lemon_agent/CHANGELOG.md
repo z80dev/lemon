@@ -10,6 +10,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Removed
 
+- **Breaking:** `LemonAgent.Proxy` (and `ProxyStreamOptions`) and
+  `LemonAgent.Context` are deleted; neither had a runtime consumer. The `req`
+  dependency is dropped. The loop no longer calls `Context.check_size/2` (a
+  full-history JSON encode per request) and the
+  `[:lemon_agent, :context, :size | :warning | :truncated]` events are gone.
+  Bound context with your own `transform_context` (#708).
+
 - **Breaking:** `LemonAgent.Workspace.{GoalStore, KanbanStore, GoalAuthority,
   KanbanAuthority}` (about 2.5K lines of Lemon product state with no
   `lemon_agent` consumer) moved to `lemon_automation` as
@@ -218,15 +225,6 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   delivery before releasing active tools. Acceptance does not start an idle
   agent or continue a completed, failed or cancelled run automatically; normal
   in-loop follow-ups retain the ordinary single terminal lifecycle.
-
-### Removed
-
-- **Breaking:** `LemonAgent.Proxy` (and `ProxyStreamOptions`) and
-  `LemonAgent.Context` are deleted; neither had a runtime consumer. The `req`
-  dependency is dropped. The loop no longer calls `Context.check_size/2` (a
-  full-history JSON encode per request) and the
-  `[:lemon_agent, :context, :size | :warning | :truncated]` events are gone.
-  Bound context with your own `transform_context` (#708).
 
 ## [0.2.0] - 2026-10-13
 

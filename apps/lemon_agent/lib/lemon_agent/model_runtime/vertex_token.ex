@@ -9,7 +9,7 @@ defmodule LemonAgent.ModelRuntime.VertexToken do
     1. the resolved service-account JSON (`providers.google_vertex`
        `service_account_json_secret`/`service_account_json`, or
        `GOOGLE_APPLICATION_CREDENTIALS_JSON`; see
-       `LemonAgent.ProviderConfigResolver`);
+       `LemonAgent.ModelRuntime.StreamOptions.ProviderSettings`);
     2. the service-account file named by `GOOGLE_APPLICATION_CREDENTIALS`;
     3. `gcloud auth print-access-token`.
 

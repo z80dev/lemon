@@ -15,7 +15,14 @@ defmodule CodingAgent.TaskRuntime.Journal do
 
   @impl true
   def init(:ok) do
-    :ets.new(@table, [:named_table, :public, :set, read_concurrency: true, write_concurrency: true])
+    :ets.new(@table, [
+      :named_table,
+      :public,
+      :set,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+
     {:ok, nil}
   end
 

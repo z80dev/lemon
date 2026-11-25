@@ -128,7 +128,9 @@ defmodule LemonControlPlane.Methods.StatusTest do
   test "daily count failures stay null with per-field availability" do
     {:ok, started} = Application.ensure_all_started(:lemon_router)
     on_exit(fn -> Enum.each(Enum.reverse(started), &Application.stop/1) end)
-    :ok = Supervisor.terminate_child(LemonRouter.ConversationSupervisor, LemonRouter.RunCountTracker)
+
+    :ok =
+      Supervisor.terminate_child(LemonRouter.ConversationSupervisor, LemonRouter.RunCountTracker)
 
     try do
       assert {:ok, result} = Status.handle(%{}, %{})
@@ -196,7 +198,9 @@ defmodule LemonControlPlane.Methods.StatusTest do
       providers: %{provider => %{auth: "none"}}
     }
 
-    row = Enum.find(LemonAgent.ModelRuntime.ProviderStatus.summary(config), &(&1["id"] == provider))
+    row =
+      Enum.find(LemonAgent.ModelRuntime.ProviderStatus.summary(config), &(&1["id"] == provider))
+
     assert %{"message" => message, "atMs" => at_ms} = row["lastError"]
     assert is_integer(at_ms)
     assert String.length(message) <= 256
@@ -283,7 +287,9 @@ defmodule LemonControlPlane.Methods.StatusTest do
       providers: %{provider => %{auth: "none"}}
     }
 
-    row = Enum.find(LemonAgent.ModelRuntime.ProviderStatus.summary(config), &(&1["id"] == provider))
+    row =
+      Enum.find(LemonAgent.ModelRuntime.ProviderStatus.summary(config), &(&1["id"] == provider))
+
     assert row["circuit"]["state"] == "unknown"
   end
 
