@@ -99,22 +99,21 @@ defmodule LemonCore.Bench.StoreWorkload do
       peak = Task.await(sampler)
       calls = for {op, us} <- samples, op in [:write, :read, :sweep], do: us
 
-      IO.inspect(
-        %{
-          workers: workers,
-          iterations: iterations,
-          initial_rows_per_table: rows,
-          elapsed_ms: duration / 1000,
-          peak_store_message_queue_len: peak,
-          store_calls_us: percentiles(calls),
-          operations_us:
-            Map.new(
-              Enum.group_by(samples, &elem(&1, 0), &elem(&1, 1)),
-              fn {op, values} -> {op, percentiles(values)} end
-            )
-        },
-        label: "store_workload"
-      )
+      stats = %{
+        workers: workers,
+        iterations: iterations,
+        initial_rows_per_table: rows,
+        elapsed_ms: duration / 1000,
+        peak_store_message_queue_len: peak,
+        store_calls_us: percentiles(calls),
+        operations_us:
+          Map.new(
+            Enum.group_by(samples, &elem(&1, 0), &elem(&1, 1)),
+            fn {op, values} -> {op, percentiles(values)} end
+          )
+      }
+
+      IO.puts("store_workload: #{inspect(stats)}")
     after
       Supervisor.stop(supervisor)
       File.rm_rf!(root)

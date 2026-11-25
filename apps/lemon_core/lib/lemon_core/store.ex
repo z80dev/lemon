@@ -288,36 +288,40 @@ defmodule LemonCore.Store do
     do: {:error, :concurrent_update}
 
   defp update_terminal_effect(server, run_id, effect, status, remaining) do
-    with {:ok, row} when is_map(row) <- terminal_pending(server, run_id) do
-      replacement =
-        case {Map.fetch!(row, effect), status} do
-          {:done, _} -> row
-          {_, :failed} -> row |> Map.put(effect, :failed) |> count_terminal_failure(effect)
-          {_, :done} -> Map.put(row, effect, :done)
+    case terminal_pending(server, run_id) do
+      {:ok, row} when is_map(row) ->
+        replacement =
+          case {Map.fetch!(row, effect), status} do
+            {:done, _} -> row
+            {_, :failed} -> row |> Map.put(effect, :failed) |> count_terminal_failure(effect)
+            {_, :done} -> Map.put(row, effect, :done)
+          end
+
+        result =
+          cond do
+            Enum.all?([:notification, :projections, :presentation], &(replacement[&1] == :done)) ->
+              compare_and_delete(server, @terminal_pending, run_id, row)
+
+            replacement == row ->
+              :ok
+
+            true ->
+              compare_and_swap(server, @terminal_pending, run_id, row, replacement, durable: true)
+          end
+
+        case result do
+          {:error, :mismatch} ->
+            update_terminal_effect(server, run_id, effect, status, remaining - 1)
+
+          other ->
+            other
         end
 
-      result =
-        cond do
-          Enum.all?([:notification, :projections, :presentation], &(replacement[&1] == :done)) ->
-            compare_and_delete(server, @terminal_pending, run_id, row)
+      {:ok, nil} ->
+        :ok
 
-          replacement == row ->
-            :ok
-
-          true ->
-            compare_and_swap(server, @terminal_pending, run_id, row, replacement, durable: true)
-        end
-
-      case result do
-        {:error, :mismatch} ->
-          update_terminal_effect(server, run_id, effect, status, remaining - 1)
-
-        other ->
-          other
-      end
-    else
-      {:ok, nil} -> :ok
-      error -> error
+      error ->
+        error
     end
   end
 
