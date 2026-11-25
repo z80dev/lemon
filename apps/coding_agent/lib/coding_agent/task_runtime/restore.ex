@@ -1,4 +1,4 @@
-defmodule CodingAgent.Tools.Task.Restore do
+defmodule CodingAgent.TaskRuntime.Restore do
   @moduledoc """
   Restores interrupted native children only after their parent is admitted for
   crash continuation. Boot never launches children on its own. Claims consume
@@ -14,7 +14,8 @@ defmodule CodingAgent.Tools.Task.Restore do
   """
 
   alias CodingAgent.{Session, TaskStore, TaskStoreServer}
-  alias CodingAgent.Tools.Task.{Async, Control, Execution, Params, Result, Runner, Worktree}
+  alias CodingAgent.TaskRuntime.{Async, Control, Runner}
+  alias CodingAgent.Tools.Task.{Execution, InvocationAuthority, Result, Worktree}
   alias LemonAgent.AbortSignal
 
   @max_attempts 3
@@ -254,7 +255,7 @@ defmodule CodingAgent.Tools.Task.Restore do
   defp restore_start_opts(record, opts) do
     descriptor = record.launch_descriptor
     parent_state = Session.get_state(opts[:session_pid])
-    inherited = Params.inherited_execution_context(parent_state.tool_opts)
+    inherited = InvocationAuthority.inherited_execution_context(parent_state.tool_opts)
     original = descriptor.start_opts
     policy = LemonCore.ToolPolicy.intersect(original[:tool_policy], parent_state.tool_policy)
 

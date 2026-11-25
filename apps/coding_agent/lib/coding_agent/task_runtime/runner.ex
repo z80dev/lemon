@@ -1,4 +1,4 @@
-defmodule CodingAgent.Tools.Task.Runner do
+defmodule CodingAgent.TaskRuntime.Runner do
   @moduledoc """
   Runs native child-session steps and output corrections in order.
 
@@ -10,7 +10,8 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   alias CodingAgent.Session
   alias CodingAgent.Session.Presentation
-  alias CodingAgent.Tools.Task.{Control, Restore, Result}
+  alias CodingAgent.TaskRuntime.{Control, Restore}
+  alias CodingAgent.Tools.Task.Result
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent

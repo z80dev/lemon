@@ -2,7 +2,8 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.SettingsManager
-  alias CodingAgent.Tools.Task.{Execution, Params, Result, Runner}
+  alias CodingAgent.TaskRuntime.Runner
+  alias CodingAgent.Tools.Task.{Execution, Params, Result}
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.AgentToolResult
 

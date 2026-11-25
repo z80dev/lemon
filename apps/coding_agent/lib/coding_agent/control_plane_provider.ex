@@ -27,7 +27,7 @@ defmodule CodingAgent.ControlPlaneProvider do
   alias CodingAgent.Session.Rewind
   alias CodingAgent.Session.Todos
   alias CodingAgent.Session.UserPrompt
-  alias CodingAgent.Tools.Task.Hub
+  alias CodingAgent.TaskRuntime.Hub
   alias CodingAgent.Tools.Todo
 
   @doc "Read bounded unresolved intents without starting or resuming the session."

@@ -4,8 +4,9 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
   import CodingAgent.AsyncHelpers
 
   alias CodingAgent.{RunGraph, TaskStore}
+  alias CodingAgent.TaskRuntime.{Async, Control, Runner}
   alias CodingAgent.Tools.Read
-  alias CodingAgent.Tools.Task.{Async, Control, Messaging, Result, Runner}
+  alias CodingAgent.Tools.Task.{Messaging, Result}
   alias CodingAgent.Tools.Write
   alias LemonAgent.{AbortSignal, Test.Mocks}
   alias LemonAgent.Types.AgentToolResult

@@ -1,4 +1,4 @@
-defmodule CodingAgent.Tools.Task.Followup do
+defmodule CodingAgent.TaskRuntime.Followup do
   @moduledoc false
 
   require Logger

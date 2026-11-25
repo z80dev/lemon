@@ -4,7 +4,7 @@ defmodule CodingAgent.TaskRuntime.ChildTest do
   import CodingAgent.AsyncHelpers
 
   alias CodingAgent.{TaskRuntime, TaskRuntimeHelpers, TaskStore}
-  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.TaskRuntime.Control
 
   defmodule Session do
     use GenServer
@@ -294,6 +294,29 @@ defmodule CodingAgent.TaskRuntime.ChildTest do
     id = idle_child(context, 0)
     assert phase(id) == :idle
     assert timeouts(id) == []
+  end
+
+  test "the stored record, not the owner phase, decides a child's status", context do
+    id = child(context)
+    projection = %{phase: :running, signal: nil, parent_signal: nil, session: nil}
+
+    # A completed result outranks a phase that gave up on the child afterwards.
+    TaskStore.finish(id, "done")
+    TaskStore.set_agent_state(id, :aborted)
+    assert TaskRuntime.status(%{projection | phase: :aborted}, id) == :completed
+
+    # A resumable result is live until a cancellation, recorded or in flight.
+    TaskStore.set_agent_state(id, :idle)
+    assert TaskRuntime.status(%{projection | phase: :idle}, id) == :idle
+    assert TaskRuntime.status(%{projection | phase: :cancelling}, id) == :cancelled
+    TaskStore.set_agent_state(id, :killed)
+    assert TaskRuntime.status(%{projection | phase: :idle}, id) == :cancelled
+
+    # A failed result wins over any live phase.
+    failed = child(context)
+    TaskStore.fail(failed, "boom")
+    session = session()
+    assert TaskRuntime.status(%{projection | session: session}, failed) == :error
   end
 
   test "session DOWN during cancellation retains the worker force deadline", context do

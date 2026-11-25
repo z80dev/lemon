@@ -1,4 +1,4 @@
-defmodule CodingAgent.Tools.Task.Control do
+defmodule CodingAgent.TaskRuntime.Control do
   @moduledoc """
   Invocation-bound control of native task children.
 

@@ -1,4 +1,4 @@
-defmodule CodingAgent.Tools.Task.Async do
+defmodule CodingAgent.TaskRuntime.Async do
   @moduledoc false
 
   require Logger
@@ -9,14 +9,8 @@ defmodule CodingAgent.Tools.Task.Async do
   alias CodingAgent.TaskProgressBindingStore
   alias CodingAgent.TaskStore
 
-  alias CodingAgent.Tools.Task.{
-    Control,
-    Execution,
-    Followup,
-    Projection,
-    Result,
-    Runner
-  }
+  alias CodingAgent.TaskRuntime.{Control, Followup, Runner}
+  alias CodingAgent.Tools.Task.{Execution, Projection, Result}
 
   alias LemonAgent.Types.AgentToolResult
   alias LemonCore.Introspection
@@ -307,11 +301,12 @@ defmodule CodingAgent.Tools.Task.Async do
   defp normalize_launch_error(_), do: :task_start_failed
 
   defp finalize_launch_failure(task_id, run_id, reason, lifecycle_context) do
-    maybe_fail_run(run_id, reason)
-
+    # The task record is the status authority; the run row follows it.
     if is_binary(task_id) and task_id != "" do
       TaskStore.fail(task_id, reason)
     end
+
+    maybe_fail_run(run_id, reason)
 
     emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
     emit_terminal_update(task_id, run_id, {:error, reason}, lifecycle_context)

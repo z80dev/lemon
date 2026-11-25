@@ -52,8 +52,7 @@ defmodule CodingAgent.TaskRuntime.Child do
   require Logger
 
   alias CodingAgent.{Session, TaskProgressBindingStore, TaskRuntime, TaskStore}
-  alias CodingAgent.TaskRuntime.Journal
-  alias CodingAgent.Tools.Task.{Async, Control}
+  alias CodingAgent.TaskRuntime.{Async, Control, Journal}
   alias LemonAgent.AbortSignal
   alias LemonCore.{Bus, Event}
   alias LemonCore.TaskSurface.Projection

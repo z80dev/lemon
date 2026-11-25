@@ -142,7 +142,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Session.Todos
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
-  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.TaskRuntime.Control
   alias CodingAgent.WorkspaceReads
   alias LemonAgent.ContextRegistry
   alias LemonAgent.ModelRuntime.SessionPins

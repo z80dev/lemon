@@ -228,7 +228,9 @@ defmodule CodingAgent.BackgroundRun do
     model = Keyword.get(opts, :model) || source[:model]
     thinking_level = Keyword.get(opts, :thinking_level) || source[:thinking_level]
     system_prompt = Keyword.get(opts, :system_prompt) || source[:explicit_system_prompt]
-    inherited_context = CodingAgent.Tools.Task.Params.inherited_execution_context(opts)
+
+    inherited_context =
+      CodingAgent.Tools.Task.InvocationAuthority.inherited_execution_context(opts)
 
     parent_policy =
       apply_floor(destination.floor, Map.get(source, :tool_policy, inherited_context.tool_policy))

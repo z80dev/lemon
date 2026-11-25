@@ -4,8 +4,9 @@ defmodule CodingAgent.Tools.TaskCrashRestoreTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.{Session, TaskStore, TaskStoreServer}
+  alias CodingAgent.TaskRuntime.{Control, Restore}
   alias CodingAgent.Tools.Task, as: TaskTool
-  alias CodingAgent.Tools.Task.{Control, Restore, Wait}
+  alias CodingAgent.Tools.Task.Wait
   alias LemonAgent.AbortSignal
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.{AgentTool, AgentToolResult}

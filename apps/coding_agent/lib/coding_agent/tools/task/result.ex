@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.Task.Result do
   require Logger
 
   alias CodingAgent.JoinAwait
+  alias CodingAgent.RunGraph
   alias CodingAgent.TaskStore
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
@@ -456,35 +457,35 @@ defmodule CodingAgent.Tools.Task.Result do
       build_join_task(nil, %{}, run)
   end
 
+  # The stored record decides a joined task's status, output and error; the run
+  # graph row only coordinates the wait and answers for a run with no record.
   defp build_join_task(task_id, record, run) do
-    status =
-      if record[:status] == :cancelled,
-        do: :cancelled,
-        else: run[:status] || record[:status] || :unknown
+    {source, status} =
+      if record == %{},
+        do: {run, RunGraph.normalize_status(run[:status])},
+        else: {record, record[:status] || :unknown}
 
     %{
       task_id: task_id,
       run_id: Map.get(record, :run_id) || run[:id],
       description: Map.get(record, :description) || run[:description],
       status: to_string(status),
-      output: join_output_for_status(status, run),
-      error: join_error_for_status(status, run)
+      output: join_output_for_status(status, source),
+      error: join_error_for_status(status, source)
     }
     |> Map.merge(Map.get(record, :workspace, %{}))
     |> Map.merge(lineage_details(record))
-    |> Map.merge(public_result_details(record[:result] || run[:result]))
+    |> Map.merge(public_result_details(source[:result]))
   end
 
-  defp join_output_for_status(:completed, run), do: visible_output_text(run[:result])
-  defp join_output_for_status("completed", run), do: visible_output_text(run[:result])
-  defp join_output_for_status(_, _run), do: ""
+  defp join_output_for_status(:completed, source), do: visible_output_text(source[:result])
+  defp join_output_for_status(_, _source), do: ""
 
-  defp join_error_for_status(:error, run), do: format_error(run[:error])
-  defp join_error_for_status("error", run), do: format_error(run[:error])
-  defp join_error_for_status(:cancelled, run), do: format_error(run[:error])
-  defp join_error_for_status(:interrupted, run), do: format_error(run[:error])
-  defp join_error_for_status(:lost, run), do: format_error(run[:error])
-  defp join_error_for_status(_, _run), do: nil
+  defp join_error_for_status(status, source)
+       when status in [:error, :cancelled, :interrupted, :lost, :timeout, :killed],
+       do: format_error(source[:error])
+
+  defp join_error_for_status(_, _source), do: nil
 
   defp join_tasks_text(tasks) do
     tasks

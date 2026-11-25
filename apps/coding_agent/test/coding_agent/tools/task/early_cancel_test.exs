@@ -11,8 +11,9 @@ defmodule CodingAgent.Tools.Task.EarlyCancelTest do
     TaskStore
   }
 
+  alias CodingAgent.TaskRuntime.{Control, Followup, Hub}
   alias CodingAgent.Tools.Task
-  alias CodingAgent.Tools.Task.{Control, Followup, Hub, Result}
+  alias CodingAgent.Tools.Task.Result
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 

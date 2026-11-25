@@ -2,7 +2,7 @@ defmodule CodingAgent.Tools.TaskOrchestrationTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.Task, as: TaskTool
-  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.TaskRuntime.Control
   alias CodingAgent.TaskStore
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult

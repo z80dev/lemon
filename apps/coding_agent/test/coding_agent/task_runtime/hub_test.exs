@@ -1,10 +1,10 @@
-defmodule CodingAgent.Tools.Task.HubTest do
+defmodule CodingAgent.TaskRuntime.HubTest do
   use ExUnit.Case, async: false
 
   import CodingAgent.AsyncHelpers
 
   alias CodingAgent.{RunGraph, TaskStore}
-  alias CodingAgent.Tools.Task.{Async, Control, Hub, Runner}
+  alias CodingAgent.TaskRuntime.{Async, Control, Hub, Runner}
   alias LemonAgent.{AbortSignal, Test.Mocks}
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent

@@ -1,10 +1,9 @@
-defmodule CodingAgent.Tools.Task.RunnerContinuationTest do
+defmodule CodingAgent.TaskRuntime.RunnerContinuationTest do
   use ExUnit.Case, async: false
 
   @moduletag :tmp_dir
 
-  alias CodingAgent.Session
-  alias CodingAgent.Tools.Task.Runner
+  alias CodingAgent.TaskRuntime.Runner
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.{AssistantMessage, TextContent}
