@@ -1117,11 +1117,16 @@ as profile memory, but destination repository-specific recall cannot infer a
 new repository mapping.
 
 Private worker methods are `memory.transfer.prepare`, `.snapshot`, `.validate`,
-`.preview`, `.apply`, `.status`, and `.inspect` over the authenticated invocation
+`.release`, `.preview`, `.apply`, `.status`, and `.inspect` over the authenticated invocation
 channel. Each method requires this connection's fresh
 `{version: 1, contextVersion: 1}` advertisement and exact ID/PID dispatch binding,
 before a source snapshot read or destination apply. Old provenance-unaware
 workers cannot strip actor ownership into a legacy copy or attest such a receipt.
+Once the destination receipt is recorded, the controller calls the source node's
+`memory.transfer.release` to delete its frozen snapshot. That call is best effort
+and bounded to five seconds; a source that does not advertise it, or a failed
+call, leaves the snapshot to the source Store's `transfer_ttl_ms`, scope erasure
+and retention, and never changes the returned receipt.
 Full snapshot content is never included in management responses,
 broadcast events, controller operation journals, or logs. Only after `copied`
 is durably acknowledged should the caller perform persona sync and explicitly

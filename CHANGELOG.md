@@ -534,6 +534,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   session exit during a call (#663).
 - Session reset no longer exits its caller with a call timeout when aborting
   the active run takes most of the session's 5-second abort wait (#499).
+  once the receipt is recorded (on a remote source node through its new
+  `memory.transfer.release` worker method), when any document it captured is
+  deleted, erased by scope or aged out, and after the new `transfer_ttl_ms`
+  Store setting (default 24 hours, capped at `retention_ms`) (#623).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
