@@ -35,6 +35,7 @@ defmodule LemonCore.ApplicationBootModeTest do
 
       assert opts(children, LemonCore.ExecApprovalExpiry) ==
                [recover: false, approvals: LemonCore.ExecApprovals]
+
       assert Keyword.get(opts(children, Store), :sweep) == false
     end
 
@@ -60,6 +61,7 @@ defmodule LemonCore.ApplicationBootModeTest do
 
     assert opts(children, LemonCore.ExecApprovalExpiry) ==
              [recover: true, approvals: LemonCore.ExecApprovals]
+
     assert opts(children, Store) == []
   end
 

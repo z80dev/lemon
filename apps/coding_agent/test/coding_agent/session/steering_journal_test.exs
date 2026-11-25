@@ -94,7 +94,8 @@ defmodule CodingAgent.Session.SteeringJournalTest do
     assert count_model_text(context.messages, "already bound") == 1
 
     assert_receive {:session_event, _, {:message_end, %{id: "bound", content: "already bound"}},
-                    _}, 5_000
+                    _},
+                   5_000
 
     assert {:error, :not_found} = Session.withdraw_steer(session, "bound")
     state = Session.get_state(session)

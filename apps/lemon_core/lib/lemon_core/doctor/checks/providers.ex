@@ -101,7 +101,8 @@ defmodule LemonCore.Doctor.Checks.Providers do
 
     ready = ready?.(provider)
 
-    extension_check = AuthExtension.call(:credential_check, [provider, provider_config, ready], nil)
+    extension_check =
+      AuthExtension.call(:credential_check, [provider, provider_config, ready], nil)
 
     cond do
       extension_check ->
