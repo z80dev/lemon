@@ -31,7 +31,8 @@ defmodule LemonLsp.Session do
         next_request_id: 0,
         sessions: %{},
         recent_sessions: [],
-        manager: manager
+        manager: manager,
+        last_used: System.unique_integer([:monotonic])
       })
 
     {:reply, {:ok, _info}, state} =
@@ -45,7 +46,8 @@ defmodule LemonLsp.Session do
     {:ok, state}
   end
 
-  def handle_call(message, from, state), do: finish(session_call(message, from, state))
+  def handle_call(message, from, state),
+    do: finish(session_call(message, from, touch(message, state)))
 
   def handle_info({:forward, :acquired_info, from}, state) do
     [session] = Map.values(state.sessions)
@@ -55,7 +57,7 @@ defmodule LemonLsp.Session do
   end
 
   def handle_info({:forward, message, from}, state) do
-    case session_call(message, from, state) do
+    case session_call(message, from, touch(message, state)) do
       {:reply, reply, state} ->
         publish(state)
         GenServer.reply(from, reply)
@@ -106,8 +108,13 @@ defmodule LemonLsp.Session do
     if map_size(state.sessions) == 0, do: {:stop, :normal, state}, else: {:noreply, state}
   end
 
+  # The manager evicts the least-recently-used session when the live cap is
+  # reached; status reads and eviction probes are not uses.
   defp publish(state),
-    do: send(state.manager, {:session_status, self(), status_from_state(state)})
+    do: send(state.manager, {:session_status, self(), status_from_state(state), state.last_used})
+
+  defp touch(message, state) when message in [:status, :refresh, :evict_if_idle], do: state
+  defp touch(_message, state), do: %{state | last_used: System.unique_integer([:monotonic])}
 
   defp session_call(:status, _from, state) do
     {:reply, status_from_state(state), state}
@@ -116,6 +123,25 @@ defmodule LemonLsp.Session do
   defp session_call(:refresh, _from, state) do
     state = refresh_state(state)
     {:reply, status_from_state(state), state}
+  end
+
+  # Decided here, not from the manager's last published status, so a request
+  # dispatched since then keeps its session alive.
+  defp session_call(:evict_if_idle, _from, state) do
+    if pending_request_count(state.sessions) == 0 do
+      state =
+        Enum.reduce(state.sessions, state, fn {session_id, session}, state ->
+          info = stopped_session_info(session, :evicted)
+
+          state
+          |> update_in([:sessions], &Map.delete(&1, session_id))
+          |> remember_session(Map.delete(info, :session_id))
+        end)
+
+      {:reply, :ok, state}
+    else
+      {:reply, {:error, :busy}, state}
+    end
   end
 
   defp session_call({:start_session, server_id, opts}, {caller, _}, state) do
@@ -571,7 +597,6 @@ defmodule LemonLsp.Session do
       recent_sessions: state.recent_sessions,
       planned_capabilities: [
         :json_rpc_diagnostics,
-        :workspace_root_detection,
         :restart_policy,
         :semantic_diagnostic_streaming
       ],
@@ -588,7 +613,9 @@ defmodule LemonLsp.Session do
         :launcher_child_cleanup,
         :server_request_responses,
         :owner_scoped_sessions,
-        :redacted_health_status
+        :redacted_health_status,
+        :workspace_root_detection,
+        :live_session_cap
       ],
       cleanup: %{
         includes_executable_paths: false,

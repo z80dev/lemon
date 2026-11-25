@@ -634,6 +634,132 @@ defmodule LemonLsp.ServerManagerProtocolTest do
     refute before["result"]["pid"] == after_restart["result"]["pid"]
   end
 
+  describe "live session cap" do
+    setup do
+      assert wait_until(fn -> ServerManager.status().active_count == 0 end)
+      %{max: ServerManager.status().max_active_count}
+    end
+
+    test "is reported in status with the live count", %{max: max} do
+      # `status/0` degrades to the unavailable projection when the manager is
+      # slower than its 1 s probe (a loaded machine); read a live projection.
+      status = wait_until(fn -> (status = ServerManager.status()).running && status end)
+      assert max == 8
+      assert status.max_active_count == 8
+      assert status.active_count == 0
+      assert :live_session_cap in status.capabilities
+      assert :workspace_root_detection in status.capabilities
+      refute :workspace_root_detection in status.planned_capabilities
+    end
+
+    test "opening one root beyond the cap evicts the least-recently-used idle session", ctx do
+      [first, second | rest] = ids = start_roots(ctx, 1..ctx.max)
+      assert wait_until(fn -> ServerManager.status().active_count == ctx.max end)
+
+      # Use every session except `second` after it, making it the LRU one.
+      for id <- [first | rest], do: assert({:ok, _} = touch(id))
+      lru = session_pid(second)
+      monitor = Process.monitor(lru)
+
+      [extra] = start_roots(ctx, [ctx.max + 1])
+
+      assert_receive {:DOWN, ^monitor, :process, ^lru, :normal}, 2_000
+      assert_receive {ServerManager, :server_stopped, ^second}, 2_000
+      assert {:error, :unknown_lsp_session} = touch(second)
+      for id <- [extra | List.delete(ids, second)], do: assert({:ok, _} = touch(id))
+
+      assert wait_until(fn ->
+               status = ServerManager.status()
+
+               status.active_count == ctx.max and
+                 Enum.any?(status.recent_sessions, &(&1.status == :evicted))
+             end)
+    end
+
+    test "a session with an in-flight request is never evicted", ctx do
+      [busy | others] = start_roots(ctx, 1..ctx.max)
+      slow = slow_request(busy)
+      assert wait_until(fn -> ServerManager.status().pending_request_count == 1 end)
+      # `busy` is the least recently used session, but it is serving a request.
+      for id <- others, do: assert({:ok, _} = touch(id))
+      [next_lru | _] = others
+
+      start_roots(ctx, [ctx.max + 1])
+
+      assert wait_until(fn -> session_pid(next_lru) == nil end)
+      assert {:ok, _} = touch(busy)
+      assert Task.yield(slow, 0) == nil
+      assert {:ok, _} = ServerManager.stop_session(busy)
+      assert {:error, :session_stopped} = Task.await(slow)
+    end
+
+    test "an acquire fails closed when every live session is busy", ctx do
+      ids = start_roots(ctx, 1..ctx.max)
+      requests = Enum.map(ids, &slow_request/1)
+      assert wait_until(fn -> ServerManager.status().pending_request_count == ctx.max end)
+      extra = Path.join(ctx.tmp_dir, "root-extra")
+      File.mkdir_p!(extra)
+
+      assert {:error, :lsp_session_limit} =
+               ServerManager.start_session(:elixir_ls, cwd: extra, config_root: ctx.tmp_dir)
+
+      assert Enum.all?(ids, &session_pid/1)
+      Enum.each(ids, &ServerManager.stop_session/1)
+      Enum.each(requests, &assert({:error, :session_stopped} = Task.await(&1)))
+    end
+
+    test "a session that cannot answer eviction is skipped for the next candidate", ctx do
+      [stuck, next_lru | rest] = start_roots(ctx, 1..ctx.max)
+      for id <- rest, do: assert({:ok, _} = touch(id))
+      stuck_pid = session_pid(stuck)
+      :ok = :sys.suspend(stuck_pid)
+
+      try do
+        start_roots(ctx, [ctx.max + 1])
+        assert wait_until(fn -> session_pid(next_lru) == nil end)
+        assert session_pid(stuck) == stuck_pid
+      after
+        :sys.resume(stuck_pid)
+      end
+    end
+  end
+
+  defp start_roots(ctx, indexes) do
+    for index <- indexes do
+      root = Path.join(ctx.tmp_dir, "root-#{index}")
+      File.mkdir_p!(root)
+      id = "#{ctx.session_id}-#{index}"
+      on_exit(fn -> ServerManager.stop_session(id) end)
+
+      assert {:ok, %{session_id: ^id}} =
+               ServerManager.start_session(:elixir_ls,
+                 cwd: root,
+                 config_root: ctx.tmp_dir,
+                 session_id: id
+               )
+
+      id
+    end
+  end
+
+  defp touch(id), do: ServerManager.document_diagnostics(id, "file:///touch")
+
+  defp slow_request(id) do
+    Task.async(fn ->
+      ServerManager.request_session(id, "fake/slow", %{},
+        timeout_ms: 60_000,
+        on_timeout: :cancel
+      )
+    end)
+  end
+
+  defp session_pid(id) do
+    case Registry.lookup(LemonLsp.SessionRegistry, {:id, manager(), id}) do
+      [{pid, _}] -> pid
+      [] -> nil
+    end
+  end
+
   defp manager, do: Process.whereis(ServerManager)
 
   defp start_owner do

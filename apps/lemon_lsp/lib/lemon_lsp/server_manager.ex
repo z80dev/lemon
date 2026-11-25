@@ -5,6 +5,13 @@ defmodule LemonLsp.ServerManager do
   Each pooled server/root/configuration owns an isolated supervised process and
   shared RPC client. Session processes own document state, request deadlines and
   native process-group cleanup; this facade never waits for protocol responses.
+
+  At most eight sessions are live at once (`max_active_count` in `status/0`).
+  Acquiring a new pool beyond that asks
+  the least-recently-used session with no in-flight request to stop (its owners
+  receive `{LemonLsp.ServerManager, :server_stopped, session_id}` and reconnect
+  on next use); when every live session is busy the acquire fails with
+  `{:error, :lsp_session_limit}`.
   """
 
   use GenServer
@@ -21,6 +28,18 @@ defmodule LemonLsp.ServerManager do
   end
 
   @name __MODULE__
+
+  # Live language servers per manager. One server process per workspace root
+  # costs from 55 MiB peak RSS (clangd after opening a one-file C project) to
+  # ~350 MiB for BEAM-hosted servers: a BEAM with every module of this umbrella
+  # and its deps loaded peaks at 353 MiB RSS, a floor for ElixirLS, which also
+  # compiles the project in its VM (measured 2026-11-24 on darwin/arm64, see
+  # docs/tools/lsp.md). Eight covers one root per language of a polyglot
+  # session; outermost-root detection keeps a monorepo at one root.
+  @max_live_sessions 8
+  # A session answers eviction from its own loop; one that cannot within this
+  # window (suspended or stuck) is skipped for the next candidate.
+  @eviction_timeout_ms 1_000
 
   @type server :: GenServer.server()
   @typedoc """
@@ -301,8 +320,12 @@ defmodule LemonLsp.ServerManager do
     {:ok,
      %{
        sessions: %{},
+       last_used: %{},
        refs: %{},
        recent: [],
+       evictions: %{},
+       evicting: MapSet.new(),
+       parked: %{},
        started_at: DateTime.to_iso8601(DateTime.utc_now()),
        refresh_count: 1
      }}
@@ -319,16 +342,14 @@ defmodule LemonLsp.ServerManager do
   def handle_call({:start_session, server_id, opts}, {caller, _} = from, state) do
     root = Keyword.get(opts, :config_root, opts[:cwd])
 
-    result =
-      with {:ok, cwd} <- validate_cwd(Keyword.get(opts, :cwd)),
-           {:ok, command} <- LemonLsp.Servers.resolve_command(server_id, root) do
-        key = {command.server.id, cwd, command.server.config_hash}
-        acquire_session(server_id, opts, key, caller, from, state)
-      end
-
-    case result do
+    with {:ok, cwd} <- validate_cwd(Keyword.get(opts, :cwd)),
+         {:ok, command} <- LemonLsp.Servers.resolve_command(server_id, root) do
+      key = {command.server.id, cwd, command.server.config_hash}
+      opts = Keyword.put(opts, :owner, opts[:owner] || caller)
+      request = %{server_id: server_id, opts: opts, key: key, from: from, tried: MapSet.new()}
+      {:noreply, admit(request, state)}
+    else
       {:error, reason} -> {:reply, {:error, reason}, state}
-      reply -> reply
     end
   end
 
@@ -346,8 +367,13 @@ defmodule LemonLsp.ServerManager do
   end
 
   @impl true
-  def handle_info({:session_status, pid, status}, state) do
-    {:noreply, %{state | sessions: Map.put(state.sessions, pid, status)}}
+  def handle_info({:session_status, pid, status, last_used}, state) do
+    {:noreply,
+     %{
+       state
+       | sessions: Map.put(state.sessions, pid, status),
+         last_used: Map.put(state.last_used, pid, last_used)
+     }}
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
@@ -356,7 +382,63 @@ defmodule LemonLsp.ServerManager do
     recent =
       if status, do: Enum.take(status.recent_sessions ++ state.recent, 5), else: state.recent
 
-    {:noreply, %{state | sessions: sessions, refs: Map.delete(state.refs, ref), recent: recent}}
+    {parked, waiting} = Map.pop(state.parked, pid, [])
+
+    {targeted, evictions} =
+      Enum.split_with(state.evictions, fn {_ref, request} -> request.pid == pid end)
+
+    state = %{
+      state
+      | sessions: sessions,
+        last_used: Map.delete(state.last_used, pid),
+        refs: Map.delete(state.refs, ref),
+        recent: recent,
+        evicting: MapSet.delete(state.evicting, pid),
+        evictions: Map.new(evictions),
+        parked: waiting
+    }
+
+    # The slot this session held is free: admit whoever waited on it.
+    requests =
+      Enum.reverse(parked) ++
+        Enum.map(targeted, fn {_ref, request} ->
+          Process.cancel_timer(request.timer)
+          request
+        end)
+
+    {:noreply, Enum.reduce(requests, state, &admit/2)}
+  end
+
+  def handle_info({:eviction_timeout, ref}, state) do
+    case Map.pop(state.evictions, ref) do
+      {nil, _evictions} ->
+        {:noreply, state}
+
+      {request, evictions} ->
+        request = %{request | tried: MapSet.put(request.tried, request.pid)}
+        {:noreply, admit(request, %{state | evictions: evictions})}
+    end
+  end
+
+  def handle_info({ref, reply}, state) when is_reference(ref) do
+    case Map.pop(state.evictions, ref) do
+      {nil, _evictions} ->
+        {:noreply, state}
+
+      {request, evictions} ->
+        Process.cancel_timer(request.timer)
+        state = %{state | evictions: evictions}
+
+        case reply do
+          :ok ->
+            {:noreply,
+             admit(request, %{state | evicting: MapSet.put(state.evicting, request.pid)})}
+
+          _busy ->
+            request = %{request | tried: MapSet.put(request.tried, request.pid)}
+            {:noreply, admit(request, state)}
+        end
+    end
   end
 
   def handle_info(_message, state), do: {:noreply, state}
@@ -370,40 +452,73 @@ defmodule LemonLsp.ServerManager do
     :ok
   end
 
-  defp acquire_session(server_id, opts, key, caller, from, state) do
-    case Registry.lookup(LemonLsp.SessionRegistry, {:pool, self(), key}) do
+  # Joins the pooled session for the key, else starts one when a live slot is
+  # free, else asks the least-recently-used session without in-flight requests to
+  # stop. A request for a pool whose session is being evicted waits for its exit.
+  defp admit(request, state) do
+    case Registry.lookup(LemonLsp.SessionRegistry, {:pool, self(), request.key}) do
       [{pid, _}] ->
-        forward(
-          pid,
-          {:start_session, server_id, Keyword.put(opts, :owner, opts[:owner] || caller)},
-          from
-        )
-
-        {:noreply, state}
+        if MapSet.member?(state.evicting, pid) do
+          update_in(state.parked[pid], &[request | &1 || []])
+        else
+          forward(pid, {:start_session, request.server_id, request.opts}, request.from)
+          state
+        end
 
       [] ->
-        start_session_child(server_id, opts, key, caller, from, state)
+        if live_count(state) < @max_live_sessions,
+          do: start_session_child(request, state),
+          else: evict_for(request, state)
     end
   end
 
-  defp start_session_child(server_id, opts, key, caller, from, state) do
-    id = opts[:session_id] || "#{server_id}:#{System.unique_integer([:positive])}"
+  defp live_count(state), do: map_size(state.refs) - MapSet.size(state.evicting)
+
+  defp evict_for(request, state) do
+    targeted = MapSet.new(state.evictions, fn {_ref, eviction} -> eviction.pid end)
+
+    candidate =
+      state.sessions
+      |> Enum.reject(fn {pid, status} ->
+        MapSet.member?(state.evicting, pid) or MapSet.member?(targeted, pid) or
+          MapSet.member?(request.tried, pid) or status.pending_request_count > 0
+      end)
+      |> Enum.min_by(fn {pid, _status} -> Map.get(state.last_used, pid, 0) end, fn -> nil end)
+
+    case candidate do
+      nil ->
+        GenServer.reply(request.from, {:error, :lsp_session_limit})
+        state
+
+      {pid, _status} ->
+        # The session decides atomically: it stops only while nothing is in
+        # flight and answers `{:error, :busy}` otherwise.
+        ref = make_ref()
+        forward(pid, :evict_if_idle, {self(), ref})
+        timer = Process.send_after(self(), {:eviction_timeout, ref}, @eviction_timeout_ms)
+        eviction = Map.merge(request, %{pid: pid, timer: timer})
+        %{state | evictions: Map.put(state.evictions, ref, eviction)}
+    end
+  end
+
+  defp start_session_child(request, state) do
+    id = request.opts[:session_id] || "#{request.server_id}:#{System.unique_integer([:positive])}"
 
     case Registry.lookup(LemonLsp.SessionRegistry, {:id, self(), id}) do
       [] ->
         opts =
-          Keyword.merge(opts,
+          Keyword.merge(request.opts,
             manager: self(),
-            pool_key: key,
+            pool_key: request.key,
             session_id: id,
-            server_id: server_id,
-            owner: opts[:owner] || caller
+            server_id: request.server_id
           )
 
-        launch_session_child(opts, from, state)
+        launch_session_child(opts, request.from, state)
 
       _ ->
-        {:reply, {:error, :duplicate_lsp_session}, state}
+        GenServer.reply(request.from, {:error, :duplicate_lsp_session})
+        state
     end
   end
 
@@ -412,10 +527,11 @@ defmodule LemonLsp.ServerManager do
       {:ok, pid} ->
         ref = Process.monitor(pid)
         forward(pid, :acquired_info, from)
-        {:noreply, %{state | refs: Map.put(state.refs, ref, pid)}}
+        %{state | refs: Map.put(state.refs, ref, pid)}
 
       {:error, _} ->
-        {:reply, {:error, :session_start_failed}, state}
+        GenServer.reply(from, {:error, :session_start_failed})
+        state
     end
   end
 
@@ -471,11 +587,12 @@ defmodule LemonLsp.ServerManager do
           :launcher_child_cleanup,
           :server_request_responses,
           :owner_scoped_sessions,
-          :redacted_health_status
+          :redacted_health_status,
+          :workspace_root_detection,
+          :live_session_cap
         ],
         planned_capabilities: [
           :json_rpc_diagnostics,
-          :workspace_root_detection,
           :restart_policy,
           :semantic_diagnostic_streaming
         ]
@@ -490,6 +607,7 @@ defmodule LemonLsp.ServerManager do
       refresh_count: state.refresh_count,
       active_servers: Enum.sort_by(active, & &1.session_hash),
       active_count: length(active),
+      max_active_count: @max_live_sessions,
       pending_request_count: Enum.sum(Enum.map(active, & &1.pending_request_count)),
       recent_sessions: Enum.take(Enum.flat_map(statuses, & &1.recent_sessions) ++ state.recent, 5)
     })
@@ -511,6 +629,7 @@ defmodule LemonLsp.ServerManager do
       refreshed_at: nil,
       refresh_count: 0,
       registry: LemonLsp.Servers.diagnostics(),
+      max_active_count: @max_live_sessions,
       active_servers: [],
       active_count: 0,
       pending_request_count: 0,
