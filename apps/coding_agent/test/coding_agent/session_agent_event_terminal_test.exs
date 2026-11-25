@@ -69,7 +69,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     {_unsubscribe, delivery} = Session.subscribe(session, tagged: true)
     assert LemonCore.Bus.Delivery.closed?(old_delivery)
     old_unsubscribe.()
-    assert [{_, _, ^delivery}] = Session.get_state(session).event_listeners
+    assert [{_, _, ^delivery, :agent}] = Session.get_state(session).event_listeners
     send(session, {:agent_event, {:canceled, :assistant_aborted}})
     gate = delivery.gate
 

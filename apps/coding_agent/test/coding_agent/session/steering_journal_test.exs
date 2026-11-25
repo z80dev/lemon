@@ -73,8 +73,8 @@ defmodule CodingAgent.Session.SteeringJournalTest do
     assert {:ok, _unsubscribe} = Session.subscribe_prompt(restored, "resume explicitly")
     id = Session.get_state(restored).session_manager.header.id
     calls = finish_run(id)
-    assert Enum.any?(calls, &(count_text(&1.messages, "durable correction") == 1))
-    assert Enum.all?(calls, &(count_text(&1.messages, "durable correction") <= 1))
+    assert Enum.any?(calls, &(count_model_text(&1.messages, "durable correction") == 1))
+    assert Enum.all?(calls, &(count_model_text(&1.messages, "durable correction") <= 1))
     assert count_text(Session.get_messages(restored), "durable correction") == 1
     assert {:ok, []} = Session.pending_steers(restored)
 
@@ -91,8 +91,11 @@ defmodule CodingAgent.Session.SteeringJournalTest do
     assert :ok = Session.steer(session, "already bound", id: "bound")
     send(first_call, :finish_model)
     assert_receive {:model_call, _second_call, context}, 5_000
-    assert count_text(context.messages, "already bound") == 1
-    assert_receive {:session_event, _, {:message_end, %{id: "bound"}}, _}, 5_000
+    assert count_model_text(context.messages, "already bound") == 1
+
+    assert_receive {:session_event, _, {:message_end, %{id: "bound", content: "already bound"}},
+                    _}, 5_000
+
     assert {:error, :not_found} = Session.withdraw_steer(session, "bound")
     state = Session.get_state(session)
     assert {:ok, []} = Session.pending_steers(session)
@@ -316,6 +319,21 @@ defmodule CodingAgent.Session.SteeringJournalTest do
   end
 
   defp count_text(messages, text), do: Enum.count(messages, &(Map.get(&1, :content) == text))
+
+  # Model-bound steering may include volatile recall. The event and restored
+  # transcript still have to match the exact user text without normalization.
+  defp count_model_text(messages, text) do
+    Enum.count(messages, fn
+      %{role: :user, content: content} = message when is_binary(content) ->
+        case Regex.run(~r/\[lemon:recalled-context id=([0-9a-f]{32})\]/, content) do
+          [_, marker] -> Session.strip_recalled_context(message, marker).content == text
+          nil -> content == text
+        end
+
+      _ ->
+        false
+    end)
+  end
 
   defp finish_run(id, calls \\ []) do
     receive do
