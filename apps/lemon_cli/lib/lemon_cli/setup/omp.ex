@@ -27,8 +27,7 @@ defmodule LemonCli.Setup.Omp do
   `status/2` shapes), `:verifier`.
   """
 
-  alias LemonAgent.ModelRuntime.{ModelCatalog, OmpBroker, ProviderNames}
-  alias LemonAi.Auth.{OmpAuthBroker, OmpConfig}
+  alias LemonAgent.ModelRuntime.{ModelCatalog, OmpAuthBroker, OmpBroker, OmpConfig, ProviderNames}
   alias LemonCli.Onboarding.{PromptUI, Providers, Runner}
   alias LemonCli.Setup.{Provider, ProviderManagement}
   alias LemonCore.Config.TomlPatch

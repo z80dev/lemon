@@ -1,4 +1,4 @@
-defmodule LemonAi.Auth.OmpAuthBroker do
+defmodule LemonAgent.ModelRuntime.OmpAuthBroker do
   @moduledoc """
   Client for omp's auth broker (`omp auth-broker serve`).
 
@@ -24,11 +24,11 @@ defmodule LemonAi.Auth.OmpAuthBroker do
   of its endpoint. A failed fetch is cached for 5 seconds so a down broker does
   not stall every resolution. Watchers are linked to the cache owner and die
   with it. Snapshot fetches and credential refreshes are single-flight per
-  endpoint. Without the cache owner (the `:lemon_ai` application not started)
+  endpoint. Without the cache owner (the `:lemon_agent` application not started)
   there is no cache, no watcher, and every call goes to the broker.
 
   Watcher options (read from the fetch that starts it): `:watch` (boolean,
-  default the `:lemon_ai, :omp_broker_watch` app env, `true`),
+  default the `:lemon_agent, :omp_broker_watch` app env, `true`),
   `:watch_wait_ms` (default 25 000) and `:watch_idle_ms` (default 600 000);
   `:req_options` is reused for every poll.
 
@@ -47,7 +47,7 @@ defmodule LemonAi.Auth.OmpAuthBroker do
 
   use GenServer
 
-  @table :lemon_ai_omp_auth_broker
+  @table :lemon_agent_omp_auth_broker
   @snapshot_ttl_ms 15_000
   @failure_ttl_ms 5_000
   @timeout_ms 5_000
@@ -540,7 +540,7 @@ defmodule LemonAi.Auth.OmpAuthBroker do
   defp watch_enabled?(opts) do
     case Keyword.get(opts, :watch) do
       value when is_boolean(value) -> value
-      _ -> Application.get_env(:lemon_ai, :omp_broker_watch, true)
+      _ -> Application.get_env(:lemon_agent, :omp_broker_watch, true)
     end
   end
 

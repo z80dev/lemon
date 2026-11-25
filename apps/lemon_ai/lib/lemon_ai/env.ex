@@ -190,18 +190,6 @@ defmodule LemonAi.Env do
       apps: [:lemon_ai]
     },
     %{
-      name: :google_application_credentials,
-      env_var: "GOOGLE_APPLICATION_CREDENTIALS",
-      aliases: [],
-      type: :string,
-      default: nil,
-      doc: "Path to a Google service-account JSON credentials file (ecosystem-standard name).",
-      secret?: true,
-      required?: false,
-      area: :provider_secrets,
-      apps: [:lemon_ai, :lemon_agent]
-    },
-    %{
       name: :google_cloud_project,
       env_var: "GOOGLE_CLOUD_PROJECT",
       aliases: [],

@@ -127,18 +127,6 @@ defmodule LemonAi.Providers.Anthropic.ComprehensiveTest do
       assert Anthropic.provider_id() == :anthropic
     end
 
-    test "get_env_api_key reads ANTHROPIC_API_KEY" do
-      with_env(%{"ANTHROPIC_API_KEY" => "test-env-key-123"}, fn ->
-        assert Anthropic.get_env_api_key() == "test-env-key-123"
-      end)
-    end
-
-    test "get_env_api_key returns nil when not set" do
-      with_env(%{"ANTHROPIC_API_KEY" => nil}, fn ->
-        assert Anthropic.get_env_api_key() == nil
-      end)
-    end
-
     test "request_history_limit returns nil for standard anthropic models" do
       assert Anthropic.request_history_limit(model()) == nil
     end
@@ -1019,8 +1007,7 @@ defmodule LemonAi.Providers.Anthropic.ComprehensiveTest do
       with_env(%{"ANTHROPIC_API_KEY" => "env-key"}, fn ->
         context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-        {:ok, stream} =
-          Anthropic.stream(model(), context, %StreamOptions{api_key: "opts-key"})
+        {:ok, stream} = LemonAi.stream(model(), context, %StreamOptions{api_key: "opts-key"})
 
         assert_receive {:headers, headers}, 1000
         assert {"x-api-key", "opts-key"} in headers
@@ -1039,7 +1026,7 @@ defmodule LemonAi.Providers.Anthropic.ComprehensiveTest do
 
       with_env(%{"ANTHROPIC_API_KEY" => "env-key-fallback"}, fn ->
         context = Context.new(messages: [%UserMessage{content: "Hi"}])
-        {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{})
+        {:ok, stream} = LemonAi.stream(model(), context, %StreamOptions{})
 
         assert_receive {:headers, headers}, 1000
         assert {"x-api-key", "env-key-fallback"} in headers

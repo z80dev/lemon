@@ -10,6 +10,71 @@ defmodule LemonAgent.Env do
 
   @declarations [
     %{
+      name: :anthropic_token,
+      env_var: "ANTHROPIC_TOKEN",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "Static Claude subscription OAuth token, used only when Anthropic `auth_source = \"oauth\"` has no stored Lemon login.",
+      secret?: true,
+      required?: false,
+      area: :provider_secrets,
+      apps: [:lemon_agent]
+    },
+    %{
+      name: :claude_code_oauth_token,
+      env_var: "CLAUDE_CODE_OAUTH_TOKEN",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "Claude Code OAuth token (as `claude setup-token` prints), checked before ANTHROPIC_TOKEN for the same ambient fallback.",
+      secret?: true,
+      required?: false,
+      area: :provider_secrets,
+      apps: [:lemon_agent]
+    },
+    %{
+      name: :codex_home,
+      env_var: "CODEX_HOME",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "Codex CLI home directory; importing a Codex CLI login reads `<dir>/auth.json` (default `~/.codex`).",
+      secret?: false,
+      required?: false,
+      area: :provider_secrets,
+      apps: [:lemon_agent]
+    },
+    %{
+      name: :google_application_credentials,
+      env_var: "GOOGLE_APPLICATION_CREDENTIALS",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "Path to a Google service-account JSON credentials file (ecosystem-standard name); Lemon mints Vertex AI tokens from it.",
+      secret?: true,
+      required?: false,
+      area: :provider_secrets,
+      apps: [:lemon_agent]
+    },
+    %{
+      name: :omp_profile,
+      env_var: "OMP_PROFILE",
+      aliases: ["PI_PROFILE"],
+      type: :string,
+      default: nil,
+      doc:
+        "omp profile whose config root holds the auth broker/gateway token files (`profiles/<name>`); PI_PROFILE applies only when unset.",
+      secret?: false,
+      required?: false,
+      area: :provider_secrets,
+      apps: [:lemon_agent]
+    },
+    %{
       name: :aws_access_key_id,
       env_var: "AWS_ACCESS_KEY_ID",
       aliases: [],

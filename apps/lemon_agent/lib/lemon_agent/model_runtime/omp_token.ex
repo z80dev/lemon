@@ -1,4 +1,4 @@
-defmodule LemonAi.Auth.OmpToken do
+defmodule LemonAgent.ModelRuntime.OmpToken do
   @moduledoc """
   Access-only bridge to omp's Kimi Code login. omp owns refresh and its leases;
   Lemon never reads or stores omp's refresh credentials. Access tokens are cached

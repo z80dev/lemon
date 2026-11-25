@@ -557,7 +557,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
       {:ok, _} = Application.ensure_all_started(:lemon_ai)
       LemonAgent.ModelRuntime.CredentialHealth.reset()
       LemonAgent.ModelRuntime.SessionPins.reset()
-      LemonAi.Auth.OmpAuthBroker.invalidate_all()
+      LemonAgent.ModelRuntime.OmpAuthBroker.invalidate_all()
 
       saved = Map.new(~w(OMP_AUTH_BROKER_URL OMP_AUTH_BROKER_TOKEN), &{&1, System.get_env(&1)})
       previous = Req.default_options()
@@ -574,7 +574,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
 
         Req.default_options(previous)
         Req.Test.set_req_test_to_private(%{})
-        LemonAi.Auth.OmpAuthBroker.invalidate_all()
+        LemonAgent.ModelRuntime.OmpAuthBroker.invalidate_all()
         LemonAgent.ModelRuntime.CredentialHealth.reset()
         LemonAgent.ModelRuntime.SessionPins.reset()
       end)

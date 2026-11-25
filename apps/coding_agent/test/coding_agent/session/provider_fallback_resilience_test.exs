@@ -439,7 +439,6 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     options = %StreamOptions{
       api_key: "caller-primary-secret",
       access_token: "caller-token",
-      service_account_json: "caller-service-account",
       headers: %{"authorization" => "caller-secret"},
       thinking_budgets: %{
         high: 16_000,
@@ -461,7 +460,6 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     assert_receive {:attempt, :azure_openai_responses, "gpt-4o", destination}
     assert destination.api_key == "destination-key"
     assert destination.access_token == nil
-    assert destination.service_account_json == nil
     assert destination.headers == %{}
     refute Map.has_key?(destination.provider_options, :openai)
     assert destination.max_tokens == 123

@@ -23,16 +23,15 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   that atomically compares that revision. Missing or value-only durable
   reloads fail before HTTP; a stale write never returns the refreshed token.
 
-  `resolve_access_token/0` reads ambient Claude Code credentials
-  (`~/.claude/.credentials.json`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_TOKEN`)
-  for configurations that opt into OAuth without a stored Lemon login.
+  Ambient Claude Code logins (the CLI's own credentials file and environment
+  tokens) are discovered by the caller, which passes them through
+  `resolve_api_key_from_secret/3` with its own `:reload_secret` and
+  `:persist_secret`.
 
   Requests authenticated with these tokens need Claude Code's request shape;
   `oauth_headers/0` and `oauth_beta_features/0` supply the headers and
   `LemonAi.Providers.Anthropic` applies the system-prompt and tool-name rules.
   """
-
-  require Logger
 
   import LemonAi.Auth.OAuthFlow, only: [non_empty_binary: 1, notify_auth: 3, notify_progress: 2]
 
@@ -53,11 +52,9 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   # 30 days after the interactive login, so the user must sign in again.
   @grant_ttl_ms 30 * 24 * 60 * 60 * 1000
   @token_timeout_ms 30_000
-  @oauth_env_vars ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_TOKEN"]
   @oauth_beta_features ["claude-code-20250219", "oauth-2025-04-20"]
   # Reviewed in priv/upstream_identities.json; never adopt an unreviewed local CLI version.
   @claude_code_version "2.1.296"
-  @claude_code_file_lock "claude_code_credentials_file"
 
   @type oauth_secret :: %{required(String.t()) => String.t() | integer() | nil}
   @type login_opt ::
@@ -244,19 +241,6 @@ defmodule LemonAi.Auth.AnthropicOAuth do
     OAuthSecret.resolve(__MODULE__, secret_name, secret_value, opts, refresh_spec())
   end
 
-  @doc """
-  Resolve an ambient Claude Code token: refreshable credentials from
-  `~/.claude/.credentials.json` win over a static `CLAUDE_CODE_OAUTH_TOKEN` or
-  `ANTHROPIC_TOKEN` value.
-  """
-  @spec resolve_access_token() :: String.t() | nil
-  def resolve_access_token do
-    claude_code_secret = current_claude_code_secret()
-
-    resolve_env_token(claude_code_secret) ||
-      if(claude_code_secret, do: non_empty_binary(claude_code_secret["access_token"]))
-  end
-
   @spec oauth_token?(String.t() | nil) :: boolean()
   def oauth_token?(token) when is_binary(token) do
     trimmed = String.trim(token)
@@ -425,127 +409,6 @@ defmodule LemonAi.Auth.AnthropicOAuth do
 
   defp transport_reason(%{reason: reason}) when is_atom(reason), do: reason
   defp transport_reason(_), do: :unknown
-
-  # ── Ambient Claude Code credentials ────────────────────────────────────────
-
-  defp resolve_env_token(claude_code_secret) do
-    Enum.find_value(@oauth_env_vars, fn env_var ->
-      with value when is_binary(value) <- non_empty_binary(System.get_env(env_var)),
-           true <- oauth_token?(value) do
-        prefer_refreshable_claude_code_token(value, claude_code_secret) || value
-      else
-        _ -> nil
-      end
-    end)
-  end
-
-  defp prefer_refreshable_claude_code_token(env_token, %{} = claude_code_secret) do
-    access_token = non_empty_binary(claude_code_secret["access_token"])
-
-    if non_empty_binary(claude_code_secret["refresh_token"]) && access_token &&
-         access_token != env_token do
-      Logger.debug(
-        "Preferring refreshable Claude Code credentials over static Anthropic OAuth env token"
-      )
-
-      access_token
-    end
-  end
-
-  defp prefer_refreshable_claude_code_token(_env_token, _claude_code_secret), do: nil
-
-  defp current_claude_code_secret do
-    opts = [
-      reload_secret: fn _ ->
-        with {:ok, latest} <- read_claude_code_credentials() do
-          {:ok, encode_secret(latest), :claude_code_file}
-        end
-      end,
-      persist_secret: fn _, encoded, _ ->
-        with {:ok, refreshed} <- decode_secret(encoded) do
-          persist_claude_code_credentials(refreshed)
-        end
-      end
-    ]
-
-    spec =
-      Map.merge(refresh_spec(), %{
-        lock: __MODULE__,
-        decode: &decode_secret/1,
-        encode: &encode_secret/1
-      })
-
-    with {:ok, secret} <- read_claude_code_credentials(),
-         {:ok, fresh} <- OAuthFlow.ensure_fresh(@claude_code_file_lock, secret, opts, spec) do
-      fresh
-    else
-      _ -> nil
-    end
-  end
-
-  defp read_claude_code_credentials do
-    with {:ok, raw} <- File.read(claude_credentials_path()),
-         {:ok, %{"claudeAiOauth" => %{} = oauth}} <- Jason.decode(raw),
-         access_token when is_binary(access_token) <- non_empty_binary(oauth["accessToken"]) do
-      now = System.system_time(:millisecond)
-
-      {:ok,
-       %{
-         "type" => @secret_type,
-         "access_token" => access_token,
-         "refresh_token" => non_empty_binary(oauth["refreshToken"]),
-         "expires_at_ms" => parse_integer(oauth["expiresAt"]),
-         "source" => "claude_code_credentials_file",
-         "created_at_ms" => now,
-         "updated_at_ms" => now
-       }}
-    else
-      _ -> {:error, :missing_credentials}
-    end
-  end
-
-  # Claude Code rotates the same refresh token, so a refresh Lemon performs on
-  # its credentials file must be written back for Claude Code to keep working.
-  defp persist_claude_code_credentials(secret) do
-    path = claude_credentials_path()
-
-    existing =
-      with {:ok, raw} <- File.read(path),
-           {:ok, decoded} when is_map(decoded) <- Jason.decode(raw) do
-        decoded
-      else
-        _ -> %{}
-      end
-
-    oauth =
-      existing
-      |> Map.get("claudeAiOauth", %{})
-      |> Map.merge(%{
-        "accessToken" => secret["access_token"],
-        "refreshToken" => secret["refresh_token"],
-        "expiresAt" => secret["expires_at_ms"]
-      })
-
-    with :ok <- File.mkdir_p(Path.dirname(path)),
-         :ok <- File.write(path, Jason.encode!(Map.put(existing, "claudeAiOauth", oauth))),
-         :ok <- File.chmod(path, 0o600) do
-      :ok
-    else
-      {:error, reason} ->
-        Logger.warning("Failed to persist Claude Code credentials: #{inspect(reason)}")
-        {:error, :oauth_secret_persistence_failed}
-    end
-  end
-
-  defp claude_credentials_path do
-    home =
-      case System.get_env("HOME") do
-        value when is_binary(value) and value != "" -> value
-        _ -> System.user_home!()
-      end
-
-    Path.join([home, ".claude", ".credentials.json"])
-  end
 
   # ── Helpers ────────────────────────────────────────────────────────────────
 

@@ -134,56 +134,6 @@ defmodule LemonAi.Providers.GoogleTest do
     end
   end
 
-  describe "get_env_api_key/0" do
-    setup do
-      # Save and clear all relevant env vars
-      saved = %{
-        "GOOGLE_GENERATIVE_AI_API_KEY" => System.get_env("GOOGLE_GENERATIVE_AI_API_KEY"),
-        "GOOGLE_API_KEY" => System.get_env("GOOGLE_API_KEY"),
-        "GEMINI_API_KEY" => System.get_env("GEMINI_API_KEY")
-      }
-
-      System.delete_env("GOOGLE_GENERATIVE_AI_API_KEY")
-      System.delete_env("GOOGLE_API_KEY")
-      System.delete_env("GEMINI_API_KEY")
-
-      on_exit(fn ->
-        Enum.each(saved, fn
-          {key, nil} -> System.delete_env(key)
-          {key, value} -> System.put_env(key, value)
-        end)
-      end)
-
-      :ok
-    end
-
-    test "returns GOOGLE_GENERATIVE_AI_API_KEY when set" do
-      System.put_env("GOOGLE_GENERATIVE_AI_API_KEY", "genai-key-123")
-      assert Google.get_env_api_key() == "genai-key-123"
-    end
-
-    test "falls back to GOOGLE_API_KEY" do
-      System.put_env("GOOGLE_API_KEY", "google-key-456")
-      assert Google.get_env_api_key() == "google-key-456"
-    end
-
-    test "falls back to GEMINI_API_KEY" do
-      System.put_env("GEMINI_API_KEY", "gemini-key-789")
-      assert Google.get_env_api_key() == "gemini-key-789"
-    end
-
-    test "returns nil when no env vars are set" do
-      assert Google.get_env_api_key() == nil
-    end
-
-    test "prefers GOOGLE_GENERATIVE_AI_API_KEY over others" do
-      System.put_env("GOOGLE_GENERATIVE_AI_API_KEY", "preferred")
-      System.put_env("GOOGLE_API_KEY", "fallback")
-      System.put_env("GEMINI_API_KEY", "last-resort")
-      assert Google.get_env_api_key() == "preferred"
-    end
-  end
-
   # ============================================================================
   # Registration
   # ============================================================================

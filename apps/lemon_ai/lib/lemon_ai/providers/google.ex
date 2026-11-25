@@ -10,8 +10,8 @@ defmodule LemonAi.Providers.Google do
   Requires a Google AI Studio API key, which can be obtained from:
   https://aistudio.google.com/apikey
 
-  Set via the `GOOGLE_GENERATIVE_AI_API_KEY` environment variable or
-  pass as `api_key` in stream options.
+  Pass it as `api_key` in stream options; `LemonAi.stream/3` falls back to
+  `GOOGLE_GENERATIVE_AI_API_KEY` (then `GOOGLE_API_KEY`, `GEMINI_API_KEY`).
 
   ## Features
 
@@ -38,13 +38,6 @@ defmodule LemonAi.Providers.Google do
 
   @impl true
   def api_id, do: :google_generative_ai
-
-  @impl true
-  def get_env_api_key do
-    System.get_env("GOOGLE_GENERATIVE_AI_API_KEY") ||
-      System.get_env("GOOGLE_API_KEY") ||
-      System.get_env("GEMINI_API_KEY")
-  end
 
   @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
@@ -87,34 +80,17 @@ defmodule LemonAi.Providers.Google do
       api_key = Map.get(resolved_provider_opts, :api_key) ->
         api_key
 
-      api_key = get_provider_env_key(model.provider) ->
-        api_key
-
-      api_key = ambient_env_api_key(model.provider) ->
-        api_key
-
       match?(%{allow_missing_api_key: true}, model.compat) ->
         nil
 
       true ->
-        raise "Google Generative AI API key is required. Set GOOGLE_GENERATIVE_AI_API_KEY or configure providers.google.api_key/api_key_secret."
+        raise "Google Generative AI API key is required. Pass api_key, or set GOOGLE_GENERATIVE_AI_API_KEY when calling LemonAi.stream/3."
     end
   end
 
   defp resolve_provider_options(model, opts) do
     provider_options(opts, model.provider)
   end
-
-  defp get_provider_env_key(:opencode), do: System.get_env("OPENCODE_API_KEY")
-  defp get_provider_env_key("opencode"), do: System.get_env("OPENCODE_API_KEY")
-  defp get_provider_env_key(_), do: nil
-
-  # Binary providers other than "google" are user-configured custom endpoints:
-  # never send them the ambient Google key.
-  defp ambient_env_api_key(provider) when provider in [:google, "google"],
-    do: get_env_api_key()
-
-  defp ambient_env_api_key(_provider), do: nil
 
   defp provider_options(%StreamOptions{provider_options: options}, key)
        when is_map(options) and is_atom(key) do

@@ -50,6 +50,7 @@ defmodule LemonAi do
 
   alias LemonAi.Types.{Context, Model, StreamOptions, AssistantMessage}
   alias LemonAi.{EventStream, ProviderRegistry}
+  alias LemonAi.Models.Presets
 
   # Re-export commonly used types
   defdelegate new_context(opts \\ []), to: Context, as: :new
@@ -98,7 +99,7 @@ defmodule LemonAi do
         call_kind: call_kind
       })
 
-    opts = normalize_options(opts)
+    opts = with_env_api_key(model, normalize_options(opts))
 
     case ProviderRegistry.get(model.api) do
       {:ok, provider_module} ->
@@ -112,6 +113,45 @@ defmodule LemonAi do
         {:error, {:unknown_api, model.api}}
     end
   end
+
+  # The package's one environment fallback, for library callers that pass no
+  # credential (`api_key` nil or ""). A caller that supplies one (`api_key`,
+  # `access_token`, a provider-option key) or marks `api_key_authoritative` is
+  # never overridden. Providers themselves read credentials only from options.
+  defp with_env_api_key(%Model{} = model, %StreamOptions{} = opts) do
+    if opts.api_key_authoritative or present?(opts.api_key) or
+         present?(opts.access_token) or provider_option_api_key?(opts, model) do
+      opts
+    else
+      case Presets.env_api_key(model.provider) do
+        nil -> opts
+        api_key -> %{opts | api_key: api_key}
+      end
+    end
+  end
+
+  defp provider_option_api_key?(%StreamOptions{provider_options: options}, model)
+       when is_map(options) do
+    Enum.any?([model.provider, model.api], fn
+      key when is_atom(key) and not is_nil(key) ->
+        option_api_key?(Map.get(options, key) || Map.get(options, Atom.to_string(key)))
+
+      key when is_binary(key) ->
+        option_api_key?(Map.get(options, key))
+
+      _ ->
+        false
+    end)
+  end
+
+  defp provider_option_api_key?(_opts, _model), do: false
+
+  defp option_api_key?(%{} = provider_opts),
+    do: present?(Map.get(provider_opts, :api_key) || Map.get(provider_opts, "api_key"))
+
+  defp option_api_key?(_provider_opts), do: false
+
+  defp present?(value), do: is_binary(value) and value != ""
 
   @doc """
   Get a complete response from an LLM (non-streaming).

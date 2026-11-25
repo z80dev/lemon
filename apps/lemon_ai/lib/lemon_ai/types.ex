@@ -343,9 +343,16 @@ defmodule LemonAi.Types do
     healthy candidate exists. Rate limits then surface without in-provider sleeps;
     other failures and single-candidate retry behavior are unchanged.
 
+    Providers read credentials only from these options: `api_key`,
+    `access_token` (Google Vertex AI) and `provider_options`. When none is set,
+    `LemonAi.stream/3` fills `api_key` from the provider's documented
+    environment variable (`LemonAi.Models.Presets.env_api_key/1`) as a
+    convenience for library callers.
+
     `api_key_authoritative` marks caller-resolved credential authority. A missing
     or empty key then fails before provider fallback or HTTP, even on a keyless
-    model. Leave it false for ordinary low-level environment/keyless resolution.
+    model, and no environment fallback applies. Leave it false for ordinary
+    low-level environment/keyless resolution.
 
     `caller_headers` retains the original caller override layer when Lemon-owned
     options are rebuilt for another model. Derived provider/model headers must
@@ -374,7 +381,6 @@ defmodule LemonAi.Types do
             project: String.t() | nil,
             location: String.t() | nil,
             access_token: String.t() | nil,
-            service_account_json: String.t() | nil,
             provider_options: map(),
             provider_retry: map() | nil,
             on_payload: (map(), map() -> term()) | nil,
@@ -396,7 +402,6 @@ defmodule LemonAi.Types do
               project: nil,
               location: nil,
               access_token: nil,
-              service_account_json: nil,
               provider_options: %{},
               provider_retry: nil,
               on_payload: nil,

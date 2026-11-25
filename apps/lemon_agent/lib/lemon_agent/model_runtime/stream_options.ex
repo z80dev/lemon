@@ -55,7 +55,6 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
       | api_key: nil,
         api_key_authoritative: false,
         access_token: nil,
-        service_account_json: nil,
         project: nil,
         location: nil,
         headers: %{},
@@ -152,11 +151,9 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
         base_opts
         |> maybe_put_struct(:project, resolved[:project])
         |> maybe_put_struct(:location, resolved[:location])
-        |> maybe_put_struct(:service_account_json, resolved[:service_account_json])
         |> put_provider_options(:google_vertex, %{
           project: resolved[:project],
           location: resolved[:location],
-          service_account_json: resolved[:service_account_json],
           credential_error: resolved[:credential_error]
         })
 

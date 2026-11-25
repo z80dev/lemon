@@ -265,6 +265,30 @@ defmodule LemonAi.Models.Presets do
   @by_id Map.new(@presets, &{&1.id, &1})
   @ids Enum.map(@presets, & &1.id)
 
+  # API-key variables of the built-in catalog providers (presets carry their own).
+  @provider_env_vars %{
+    anthropic: ["ANTHROPIC_API_KEY"],
+    azure_openai_responses: ["AZURE_OPENAI_API_KEY"],
+    cerebras: ["CEREBRAS_API_KEY"],
+    deepseek: ["DEEPSEEK_API_KEY"],
+    fireworks: ["FIREWORKS_API_KEY"],
+    github_copilot: ["GITHUB_COPILOT_API_KEY"],
+    google: ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"],
+    groq: ["GROQ_API_KEY"],
+    kimi: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+    kimi_coding: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+    minimax: ["MINIMAX_API_KEY"],
+    minimax_cn: ["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY"],
+    mistral: ["MISTRAL_API_KEY"],
+    openai: ["OPENAI_API_KEY"],
+    openai_codex: ["OPENAI_CODEX_API_KEY", "CHATGPT_TOKEN"],
+    opencode: ["OPENCODE_API_KEY"],
+    opencode_go: ["OPENCODE_API_KEY"],
+    openrouter: ["OPENROUTER_API_KEY"],
+    xai: ["XAI_API_KEY"],
+    zai: ["ZAI_API_KEY"]
+  }
+
   @lookup @presets
           |> Enum.flat_map(fn preset ->
             names = [Atom.to_string(preset.id) | preset.aliases]
@@ -323,16 +347,30 @@ defmodule LemonAi.Models.Presets do
     end
   end
 
-  @doc "API-key environment variables for a preset (first non-empty wins)."
+  @doc """
+  API-key environment variables for a preset or a built-in catalog provider
+  (first non-empty wins). This is the package's only provider environment
+  table: `LemonAi.stream/3` uses it as the library-caller fallback and error
+  hints name its variables. A provider string matches only the exact name of a
+  built-in provider; other strings are custom endpoints and get none.
+  """
   @spec env_vars(term()) :: [String.t()]
-  def env_vars(provider) do
+  def env_vars(provider) when is_atom(provider) do
     case get(provider) do
       %{env_vars: vars} -> vars
-      nil -> []
+      nil -> Map.get(@provider_env_vars, provider, [])
     end
   end
 
-  @doc "The first non-empty API key from the preset's environment variables."
+  def env_vars(provider) when is_binary(provider) do
+    Enum.find_value(@provider_env_vars, [], fn {id, vars} ->
+      if Atom.to_string(id) == provider, do: vars
+    end)
+  end
+
+  def env_vars(_provider), do: []
+
+  @doc "The first non-empty API key from `env_vars/1`."
   @spec env_api_key(term()) :: String.t() | nil
   def env_api_key(provider) do
     provider

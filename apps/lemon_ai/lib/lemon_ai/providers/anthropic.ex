@@ -37,7 +37,6 @@ defmodule LemonAi.Providers.Anthropic do
   alias LemonAi.Auth.{AnthropicOAuth, KimiCodeOAuth}
   alias LemonAi.EventStream
   alias LemonAi.Retry
-  alias LemonAi.Models.Presets
 
   alias LemonAi.Providers.{
     HttpTrace,
@@ -74,11 +73,6 @@ defmodule LemonAi.Providers.Anthropic do
   def provider_id, do: :anthropic
 
   @impl true
-  def get_env_api_key do
-    System.get_env("ANTHROPIC_API_KEY")
-  end
-
-  @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
     StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end
@@ -92,7 +86,7 @@ defmodule LemonAi.Providers.Anthropic do
     resolved_provider_opts = resolve_provider_options(model, opts)
 
     try do
-      api_key = resolve_api_key(model, opts, resolved_provider_opts)
+      api_key = resolve_api_key(opts, resolved_provider_opts)
 
       if api_key == "" and not match?(%{allow_missing_api_key: true}, model.compat) do
         raise missing_api_key_error(model.provider)
@@ -243,64 +237,16 @@ defmodule LemonAi.Providers.Anthropic do
     end
   end
 
-  defp resolve_api_key(model, opts, resolved_provider_opts) do
+  defp resolve_api_key(opts, resolved_provider_opts) do
     cond do
-      is_binary(opts.api_key) and opts.api_key != "" ->
-        opts.api_key
-
-      api_key = Map.get(resolved_provider_opts, :api_key) ->
-        api_key
-
-      api_key = get_provider_env_api_key(model.provider) ->
-        api_key
-
-      true ->
-        ""
+      is_binary(opts.api_key) and opts.api_key != "" -> opts.api_key
+      api_key = Map.get(resolved_provider_opts, :api_key) -> api_key
+      true -> ""
     end
   end
 
   defp resolve_provider_options(model, opts) do
     provider_options(opts, model.provider)
-  end
-
-  defp get_provider_env_api_key(provider) do
-    provider
-    |> provider_env_vars()
-    |> Enum.find_value(&env_value/1)
-  end
-
-  defp provider_env_vars(provider)
-       when provider in [:kimi, :kimi_coding, "kimi", "kimi_coding"],
-       do: ["KIMI_API_KEY", "MOONSHOT_API_KEY"]
-
-  defp provider_env_vars(provider)
-       when provider in [:opencode, :opencode_go, "opencode", "opencode_go"],
-       do: ["OPENCODE_API_KEY"]
-
-  defp provider_env_vars(provider) when provider in [:minimax, "minimax"],
-    do: ["MINIMAX_API_KEY"]
-
-  defp provider_env_vars(provider) when provider in [:minimax_cn, "minimax_cn"],
-    do: ["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY"]
-
-  defp provider_env_vars(provider) when provider in [:github_copilot, "github_copilot"],
-    do: ["GITHUB_COPILOT_API_KEY"]
-
-  defp provider_env_vars(provider) when provider in [:anthropic, "anthropic"],
-    do: ["ANTHROPIC_API_KEY"]
-
-  defp provider_env_vars(provider) when is_atom(provider),
-    do: Presets.env_vars(provider)
-
-  # Other binary providers are user-configured custom endpoints: they only get
-  # their own credential, never the ambient Anthropic key.
-  defp provider_env_vars(_provider), do: []
-
-  defp env_value(name) when is_binary(name) do
-    case System.get_env(name) do
-      value when is_binary(value) and value != "" -> value
-      _ -> nil
-    end
   end
 
   defp provider_options(%StreamOptions{provider_options: options}, key)

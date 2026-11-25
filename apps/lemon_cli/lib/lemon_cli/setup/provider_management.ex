@@ -45,7 +45,7 @@ defmodule LemonCli.Setup.ProviderManagement do
   encrypted store and runtime config reload.
   """
 
-  alias LemonAgent.ModelRuntime.ProviderNames
+  alias LemonAgent.ModelRuntime.{AmbientCredentials, ProviderNames}
   alias LemonAi.Auth.OpenAICodexOAuth
   alias LemonCli.Onboarding.{Provider, Providers, Runner}
   alias LemonCli.Setup.{DeviceLogin, ModelReadiness, ProviderAuth}
@@ -92,7 +92,7 @@ defmodule LemonCli.Setup.ProviderManagement do
 
   def import_login("openai_codex", "codex_cli", opts) do
     with {:ok, target} <- target(opts) do
-      case OpenAICodexOAuth.import_codex_cli_login([]) do
+      case AmbientCredentials.import_codex_cli_login([]) do
         {:ok, secret} ->
           persist_imported_login(target, secret, opts)
 

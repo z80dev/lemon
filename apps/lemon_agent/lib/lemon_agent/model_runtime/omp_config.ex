@@ -1,4 +1,4 @@
-defmodule LemonAi.Auth.OmpConfig do
+defmodule LemonAgent.ModelRuntime.OmpConfig do
   @moduledoc """
   Read-only view of omp's config root and the bearer-token files its auth
   broker and auth gateway write there.

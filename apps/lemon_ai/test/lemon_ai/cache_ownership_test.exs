@@ -8,8 +8,7 @@ defmodule LemonAi.CacheOwnershipTest do
 
     for {table, module} <- [
           {:lemon_ai_auth_cache, Cache},
-          {:ai_model_cache, LemonAi.ModelCache},
-          {:lemon_ai_omp_auth_broker, LemonAi.Auth.OmpAuthBroker}
+          {:ai_model_cache, LemonAi.ModelCache}
         ] do
       owner = Process.whereis(module)
       assert is_pid(owner)

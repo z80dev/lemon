@@ -449,37 +449,6 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
     end
   end
 
-  describe "ambient Claude Code credentials" do
-    test "reads ~/.claude/.credentials.json", %{home: home} do
-      write_claude_credentials(home, "sk-ant-oat01-file-token", 3_600_000)
-      assert AnthropicOAuth.resolve_access_token() == "sk-ant-oat01-file-token"
-    end
-
-    test "prefers refreshable Claude Code credentials over a static env token", %{home: home} do
-      write_claude_credentials(home, "sk-ant-oat01-refreshable-token", 3_600_000)
-      System.put_env("ANTHROPIC_TOKEN", "sk-ant-oat01-static-token")
-
-      assert AnthropicOAuth.resolve_access_token() == "sk-ant-oat01-refreshable-token"
-    end
-
-    test "refreshes and writes back the Claude Code credentials file", %{home: home} do
-      path = write_claude_credentials(home, "sk-ant-oat01-stale", -1)
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        Req.Test.json(conn, %{
-          "access_token" => "sk-ant-oat01-rotated",
-          "refresh_token" => "rotated-refresh",
-          "expires_in" => 3600
-        })
-      end)
-
-      assert AnthropicOAuth.resolve_access_token() == "sk-ant-oat01-rotated"
-      stored = path |> File.read!() |> Jason.decode!()
-      assert stored["claudeAiOauth"]["refreshToken"] == "rotated-refresh"
-      assert stored["claudeAiOauth"]["scopes"] == ["user:inference"]
-    end
-  end
-
   describe "request fingerprint" do
     test "keeps the reviewed identity even when a newer Claude CLI is installed", %{home: home} do
       bin_dir = Path.join(home, "bin-#{System.unique_integer([:positive])}")
@@ -532,25 +501,6 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
       end
     end)
     |> Jason.encode!()
-  end
-
-  defp write_claude_credentials(home, access_token, expires_in_ms) do
-    path = Path.join([home, ".claude", ".credentials.json"])
-    File.mkdir_p!(Path.dirname(path))
-
-    File.write!(
-      path,
-      Jason.encode!(%{
-        "claudeAiOauth" => %{
-          "accessToken" => access_token,
-          "refreshToken" => "refresh-token",
-          "expiresAt" => System.system_time(:millisecond) + expires_in_ms,
-          "scopes" => ["user:inference"]
-        }
-      })
-    )
-
-    path
   end
 
   defp reserve_local_port do

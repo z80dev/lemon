@@ -102,28 +102,6 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
     assert String.split(token, ".") |> length() == 3
   end
 
-  test "resolve_access_token prefers OPENAI_CODEX_API_KEY env over stored secrets" do
-    oauth_secret =
-      Jason.encode!(%{
-        "type" => "openai_codex_oauth",
-        "refresh_token" => "refresh-token",
-        "access_token" => make_jwt("acc_secret", 3_600),
-        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
-        "account_id" => "acc_secret",
-        "created_at_ms" => System.system_time(:millisecond),
-        "updated_at_ms" => System.system_time(:millisecond)
-      })
-
-    assert {:ok, _} = Secrets.set("llm_openai_codex_api_key", oauth_secret)
-
-    System.put_env("OPENAI_CODEX_API_KEY", "env-token")
-    assert OpenAICodexOAuth.resolve_access_token() == "env-token"
-  end
-
-  test "resolve_access_token returns nil when env vars are missing" do
-    assert OpenAICodexOAuth.resolve_access_token() == nil
-  end
-
   test "resolve_api_key_from_secret refreshes near-expiry token and calls persistence callback" do
     secret_name = "llm_openai_codex_api_key"
     test_pid = self()
@@ -251,28 +229,11 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
     assert secret["account_id"] == "acc_auto"
   end
 
-  test "detects usable CLI logins without returning tokens or making requests", %{home: home} do
-    Req.Test.stub(__MODULE__, fn _ -> flunk("detection must not call HTTP") end)
-    path = Path.join(home, "detected.json")
-    assert OpenAICodexOAuth.codex_cli_login_status(path: path) == :absent
-    original = write_cli_login(path, cli_login(-60))
-    assert OpenAICodexOAuth.codex_cli_login_status(path: path) == :present
-    assert File.read!(path) == original
-    write_cli_login(path, %{"OPENAI_API_KEY" => "synthetic-key"})
-    assert OpenAICodexOAuth.codex_cli_login_status(path: path) == {:unusable, :not_chatgpt_oauth}
-    File.write!(path, "invalid")
-
-    assert OpenAICodexOAuth.codex_cli_login_status(path: path) ==
-             {:unusable, :invalid_codex_cli_login}
-  end
-
-  test "imports only the selected synthetic CLI copy without HTTP or writes", %{home: home} do
-    Req.Test.stub(__MODULE__, fn _ -> flunk("import must not call HTTP") end)
-    path = Path.join([home, ".codex", "auth.json"])
+  test "decodes a CLI login without HTTP" do
+    Req.Test.stub(__MODULE__, fn _ -> flunk("decoding must not call HTTP") end)
     login = cli_login(3_600)
-    original = write_cli_login(path, login)
 
-    assert {:ok, secret} = OpenAICodexOAuth.import_codex_cli_login()
+    assert {:ok, secret} = OpenAICodexOAuth.decode_codex_cli_login(Jason.encode!(login))
     assert secret["type"] == "openai_codex_oauth"
     assert secret["access_token"] == login["tokens"]["access_token"]
     assert secret["refresh_token"] == "synthetic-refresh"
@@ -281,20 +242,10 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
     [_, payload, _] = String.split(secret["access_token"], ".")
     claims = payload |> Base.url_decode64!(padding: false) |> Jason.decode!()
     assert secret["expires_at_ms"] == claims["exp"] * 1000
-    assert File.read!(path) == original
-
-    codex_home = Path.join(home, "alternate")
-    System.put_env("CODEX_HOME", codex_home)
-    assert {:error, :enoent} = OpenAICodexOAuth.import_codex_cli_login()
-    write_cli_login(Path.join(codex_home, "auth.json"), %{"OPENAI_API_KEY" => "synthetic-key"})
-    assert {:error, :not_chatgpt_oauth} = OpenAICodexOAuth.import_codex_cli_login()
-    assert {:ok, selected} = OpenAICodexOAuth.import_codex_cli_login(path: path)
-    assert selected["access_token"] == secret["access_token"]
   end
 
-  test "rejects malformed and non-refreshable CLI logins with safe errors", %{home: home} do
-    Req.Test.stub(__MODULE__, fn _ -> flunk("import must not call HTTP") end)
-    path = Path.join(home, "invalid.json")
+  test "rejects malformed and non-refreshable CLI logins with safe errors" do
+    Req.Test.stub(__MODULE__, fn _ -> flunk("decoding must not call HTTP") end)
 
     cases = [
       {%{}, :not_chatgpt_oauth},
@@ -310,24 +261,19 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
     ]
 
     for {login, reason} <- cases do
-      original = write_cli_login(path, login)
-      assert OpenAICodexOAuth.import_codex_cli_login(path: path) == {:error, reason}
-      assert OpenAICodexOAuth.codex_cli_login_status(path: path) == {:unusable, reason}
-      assert File.read!(path) == original
+      assert OpenAICodexOAuth.decode_codex_cli_login(Jason.encode!(login)) == {:error, reason}
     end
 
-    File.write!(path, "secret-marker invalid JSON")
-
     assert {:error, :invalid_codex_cli_login} =
-             OpenAICodexOAuth.import_codex_cli_login(path: path)
+             OpenAICodexOAuth.decode_codex_cli_login("secret-marker invalid JSON")
 
-    assert {:error, :invalid_codex_auth_path} = OpenAICodexOAuth.import_codex_cli_login(path: 42)
+    assert {:error, :invalid_codex_cli_login} = OpenAICodexOAuth.decode_codex_cli_login(42)
   end
 
   test "imported expired login refreshes and persists only the Lemon secret", %{home: home} do
     path = Path.join(home, "auth.json")
     original = write_cli_login(path, cli_login(-60))
-    assert {:ok, secret} = OpenAICodexOAuth.import_codex_cli_login(path: path)
+    assert {:ok, secret} = OpenAICodexOAuth.decode_codex_cli_login(File.read!(path))
     name = "llm_openai_codex_api_key"
     assert {:ok, _} = Secrets.set(name, OpenAICodexOAuth.encode_secret(secret))
     fresh_token = make_jwt("acc_import", 900)
@@ -369,7 +315,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
   } do
     path = Path.join(home, "auth.json")
     original = write_cli_login(path, cli_login(-60))
-    assert {:ok, secret} = OpenAICodexOAuth.import_codex_cli_login(path: path)
+    assert {:ok, secret} = OpenAICodexOAuth.decode_codex_cli_login(File.read!(path))
     fresh_token = make_jwt("acc_import", 900)
 
     Req.Test.stub(__MODULE__, fn conn ->
@@ -404,7 +350,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
 
     for {seconds, expected} <- [{-60, :error}, {60, :ok}] do
       write_cli_login(path, cli_login(seconds))
-      assert {:ok, secret} = OpenAICodexOAuth.import_codex_cli_login(path: path)
+      assert {:ok, secret} = OpenAICodexOAuth.decode_codex_cli_login(File.read!(path))
 
       result =
         OpenAICodexOAuth.resolve_api_key_from_secret(
@@ -452,7 +398,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
 
     path = Path.join(home, "legacy.json")
     write_cli_login(path, login)
-    assert {:ok, secret} = OpenAICodexOAuth.import_codex_cli_login(path: path)
+    assert {:ok, secret} = OpenAICodexOAuth.decode_codex_cli_login(File.read!(path))
     assert secret["account_id"] == "acc_import"
   end
 

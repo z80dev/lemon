@@ -220,4 +220,4 @@ config :lemon_web, LemonWeb.Endpoint,
   server: false
 
 # Tests stub the omp auth broker; opt in to the snapshot long-poll per call.
-config :lemon_ai, omp_broker_watch: false
+config :lemon_agent, omp_broker_watch: false

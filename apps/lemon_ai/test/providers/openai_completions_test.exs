@@ -142,7 +142,7 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
 
     context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-    {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{})
+    {:ok, stream} = LemonAi.stream(model, context, %StreamOptions{})
 
     assert_receive {:request_headers, headers}, 1000
     assert Map.new(headers)["authorization"] == "Bearer opencode-env-key"
@@ -186,7 +186,7 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
 
     context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-    {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{})
+    {:ok, stream} = LemonAi.stream(model, context, %StreamOptions{})
 
     assert_receive {:request_headers, headers}, 1000
     assert Map.new(headers)["authorization"] == "Bearer zai-env-key"
@@ -1748,13 +1748,14 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
         LemonAi.Models.get_model(:deepseek, "deepseek-chat") || raise "missing catalog model"
 
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{})
+      {:ok, stream} = LemonAi.stream(model, context, %StreamOptions{})
 
       assert {:error, %AssistantMessage{error_message: message}} =
                EventStream.result(stream, 1000)
 
-      assert message =~ "No API key provided for provider deepseek"
-      assert message =~ "DEEPSEEK_API_KEY"
+      assert message ==
+               "No API key provided for provider deepseek. Set DEEPSEEK_API_KEY or configure an API key for it."
+
       refute_received {:request, _, _, _}
     end
 
@@ -1765,7 +1766,7 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
 
       model = LemonAi.Models.get_model(:deepseek, "deepseek-chat")
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{})
+      {:ok, stream} = LemonAi.stream(model, context, %StreamOptions{})
 
       assert_receive {:request, _host, _path, headers}, 1000
       assert Map.new(headers)["authorization"] == "Bearer deepseek-env-key"
@@ -1785,7 +1786,7 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
       }
 
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{})
+      {:ok, stream} = LemonAi.stream(model, context, %StreamOptions{})
 
       assert_receive {:request, _host, _path, headers}, 1000
       assert Map.new(headers)["authorization"] == "Bearer openai-env-key"
@@ -1798,7 +1799,7 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
 
       model = LemonAi.Models.get_model(:ollama, "qwen3:32b")
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{})
+      {:ok, stream} = LemonAi.stream(model, context, %StreamOptions{})
 
       assert_receive {:request, "127.0.0.1", "/v1/chat/completions", headers}, 1000
       refute Map.has_key?(Map.new(headers), "authorization")
@@ -1811,7 +1812,7 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
 
       model = LemonAi.Models.get_model(:ollama, "qwen3:32b")
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{})
+      {:ok, stream} = LemonAi.stream(model, context, %StreamOptions{})
 
       assert_receive {:request, _host, _path, headers}, 1000
       assert Map.new(headers)["authorization"] == "Bearer ollama-env-key"

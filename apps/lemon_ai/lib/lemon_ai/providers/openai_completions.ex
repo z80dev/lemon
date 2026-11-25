@@ -90,11 +90,6 @@ defmodule LemonAi.Providers.OpenAICompletions do
   def provider_id, do: :openai
 
   @impl LemonAi.Provider
-  def get_env_api_key do
-    System.get_env("OPENAI_API_KEY")
-  end
-
-  @impl LemonAi.Provider
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
     StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end
@@ -159,22 +154,18 @@ defmodule LemonAi.Providers.OpenAICompletions do
     }
   end
 
-  # Provider-specific credentials only: OPENAI_API_KEY is never sent to a
-  # non-OpenAI endpoint. Models flagged `compat.allow_missing_api_key`
-  # (keyless local servers, `auth = "none"` custom providers) go out without an
-  # Authorization header when nothing resolves.
+  # Credentials come only from the options (`LemonAi.stream/3` applies the
+  # library-caller environment fallback per provider, so OPENAI_API_KEY is
+  # never sent to a non-OpenAI endpoint). Models flagged
+  # `compat.allow_missing_api_key` (keyless local servers, `auth = "none"`
+  # custom providers) go out without an Authorization header when nothing
+  # resolves.
   defp get_api_key(model, opts, resolved_provider_opts) do
     cond do
       opts.api_key && opts.api_key != "" ->
         opts.api_key
 
       api_key = Map.get(resolved_provider_opts, :api_key) ->
-        api_key
-
-      api_key = get_provider_env_key(model.provider) ->
-        api_key
-
-      api_key = openai_env_api_key(model.provider) ->
         api_key
 
       allow_missing_api_key?(model) ->
@@ -185,66 +176,22 @@ defmodule LemonAi.Providers.OpenAICompletions do
     end
   end
 
-  defp openai_provider?(provider), do: provider in [:openai, "openai"]
-
-  defp openai_env_api_key(provider) do
-    if openai_provider?(provider), do: non_empty(get_env_api_key())
-  end
-
   defp allow_missing_api_key?(%Model{compat: %{allow_missing_api_key: true}}), do: true
   defp allow_missing_api_key?(_model), do: false
 
   defp missing_api_key_message(provider) do
-    if openai_provider?(provider) do
-      "OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass api_key option."
-    else
-      env_hint =
-        case provider_env_vars(provider) do
-          [] -> ""
-          vars -> " Set #{Enum.join(vars, " or ")} or"
-        end
+    env_hint =
+      case Presets.env_vars(provider) do
+        [] -> ""
+        vars -> " Set #{Enum.join(vars, " or ")} or"
+      end
 
-      "No API key provided for provider #{provider}.#{env_hint} configure an API key for it."
-    end
+    "No API key provided for provider #{provider}.#{env_hint} configure an API key for it."
   end
 
   defp resolve_provider_options(model, opts) do
     provider_options(opts, model.provider)
   end
-
-  @provider_env_vars %{
-    groq: ["GROQ_API_KEY"],
-    mistral: ["MISTRAL_API_KEY"],
-    xai: ["XAI_API_KEY"],
-    cerebras: ["CEREBRAS_API_KEY"],
-    deepseek: ["DEEPSEEK_API_KEY"],
-    openrouter: ["OPENROUTER_API_KEY"],
-    opencode: ["OPENCODE_API_KEY"],
-    zai: ["ZAI_API_KEY"],
-    minimax: ["MINIMAX_API_KEY"],
-    fireworks: ["FIREWORKS_API_KEY"]
-  }
-
-  defp provider_env_vars(provider) when is_atom(provider) do
-    Map.get(@provider_env_vars, provider) || Presets.env_vars(provider)
-  end
-
-  defp provider_env_vars(provider) when is_binary(provider) do
-    Enum.find_value(@provider_env_vars, [], fn {atom, vars} ->
-      if Atom.to_string(atom) == provider, do: vars
-    end)
-  end
-
-  defp provider_env_vars(_provider), do: []
-
-  defp get_provider_env_key(provider) do
-    provider
-    |> provider_env_vars()
-    |> Enum.find_value(&non_empty(System.get_env(&1)))
-  end
-
-  defp non_empty(value) when is_binary(value) and value != "", do: value
-  defp non_empty(_value), do: nil
 
   # Provider options are keyed by the provider atom (or its string form). A
   # binary provider (custom providers) is looked up as-is: never converted to

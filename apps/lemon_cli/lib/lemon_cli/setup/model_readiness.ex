@@ -20,8 +20,7 @@ defmodule LemonCli.Setup.ModelReadiness do
   own login. Static credential projections never expose credential values.
   """
 
-  alias LemonAgent.ModelRuntime.{Credentials, ProviderNames}
-  alias LemonAi.Auth.OpenAICodexOAuth
+  alias LemonAgent.ModelRuntime.{AmbientCredentials, Credentials, ProviderNames}
   alias LemonAi.Models
   alias LemonCli.Onboarding.Providers
   alias LemonCli.ProviderLiveCheck
@@ -327,7 +326,9 @@ defmodule LemonCli.Setup.ModelReadiness do
   # Detection
 
   defp detect_codex_cli(opts) do
-    probe = Keyword.get(opts, :codex_login_status, &OpenAICodexOAuth.codex_cli_login_status/1)
+    probe =
+      Keyword.get(opts, :codex_login_status, &AmbientCredentials.codex_cli_login_status/1)
+
     probe_opts = if path = Keyword.get(opts, :codex_auth_path), do: [path: path], else: []
 
     case probe.(probe_opts) do

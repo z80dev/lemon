@@ -25,12 +25,6 @@ defmodule LemonAi.Providers.BedrockTest do
     end
   end
 
-  describe "get_env_api_key/0" do
-    test "returns nil because Bedrock uses AWS credentials" do
-      assert Bedrock.get_env_api_key() == nil
-    end
-  end
-
   # ============================================================================
   # Provider Registration
   # ============================================================================
