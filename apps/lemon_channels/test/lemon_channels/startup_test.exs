@@ -47,7 +47,7 @@ defmodule LemonChannels.StartupTest do
         "lemon_channels_test_locks_#{System.unique_integer([:positive])}"
       ])
 
-    env = LemonCore.Testing.HermeticEnv.snapshot_env(["LEMON_LOCK_DIR"])
+    env = LemonPlatformTest.Testing.HermeticEnv.snapshot_env(["LEMON_LOCK_DIR"])
     gateway = Application.fetch_env(:lemon_gateway, @gateway_config_key)
     adapters = Application.fetch_env(:lemon_channels, :adapters)
     running? = List.keymember?(Application.started_applications(), :lemon_channels, 0)
@@ -57,7 +57,7 @@ defmodule LemonChannels.StartupTest do
       StartupMockTelegramAPI.stop()
       restore_env(:lemon_gateway, @gateway_config_key, gateway)
       restore_env(:lemon_channels, :adapters, adapters)
-      LemonCore.Testing.HermeticEnv.restore_env(env)
+      LemonPlatformTest.Testing.HermeticEnv.restore_env(env)
       File.rm_rf!(lock_dir)
       if running?, do: :ok = Application.start(:lemon_channels)
     end)

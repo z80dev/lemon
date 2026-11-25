@@ -2,7 +2,7 @@ defmodule LemonCore.Runtime.BootTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Runtime.{Boot, Env}
-  alias LemonCore.Testing.HermeticEnv
+  alias LemonPlatformTest.Testing.HermeticEnv
 
   @base_env %Env{
     control_port: 19_980,

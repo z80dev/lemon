@@ -2,7 +2,7 @@ defmodule LemonCli.Setup.PortsTest do
   use ExUnit.Case, async: false
 
   alias LemonCli.Setup.Ports
-  alias LemonCore.Testing.HermeticEnv
+  alias LemonPlatformTest.Testing.HermeticEnv
 
   setup do
     previous =

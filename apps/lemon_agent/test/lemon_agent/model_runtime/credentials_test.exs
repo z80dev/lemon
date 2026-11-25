@@ -2,7 +2,7 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Secrets
-  alias LemonCore.Testing.HermeticEnv
+  alias LemonPlatformTest.Testing.HermeticEnv
 
   @env_keys ~w(
     OPENAI_API_KEY
