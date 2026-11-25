@@ -20,6 +20,27 @@ defmodule CodingAgent.TestHostCapabilities do
 
   def browser_driver_path, do: @browser_driver
 
+  # The coding_agent suite isolates HOME. On macOS, Chrome under a HOME without
+  # a login keychain stalls every network request on cookie encryption, so the
+  # smoke launches it through a wrapper adding `--use-mock-keychain` (the macOS
+  # counterpart of the driver's `--password-store=basic`). Other hosts use
+  # Chrome directly.
+  def isolated_home_chrome(dir) do
+    chrome = chrome_executable()
+
+    case :os.type() do
+      {:unix, :darwin} ->
+        wrapper = Path.join(dir, "chrome-mock-keychain")
+        quoted = "'" <> String.replace(chrome, "'", "'\\''") <> "'"
+        File.write!(wrapper, "#!/bin/sh\nexec #{quoted} --use-mock-keychain \"$@\"\n")
+        File.chmod!(wrapper, 0o755)
+        wrapper
+
+      _ ->
+        chrome
+    end
+  end
+
   def chrome_executable do
     [
       System.get_env("LEMON_BROWSER_EXECUTABLE"),

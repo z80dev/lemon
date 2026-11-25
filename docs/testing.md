@@ -434,7 +434,11 @@ when trimming slower channel suites.
   ignored) and Chrome/Chromium on `PATH` or in `LEMON_BROWSER_EXECUTABLE`. The
   helper excludes the tag when one is missing, unless
   `LEMON_TEST_REQUIRE_BROWSER_DRIVER=1` (set by CI's `test` job, which builds
-  the driver), where a missing prerequisite fails the run.
+  the driver), where a missing prerequisite fails the run. The smoke serves its
+  page from loopback only. On macOS, set `LEMON_BROWSER_EXECUTABLE` to
+  `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`; under the
+  suite's isolated `HOME` the test launches it with `--use-mock-keychain`,
+  because Chrome without a login keychain stalls every network request.
 - `:node` (`lemon_channels`) marks bridge tests that spawn Node; excluded when
   `node` is missing.
 - Skip tags (`@tag :skip`, `@tag skip: ...`, `@moduletag :skip`,

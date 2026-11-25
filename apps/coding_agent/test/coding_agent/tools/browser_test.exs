@@ -1449,7 +1449,7 @@ defmodule CodingAgent.Tools.BrowserTest do
   test "browser tools drive a deterministic page through the supervised local server", %{
     tmp_dir: tmp_dir
   } do
-    chrome = TestHostCapabilities.chrome_executable()
+    chrome = TestHostCapabilities.isolated_home_chrome(tmp_dir)
     server = :"browser_smoke_#{System.unique_integer([:positive])}"
     port = free_port()
     profile_dir = Path.join(tmp_dir, "browser-profile")
@@ -1513,7 +1513,7 @@ defmodule CodingAgent.Tools.BrowserTest do
         navigate =
           "browser_navigate"
           |> browser_tool(tmp_dir, browser_request: request)
-          |> run_browser_tool(%{"url" => url, "timeoutMs" => 60_000})
+          |> run_browser_tool(%{"url" => url, "timeoutMs" => 20_000})
 
         assert navigate.trust == :untrusted
         assert navigate.details["title"] == "Lemon Browser Proof"
