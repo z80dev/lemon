@@ -14,9 +14,6 @@ defmodule LemonWeb.Application do
   end
 
   defp start_supervisor do
-    # Global run start/stop feed for shell notifications (idempotent).
-    LemonWeb.ShellLive.RunEvents.attach()
-
     children = [
       {LemonCore.RateLimiter, profile: :login, name: LemonWeb.LoginThrottle},
       LemonWeb.Endpoint

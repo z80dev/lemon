@@ -258,13 +258,43 @@ requests as direct request/reply calls, not bus events (`:no_client`, `:client_d
 
 Subscribers include `LemonRouter.RunProcess` (also forwards run events to the session
 topic), `LemonRouter.AsyncTaskSurfaceSubscriber`, `CodingAgent.Tools.Task.LiveBridge`,
-`CodingAgent.Tools.Agent` (completion waits), the execution-node worker
-(`CodingAgent.ExecutionNode.Worker`), `LemonChannels.TypingIndicator`,
-`LemonChannels.UserPromptSurface`, the Discord/Telegram transports,
-`LemonComputerUse.Server`, control-plane `Methods.AgentWait`, `ACP`, the SSE route in
-`LemonControlPlane.HTTP.Router` and the A2A runner/router, the gateway webhook transport
-(`transports/webhook/response.ex`), `LemonAutomation.RunCompletionWaiter`,
-`LemonWeb.ShellLive`, and `LemonControlPlane.EventBridge` (ref-counted, dynamic).
+`CodingAgent.Tools.Agent`, the execution-node worker (`CodingAgent.ExecutionNode.Worker`),
+`LemonChannels.TypingIndicator`, `LemonChannels.UserPromptSurface`, the Discord/Telegram
+transports, `LemonComputerUse.Server`, control-plane `Methods.AgentWait`, `ACP`, the SSE
+route in `LemonControlPlane.HTTP.Router` and `LemonControlPlane.EventBridge`'s legacy run
+stream for operators without `sessions.watch`.
+
+#### `run_done:<run_id>` and `run_lifecycle`
+
+`run_done:<run_id>` carries only `:run_completed`, published after the run summary has
+committed. A2A and webhook completion waiters subscribe here, not to token streams.
+The web shell uses one `run_lifecycle` subscription for `:run_started`, `:run_completed`
+and abnormal owner notices (`:run_failed`); no token or action reaches a shell tab.
+An owner failure notice is not a substitute for a durable terminal decision.
+
+The authoritative run envelope uses `meta.schema_version == 1`, `run_id`, `attempt_id`,
+`event_id` (opaque, derived from run ID, attempt ID and sequence), and `seq` (start 1,
+durable completion 2, owner-failure notice 3). An attempt removed before execution has
+no start. These values identify lifecycle slots within an attempt; they do not promise
+arrival order, gap-free delivery or order across runs. A legacy envelope without a
+version is decoded by `Event.decode_run_lifecycle/1`;
+unknown versions return an error rather than being interpreted as version 1.
+
+Native sessions translate each agent event once. A nonempty translated batch goes
+to `session:<session_key>` and is retained for `sessions.events` with the same
+identity; untranslated events consume no session sequence. The session cursor
+orders batches within an owner/branch stream independently of run lifecycle
+slots. Inner events inherit the batch identity and carry the same run attempt ID
+as the run owner. The executor consumes those same translated events; local native
+text is not mirrored to the session topic via the router. Remote executor text still
+uses a run-local delta sequence because its session owner is on the remote worker.
+
+One-byte token fixture (`WS.SessionWatchTest`, uncompressed JSON, excluding WebSocket
+framing): 2 frames per token before (`333`-byte session batch + `157`-byte run delta),
+1 after (`398`-byte versioned batch). Total per-token delivery fell from `490` to
+`398` bytes (19%); the mean bytes per frame rose from `245` to `398` because the
+legacy small duplicate frame is gone. `ShellLiveTest` observes 0 of 100 injected
+run-token messages with one lifecycle subscription after more than 100 starts.
 
 #### Named execution-node transport
 

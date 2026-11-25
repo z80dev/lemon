@@ -9,8 +9,9 @@ defmodule LemonGateway.Executor do
 
   Executors send lifecycle events to the supplied sink as
   `{:engine_event, run_ref, event}` and streamed text as
-  `{:engine_delta, run_ref, text}`. Control operations that an executor cannot
-  perform must return `{:error, :unsupported}`.
+  `{:engine_delta, run_ref, text}`. With `canonical_delta: true` a local
+  executor may send its already-translated `LemonCore.Event` delta instead
+  of a bare string. Unsupported control operations return `{:error, :unsupported}`.
   """
 
   alias LemonGateway.ExecutionRequest

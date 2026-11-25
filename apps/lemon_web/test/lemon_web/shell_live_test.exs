@@ -9,7 +9,7 @@ defmodule LemonWeb.ShellLiveTest do
 
   alias LemonCore.{Bus, Event, Events, RunStore, SessionLifecycle}
   alias LemonWeb.ShellLive
-  alias LemonWeb.ShellLive.{Palette, RunEvents}
+  alias LemonWeb.ShellLive.Palette
 
   setup :configure_operator_token
 
@@ -301,10 +301,7 @@ defmodule LemonWeb.ShellLiveTest do
     end
 
     defp start_run(view, run_id, key) do
-      Bus.broadcast(
-        RunEvents.topic(),
-        {:lemon_web_run, :started, %{run_id: run_id, session_key: key, ok: nil, duration_ms: nil}}
-      )
+      Bus.publish_run_lifecycle(Event.new(:run_started, %{}, %{run_id: run_id, session_key: key}))
 
       render(view)
     end
@@ -317,7 +314,7 @@ defmodule LemonWeb.ShellLiveTest do
       render_hook(view, "location", %{"path" => "/sessions", "visible" => true})
 
       start_run(view, run_id, key)
-      Bus.broadcast(Bus.run_topic(run_id), completed_event(run_id, key, true))
+      Bus.publish_run_lifecycle(completed_event(run_id, key, true))
 
       html = render(view)
       assert html =~ "Run finished"
@@ -328,7 +325,7 @@ defmodule LemonWeb.ShellLiveTest do
       assert href == Palette.chat_path(key)
 
       # A duplicate terminal event for the same run is ignored.
-      Bus.broadcast(Bus.run_topic(run_id), completed_event(run_id, key, true))
+      Bus.publish_run_lifecycle(completed_event(run_id, key, true))
       assert has_element?(view, ~s(#shell-bell[aria-label="Notifications, 1 unread"]))
 
       html = render_click(view, "panel:toggle", %{})
@@ -342,31 +339,56 @@ defmodule LemonWeb.ShellLiveTest do
 
       failed = "run-fail-#{unique()}"
       start_run(view, failed, key)
-      Bus.broadcast(Bus.run_topic(failed), completed_event(failed, key, false))
+      Bus.publish_run_lifecycle(Event.new(:run_failed, %{}, %{run_id: failed, session_key: key}))
       assert render(view) =~ "Run failed"
 
       stopped = "run-stop-#{unique()}"
       start_run(view, stopped, key)
-      Bus.broadcast(Bus.run_topic(stopped), completed_event(stopped, key, false, true))
+      Bus.publish_run_lifecycle(completed_event(stopped, key, false, true))
       assert render(view) =~ "Run stopped"
 
       sub_key = key <> ":sub:task1"
       sub = "run-sub-#{unique()}"
       start_run(view, sub, sub_key)
-      Bus.broadcast(Bus.run_topic(sub), completed_event(sub, sub_key, true))
+      Bus.publish_run_lifecycle(completed_event(sub, sub_key, true))
       refute render(view) =~ "Run finished"
     end
 
-    test "telemetry stop without a bus completion still notifies", context do
+    test "the shell uses one lifecycle subscription, never sees tokens and recovers missing session metadata",
+         context do
       view = shell(context)
-      key = "agent:shell_telemetry_#{unique()}:main"
-      run_id = "run-telemetry-#{unique()}"
+      key = "agent:shell_lifecycle_#{unique()}:main"
+      run_id = "run-lifecycle-#{unique()}"
+      start_run(view, run_id, key)
 
-      :telemetry.execute([:lemon, :run, :start], %{ts_ms: 1}, %{run_id: run_id, session_key: key})
-      render(view)
-      :telemetry.execute([:lemon, :run, :stop], %{duration_ms: 900, ok: true}, %{run_id: run_id})
+      for n <- 1..105 do
+        Bus.publish_run_lifecycle(
+          Event.new(:run_started, %{}, %{run_id: "#{run_id}-#{n}", session_key: key})
+        )
+      end
 
-      assert eventually(fn -> render(view) =~ "Run finished" end, 600)
+      # Include a recently started run so no durable metadata is needed
+      # to resolve a missing session key on completion.
+      tracked = "#{run_id}-tracked"
+      start_run(view, tracked, key)
+      pubsub = if Bus.pubsub?(), do: LemonCore.PubSub, else: LemonCore.Bus.Registry
+      topics = Registry.keys(pubsub, view.pid)
+      assert Enum.count(topics, &(&1 == Bus.run_lifecycle_topic())) == 1
+      refute Enum.any?(topics, &String.starts_with?(&1, ["run:", "run_done:"]))
+
+      :erlang.trace(view.pid, true, [:receive])
+
+      try do
+        for n <- 1..100 do
+          Bus.broadcast(Bus.run_topic(tracked), Event.new(:delta, %{text: "x", seq: n}))
+        end
+
+        Bus.publish_run_lifecycle(completed_event(tracked, nil, true))
+        assert render(view) =~ "Run finished"
+        refute_receive {:trace, _pid, :receive, %Event{type: :delta}}, 50
+      after
+        :erlang.trace(view.pid, false, [:receive])
+      end
     end
 
     test "the session open in the foreground is not notified", context do
@@ -380,7 +402,7 @@ defmodule LemonWeb.ShellLiveTest do
       })
 
       start_run(view, run_id, key)
-      Bus.broadcast(Bus.run_topic(run_id), completed_event(run_id, key, true))
+      Bus.publish_run_lifecycle(completed_event(run_id, key, true))
       Bus.broadcast("exec_approvals", approval_event(key, "ap-fg-#{unique()}"))
       html = render(view)
       refute html =~ "Run finished"

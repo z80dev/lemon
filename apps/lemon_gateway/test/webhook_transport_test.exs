@@ -1150,7 +1150,7 @@ defmodule LemonGateway.WebhookTransportTest do
     publisher =
       spawn_link(fn ->
         publish = fn publish ->
-          LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), event)
+          LemonCore.Bus.broadcast(LemonCore.Bus.run_done_topic(run_id), event)
 
           receive do
             :stop -> :ok

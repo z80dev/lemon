@@ -141,6 +141,7 @@ export class SessionController {
 	async initialize(): Promise<void> {
 		const session = this.#store.focused;
 		assertSessionDirectory(session.key, this.#cwd ?? process.cwd());
+		await this.watchFocused();
 		if (this.#methods.supports(METHOD.sessionsSnapshot)) {
 			await this.resync();
 		} else {
@@ -151,6 +152,11 @@ export class SessionController {
 		this.#events.rebuildFocused();
 		this.#refreshStatus?.();
 		void this.seedContext(session);
+	}
+
+	async watchFocused(): Promise<void> {
+		if (this.#methods.client.state === "online" && this.#methods.supports(METHOD.sessionsWatch))
+			await this.#methods.sessionsWatch(this.#store.focusedKey);
 	}
 
 	/**
@@ -191,6 +197,8 @@ export class SessionController {
 				this.#store.queue.items(previousKey)[0]?.state === "queued-local")
 		)
 			void this.resync(previousKey);
+		await this.watchFocused();
+		if (selection !== this.#selectionGeneration) return;
 		if (this.#methods.supports(METHOD.sessionsSnapshot)) {
 			await this.resync();
 		} else {

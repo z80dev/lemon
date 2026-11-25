@@ -60,7 +60,7 @@ defmodule LemonControlPlane.EventBridgeScopeTest do
              )
 
       assert {"session.event", %{"events" => full_inner}} =
-               Enum.find(full_events, &match?({"session.event", _}, &1))
+               projected_batch(c, @full)
 
       assert Enum.any?(full_inner, &match?(%{"event" => "chat"}, &1))
 
@@ -89,7 +89,7 @@ defmodule LemonControlPlane.EventBridgeScopeTest do
       refute Map.has_key?(tool_use, "message")
 
       # The batch is forwarded for cursor continuity without the delta.
-      assert {"session.event", batch} = Enum.find(read_events, &match?({"session.event", _}, &1))
+      assert {"session.event", batch} = projected_batch(c, [:read])
       assert batch["cursor"] == cursor(7)
       assert batch["eventId"] == "scope-stream:7"
       assert batch["sessionKey"] == c.session_key
@@ -129,7 +129,7 @@ defmodule LemonControlPlane.EventBridgeScopeTest do
              |> dump() =~ @prose
 
       assert {"session.event", %{"events" => inner}} =
-               Enum.find(approval_events, &match?({"session.event", _}, &1))
+               projected_batch(c, [:read, :approvals])
 
       assert Enum.any?(inner, &match?(%{"event" => "exec.approval.requested"}, &1))
       refute Enum.any?(inner, &match?(%{"event" => "chat"}, &1))
@@ -140,7 +140,7 @@ defmodule LemonControlPlane.EventBridgeScopeTest do
       assert dump(content_events) =~ @prose
 
       assert {"session.event", %{"events" => content_inner}} =
-               Enum.find(content_events, &match?({"session.event", _}, &1))
+               projected_batch(c, [:read, :content])
 
       assert Enum.any?(content_inner, &match?(%{"event" => "chat"}, &1))
       refute Enum.any?(content_inner, &match?(%{"event" => "exec.approval." <> _}, &1))
@@ -335,26 +335,6 @@ defmodule LemonControlPlane.EventBridgeScopeTest do
     end
   end
 
-  describe "authorize_event/3" do
-    test "read-only recipients get the metrics envelope without its free-form payload" do
-      {"metrics", projected} =
-        EventBridge.project(
-          Event.new(:metrics, %{note: @prose, gauge: 3}, %{target: "run:metrics-run"})
-        )
-
-      assert {"metrics", read} = EventBridge.authorize_event("metrics", projected, [:read])
-      refute Map.has_key?(read, "payload")
-      assert read["runId"] == "metrics-run"
-      assert is_integer(read["timestampMs"])
-      refute inspect(read) =~ @prose
-
-      assert {"metrics", ^projected} =
-               EventBridge.authorize_event("metrics", projected, [:read, :content])
-
-      assert projected["payload"]["note"] == @prose
-    end
-  end
-
   # Publishes real Bus events on the topics the bridge subscribes to.
   defp publish_all(c) do
     EventBridge.subscribe_run(c.run_id)
@@ -417,21 +397,25 @@ defmodule LemonControlPlane.EventBridgeScopeTest do
       Event.new(:node_pair_requested, %{pairing_id: "pair-1", code: "PAIR-CODE"}, %{})
     )
 
-    Bus.broadcast(
-      "session_events",
-      Event.new(
-        :session_event,
-        %{
-          cursor: cursor(7),
-          event_id: "scope-stream:7",
-          events: [delta(c, "#{@prose} #{@secret}"), run_started(c), approval_requested(c)]
-        },
-        %{session_key: c.session_key}
-      )
-    )
-
     sync_bridge()
     EventBridge.unsubscribe_run(c.run_id)
+  end
+
+  defp projected_batch(c, scopes) do
+    {"session.event", payload} =
+      EventBridge.project(
+        Event.new(
+          :session_event,
+          %{
+            cursor: cursor(7),
+            event_id: "scope-stream:7",
+            events: [delta(c, "#{@prose} #{@secret}"), run_started(c), approval_requested(c)]
+          },
+          %{session_key: c.session_key}
+        )
+      )
+
+    EventBridge.authorize_event("session.event", payload, scopes)
   end
 
   defp delta(c, text),

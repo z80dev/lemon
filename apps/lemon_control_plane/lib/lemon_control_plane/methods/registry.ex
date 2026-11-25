@@ -147,6 +147,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsHistory,
     LemonControlPlane.Methods.SessionsSnapshot,
     LemonControlPlane.Methods.SessionsEvents,
+    LemonControlPlane.Methods.SessionsWatch,
     LemonControlPlane.Methods.SessionsStats,
     LemonControlPlane.Methods.SessionsPreview,
     LemonControlPlane.Methods.SessionsDelete,

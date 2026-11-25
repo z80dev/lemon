@@ -7,12 +7,18 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
 
   defmodule Owner do
     use GenServer, restart: :temporary
-    def start_link(messages), do: GenServer.start_link(__MODULE__, messages)
-    def init(messages), do: {:ok, messages}
-    def handle_call(:get_messages, _from, messages), do: {:reply, messages, messages}
+    def start_link(events), do: GenServer.start_link(__MODULE__, events)
 
-    def handle_call(:get_state, _from, messages),
-      do: {:reply, %{terminal_event: nil}, messages}
+    def init(events) do
+      log =
+        CodingAgent.Session.EventLog.new("session-1", "session-key", "run-1", System.tmp_dir!())
+
+      Enum.each(events, &CodingAgent.Session.EventLog.append(log, &1))
+      {:ok, log}
+    end
+
+    def handle_call(:canonical_terminal, _from, log),
+      do: {:reply, CodingAgent.Session.EventLog.terminal(log), log}
 
     def handle_call(:context_budget, _from, messages),
       do: {:reply, {:error, :unavailable}, messages}
@@ -27,7 +33,9 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
 
   test "overflow terminal recovers the complete owner answer exactly once, not the partial prefix" do
     owner =
-      start_supervised!({Owner, [%{role: :assistant, content: "complete canonical answer"}]})
+      start_supervised!(
+        {Owner, [{:agent_start}, text("complete canonical answer"), {:agent_end, []}]}
+      )
 
     state = runner(owner)
     run_ref = state.run_ref
@@ -50,14 +58,13 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
 
     assert {:noreply, ^state} =
              SessionRunner.handle_info(
-               {:session_event, "session-1", {:tool_execution_start, "late", "bash", %{}}, nil},
+               batch("session-1", :engine_action, %{}),
                state
              )
 
     assert {:noreply, ^state} =
              SessionRunner.handle_info(
-               {:session_event, "session-1", {:message_update, {:text_delta, 0, "late delta"}},
-                nil},
+               batch("session-1", :delta, %{text: "late delta"}),
                state
              )
 
@@ -74,8 +81,7 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
 
     assert {:noreply, ^state} =
              SessionRunner.handle_info(
-               {:session_event, "other-session", {:message_update, {:text_delta, 0, "foreign"}},
-                nil},
+               batch("other-session", :delta, %{text: "foreign"}),
                state
              )
 
@@ -84,7 +90,11 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
   end
 
   test "cancel terminal remains failed and keeps the owner's canonical partial answer" do
-    owner = start_supervised!({Owner, [%{role: :assistant, content: "canonical partial answer"}]})
+    owner =
+      start_supervised!(
+        {Owner, [{:agent_start}, text("canonical partial answer"), {:canceled, :user_requested}]}
+      )
+
     state = runner(owner)
     run_ref = state.run_ref
 
@@ -103,19 +113,17 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
       start_supervised!(
         {Owner,
          [
-           %{role: :user, content: "Previous prompt"},
-           %{role: :assistant, content: "PREVIOUS ANSWER"},
-           %{role: :user, content: "Current prompt"}
+           {:agent_start},
+           text("PREVIOUS ANSWER"),
+           {:agent_end, []},
+           {:agent_start},
+           text("Current partial prefix"),
+           {:canceled, :user_requested}
          ]}
       )
 
     state = runner(owner)
     run_ref = state.run_ref
-
-    state = %{
-      state
-      | translator: RunTranslator.replace_text(state.translator, "Current partial prefix")
-    }
 
     assert {:stop, :normal, state} =
              SessionRunner.handle_info({:session_terminal, "session-1", :canceled}, state)
@@ -172,13 +180,14 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
     refute CodingAgent.Session.get_state(session).is_streaming
 
     # Fence this turn on lifecycle traffic before releasing the failing provider.
-    _unsubscribe = CodingAgent.Session.subscribe(session, max_queue: 1)
+    _unsubscribe = CodingAgent.Session.subscribe(session, max_queue: 1, format: :canonical)
     assert :ok = CodingAgent.Session.prompt(session, "Current prompt")
     assert_receive {:crash_provider_waiting, producer}, 5_000
     on_exit(fn -> send(producer, :crash_now) end)
     owner_state = CodingAgent.Session.get_state(session)
     assert owner_state.terminal_event == nil
-    [{_, _, delivery}] = owner_state.event_listeners
+    [{_, _, delivery, :canonical}] = owner_state.event_listeners
+    LemonCore.Bus.Delivery.resync(delivery)
     assert LemonCore.Bus.Delivery.closed?(delivery)
     send(producer, :crash_now)
     assert_receive {:session_terminal, ^session_id, :error} = terminal, 5_000
@@ -202,6 +211,13 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
     assert state.translator.completed_emitted
     assert {:noreply, ^state} = SessionRunner.handle_info(terminal, state)
     refute_received {:engine_event, ^run_ref, %{__event__: :completed}}
+  end
+
+  defp text(text), do: {:message_update, {:text_delta, 0, text}}
+
+  defp batch(session_id, type, data) do
+    {:session_batch, session_id,
+     LemonCore.Event.new(:session_event, %{events: [LemonCore.Event.new(type, data)]})}
   end
 
   defp runner(owner) do

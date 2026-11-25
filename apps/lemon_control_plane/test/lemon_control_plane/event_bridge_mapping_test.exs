@@ -17,8 +17,10 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
       # System events
       assert "presence" in events
       assert "tick" in events
-      assert "shutdown" in events
-      assert "health" in events
+      refute "shutdown" in events
+      refute "health" in events
+      refute "metrics" in events
+      refute "log" in events
       assert "heartbeat" in events
 
       # Cron events

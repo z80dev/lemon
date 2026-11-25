@@ -26,6 +26,9 @@ export interface SessionEventCursor {
 export interface SessionEventBatch {
 	cursor: SessionEventCursor;
 	eventId?: string;
+	schemaVersion?: 1;
+	attemptId?: string;
+	sequence?: number;
 	/** An empty projection still advances the session sequence. */
 	events: Array<{ event: string; payload: Record<string, unknown> }>;
 }
@@ -135,7 +138,14 @@ export type ChatEvent = ChatDeltaEvent;
 // agent events
 // ---------------------------------------------------------------------------
 
-export interface AgentStartedEvent {
+interface RunLifecycleIdentity {
+	schemaVersion?: 1;
+	eventId?: string;
+	attemptId?: string;
+	sequence?: number;
+}
+
+export interface AgentStartedEvent extends RunLifecycleIdentity {
 	type: "started";
 	runId: string;
 	sessionKey: Nullable<string>;
@@ -168,7 +178,7 @@ export interface RunUsage {
 	costUsd?: Nullable<number>;
 }
 
-export interface AgentCompletedEvent {
+export interface AgentCompletedEvent extends RunLifecycleIdentity {
 	type: "completed";
 	runId: string;
 	sessionKey: Nullable<string>;

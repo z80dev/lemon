@@ -793,6 +793,13 @@ defmodule LemonWeb.Chat.PaneLive do
       when type in [:config_reloaded, :secret_changed],
       do: {:noreply, refresh_setup(socket)}
 
+  def handle_info(%LemonCore.Event{type: :session_event, payload: %{events: events}}, socket) do
+    Enum.reduce(events, {:noreply, socket}, fn
+      %LemonCore.Event{type: :delta} = event, {:noreply, acc} -> handle_info(event, acc)
+      _event, acc -> acc
+    end)
+  end
+
   def handle_info(%LemonCore.Event{} = event, socket) do
     socket =
       assign(socket, :recovery, %{

@@ -14,7 +14,7 @@ defmodule LemonControlPlane.A2A.RouterTest do
       send(owner, {:a2a_submitted, request})
 
       Task.start(fn ->
-        topic = LemonCore.Bus.run_topic(request.run_id)
+        topic = LemonCore.Bus.run_done_topic(request.run_id)
         await_subscriber(topic, System.monotonic_time(:millisecond) + 5_000)
 
         LemonCore.Bus.broadcast(topic, %{

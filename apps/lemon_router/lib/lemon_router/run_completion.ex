@@ -12,12 +12,21 @@ defmodule LemonRouter.RunCompletion do
       |> Map.put(:run_id, command.run_id)
       |> Map.put(:session_key, command.session_key)
 
-    event = %{event | payload: %{event.payload | completed: completed}}
+    attempt_id = command.execution_context && command.execution_context.attempt_id
+
+    event =
+      %{
+        event
+        | payload: %{event.payload | completed: completed},
+          meta: Map.put(event.meta || %{}, :session_key, command.session_key)
+      }
+      |> LemonCore.Event.identify_run(command.run_id, attempt_id)
 
     summary = %{
       completed: completed,
       session_key: command.session_key,
       run_id: command.run_id,
+      attempt_id: event.meta.attempt_id,
       prompt: command.prompt,
       duration_ms: event.payload.duration_ms,
       engine: "lemon",
@@ -49,7 +58,7 @@ defmodule LemonRouter.RunCompletion do
           %{run_id: command.run_id, session_key: command.session_key, engine: "lemon"}
         )
 
-        Bus.broadcast(Bus.run_topic(command.run_id), event)
+        Bus.publish_run_lifecycle(event)
 
       {:error, {:already_finalized, run_id}} when run_id == command.run_id ->
         # A late gateway completion may have won during the grace window.

@@ -515,7 +515,7 @@ defmodule LemonControlPlane.A2A.Runner do
   end
 
   defp wait_run(run_id, timeout_ms) do
-    topic = Bus.run_topic(run_id)
+    topic = Bus.run_done_topic(run_id)
     :ok = Bus.subscribe(topic)
 
     try do

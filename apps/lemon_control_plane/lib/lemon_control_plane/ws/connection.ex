@@ -27,6 +27,8 @@ defmodule LemonControlPlane.WS.Connection do
   alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.{Errors, Frames}
   alias LemonCore.Bus.Delivery
+  alias LemonControlPlane.{Connections, EventBridge}
+  alias LemonCore.Bus
 
   @heartbeat_interval_ms 25_000
   @node_session_touch_interval_ms 3_600_000
@@ -48,6 +50,7 @@ defmodule LemonControlPlane.WS.Connection do
     :peer,
     :state_version,
     :delivery,
+    :watched_session,
     :heartbeat_timer_ref,
     :node_session_touch_timer_ref,
     method_tasks: %{},
@@ -64,6 +67,7 @@ defmodule LemonControlPlane.WS.Connection do
           peer: :inet.ip_address() | nil,
           state_version: map(),
           delivery: Delivery.t() | nil,
+          watched_session: binary() | nil,
           resync_required: boolean(),
           method_tasks: %{reference() => map()},
           heartbeat_timer_ref: reference() | nil,
@@ -181,6 +185,23 @@ defmodule LemonControlPlane.WS.Connection do
 
   def handle_info(:stream_overflow_disconnect, state), do: {:stop, :normal, state}
 
+  def handle_info(
+        %LemonCore.Event{meta: %{session_key: key}} = event,
+        %{watched_session: key, auth: %{scopes: scopes}, resync_required: false} = state
+      )
+      when is_binary(key) do
+    case EventBridge.project(event) do
+      {name, payload} ->
+        case EventBridge.authorize_event(name, payload, scopes) do
+          {name, view} -> push_event(name, view, increment_event_seq(state))
+          nil -> {:ok, state}
+        end
+
+      nil ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:event, _, _, _}, %{resync_required: true} = state), do: {:ok, state}
   def handle_info({:event, _, _}, %{resync_required: true} = state), do: {:ok, state}
 
@@ -199,14 +220,20 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   def handle_info({:event, event_name, payload}, state) do
-    push_event(event_name, payload, increment_event_seq(state))
+    if is_nil(state.watched_session) or EventBridge.legacy_recipient?(self(), event_name, payload),
+      do: push_event(event_name, payload, increment_event_seq(state)),
+      else: {:ok, state}
   end
 
   def handle_info({:event, event_name, payload, new_state_version}, state)
       when is_map(new_state_version) do
-    state = increment_event_seq(state)
-    state = %{state | state_version: Map.merge(state.state_version, new_state_version)}
-    push_event(event_name, payload, state)
+    if is_nil(state.watched_session) or EventBridge.legacy_recipient?(self(), event_name, payload) do
+      state = increment_event_seq(state)
+      state = %{state | state_version: Map.merge(state.state_version, new_state_version)}
+      push_event(event_name, payload, state)
+    else
+      {:ok, state}
+    end
   end
 
   def handle_info({:push_frame, frame}, state) when is_binary(frame) do
@@ -446,6 +473,7 @@ defmodule LemonControlPlane.WS.Connection do
       auth: state.auth,
       conn_id: state.conn_id,
       conn_pid: self(),
+      transport: :websocket,
       local?: state.local?,
       peer: state.peer
     }
@@ -456,11 +484,22 @@ defmodule LemonControlPlane.WS.Connection do
 
       :inline ->
         result = Registry.dispatch(method, params, ctx)
+        state = maybe_watch_session(method, result, state)
         response = encode_response(id, result)
 
         {:push, {:text, response}, state}
     end
   end
+
+  defp maybe_watch_session("sessions.watch", {:ok, %{"sessionKey" => key}}, state)
+       when state.watched_session != key do
+    if state.watched_session, do: Bus.unsubscribe(Bus.session_topic(state.watched_session))
+    :ok = Bus.subscribe(Bus.session_topic(key), delivery: state.delivery)
+    :ok = Connections.watch_session(key)
+    %{state | watched_session: key}
+  end
+
+  defp maybe_watch_session(_method, _result, state), do: state
 
   defp start_method_task(id, method, params, ctx, state) do
     if map_size(state.method_tasks) >= @per_connection_method_limit do

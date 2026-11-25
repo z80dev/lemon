@@ -409,6 +409,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
       required: %{"sessionKey" => :string, "cursor" => :map},
       optional: %{"limit" => :integer}
     },
+    "sessions.watch" => %{required: %{"sessionKey" => :string}, optional: %{}},
     "sessions.create" => %{
       required: %{"sessionKey" => :string, "cwd" => :string},
       optional: %{}
@@ -1225,7 +1226,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "eventId" => :string,
         "cursor" => :map,
         "events" => :list
-      }
+      },
+      optional: %{"schemaVersion" => :integer, "attemptId" => :string, "sequence" => :integer}
     },
     "session.prompt.requested" => %{
       required: %{"promptId" => :string, "sessionKey" => :string, "questions" => :list},

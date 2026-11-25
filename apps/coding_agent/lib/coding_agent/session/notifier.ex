@@ -60,7 +60,8 @@ defmodule CodingAgent.Session.Notifier do
            {:stream_resync, %{reason: :overflow}}, nil}
       )
 
-    new_listeners = [{pid, monitor_ref, delivery} | state.event_listeners]
+    format = Keyword.get(opts, :format, :agent)
+    new_listeners = [{pid, monitor_ref, delivery, format} | state.event_listeners]
 
     unsubscribe = fn ->
       GenServer.cast(session_pid, {:unsubscribe, pid, monitor_ref})
@@ -73,7 +74,7 @@ defmodule CodingAgent.Session.Notifier do
   @spec unsubscribe_direct(map(), pid(), reference() | nil) :: map()
   def unsubscribe_direct(state, pid, ref \\ nil) do
     new_listeners =
-      Enum.reject(state.event_listeners, fn {listener_pid, monitor_ref, delivery} ->
+      Enum.reject(state.event_listeners, fn {listener_pid, monitor_ref, delivery, _format} ->
         if listener_pid == pid and (is_nil(ref) or monitor_ref == ref) do
           discard_pending(delivery)
           LemonCore.Bus.Delivery.close(delivery)
@@ -89,23 +90,33 @@ defmodule CodingAgent.Session.Notifier do
 
   @spec broadcast_event(map(), LemonAgent.Types.agent_event()) :: :ok
   def broadcast_event(state, event) do
-    entry = EventLog.append(state.event_log, event, state.run_id)
-    session_event = {:session_event, state.session_manager.header.id, event, entry.cursor}
+    context = Map.get(state, :execution_context)
+    attempt_id = context && context.attempt_id
+    entry = EventLog.append(state.event_log, event, state.run_id, attempt_id)
+    session_id = state.session_manager.header.id
+    session_event = {:session_event, session_id, event, entry.cursor}
 
-    LemonCore.Bus.broadcast(
-      "session_events",
-      LemonCore.Event.new(:session_event, Map.take(entry, [:cursor, :event_id, :events]), %{
-        session_key: state.session_key,
-        run_id: state.run_id,
-        schema_version: 1,
-        event_id: entry.event_id,
-        session_seq: entry.cursor["seq"],
-        cursor: entry.cursor
-      })
-    )
+    batch =
+      case entry.events do
+        [] ->
+          nil
 
-    Enum.each(state.event_listeners, fn {_pid, _ref, delivery} ->
-      deliver(delivery, session_event, :direct)
+        [first | _] ->
+          batch = LemonCore.Event.new(:session_event, entry, first.meta)
+
+          if is_binary(state.session_key) do
+            LemonCore.Bus.broadcast(LemonCore.Bus.session_topic(state.session_key), batch)
+          end
+
+          batch
+      end
+
+    Enum.each(state.event_listeners, fn
+      {_pid, _ref, delivery, :agent} ->
+        deliver(delivery, session_event, :direct)
+
+      {_pid, _ref, delivery, :canonical} ->
+        if batch, do: Delivery.send(delivery, {:session_batch, session_id, batch})
     end)
 
     Enum.each(state.event_streams, fn {_mon_ref, %{delivery: delivery}} ->
@@ -235,7 +246,7 @@ defmodule CodingAgent.Session.Notifier do
           :canceled
       end
 
-    Enum.each(state.event_listeners, fn {_pid, _ref, delivery} ->
+    Enum.each(state.event_listeners, fn {_pid, _ref, delivery, _format} ->
       flush_delivery(delivery)
 
       if LemonCore.Bus.Delivery.closed?(delivery) do
@@ -285,7 +296,7 @@ defmodule CodingAgent.Session.Notifier do
   @spec prune_subscribers(map(), pid(), reference()) :: map()
   def prune_subscribers(state, pid, ref) do
     new_listeners =
-      Enum.reject(state.event_listeners, fn {listener_pid, monitor_ref, delivery} ->
+      Enum.reject(state.event_listeners, fn {listener_pid, monitor_ref, delivery, _format} ->
         if listener_pid == pid or monitor_ref == ref do
           discard_pending(delivery)
           LemonCore.Bus.Delivery.close(delivery)
