@@ -179,14 +179,8 @@ defmodule LemonCore.TerminalOutbox do
 
   @doc false
   def publish(server \\ Store, run_id, %Event{} = event) do
-    meta =
-      (event.meta || %{})
-      |> Map.put(:run_id, run_id)
-      |> Map.put(:event_id, "run_completed:#{run_id}")
-
-    event = %{event | meta: meta}
-
-    with :ok <- Bus.broadcast(Bus.run_topic(run_id), event) do
+    with {:ok, %{attempt_id: attempt_id}} <- decision(server, run_id),
+         :ok <- Bus.publish_run_lifecycle(Event.identify_run(event, run_id, attempt_id)) do
       # Publishing succeeded; if acknowledging fails replay can duplicate it.
       _ = ack(server, run_id, :notification)
       :ok
@@ -204,10 +198,10 @@ defmodule LemonCore.TerminalOutbox do
       %{
         run_id: run_id,
         session_key: summary[:session_key],
-        engine: summary[:engine],
-        event_id: "run_completed:#{run_id}"
+        engine: summary[:engine]
       }
     )
+    |> Event.identify_run(run_id, summary[:attempt_id])
   end
 
   @impl true

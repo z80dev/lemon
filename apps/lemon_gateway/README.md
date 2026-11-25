@@ -234,12 +234,6 @@ in-process subagents.
 | `LemonGateway.TransportSupervisor` | `transport_supervisor.ex` | Supervisor for enabled transports |
 | `LemonGateway.Transports.Webhook` | `transports/webhook.ex` | HTTP webhook transport (sync/async) |
 
-### Legacy Rendering Helpers
-
-| Module | File | Purpose |
-|--------|------|---------|
-| `LemonGateway.Renderers.Basic` | `renderers/basic.ex` | Plain-text renderer with action lists and resume info |
-
 ### SMS
 
 | Module | File | Purpose |
@@ -293,8 +287,9 @@ tool (`CodingAgent.Tools.SendFile` in `coding_agent`), not a gateway tool.
 
 ### Streaming
 
-- The native executor sends `{:engine_delta, run_ref, text}` messages for incremental text output.
-- The Run process assigns monotonic sequence numbers, builds `Event.Delta` structs, and broadcasts them to `LemonCore.Bus`.
+- The local native executor forwards the session's canonical `LemonCore.Events.Delta`.
+- When a remote executor only sends text, the Run process assigns its run-local
+  sequence and constructs the same canonical payload before broadcasting it.
 - First-token latency telemetry is emitted on the first delta.
 
 ### Completion

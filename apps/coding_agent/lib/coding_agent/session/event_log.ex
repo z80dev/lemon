@@ -1,7 +1,7 @@
 defmodule CodingAgent.Session.EventLog do
   @moduledoc """
-  Session-owned, volatile cursor replay. Each broadcast gets one gap-free sequence
-  in a native session process. Branch changes expire the stream without reusing
+  Session-owned, volatile cursor replay. Each nonempty canonical batch gets one
+  gap-free sequence in a native session process. Branch changes expire the stream without reusing
   a sequence. A cursor is version 1 plus the native
   session ID, an opaque stream ID and sequence; `streamId:seq` is the stable event
   ID. It is not a global order or the run-local text delta sequence.
@@ -27,11 +27,17 @@ defmodule CodingAgent.Session.EventLog do
         action: Map.take(fields, [:id, :kind, :title, :detail]),
         phase: fields.phase,
         ok: fields.ok,
+        engine: fields.engine,
+        level: fields.level,
         message: fields.message
       })
     end
 
-    def emit_delta(state, _text, fields), do: record(state, :delta, fields)
+    def emit_delta(state, text, %{run_id: run_id, seq: seq, ts_ms: ts}) do
+      payload = %LemonCore.Events.Delta{run_id: run_id, seq: seq, text: text, ts_ms: ts}
+      [Event.new_with_ts(:delta, ts, payload) | state]
+    end
+
     def emit_completed(state, fields), do: record(state, :run_completed, %{completed: fields})
 
     defp record(state, type, payload), do: [Event.new(type, payload) | state]
@@ -59,21 +65,21 @@ defmodule CodingAgent.Session.EventLog do
         cwd: cwd
       )
 
-    :ets.insert(
-      table,
-      {:state,
-       %{
-         session_id: session_id,
-         stream_id: stream_id,
-         session_key: session_key,
-         run_id: run_id,
-         seq: 0,
-         count: 0,
-         bytes: 0,
-         max_count: max_count,
-         max_bytes: max_bytes,
-         translator: translator
-       }}
+    Process.put(
+      {__MODULE__, table},
+      %{
+        session_id: session_id,
+        stream_id: stream_id,
+        session_key: session_key,
+        run_id: run_id,
+        seq: 0,
+        count: 0,
+        bytes: 0,
+        max_count: max_count,
+        max_bytes: max_bytes,
+        translator: translator,
+        terminal: nil
+      }
     )
 
     table
@@ -87,18 +93,18 @@ defmodule CodingAgent.Session.EventLog do
     :ets.select_delete(table, [{{:"$1", :_, :_}, [{:is_integer, :"$1"}], [true]}])
     translator = fresh_translator(state.translator, session_id, run_id)
 
-    :ets.insert(
-      table,
-      {:state,
-       %{
-         state
-         | session_id: session_id,
-           run_id: run_id,
-           stream_id: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false),
-           count: 0,
-           bytes: 0,
-           translator: translator
-       }}
+    Process.put(
+      {__MODULE__, table},
+      %{
+        state
+        | session_id: session_id,
+          run_id: run_id,
+          stream_id: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false),
+          count: 0,
+          bytes: 0,
+          translator: translator,
+          terminal: nil
+      }
     )
 
     :ok
@@ -106,9 +112,9 @@ defmodule CodingAgent.Session.EventLog do
 
   def append(table, event), do: append(table, event, state(table).run_id)
 
-  def append(table, event, run_id) do
+  def append(table, event, run_id, attempt_id \\ nil) do
     state = %{state(table) | run_id: run_id}
-    seq = state.seq + 1
+    state = if event == {:agent_start}, do: %{state | terminal: nil}, else: state
 
     translator =
       case event do
@@ -119,15 +125,29 @@ defmodule CodingAgent.Session.EventLog do
           state.translator
       end
 
+    translator = RunTranslator.handle_event(translator, event)
+    state = %{state | translator: %{translator | emitter_state: []}}
+
+    case translator.emitter_state do
+      [] ->
+        Process.put({__MODULE__, table}, state)
+        %{cursor: cursor_for(state), events: []}
+
+      events ->
+        append_batch(table, state, events, attempt_id)
+    end
+  end
+
+  defp append_batch(table, state, events, attempt_id) do
+    seq = state.seq + 1
     state = %{state | seq: seq}
     cursor = cursor_for(state)
     event_id = state.stream_id <> ":" <> Integer.to_string(seq)
 
-    translator = RunTranslator.handle_event(translator, event)
-
     meta = %{
       session_key: state.session_key,
       run_id: state.run_id,
+      attempt_id: attempt_id || (state.run_id && "#{state.run_id}:attempt:1"),
       schema_version: 1,
       event_id: event_id,
       session_seq: seq,
@@ -135,25 +155,25 @@ defmodule CodingAgent.Session.EventLog do
     }
 
     events =
-      translator.emitter_state
-      |> Enum.reverse()
-      |> Enum.map(fn %Event{} = event -> %{event | meta: Map.merge(event.meta || %{}, meta)} end)
+      Enum.reduce(events, [], fn event, acc -> [%{event | meta: meta} | acc] end)
 
-    entry = %{cursor: cursor, event_id: event_id, event: event, events: events}
+    entry = %{cursor: cursor, event_id: event_id, events: events}
     bytes = :erlang.external_size(entry)
     :ets.insert(table, {seq, bytes, entry})
 
     state = %{
       state
       | count: state.count + 1,
-        bytes: state.bytes + bytes,
-        translator: %{translator | emitter_state: []}
+        terminal: Enum.find(events, &(&1.type == :run_completed)) || state.terminal,
+        bytes: state.bytes + bytes
     }
 
     state = evict(table, state)
-    :ets.insert(table, {:state, state})
+    Process.put({__MODULE__, table}, state)
     entry
   end
+
+  def terminal(table), do: state(table).terminal
 
   def replay(table, cursor, limit) when is_integer(limit) and limit in 1..100 do
     state = state(table)
@@ -207,10 +227,7 @@ defmodule CodingAgent.Session.EventLog do
     )
   end
 
-  defp state(table) do
-    [{:state, state}] = :ets.lookup(table, :state)
-    state
-  end
+  defp state(table), do: Process.get({__MODULE__, table})
 
   defp cursor_for(state) do
     %{

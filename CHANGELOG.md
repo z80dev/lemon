@@ -43,6 +43,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   a Moonshot-native host send tool parameters as Moonshot Flavored JSON Schema.
 - `lemon browser stop` (admin control-plane method `browser.stop`) stops the
   local browser driver and the Chrome it launched (#660).
+- Operator WebSockets can watch one session at a time with `sessions.watch`.
+  The TUI uses that subscription to receive each native text delta once. The web
+  shell listens for lifecycle only, and terminal waiters no longer subscribe to
+  token streams. Run lifecycle events carry versioned run/attempt identities (#716, #86).
+
 - `lemon setup omp` reuses the provider logins and API keys omp already holds:
   it starts omp's auth broker as the new `omp-broker` service
   (`lemon service install omp-broker`) when none is running, lists omp's

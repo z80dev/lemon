@@ -192,7 +192,7 @@ defmodule LemonRouter.RunCompletionTest do
       payload: %{completed: %{ok: true}}
     }
 
-    assert event_id == "run_completed:#{run_id}"
+    assert event_id == "run:#{byte_size(run_id)}:#{run_id}:#{run_id}:attempt:1:2"
     refute_receive %Event{type: :run_completed, payload: %{completed: %{ok: false}}}, 200
     assert {:ok, %{summary: ^committed}} = RunStore.fetch(run_id)
   end

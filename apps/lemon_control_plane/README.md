@@ -91,16 +91,18 @@ Responses carry the same ID with `ok: true, payload: ...` or
 ```
 
 The event bridge maps Bus run/chat/approval/cron/goal/presence traffic to socket
-events. Non-node clients receive the general event stream; nodes receive only
-targeted node traffic. State-version counters let clients reconcile changed
-presence, health and cron data. They are not durable event replay cursors.
+events. Nodes receive only targeted node traffic. State-version counters reconcile
+presence and cron data; they are not durable event replay cursors.
 
-Native owners also publish `session.event` batches on the `session_events` Bus
-topic. Each batch contains `sessionKey`, `eventId`, `cursor`, and `events`, where
-each inner event is `{event, payload}` projected by the same `EventBridge.project/1`
-as legacy `agent`/`chat` traffic. Empty batches still advance the cursor. For a
-session with a cursor, these batches are authoritative: do not also apply legacy
-`agent`/`chat` events for that session.
+An operator WebSocket selects one live session with `sessions.watch`
+(`{"sessionKey": "…"}`); changing the key replaces the subscription. Re-select
+after reconnect, then use `sessions.events` or `sessions.snapshot` to catch up.
+The socket receives versioned `session.event` batches from `session:<session_key>`
+with `sessionKey`, `eventId`, `schemaVersion`, `attemptId` (when known), `sequence`,
+`cursor`, and `events`. Each inner event is `{event, payload}`. Events without a
+canonical projection consume no session sequence; authorization can still leave
+an empty batch that advances the cursor. A watched session does not also receive
+the legacy run-topic text delta.
 
 Native `message_update` tuples contain only their provider event, without a
 partial assistant message. The native ACP mapper consumes these deltas directly;

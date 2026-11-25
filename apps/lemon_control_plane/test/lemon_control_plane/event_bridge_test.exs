@@ -782,54 +782,9 @@ defmodule LemonControlPlane.EventBridgeTest do
       Connections.unregister(conn_id)
     end
 
-    test "maps ingested metrics and log events with target fields" do
-      run_id = "run_#{System.unique_integer()}"
-      session_key = "session:event-bridge-ingest"
-      conn_id = "conn_#{System.unique_integer()}"
-
-      assert :ok =
-               Connections.register(conn_id, %{
-                 role: :operator,
-                 auth: @operator_auth,
-                 client_id: "test",
-                 pid: self()
-               })
-
-      flush_events()
-
-      send(
-        Process.whereis(EventBridge),
-        LemonCore.Event.new(:metrics, %{count: 2}, %{target: "run:#{run_id}"})
-      )
-
-      assert_receive {:event, "metrics",
-                      %{
-                        "payload" => %{"count" => 2},
-                        "runId" => ^run_id
-                      }, _state_version},
-                     1_000
-
-      send(
-        Process.whereis(EventBridge),
-        LemonCore.Event.new(
-          :log,
-          %{level: "info", message: String.duplicate("x", 700), timestamp_ms: 123},
-          %{target: "session:#{session_key}"}
-        )
-      )
-
-      assert_receive {:event, "log",
-                      %{
-                        "level" => "info",
-                        "message" => message,
-                        "timestampMs" => 123,
-                        "sessionKey" => ^session_key
-                      }, _state_version},
-                     1_000
-
-      assert byte_size(message) < 700
-
-      Connections.unregister(conn_id)
+    test "unpublished metric and log events have no projection" do
+      assert EventBridge.project(LemonCore.Event.new(:metrics, %{count: 2})) == nil
+      assert EventBridge.project(LemonCore.Event.new(:log, %{message: "test"})) == nil
     end
   end
 

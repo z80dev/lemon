@@ -12,15 +12,23 @@ defmodule LemonRouter.RunCompletion do
       |> Map.put(:run_id, command.run_id)
       |> Map.put(:session_key, command.session_key)
 
-    event = %{event | payload: %{event.payload | completed: completed}}
+    attempt_id = command.execution_context && command.execution_context.attempt_id
+
+    event =
+      %{
+        event
+        | payload: %{event.payload | completed: completed},
+          meta: Map.put(event.meta || %{}, :session_key, command.session_key)
+      }
+      |> LemonCore.Event.identify_run(command.run_id, attempt_id)
 
     summary = %{
       completed: completed,
       session_key: command.session_key,
       run_id: command.run_id,
+      attempt_id: event.meta.attempt_id,
       prompt: command.prompt,
       presentation_cwd: command.cwd,
-      attempt_id: command.execution_context && command.execution_context.attempt_id,
       duration_ms: event.payload.duration_ms,
       engine: "lemon",
       meta: command.meta

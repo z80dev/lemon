@@ -341,8 +341,8 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
         assert consumer == task.pid
         assert {:ok, session} = CodingAgent.lookup_session(session_id)
 
-        {^consumer, _monitor, delivery} =
-          Enum.find(CodingAgent.Session.get_state(session).event_listeners, fn {pid, _, _} ->
+        {^consumer, _monitor, delivery, :agent} =
+          Enum.find(CodingAgent.Session.get_state(session).event_listeners, fn {pid, _, _, _} ->
             pid == consumer
           end)
 

@@ -338,7 +338,7 @@ defmodule LemonRouter.RunProcess do
 
   # Handle run events from Bus.
   def handle_event(:info, %LemonCore.Event{type: :run_started} = event, phase, state) do
-    Bus.broadcast(Bus.session_topic(state.session_key), event)
+    forward_legacy_lifecycle(state, event)
     state = maybe_monitor_gateway_run(state)
 
     bind_actions =
@@ -397,8 +397,7 @@ defmodule LemonRouter.RunProcess do
     # we don't race a :DOWN message and emit a synthetic completion.
     state = maybe_demonitor_gateway_run(state)
 
-    # Emit router-level completion event
-    Bus.broadcast(Bus.session_topic(state.session_key), event)
+    forward_legacy_lifecycle(state, event)
 
     # If the engine reports a context-window overflow, clear resume state so
     # the next message can start fresh instead of immediately failing again.
@@ -429,8 +428,10 @@ defmodule LemonRouter.RunProcess do
   end
 
   def handle_event(:info, %LemonCore.Event{type: :delta, payload: delta} = event, phase, state) do
-    # Forward delta to session subscribers
-    Bus.broadcast(Bus.session_topic(state.session_key), event)
+    # Local native deltas are already on this session topic in their cursor batch.
+    unless is_map_key(event.meta || %{}, :session_seq) do
+      Bus.broadcast(Bus.session_topic(state.session_key), event)
+    end
 
     # Finalize the previous tool-status segment before we start streaming a new answer chunk.
     if state.saw_delta == false do
@@ -776,6 +777,12 @@ defmodule LemonRouter.RunProcess do
 
   defp track_effectful_action(state, _action_ev), do: state
 
+  defp forward_legacy_lifecycle(state, event) do
+    unless is_map_key(event.meta || %{}, :schema_version) do
+      Bus.broadcast(Bus.session_topic(state.session_key), event)
+    end
+  end
+
   @impl true
   def terminate(reason, phase, state) do
     if is_pid(state.coordinator_pid) do
@@ -813,22 +820,21 @@ defmodule LemonRouter.RunProcess do
 
       LemonRouter.RunCountTracker.record_terminal(state.run_id, true)
 
-      Bus.broadcast(
-        Bus.run_topic(state.run_id),
-        LemonCore.Event.new(
-          :run_failed,
-          Events.RunFailed.new(%{
-            run_id: state.run_id,
-            session_key: state.session_key,
-            reason: reason
-          }),
-          %{
-            run_id: state.run_id,
-            session_key: state.session_key,
-            synthetic: true
-          }
-        )
+      attempt_id =
+        state.execution_request.execution_context &&
+          state.execution_request.execution_context.attempt_id
+
+      LemonCore.Event.new(
+        :run_failed,
+        Events.RunFailed.new(%{
+          run_id: state.run_id,
+          session_key: state.session_key,
+          reason: reason
+        }),
+        %{session_key: state.session_key, synthetic: true}
       )
+      |> LemonCore.Event.identify_run(state.run_id, attempt_id)
+      |> Bus.publish_run_lifecycle()
 
       # Best-effort abort of the gateway run on abnormal termination
       try do
@@ -952,8 +958,7 @@ defmodule LemonRouter.RunProcess do
 
         :ok = LemonRouter.RunReceiptStore.retain_terminal_evidence(run_id)
 
-        with :ok <- replay_conversation_projections(state, event, started_at),
-             :ok <- Bus.broadcast(Bus.session_topic(session_key), event) do
+        with :ok <- replay_conversation_projections(state, event, started_at) do
           present(state, event, false)
         end
     end

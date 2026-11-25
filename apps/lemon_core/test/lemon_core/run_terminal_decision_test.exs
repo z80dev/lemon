@@ -190,7 +190,7 @@ defmodule LemonCore.RunTerminalDecisionTest do
 
     assert_receive %Event{
       type: :run_completed,
-      meta: %{event_id: "run_completed:ephemeral-run"},
+      meta: %{schema_version: 1, event_id: "run:13:ephemeral-run:attempt-2:2", attempt_id: "attempt-2"},
       payload: %{completed: %{ok: true, answer: "private answer"}}
     }
 

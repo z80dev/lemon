@@ -2,7 +2,7 @@ defmodule CodingAgent.Session.EventIdentityContractTest do
   @moduledoc """
   Lifecycle identity contract for native session events (#86, #560).
 
-  Live `session_events` envelopes and cursor replay carry one identity: schema
+  Live session-topic envelopes and cursor replay carry one identity: schema
   version 1, `event_id` (`streamId:seq`), a gap-free `session_seq` scoped to one
   owner stream, and the replay cursor. Consumers deduplicate by `event_id` and
   order by `session_seq` within a stream; a branch epoch or a replacement owner
@@ -47,6 +47,11 @@ defmodule CodingAgent.Session.EventIdentityContractTest do
     def handle_call({:replay, cursor}, _from, state),
       do: {:reply, EventLog.replay(state.event_log, cursor, 100), state}
 
+    def handle_call({:subscribe, pid}, _from, state) do
+      {_unsubscribe, state} = Notifier.subscribe_direct(state, pid, self(), format: :canonical)
+      {:reply, :ok, state}
+    end
+
     def handle_call(:invalidate, _from, state) do
       session_id = state.session_manager.header.id
       :ok = EventLog.invalidate(state.event_log, session_id, state.run_id)
@@ -58,8 +63,7 @@ defmodule CodingAgent.Session.EventIdentityContractTest do
     n = System.unique_integer([:positive])
     session_key = "agent:identity_contract_#{n}:main"
     session_id = "native-identity-#{n}"
-    :ok = Bus.subscribe("session_events")
-    on_exit(fn -> Bus.unsubscribe("session_events") end)
+    :ok = Bus.subscribe(Bus.session_topic(session_key))
     %{session_key: session_key, session_id: session_id}
   end
 
@@ -67,12 +71,22 @@ defmodule CodingAgent.Session.EventIdentityContractTest do
     pid = owner(c, :owner)
     initial = GenServer.call(pid, :cursor)
 
+    :ok = GenServer.call(pid, {:subscribe, self()})
     append(pid, {:agent_start})
     append(pid, {:message_update, {:text_delta, 0, "hello"}})
     GenServer.call(pid, {:run, "run-2"})
     append(pid, {:observed, :untranslated})
 
-    live = receive_live(c.session_key, 3)
+    live = receive_live(c.session_key, 2)
+    refute_receive %Event{type: :session_event}, 20
+
+    # Both the executor and the live session stream reuse the log's exact
+    # envelope; neither translates the raw event again.
+    for batch <- live do
+      assert_receive {:session_batch, _, ^batch}
+    end
+
+    refute_receive {:session_batch, _, _}, 20
     assert {:ok, %{events: replayed, has_more: false}} = GenServer.call(pid, {:replay, initial})
 
     for {%Event{payload: payload, meta: meta}, seq} <- Enum.with_index(live, 1) do
@@ -84,6 +98,7 @@ defmodule CodingAgent.Session.EventIdentityContractTest do
       assert payload.event_id == meta.event_id
       assert payload.cursor == meta.cursor
 
+      assert meta.attempt_id == "run-1:attempt:1"
       # Every translated lifecycle event inherits its batch identity unchanged.
       for %Event{meta: inner} <- payload.events do
         assert Map.take(inner, [:schema_version, :event_id, :session_seq, :cursor, :run_id]) ==
@@ -95,21 +110,21 @@ defmodule CodingAgent.Session.EventIdentityContractTest do
     assert Enum.map(replayed, &Map.take(&1, [:cursor, :event_id, :events])) ==
              Enum.map(live, & &1.payload)
 
-    assert Enum.map(live, & &1.meta.run_id) == ["run-1", "run-1", "run-2"]
+    assert Enum.map(live, & &1.meta.run_id) == ["run-1", "run-1"]
 
-    assert [[%Event{type: :run_started}], [%Event{type: :delta}], []] =
+    assert [[%Event{type: :run_started}], [%Event{type: :delta}]] =
              Enum.map(live, & &1.payload.events)
   end
 
   test "identities are unique and ordered across branch epochs and owner replacement", c do
     pid = owner(c, :first)
-    append(pid, {:observed, 1})
-    append(pid, {:observed, 2})
+    append(pid, {:agent_start})
+    append(pid, {:message_update, {:text_delta, 0, "before branch"}})
     GenServer.call(pid, :invalidate)
-    append(pid, {:observed, 3})
+    append(pid, {:agent_start})
 
     replacement = owner(c, :replacement)
-    append(replacement, {:observed, 4})
+    append(replacement, {:agent_start})
 
     live = receive_live(c.session_key, 4)
     ids = Enum.map(live, & &1.meta.event_id)
@@ -154,7 +169,7 @@ defmodule CodingAgent.Session.EventIdentityContractTest do
       receive do
         %Event{type: :session_event, meta: %{session_key: ^session_key}} = event -> event
       after
-        1_000 -> flunk("missing live session_events envelope")
+        1_000 -> flunk("missing live session-topic envelope")
       end
     end
   end

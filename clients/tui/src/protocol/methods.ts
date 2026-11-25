@@ -170,6 +170,7 @@ export const METHOD = {
 	sessionsActiveList: "sessions.active.list",
 	sessionsSnapshot: "sessions.snapshot",
 	sessionsEvents: "sessions.events",
+	sessionsWatch: "sessions.watch",
 	sessionsPatch: "sessions.patch",
 	sessionsMetadataPatch: "sessions.metadata.patch",
 	sessionsExport: "sessions.export",
@@ -550,6 +551,10 @@ export class ControlPlaneMethods {
 			...options,
 			queueIfOffline: false,
 		}).then(parseSessionsEvents);
+	}
+
+	sessionsWatch(sessionKey: string): Promise<unknown> {
+		return this.#call(METHOD.sessionsWatch, { sessionKey }, { queueIfOffline: false });
 	}
 
 	sessionsPatch(params: SessionsPatchParams, options?: RequestOptions): Promise<unknown> {

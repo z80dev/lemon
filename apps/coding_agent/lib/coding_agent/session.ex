@@ -286,7 +286,7 @@ defmodule CodingAgent.Session do
           context_frozen: boolean(),
           is_streaming: boolean(),
           pending_prompt_timer_ref: reference() | nil,
-          event_listeners: [{pid(), reference(), LemonCore.Bus.Delivery.t()}],
+          event_listeners: [{pid(), reference(), LemonCore.Bus.Delivery.t(), :agent | :canonical}],
           event_streams: %{
             reference() => %{pid: pid(), stream: pid(), delivery: LemonCore.Bus.Delivery.t()}
           },
@@ -1487,6 +1487,10 @@ defmodule CodingAgent.Session do
 
   def handle_call(:get_state, _from, state) do
     {:reply, state, state}
+  end
+
+  def handle_call(:canonical_terminal, _from, state) do
+    {:reply, CodingAgent.Session.EventLog.terminal(state.event_log), state}
   end
 
   def handle_call({:has_steering_messages, signal}, _from, state) do

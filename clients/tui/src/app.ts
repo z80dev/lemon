@@ -639,7 +639,15 @@ export class AppShell {
 				// A pending startup request refreshes after it has picked the session.
 				if (!this.#startup) void this.refreshPlanMode();
 				if (!this.#startup) void this.refreshSteers();
-				if (this.#sessionReady) void refreshSetupStatus(this.store, this.methods);
+				if (this.#sessionReady) {
+					void refreshSetupStatus(this.store, this.methods);
+					void this.sessions
+						.watchFocused()
+						.then(() => this.sessions.resync())
+						.catch((error: unknown) =>
+							this.events.notice(`could not watch session: ${describeError(error)}`, "error"),
+						);
+				}
 				if (this.#sessionReady || this.#initialSessionLoad) return;
 				const startup = this.#startup;
 				this.#startup = undefined;

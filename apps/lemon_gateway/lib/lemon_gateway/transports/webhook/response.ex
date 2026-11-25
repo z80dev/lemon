@@ -67,7 +67,7 @@ defmodule LemonGateway.Transports.Webhook.Response do
   @spec prepare_wait_before_submit(atom(), map(), keyword()) ::
           {:ok, map(), map() | nil} | {:error, term()}
   def prepare_wait_before_submit(:sync, %{run_id: run_id}, _opts) do
-    topic = LemonCore.Bus.run_topic(run_id)
+    topic = LemonCore.Bus.run_done_topic(run_id)
     :ok = LemonCore.Bus.subscribe(topic)
     {:ok, %{sync_topic: topic}, nil}
   rescue
@@ -101,7 +101,7 @@ defmodule LemonGateway.Transports.Webhook.Response do
 
   def wait_for_run_completion(run_id, timeout_ms, opts)
       when is_binary(run_id) and is_list(opts) do
-    topic = LemonCore.Bus.run_topic(run_id)
+    topic = LemonCore.Bus.run_done_topic(run_id)
     subscribe? = Keyword.get(opts, :subscribe?, true)
     timeout_ms = int_value(timeout_ms, 30_000)
     deadline = System.monotonic_time(:millisecond) + timeout_ms
@@ -149,7 +149,7 @@ defmodule LemonGateway.Transports.Webhook.Response do
   end
 
   defp async_callback_waiter(parent, ready_ref, run_ctx) do
-    topic = LemonCore.Bus.run_topic(run_ctx.run_id)
+    topic = LemonCore.Bus.run_done_topic(run_ctx.run_id)
 
     case LemonCore.Bus.subscribe(topic) do
       :ok ->
