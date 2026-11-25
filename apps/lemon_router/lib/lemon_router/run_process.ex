@@ -37,7 +37,8 @@ defmodule LemonRouter.RunProcess do
   | confirming idle | confirmation expiry or cancel | aborting / gateway cancel with the real reason |
   | active | abort or restart boundary | aborting / bounded missing-executor grace |
   | active or aborting | executor DOWN/missing | completion grace / named timeout |
-  | any | run completed | stopped normally |
+  | any | run completed | presenting / execution status is immutable |
+  | presenting | presentation returned | stopped normally; failed effects stay replayable |
 
   Gateway bind, DOWN and abort grace periods are independent named timeouts.
   Metadata calls and unrelated events never restart them or the idle deadline.
@@ -407,51 +408,13 @@ defmodule LemonRouter.RunProcess do
     CompactionTrigger.maybe_mark_pending_compaction_near_limit(state, event)
     retried? = RetryHandler.maybe_retry_zero_answer_failure(state, event)
 
-    # Mark any still-running tool calls as completed so the editable "Tool calls"
-    # status message (Telegram) can't get stuck at [running] if a final action
-    # completion event is missed/raced.
-    SurfaceManager.finalize_status(state, event)
+    {:next_state, :presenting, state, [{:next_event, :internal, {:present, event, retried?}}]}
+  end
 
-    # If we never streamed deltas, make sure any tool-status output is flushed
-    # before we emit a single final answer chunk.
-    if state.saw_delta == false do
-      SurfaceManager.flush_status(state)
-    end
-
-    unless retried? do
-      extra_meta = safe_finalize_meta(state, event)
-      media_recording = safe_record_media_jobs(extra_meta, state)
-      surface_event = strip_media_directives_from_event(event)
-
-      Introspection.record(
-        :answer_finalize_started,
-        %{
-          saw_delta: state.saw_delta,
-          extra_meta_keys: Map.keys(extra_meta),
-          media_jobs_recorded_count: media_recording.recorded_count,
-          media_jobs_failed_count: media_recording.failed_count
-        },
-        run_id: state.run_id,
-        session_key: state.session_key,
-        engine: "lemon",
-        provenance: :direct
-      )
-
-      # SurfaceManager finalizes the answer path through the existing answer-stream surface, so
-      # channels keep their dedicated final-answer behavior separate from tool status UI.
-      SurfaceManager.finalize_answer(state, surface_event, extra_meta)
-
-      Introspection.record(
-        :answer_finalize_completed,
-        %{saw_delta: state.saw_delta},
-        run_id: state.run_id,
-        session_key: state.session_key,
-        engine: "lemon",
-        provenance: :direct
-      )
-
-      # Optional fanout: forward the final answer text to additional destinations.
-      SurfaceManager.fanout_final_answer(state, event)
+  def handle_event(:internal, {:present, event, retried?}, :presenting, state) do
+    case present(state, event, retried?) do
+      :ok -> LemonCore.TerminalOutbox.ack(state.run_id, :presentation)
+      {:error, _} -> LemonCore.TerminalOutbox.failed(state.run_id, :presentation)
     end
 
     # Deliver first: terminal evidence is best-effort bookkeeping (see
@@ -814,13 +777,28 @@ defmodule LemonRouter.RunProcess do
   defp track_effectful_action(state, _action_ev), do: state
 
   @impl true
-  def terminate(reason, _phase, state) do
+  def terminate(reason, phase, state) do
     if is_pid(state.coordinator_pid) do
       send(state.coordinator_pid, {:run_process_terminated, state.run_id, reason})
     end
 
-    # If not completed normally, emit failure event and attempt abort
-    if reason != :normal do
+    committed? = reason != :normal and committed_execution?(phase, state.run_id)
+
+    if committed? do
+      LemonCore.TerminalOutbox.failed(state.run_id, :presentation)
+
+      Introspection.record(
+        :answer_presentation_failed,
+        %{reason: CompactionTrigger.safe_error_label(reason)},
+        run_id: state.run_id,
+        session_key: state.session_key,
+        engine: "lemon",
+        provenance: :direct
+      )
+    end
+
+    # A committed execution is never retroactively failed by presentation.
+    if reason != :normal and not committed? do
       # Emit introspection event for run failure
       Introspection.record(
         :run_failed,
@@ -869,6 +847,131 @@ defmodule LemonRouter.RunProcess do
     :ok
   end
 
+  defp present(state, event, retried?) do
+    # Mark any still-running tool calls as completed so the editable "Tool calls"
+    # status message (Telegram) can't get stuck at [running] if a final action
+    # completion event is missed/raced.
+    SurfaceManager.finalize_status(state, event)
+
+    # If we never streamed deltas, make sure any tool-status output is flushed
+    # before we emit a single final answer chunk.
+    if state.saw_delta == false do
+      SurfaceManager.flush_status(state)
+    end
+
+    if retried? do
+      :ok
+    else
+      {artifact_status, extra_meta} = safe_finalize_meta(state, event)
+      media_recording = safe_record_media_jobs(extra_meta, state)
+      surface_event = strip_media_directives_from_event(event)
+
+      Introspection.record(
+        :answer_finalize_started,
+        %{
+          saw_delta: state.saw_delta,
+          extra_meta_keys: Map.keys(extra_meta),
+          media_jobs_recorded_count: media_recording.recorded_count,
+          media_jobs_failed_count: media_recording.failed_count
+        },
+        run_id: state.run_id,
+        session_key: state.session_key,
+        engine: "lemon",
+        provenance: :direct
+      )
+
+      # SurfaceManager finalizes the answer path through the existing answer-stream surface, so
+      # channels keep their dedicated final-answer behavior separate from tool status UI.
+      delivery = SurfaceManager.finalize_answer(state, surface_event, extra_meta)
+
+      Introspection.record(
+        :answer_finalize_completed,
+        %{saw_delta: state.saw_delta},
+        run_id: state.run_id,
+        session_key: state.session_key,
+        engine: "lemon",
+        provenance: :direct
+      )
+
+      # Optional fanout: forward the final answer text to additional destinations.
+      fanout = SurfaceManager.fanout_final_answer(state, surface_event)
+
+      if delivery == :ok and fanout == :ok and artifact_status == :ok and
+           media_recording.failed_count == 0,
+         do: :ok,
+         else: {:error, :presentation_failed}
+    end
+  end
+
+  defp committed_execution?(:presenting, _run_id), do: true
+
+  defp committed_execution?(_phase, run_id) do
+    # An unavailable authority is not evidence that execution failed.
+    LemonCore.TerminalOutbox.decision(run_id) != {:ok, nil}
+  end
+
+  @doc false
+  def replay_presentation(
+        run_id,
+        %{started_at: started_at, summary: %{session_key: session_key} = summary} = record
+      ) do
+    cond do
+      is_nil(Process.whereis(LemonRouter.RunRegistry)) ->
+        :busy
+
+      Registry.lookup(LemonRouter.RunRegistry, run_id) != [] ->
+        :busy
+
+      true ->
+        event = LemonCore.TerminalOutbox.event(run_id, summary)
+
+        state = %{
+          run_id: run_id,
+          session_key: session_key,
+          saw_delta: false,
+          terminal_replay: true,
+          execution_request: %ExecutionCommand{
+            run_id: run_id,
+            session_key: session_key,
+            meta: summary[:meta],
+            cwd: summary[:presentation_cwd],
+            prompt: summary[:prompt]
+          }
+        }
+
+        state =
+          Enum.reduce(record[:events] || [], state, fn
+            %{__event__: :action_event} = action, acc ->
+              acc
+              |> ArtifactTracker.track_generated_images(action)
+              |> ArtifactTracker.track_requested_send_files(action)
+
+            _, acc ->
+              acc
+          end)
+
+        :ok = LemonRouter.RunReceiptStore.retain_terminal_evidence(run_id)
+
+        with :ok <- replay_conversation_projections(state, event, started_at),
+             :ok <- Bus.broadcast(Bus.session_topic(session_key), event) do
+          present(state, event, false)
+        end
+    end
+  end
+
+  defp replay_conversation_projections(state, event, started_at) do
+    with {:ok, index} <- LemonCore.RunStore.fetch_session_index(state.session_key) do
+      if Registry.lookup(LemonRouter.SessionRegistry, state.session_key) == [] and
+           is_map(index) and index.updated_at_ms <= started_at do
+        CompactionTrigger.maybe_reset_resume_on_context_overflow(state, event)
+        CompactionTrigger.maybe_store_chat_state(state, event)
+        CompactionTrigger.maybe_mark_pending_compaction_near_limit(state, event)
+      end
+
+      :ok
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Gateway monitoring
   # ---------------------------------------------------------------------------
@@ -881,7 +984,7 @@ defmodule LemonRouter.RunProcess do
   # after boot silently dropped final-answer MEDIA directives.
   defp safe_finalize_meta(state, event) do
     answer = CompactionTrigger.extract_completed_answer(event)
-    artifact_tracker(state).finalize_meta(state, answer)
+    {:ok, artifact_tracker(state).finalize_meta(state, answer)}
   rescue
     error ->
       Introspection.record(
@@ -898,7 +1001,7 @@ defmodule LemonRouter.RunProcess do
           "session_key=#{inspect(state.session_key)} error=#{Exception.message(error)}"
       )
 
-      %{}
+      {:error, %{}}
   end
 
   defp strip_media_directives_from_event(%LemonCore.Event{payload: payload} = event)
@@ -1006,7 +1109,8 @@ defmodule LemonRouter.RunProcess do
     normalized_request = %{
       request
       | session_key: request.session_key || session_key,
-        conversation_key: request.conversation_key || conversation_key
+        conversation_key: request.conversation_key || conversation_key,
+        meta: Map.put(request.meta || %{}, :router_owned, true)
     }
 
     {:ok, ExecutionCommand.ensure_conversation_key(normalized_request)}

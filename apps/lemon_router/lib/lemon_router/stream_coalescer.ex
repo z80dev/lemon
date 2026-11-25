@@ -673,6 +673,11 @@ defmodule LemonRouter.StreamCoalescer do
   defp dispatch_final(state, text, terminal_answer?) do
     case build_intent(state, :stream_finalize, text) do
       {:ok, intent} ->
+        intent =
+          if terminal_answer? and Map.get(intent.meta, :durable_terminal) == true,
+            do: %{intent | intent_id: "#{state.run_id}:terminal-answer"},
+            else: intent
+
         intent = %{intent | meta: Map.put(intent.meta, :terminal_answer, terminal_answer?)}
 
         case dispatcher().dispatch(intent) do

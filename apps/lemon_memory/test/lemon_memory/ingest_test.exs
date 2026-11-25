@@ -124,6 +124,25 @@ defmodule LemonMemory.IngestTest do
     end
   end
 
+  test "replaying a committed run upserts the same memory document", %{tmp_dir: tmp_dir} do
+    counter = :counters.new(1, [:atomics])
+    {:ok, pid, memory_store} = start_isolated_ingest(tmp_dir, counter, %{session_search: true})
+    {run_id, record, summary} = make_ingest_args()
+    payload = %{run_id: run_id, record: record, summary: summary}
+
+    assert :ok = Ingest.handle_finalize_run(pid, payload)
+
+    assert [first] =
+             LemonMemory.Store.get_by_session(memory_store, summary.session_key, limit: 10)
+
+    assert :ok = Ingest.handle_finalize_run(pid, payload)
+
+    assert [%{doc_id: doc_id, run_id: ^run_id}] =
+             LemonMemory.Store.get_by_session(memory_store, summary.session_key, limit: 10)
+
+    assert doc_id == first.doc_id
+  end
+
   describe "notification-only duplicates" do
     test "a cron forwarded summary is never ingested and never reads as legacy", %{
       tmp_dir: tmp_dir

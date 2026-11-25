@@ -151,6 +151,19 @@ defmodule LemonRouter.ResumeResolver do
     end
   end
 
+  @doc false
+  def bind_from_run(%ResumeToken{} = resume, run_id, session_key) do
+    with {:ok, digest} <- Store.fetch(@context_table, {:run, run_id}),
+         true <- is_binary(digest),
+         :ok <- put_binding(Store, {resume.engine, resume.value}, digest) do
+      bind_owner(Store, resume, session_key)
+    else
+      {:ok, nil} -> {:error, :missing_run_binding}
+      false -> {:error, :invalid_run_binding}
+      error -> error
+    end
+  end
+
   # Only native sessions are resumable, so only they carry an owner.
   defp bind_owner(store, %ResumeToken{engine: @native_engine} = resume, session_key)
        when is_binary(session_key) and session_key != "",

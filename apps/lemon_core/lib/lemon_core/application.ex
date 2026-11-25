@@ -20,6 +20,7 @@ defmodule LemonCore.Application do
   - `LemonCore.UsageLedger` - Serialized per-run usage/cost aggregation (finalize-run hook)
   - `LemonCore.RuntimeOwner` - Holds the cross-VM ownership lock of a
     file-backed store; only its holder reconciles other runtimes' records
+  - `LemonCore.TerminalOutbox` - Replays durable run-completion projections
   - `LemonCore.ExecApprovalExpiry` - Expires pending exec approvals whose run or
     session ended (finalize-run hook)
   - `LemonCore.Secrets.SourceTaskSupervisor` - Bounded external-source tasks
@@ -61,7 +62,7 @@ defmodule LemonCore.Application do
     packages (`lemon_ai`, `lemon_agent`, `lemon_memory`) need.
   - `:runtime_control` - the assistant runtime's control services: `Drain`,
     `ACPClientBridge`, `NodeRegistry`, `RuntimeOwner`, `SessionActivity`,
-    `UsageLedger`, `ExecApprovalExpiry` and the config reloader.
+    `TerminalOutbox`, `UsageLedger`, `ExecApprovalExpiry` and the config reloader.
   - `:run_history` - `RunHistoryStore` (needs the optional `:exqlite`).
 
   A library consumer that only uses the agent and store APIs selects
@@ -230,6 +231,7 @@ defmodule LemonCore.Application do
         core: store
       ] ++
       owner_children(mode) ++
+      if(runtime?, do: [runtime_control: LemonCore.TerminalOutbox], else: []) ++
       [
         runtime_control: LemonCore.SessionActivity,
         core: LemonCore.Secrets.Usage,

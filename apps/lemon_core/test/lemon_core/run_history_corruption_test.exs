@@ -2,7 +2,7 @@ defmodule LemonCore.RunHistoryCorruptionTest do
   use ExUnit.Case, async: false
 
   alias Exqlite.Sqlite3
-  alias LemonCore.{RunHistoryStore, SessionLifecycle}
+  alias LemonCore.RunHistoryStore
 
   @session "agent:history:main"
 

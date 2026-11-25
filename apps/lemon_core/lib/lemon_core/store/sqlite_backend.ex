@@ -391,6 +391,33 @@ defmodule LemonCore.Store.SqliteBackend do
     end
   end
 
+  @doc false
+  def atomic(state, operation) do
+    reset_statements(state)
+
+    with :ok <- Sqlite3.execute(state.conn, "BEGIN IMMEDIATE") do
+      try do
+        with {:ok, next_state} <- operation.(),
+             :ok <- Sqlite3.execute(state.conn, "COMMIT") do
+          {:ok, next_state}
+        else
+          error ->
+            _ = Sqlite3.execute(state.conn, "ROLLBACK")
+            atomic_error(error)
+        end
+      rescue
+        error ->
+          _ = Sqlite3.execute(state.conn, "ROLLBACK")
+          reraise error, __STACKTRACE__
+      end
+    else
+      error -> atomic_error(error)
+    end
+  end
+
+  defp atomic_error({:error, _, _} = error), do: error
+  defp atomic_error(error), do: {:error, normalize_transaction_error(error)}
+
   @doc """
   Checkpoints the write-ahead log into the database file with `TRUNCATE`.
 
@@ -520,6 +547,29 @@ defmodule LemonCore.Store.SqliteBackend do
         end
       else
         {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  @doc false
+  def list_page(state, table, cursor, limit) do
+    table_name = normalize_table_name(table)
+
+    with {:ok, statement} <-
+           Sqlite3.prepare(state.conn, """
+           SELECT key_blob, value_blob FROM lemon_store_kv
+           WHERE table_name = ?1 AND key_blob > ?2 ORDER BY key_blob LIMIT ?3
+           """) do
+      try do
+        key = if is_nil(cursor), do: <<>>, else: encode(cursor)
+
+        with :ok <- bind_statement(statement, [table_name, {:blob, key}, limit]),
+             {:ok, rows} <- Sqlite3.fetch_all(state.conn, statement),
+             {:ok, items} <- decode_rows(rows, table) do
+          {:ok, items, state}
+        end
+      after
+        Sqlite3.release(state.conn, statement)
       end
     end
   end

@@ -10,7 +10,7 @@ defmodule LemonCore.RunTerminalDecisionTest do
   use ExUnit.Case, async: false
   use ExUnitProperties
 
-  alias LemonCore.{RunStore, Store}
+  alias LemonCore.{Bus, Event, RunStore, Store, TerminalOutbox}
   alias LemonCore.Store.{EtsBackend, SqliteBackend}
 
   @moduletag :tmp_dir
@@ -137,6 +137,83 @@ defmodule LemonCore.RunTerminalDecisionTest do
 
     assert %{run_count: 1} =
              Store.get(:terminal_decision_sqlite, :sessions_index, session_key)
+  end
+
+  test "terminal decision and replay payload survive loss of ephemeral run records", %{
+    tmp_dir: path
+  } do
+    server = :terminal_decision_ephemeral
+
+    opts = [
+      name: server,
+      backend: SqliteBackend,
+      backend_opts: [path: path, ephemeral_tables: [:runs]]
+    ]
+
+    spec = Supervisor.child_spec({Store, opts}, id: server)
+    start_supervised!(spec)
+
+    run_id = "ephemeral-run"
+    summary = %{attempt_id: "attempt-2", completed: %{ok: true, answer: "private answer"}}
+    event = %{type: :action, data: "buffered"}
+    assert :ok = Store.append_run_event(server, run_id, event)
+    assert :ok = Store.ping(server)
+    assert :ok = RunStore.finalize(server, run_id, summary)
+    assert {:ok, live_record} = Store.fetch_run(server, run_id)
+    refute Map.has_key?(live_record, :events)
+    assert %{events: [^event]} = Store.get_run_with_events(server, run_id)
+    :ok = stop_supervised!(server)
+    start_supervised!(spec)
+
+    assert {:error, :evicted} = Store.fetch_run(server, run_id)
+
+    assert {:ok, %{outcome: :success, status: :completed, attempt_id: "attempt-2"} = decision} =
+             TerminalOutbox.decision(server, run_id)
+
+    refute inspect(decision) =~ "private answer"
+
+    assert {:ok, %{record: %{summary: ^summary, events: [^event]}, notification: :pending}} =
+             TerminalOutbox.pending(server, run_id)
+
+    assert {:ok, [{^run_id, _}]} = Store.terminal_pending_page(server, nil, 1)
+    assert {:ok, []} = Store.terminal_pending_page(server, run_id, 1)
+
+    assert {:error, {:already_finalized, ^run_id}} =
+             RunStore.finalize(server, run_id, %{completed: %{ok: false}})
+
+    :ok = Bus.subscribe(Bus.run_topic(run_id))
+
+    worker =
+      start_supervised!({TerminalOutbox, name: :ephemeral_terminal_replayer, store: server})
+
+    send(worker, :replay)
+
+    assert_receive %Event{
+      type: :run_completed,
+      meta: %{event_id: "run_completed:ephemeral-run"},
+      payload: %{completed: %{ok: true, answer: "private answer"}}
+    }
+
+    _ = :sys.get_state(worker)
+    assert {:ok, nil} = TerminalOutbox.pending(server, run_id)
+    assert {:ok, ^decision} = TerminalOutbox.decision(server, run_id)
+  end
+
+  test "history deletion discards the private replay source but keeps the execution fence", %{
+    store: server
+  } do
+    run_id = "private-terminal"
+    session_key = "agent:private:main"
+    summary = %{session_key: session_key, completed: %{ok: true, answer: "private"}}
+    assert :ok = RunStore.finalize(server, run_id, summary)
+    assert {:ok, %{notification: :pending}} = TerminalOutbox.pending(server, run_id)
+
+    assert :ok = TerminalOutbox.with_history_deletion(server, session_key, fn -> :ok end)
+    assert {:ok, nil} = TerminalOutbox.pending(server, run_id)
+    assert {:ok, %{status: :completed}} = TerminalOutbox.decision(server, run_id)
+
+    assert {:error, {:already_finalized, ^run_id}} =
+             RunStore.finalize(server, run_id, %{completed: %{ok: false}})
   end
 
   defp summaries(session_key) do

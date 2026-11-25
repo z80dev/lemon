@@ -400,6 +400,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   scheduler, which claims exactly that ID, so an unknown outcome names the
   `runId` to reconcile; a trigger blocked by an earlier unresolved run reports
   `PRIOR_RUN_OUTCOME_UNKNOWN` with that run's `priorRunId` instead (#620).
+- Preserve committed run outcomes across restarts, retry pending completion
+  notifications and projections, and never report an already-completed run
+  as failed because answer presentation crashed (#75, #76, #77, #84).
+
 - `bin/lemon start` now starts Honcho memory and computer-use tools when they
   are configured: the source runtime previously never started
   `lemon_honcho` or `lemon_computer_use` (#726).

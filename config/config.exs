@@ -196,6 +196,10 @@ config :lemon_core, LemonCore.Store,
     {LemonCore.ExecApprovalExpiry, :handle_finalize_run}
   ]
 
+config :lemon_core,
+       :terminal_presentation_replayer,
+       {LemonRouter.RunProcess, :replay_presentation}
+
 config :lemon_web, LemonWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,
   url: [host: "localhost"],

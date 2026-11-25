@@ -163,14 +163,14 @@ defmodule LemonCore.StoreRunsRetentionTest do
       assert Store.get_run(store, "done-1") == nil
       assert {:ok, nil} = Store.fetch_run(store, "never-ran")
 
-      # An evicted run stays finalized: no resurrection by a late event, and a
-      # second finalization is refused.
+      # An evicted run stays finalized. An identical retry is safe but
+      # publishes no new decision and cannot recreate the live record.
       Store.append_run_event(store, "done-1", %{seq: 2})
       :ok = Store.ping(store)
       assert {:error, :evicted} = Store.fetch_run(store, "done-1")
 
-      assert {:error, {:already_finalized, "done-1"}} =
-               Store.finalize_run(store, "done-1", %{completed: %{ok: true}})
+      assert :ok = Store.finalize_run(store, "done-1", %{completed: %{ok: true}})
+      assert {:error, :evicted} = Store.fetch_run(store, "done-1")
     end
 
     test "runs inside retention are kept" do
@@ -184,9 +184,14 @@ defmodule LemonCore.StoreRunsRetentionTest do
       store = start_store([])
       Store.append_run_event(store, "run", %{seq: 1})
       :ok = Store.ping(store)
-      decision = %{digest: "decision-digest", status: :committed}
-      :ok = Store.put_new(store, :run_terminals, "run", decision)
       :ok = Store.finalize_run(store, "run", %{completed: %{ok: true}})
+
+      assert {:ok, %{digest: _, status: :completed} = decision} =
+               Store.fetch(store, :run_terminals, "run")
+
+      assert {:error, {:already_finalized, "run"}} =
+               Store.finalize_run(store, "run", %{completed: %{ok: false}})
+
       assert {:ok, ^decision} = Store.fetch(store, :run_terminals, "run")
     end
 
