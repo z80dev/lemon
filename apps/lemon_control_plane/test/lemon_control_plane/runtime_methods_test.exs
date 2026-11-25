@@ -27,14 +27,13 @@ defmodule LemonControlPlane.RuntimeMethodsTest do
                LemonControlPlane.Methods.TasksRecentList.handle(%{}, %{})
     end
 
-    test "sessions.compact reports the runtime as unavailable, in the pre-existing shape" do
-      assert {:error, {:internal_error, "Failed to compact session", reason}} =
-               LemonControlPlane.Methods.SessionsCompact.handle(
-                 %{"sessionKey" => "agent:main:x"},
-                 %{}
-               )
-
-      assert reason == :session_registry_not_available
+    test "sessions.compact reports the runtime as unavailable without exposing registry details" do
+      assert LemonControlPlane.Methods.SessionsCompact.handle(
+               %{"sessionKey" => "agent:main:x"},
+               %{}
+             ) ==
+               {:error,
+                {:unavailable, "Native session runtime unavailable", %{"reason" => "unavailable"}}}
     end
   end
 end
