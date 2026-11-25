@@ -8,6 +8,9 @@ defmodule LemonCore.IntrospectionStore do
 
   alias LemonCore.Store
 
+  @doc false
+  def fetch_rows, do: Store.fetch_all(:introspection_log)
+
   @spec append(map()) :: :ok | {:error, term()}
   def append(event), do: Store.append_introspection_event(event)
 
@@ -20,7 +23,7 @@ defmodule LemonCore.IntrospectionStore do
   """
   @spec terminal_events_since(non_neg_integer()) :: {:ok, [map()]} | {:error, term()}
   def terminal_events_since(since_ms) do
-    with {:ok, entries} <- Store.fetch_all(:introspection_log) do
+    with {:ok, entries} <- fetch_rows() do
       events =
         for {_key, event} <- entries,
             event.event_type in [:run_completed, :run_failed, "run_completed", "run_failed"],

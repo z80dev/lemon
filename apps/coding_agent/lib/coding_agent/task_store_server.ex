@@ -117,6 +117,20 @@ defmodule CodingAgent.TaskStoreServer do
     GenServer.call(server, {:delete_task, task_id}, 10_000)
   end
 
+  @doc false
+  def session_snapshot(session_key),
+    do: GenServer.call(__MODULE__, {:session_snapshot, session_key})
+
+  @doc false
+  def delete_session(session_key, snapshot) do
+    GenServer.call(__MODULE__, {:delete_session, session_key, snapshot}, 10_000)
+  end
+
+  @doc false
+  def restore_session(session_key, snapshot) do
+    GenServer.call(__MODULE__, {:restore_session, session_key, snapshot}, 10_000)
+  end
+
   @doc """
   Trigger a cleanup of expired tasks.
   """
@@ -379,6 +393,61 @@ defmodule CodingAgent.TaskStoreServer do
     {:reply, :ok, state}
   end
 
+  def handle_call({:session_snapshot, session_key}, _from, state) do
+    state = ensure_tables(state)
+
+    {:reply, with_task_storage(state, fn -> {:ok, session_rows(state.table, session_key)} end),
+     state}
+  end
+
+  def handle_call({:delete_session, session_key, snapshot}, _from, state) do
+    state = ensure_tables(state)
+
+    reply =
+      with_task_storage(state, fn ->
+        ids = MapSet.new(snapshot, &elem(&1, 0))
+        current = session_rows(state.table, session_key)
+
+        if Enum.all?(current, &(elem(&1, 0) in ids)) do
+          Enum.each(current, fn {id, record, _events} ->
+            :ok = DurableTable.delete(state.table, id)
+            notify_change(id, record)
+          end)
+
+          DurableTable.sync(state.table)
+        else
+          {:error, :task_rows_changed}
+        end
+      end)
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:restore_session, session_key, snapshot}, _from, state) do
+    state = ensure_tables(state)
+
+    reply =
+      with_task_storage(state, fn ->
+        if Enum.all?(snapshot, fn {id, _record, _events} ->
+             case :ets.lookup(state.table, id) do
+               [] -> true
+               [{^id, %{session_key: ^session_key}, _}] -> true
+               _ -> false
+             end
+           end) do
+          Enum.each(snapshot, fn {id, record, events} ->
+            unless :ets.member(state.table, id), do: do_insert_record(id, record, events)
+          end)
+
+          DurableTable.sync(state.table)
+        else
+          {:error, :task_restore_conflict}
+        end
+      end)
+
+    {:reply, reply, state}
+  end
+
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
     state = ensure_tables(state)
     deleted_count = DurableTable.cleanup(state, ttl_seconds, &delete_expired_task/1)
@@ -493,6 +562,14 @@ defmodule CodingAgent.TaskStoreServer do
 
     :ok = DurableTable.sync(state.table)
     state
+  end
+
+  defp with_task_storage(state, fun) do
+    if DurableTable.open?(state.dets_table), do: fun.(), else: {:error, :task_store_unavailable}
+  end
+
+  defp session_rows(table, key) do
+    :ets.select(table, [{{:_, %{session_key: key}, :_}, [], [:"$_"]}])
   end
 
   defp do_insert_record(task_id, record, events, mode \\ :write) do

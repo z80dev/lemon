@@ -3,13 +3,10 @@ defmodule CodingAgent.SessionParticipant do
   `LemonCore.SessionLifecycle.Participant` for the native sessions of a
   session key.
 
-  The session's native sessions are the one its chat state resumes and any
-  still registered for the key. Deleting the session stops those (idle,
-  under the lifecycle fence) processes, deletes their JSONL journals (live
-  and maintenance-archived copies), including the todos they contain, and
-  drops provider pins. A journal is staged by an atomic rename next to it
-  and removed only after the canonical deletion commits; a failure before
-  that renames it back.
+  Deleting a session stops its live native processes and erases its task
+  records, provider pins and JSONL journals, including archived journals and
+  prior crash-staged copies. A newly staged journal is renamed back if the
+  canonical deletion fails; staged bytes are unlinked only after it commits.
 
   Reset keeps journals: the reset session starts a new native session and the
   unreferenced journal ages into maintenance archiving.
@@ -17,19 +14,29 @@ defmodule CodingAgent.SessionParticipant do
 
   @behaviour LemonCore.SessionLifecycle.Participant
 
-  alias CodingAgent.{Config, SessionManager, SessionSupervisor}
-  alias CodingAgent.Session.Ownership
+  alias CodingAgent.{SessionSupervisor, TaskStoreServer}
+  alias CodingAgent.Session.JournalErasure
   alias LemonAgent.ModelRuntime.SessionPins
+  alias LemonCore.NativeSessionOwner
 
   @impl true
   def snapshot(session_key, :delete) do
     with {:ok, resumed} <- resumed_native_id(session_key),
-         ids = Enum.uniq(List.wrap(resumed) ++ Enum.map(live(session_key), &elem(&1, 0))),
-         {:ok, journals} <- journals(ids) do
+         {:ok, bindings} <- NativeSessionOwner.fetch_bindings(),
+         {:ok, tasks} <- TaskStoreServer.session_snapshot(session_key),
+         owners = Map.new(bindings),
+         ids = owned_ids(session_key, resumed, tasks, owners),
+         {:ok, %{entries: journals, foreign_ids: foreign_ids}} <-
+           JournalErasure.snapshot(session_key, ids, owners) do
+      journal_ids = Enum.reduce(journals, ids, &MapSet.put(&2, &1.id))
+      ids = MapSet.difference(journal_ids, foreign_ids)
+
       {:ok,
        %{
          ids: ids,
-         journals: Enum.map(journals, &{&1, staged_path(&1)}),
+         journals: journals,
+         bindings: bindings,
+         tasks: tasks,
          pins: for(id <- ids, pin = SessionPins.get(id), into: %{}, do: {id, pin})
        }}
     end
@@ -38,7 +45,8 @@ defmodule CodingAgent.SessionParticipant do
   @impl true
   def delete(session_key, :delete, snapshot) do
     with :ok <- stop_live(session_key),
-         :ok <- each(snapshot.journals, &stage/1) do
+         :ok <- JournalErasure.stage(snapshot.journals),
+         :ok <- TaskStoreServer.delete_session(session_key, snapshot.tasks) do
       Enum.each(snapshot.ids, &(:ok = SessionPins.clear(&1)))
     end
   end
@@ -46,7 +54,10 @@ defmodule CodingAgent.SessionParticipant do
   @impl true
   def verify_deleted(session_key, :delete, snapshot) do
     with [] <- live(session_key),
-         {:ok, []} <- journals(snapshot.ids),
+         {:ok, []} <- TaskStoreServer.session_snapshot(session_key),
+         {:ok, bindings} <- NativeSessionOwner.fetch_bindings(),
+         :ok <-
+           JournalErasure.verify(session_key, snapshot.ids, Map.new(bindings), snapshot.journals),
          true <- Enum.all?(snapshot.ids, &is_nil(SessionPins.get(&1))) do
       :ok
     else
@@ -55,23 +66,21 @@ defmodule CodingAgent.SessionParticipant do
   end
 
   @impl true
-  def restore(_session_key, :delete, snapshot) do
+  def restore(session_key, :delete, snapshot) do
     Enum.each(snapshot.pins, fn {id, pin} ->
       SessionPins.pin(id, pin.provider, pin.credential_ref, pin.model_id)
     end)
 
-    each(snapshot.journals, &unstage/1)
+    journal_result = JournalErasure.restore(snapshot.journals)
+    task_result = TaskStoreServer.restore_session(session_key, snapshot.tasks)
+
+    with :ok <- journal_result, do: task_result
   end
 
   @impl true
-  def commit(_session_key, :delete, snapshot) do
-    each(snapshot.journals, fn {_path, staged} ->
-      case File.rm(staged) do
-        :ok -> :ok
-        {:error, :enoent} -> :ok
-        {:error, _} -> {:error, :journal_delete_failed}
-      end
-    end)
+  def commit(session_key, :delete, snapshot) do
+    with :ok <- JournalErasure.commit(snapshot.journals),
+         do: NativeSessionOwner.delete_bindings(session_key, snapshot.bindings)
   end
 
   defp resumed_native_id(session_key) do
@@ -117,74 +126,18 @@ defmodule CodingAgent.SessionParticipant do
     end)
   end
 
-  # Journals are `<sessions root>/<encoded cwd>/<id>.jsonl`, and maintenance
-  # moves cold ones into that directory's `archive/`. Unreadable is an error.
-  defp journals([]), do: {:ok, []}
+  defp owned_ids(session_key, resumed, tasks, owners) do
+    bound = for {{"lemon", id}, ^session_key} <- owners, do: id
 
-  defp journals(ids) do
-    root = Path.expand(Path.join(Config.agent_dir(), "sessions"))
+    children =
+      for {_task_id, %{session_id: id, parent_session_id: parent}, _events} <- tasks,
+          is_binary(id) and is_binary(parent),
+          do: id
 
-    case File.ls(root) do
-      {:ok, directories} ->
-        names = Enum.map(ids, &Path.basename(SessionManager.session_file_path(root, &1)))
-
-        for directory <- Enum.sort(directories),
-            name <- names,
-            path <- [
-              Path.join([root, directory, name]),
-              Path.join([root, directory, "archive", name])
-            ] do
-          path
-        end
-        |> Enum.reduce_while({:ok, []}, fn path, {:ok, found} ->
-          case File.lstat(path) do
-            {:ok, %File.Stat{type: :regular}} -> {:cont, {:ok, [path | found]}}
-            {:ok, _not_a_journal} -> {:cont, {:ok, found}}
-            {:error, reason} when reason in [:enoent, :enotdir] -> {:cont, {:ok, found}}
-            {:error, _} -> {:halt, {:error, :journal_unreadable}}
-          end
-        end)
-        |> case do
-          {:ok, found} -> {:ok, Enum.reverse(found)}
-          error -> error
-        end
-
-      {:error, :enoent} ->
-        {:ok, []}
-
-      {:error, _} ->
-        {:error, :journal_unreadable}
-    end
-  end
-
-  defp staged_path(path),
-    do: path <> ".deleting-" <> Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
-
-  defp stage({path, staged}) do
-    Ownership.with_file(path, fn ->
-      cond do
-        is_pid(Ownership.owner(path)) -> {:error, :journal_in_use}
-        match?({:error, :enoent}, File.lstat(path)) -> :ok
-        true -> rename(path, staged)
-      end
-    end)
-  end
-
-  defp unstage({path, staged}) do
-    Ownership.with_file(path, fn ->
-      case {File.lstat(staged), File.lstat(path)} do
-        {{:ok, _}, {:error, :enoent}} -> rename(staged, path)
-        {{:error, :enoent}, _} -> :ok
-        _conflict -> {:error, :journal_restore_conflict}
-      end
-    end)
-  end
-
-  defp rename(from, to) do
-    case File.rename(from, to) do
-      :ok -> :ok
-      {:error, _} -> {:error, :journal_rename_failed}
-    end
+    for id <- bound ++ List.wrap(resumed) ++ children ++ Enum.map(live(session_key), &elem(&1, 0)),
+        Map.get(owners, {"lemon", id}, session_key) == session_key,
+        into: MapSet.new(),
+        do: id
   end
 
   defp each(items, fun) do

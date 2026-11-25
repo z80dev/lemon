@@ -489,6 +489,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   deletion; a failure restores all of them. `sessions.reset` also revokes the
   session's approval grants and drops message indexes, pending selected
   resumes and compaction markers that could resume the old conversation (#692).
+- Verified session deletion also erases run diagnostics, stopped native task
+  records and journals, and attributable crash-staged journal copies without
+  deleting independent forks or the content-free terminal run decision (#692).
 
 - One-shot CLI commands (`lemon doctor`, `config`, `secrets`, `usage`, `context`,
   `learn`, `learning`, `mcp`, `update`, `migrate`, `providers`, `setup`, and the
