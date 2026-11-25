@@ -24,18 +24,23 @@ defmodule LemonWeb.WorkProjection do
   @objective_max_bytes 8_000
   @agent_regex ~r/\A[A-Za-z0-9_-]{1,64}\z/
 
+  # A fixed number of service reads per snapshot whatever the row count: one
+  # list per section plus one batched read per per-row service (cards, dispatcher
+  # status, loop status, cron runs). Only boards that request publication add a
+  # per-board destination preview.
   def snapshot(previous \\ %{}) do
     %{
       boards:
         section(fn ->
           call(KanbanStore, :list_boards, [[limit: 12, strict: true]])
-          |> strict_rows(12, &board/1)
+          |> strict_list(12)
+          |> boards()
         end),
       goals:
         section(fn ->
-          call(GoalStore, :list, [[limit: 25, strict: true]]) |> strict_rows(25, &goal/1)
+          call(GoalStore, :list, [[limit: 25, strict: true]]) |> strict_list(25) |> goals()
         end),
-      cron: section(fn -> call(CronManager, :list, []) |> rows(25, &cron/1) end)
+      cron: section(fn -> call(CronManager, :list, []) |> list(25) |> crons() end)
     }
     |> Map.new(fn {kind, current} ->
       old = Map.get(previous, kind, %{items: []})
@@ -415,14 +420,27 @@ defmodule LemonWeb.WorkProjection do
 
   # ── Projections ───────────────────────────────────────────────────────────
 
-  defp board(raw) do
+  # Card or store failure makes the whole section unavailable; a failed status
+  # read only marks each row's runtime unavailable.
+  defp boards(raws) do
+    ids = Enum.map(raws, &required_id(&1.id))
+
+    cards =
+      case batch_call(ids, KanbanStore, :list_tasks_for, [ids, [limit: @card_limit]]) do
+        {:ok, %{} = by_board} -> by_board
+        _ -> throw(:unavailable)
+      end
+
+    statuses = batch(ids, KanbanDispatcher, :status_many, [ids])
+
+    Enum.map(raws, fn raw ->
+      board(raw, Map.get(cards, raw.id), runtime(Map.get(statuses, raw.id), :dispatcher))
+    end)
+  end
+
+  defp board(raw, cards, runtime) do
     id = required_id(raw.id)
-
-    tasks =
-      call(KanbanStore, :list_tasks, [id, [limit: @card_limit, strict: true]])
-      |> strict_rows(@card_limit, &card/1)
-
-    runtime = runtime(fn -> call(KanbanDispatcher, :status, [id]) end, :dispatcher)
+    tasks = rows(cards, @card_limit, &card/1)
     preview = publication_preview(id, raw)
 
     %{
@@ -612,17 +630,19 @@ defmodule LemonWeb.WorkProjection do
 
   defp pull_request_url(_), do: nil
 
-  defp goal(raw) do
+  defp goals(raws) do
+    keys = raws |> Enum.map(&session(&1[:session_key])) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    statuses = batch(keys, GoalLoopManager, :status_many, [keys])
+    Enum.map(raws, &goal(&1, statuses))
+  end
+
+  defp goal(raw, statuses) do
     key = session(raw[:session_key])
     meta = if is_map(raw[:meta]), do: raw[:meta], else: %{}
     loop = meta["goalLoop"] || %{}
     loop = if is_map(loop), do: loop, else: %{}
     budget = if is_map(raw[:budget]), do: raw[:budget], else: %{}
-
-    runtime =
-      if key,
-        do: runtime(fn -> call(GoalLoopManager, :status, [key]) end, :loop),
-        else: %{status: "unavailable", revision: nil, count: 0}
+    runtime = runtime(key && Map.get(statuses, key), :loop)
 
     %{
       kind: :goals,
@@ -653,14 +673,15 @@ defmodule LemonWeb.WorkProjection do
     }
   end
 
-  defp cron(raw) do
-    id = required_id(raw.id)
+  defp crons(raws) do
+    ids = Enum.map(raws, &required_id(&1.id))
+    runs = batch(ids, CronManager, :runs_for, [ids, [limit: @run_limit]])
+    Enum.map(raws, &cron(&1, Map.get(runs, &1.id)))
+  end
 
-    runs =
-      section(fn ->
-        call(CronManager, :runs, [id, [limit: @run_limit, strict: true]])
-        |> strict_rows(@run_limit, &run/1)
-      end)
+  defp cron(raw, runs) do
+    id = required_id(raw.id)
+    runs = section(fn -> rows(runs, @run_limit, &run/1) end)
 
     %{
       kind: :cron,
@@ -711,35 +732,46 @@ defmodule LemonWeb.WorkProjection do
     }
   end
 
-  defp runtime(fun, key) do
-    case section(fn ->
-           case fun.() do
-             {:ok, %{running: running, control_revision: revision} = raw}
-             when is_boolean(running) ->
-               details = raw[key] || %{}
-
-               status =
-                 cond do
-                   count(raw[:reconciling_count]) > 0 -> "reconciling"
-                   running -> enum(details[:status], ~w(running stopping reconciling))
-                   key == :loop and get_in(raw, [:auto, "enabled"]) == true -> "scheduled"
-                   true -> "idle"
-                 end
-
-               %{
-                 status: status,
-                 revision: required_id(revision),
-                 count: count(details[:running_count])
-               }
-
-             _ ->
-               throw(:unavailable)
-           end
-         end) do
+  defp runtime(raw, key) do
+    case section(fn -> runtime!(raw, key) end) do
       %{state: :ready, items: value} -> value
       _ -> %{status: "unavailable", revision: nil, count: 0}
     end
   end
+
+  defp runtime!(%{running: running, control_revision: revision} = raw, key)
+       when is_boolean(running) do
+    details = raw[key] || %{}
+
+    status =
+      cond do
+        count(raw[:reconciling_count]) > 0 -> "reconciling"
+        running -> enum(details[:status], ~w(running stopping reconciling))
+        key == :loop and get_in(raw, [:auto, "enabled"]) == true -> "scheduled"
+        true -> "idle"
+      end
+
+    %{status: status, revision: required_id(revision), count: count(details[:running_count])}
+  end
+
+  defp runtime!(_, _), do: throw(:unavailable)
+
+  # One batched read for every row of a section, skipped when there are no
+  # rows. A failed read yields no entries, so each row projects as
+  # unavailable, never idle or empty.
+  defp batch(ids, module, function, args) do
+    case batch_call(ids, module, function, args) do
+      {:ok, %{} = by_id} -> by_id
+      _ -> %{}
+    end
+  rescue
+    _ -> %{}
+  catch
+    _, _ -> %{}
+  end
+
+  defp batch_call([], _module, _function, _args), do: {:ok, %{}}
+  defp batch_call(_ids, module, function, args), do: call(module, function, args)
 
   defp section(fun) do
     %{state: :ready, items: fun.()}
@@ -749,13 +781,13 @@ defmodule LemonWeb.WorkProjection do
     _, _ -> %{state: :unavailable, items: []}
   end
 
-  defp strict_rows({:ok, items}, limit, project), do: rows(items, limit, project)
-  defp strict_rows(_, _, _), do: throw(:unavailable)
+  defp strict_list({:ok, items}, limit), do: list(items, limit)
+  defp strict_list(_, _), do: throw(:unavailable)
 
-  defp rows(items, limit, project) when is_list(items),
-    do: items |> Enum.take(limit) |> Enum.map(project)
+  defp list(items, limit) when is_list(items), do: Enum.take(items, limit)
+  defp list(_, _), do: throw(:unavailable)
 
-  defp rows(_, _, _), do: throw(:unavailable)
+  defp rows(items, limit, project), do: items |> list(limit) |> Enum.map(project)
 
   defp call(module, function, args) do
     case Application.get_env(:lemon_web, :work_service_fun) do

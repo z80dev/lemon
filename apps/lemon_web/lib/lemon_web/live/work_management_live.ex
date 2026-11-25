@@ -519,7 +519,7 @@ defmodule LemonWeb.WorkManagementLive do
         >
           <:meta>
             <span class="inline-flex items-center gap-1.5 text-xs text-muted">
-              <.status_dot tone="success" pulse /> Live · cron and goal events, 3s board refresh
+              <.status_dot tone="success" pulse /> Live · updates on kanban, goal and cron events
             </span>
           </:meta>
           <:actions>

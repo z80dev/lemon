@@ -94,7 +94,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
-  tab makes no service calls and kanban changes appear immediately (#687).
+  tab makes no service calls and kanban changes appear immediately. Each load
+  makes seven batched reads whatever the number of boards, goals and cron jobs
+  (`KanbanStore.list_tasks_for/2`, `KanbanDispatcher.status_many/2`,
+  `GoalLoopManager.status_many/1`, `CronManager.runs_for/2`) (#687).
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14

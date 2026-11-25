@@ -360,6 +360,33 @@ defmodule LemonAutomation.CronStore do
   end
 
   @doc """
+  Recent runs of up to 100 jobs in one store read: `{:ok, %{job_id => runs}}`
+  (every requested job present, `[]` when it has none) or
+  `{:error, :store_unavailable}`, never false empty history. Accepts the
+  `list_runs/2` filters; `:limit` (default 100) applies per job.
+  """
+  @spec list_runs_for([binary()], keyword()) ::
+          {:ok, %{binary() => [CronRun.t()]}} | {:error, :store_unavailable}
+  def list_runs_for(job_ids, opts \\ []) when is_list(job_ids) and length(job_ids) <= 100 do
+    wanted = MapSet.new(job_ids)
+    limit = Keyword.get(opts, :limit, 100)
+
+    with {:ok, rows} <- LemonCore.Store.fetch_all(@runs_table) do
+      {:ok,
+       rows
+       |> Enum.map(fn {_id, map} -> CronRun.from_map(map) end)
+       |> Enum.filter(&MapSet.member?(wanted, &1.job_id))
+       |> maybe_filter_status(Keyword.get(opts, :status))
+       |> maybe_filter_since(Keyword.get(opts, :since_ms))
+       |> Enum.group_by(& &1.job_id)
+       |> Map.new(fn {job_id, runs} ->
+         {job_id, runs |> Enum.sort_by(& &1.started_at_ms, :desc) |> Enum.take(limit)}
+       end)
+       |> then(&Map.merge(Map.new(job_ids, fn id -> {id, []} end), &1))}
+    end
+  end
+
+  @doc """
   List all runs across all jobs.
 
   ## Options

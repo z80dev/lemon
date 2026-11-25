@@ -338,6 +338,11 @@ defmodule LemonAutomation.GoalAuthorityTest do
 
     send(GoalLoopManager, :auto_tick)
     assert {:ok, _status} = GoalLoopManager.status(key)
+
+    assert {:ok, %{^key => %{running: running, control_revision: revision}}} =
+             GoalLoopManager.status_many([key])
+
+    assert is_boolean(running) and is_binary(revision)
     refute_receive {:execution, _command}, 300
 
     assert {:error, _reason} = GoalLoopManager.start_loop(key, max_ticks: 1)

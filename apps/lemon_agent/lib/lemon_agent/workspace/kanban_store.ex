@@ -291,6 +291,36 @@ defmodule LemonAgent.Workspace.KanbanStore do
     list_records(@tasks_table, opts, project)
   end
 
+  @doc """
+  Cards of up to 100 boards in one store read: `{:ok, %{board_id => cards}}`
+  (every requested board present, `[]` when it has none) or the store error,
+  never false emptiness. Each board's cards are filtered and capped like
+  `list_tasks/2` (`:limit` applies per board).
+  """
+  @spec list_tasks_for([binary()], keyword()) :: {:ok, %{binary() => [map()]}} | {:error, term()}
+  def list_tasks_for(board_ids, opts \\ [])
+      when is_list(board_ids) and length(board_ids) <= 100 do
+    wanted = MapSet.new(board_ids)
+    empty = Map.new(board_ids, &{&1, []})
+
+    with {:ok, records} <- Store.fetch_all(@tasks_table) do
+      {:ok,
+       records
+       |> Enum.map(fn {_key, task} -> normalize_task(task) end)
+       |> Enum.filter(&(&1 != %{} and MapSet.member?(wanted, &1.board_id)))
+       |> maybe_filter(:status, opts[:status] && to_string(opts[:status]))
+       |> maybe_filter(:assignee, opts[:assignee] && to_string(opts[:assignee]))
+       |> Enum.group_by(& &1.board_id)
+       |> Map.new(fn {board_id, tasks} ->
+         {board_id,
+          tasks
+          |> Enum.sort_by(&(&1.updated_at_ms || 0), :desc)
+          |> Enum.take(positive_limit(opts[:limit], 100))}
+       end)
+       |> then(&Map.merge(empty, &1))}
+    end
+  end
+
   defp list_records(table, opts, project) do
     if opts[:strict] do
       with {:ok, records} <- Store.fetch_all(table), do: {:ok, project.(records)}
