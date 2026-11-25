@@ -30,8 +30,8 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
 
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.{ChatHistory, ExecApprovalsGet, NativeSessions}
-  alias LemonCore.{AgentRuntime, ExecApprovalStore, RunHistoryStore, RunStore}
   alias LemonControlPlane.SessionLifecycle
+  alias LemonCore.{AgentRuntime, ExecApprovalStore, RunHistoryStore, RunStore, Store}
 
   @max_bytes 131_072
   @identity_fields ~w(sessionKey sessionId branchId revision runId attempt)
@@ -163,6 +163,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
     {run_id, run, run_status} = current_run(key, native, input)
     completed = committed_completion(run)
     terminal = is_map(completed)
+    run = if terminal, do: with_terminal_events(run, run_id), else: run
 
     streaming =
       native.streaming and not terminal and
@@ -417,6 +418,23 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
     completed = field(field(run, :summary), :completed)
     if is_map(completed) and is_boolean(field(completed, :ok)), do: completed
   end
+
+  # History rows already carry their retained events. The strict live read
+  # selects the committed run but omits its event buffer; attach that buffer
+  # only from a display read of the same record.
+  defp with_terminal_events(%{events: _} = run, _run_id), do: run
+
+  defp with_terminal_events(%{summary: summary, started_at: started_at} = run, run_id) do
+    case Store.get_run_with_events(run_id) do
+      %{summary: ^summary, started_at: ^started_at, events: events} ->
+        Map.put(run, :events, events)
+
+      _ ->
+        run
+    end
+  end
+
+  defp with_terminal_events(run, _run_id), do: run
 
   defp phase(_native, completed, _streaming, _status) when is_map(completed) do
     cond do

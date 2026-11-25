@@ -3,6 +3,7 @@ Code.require_file(Path.expand("../../../../lemon_agent/test/support/mocks.ex", _
 defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
   use ExUnit.Case, async: false
 
+  alias CodingAgent.Executor.Event
   alias LemonControlPlane.Methods.{Registry, SessionsSnapshot}
   alias LemonCore.{AgentRuntime, ExecApprovalStore, RunStore, Store}
 
@@ -359,19 +360,20 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
     assert {:ok, before} = SessionsSnapshot.handle(params(c), ctx())
     assert before["snapshot"]["phase"] == "running"
     assert [%{"phase" => "started"}] = before["snapshot"]["actions"]
-    # No transient progress is replayed. Only the owner's terminal event/summary
-    # is published while the client is disconnected.
-    :ok =
-      RunStore.append_event(c.id, %{
-        phase: :completed,
-        ok: true,
-        action: %{
-          id: "tool_call",
-          kind: :tool,
-          title: "bash",
-          detail: %{tool_call_id: "call", name: "bash", result_full: "ACTUAL RESULT"}
-        }
+    # No transient progress is replayed. The single owner buffers the executor
+    # action in this shape before committing the run's terminal summary.
+    action =
+      Event.action(%{
+        id: "tool_call",
+        kind: "command",
+        title: "bash",
+        detail: %{tool_call_id: "call", name: "bash", result: "ACTUAL RESULT"}
       })
+
+    completed_action =
+      Event.action_event(%{engine: "lemon", phase: :completed, ok: true, action: action})
+
+    :ok = RunStore.append_event(c.id, completed_action)
 
     finalize(c, %{ok: true, answer: "Canonical answer"})
 
@@ -389,8 +391,15 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
              "truncated" => false
            }
 
-    assert [%{"phase" => "completed", "content" => "ACTUAL RESULT", "toolCallId" => "call"}] =
-             recovered["snapshot"]["actions"]
+    assert [
+             %{
+               "phase" => "completed",
+               "role" => "tool_result",
+               "ok" => true,
+               "content" => "ACTUAL RESULT",
+               "toolCallId" => "call"
+             }
+           ] = recovered["snapshot"]["actions"]
 
     assert {:ok, ^recovered} = SessionsSnapshot.handle(params(c), ctx())
 
@@ -406,6 +415,15 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
              )
 
     refute Map.has_key?(stale, "snapshot")
+
+    # Once only the retained journal is selected, the same action is recovered
+    # from the history projection of the owner's commit, without duplication.
+    Agent.update(c.state, fn state ->
+      %{state | native_result: {:ok, %{c.native | live: false, streaming: false, run_id: nil}}}
+    end)
+
+    assert {:ok, retained} = SessionsSnapshot.handle(params(c), ctx())
+    assert retained["snapshot"]["actions"] == recovered["snapshot"]["actions"]
   end
 
   test "terminal continuation proves full journal ancestry across leaf/revision and retained attempt changes",
