@@ -1,7 +1,7 @@
 defmodule LemonPlatformTest.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.3.0"
   @source_url "https://github.com/z80dev/lemon"
 
   # This file ships verbatim in the hex tarball, so it must not read anything
@@ -16,15 +16,18 @@ defmodule LemonPlatformTest.MixProject do
               File.regular?(Path.expand("../../mix.exs", __DIR__)) and
               System.get_env("LEMON_HEX_PUBLISH") not in ["1", "true"]
 
-  # What a published release requires of its sibling Lemon packages.
-  @lemon_requirement "~> 0.2"
+  # What a published release requires of its sibling Lemon packages. The
+  # published packages ship together on one 0.x release line and every 0.x
+  # minor may break, so the requirement is derived from @version and admits
+  # patch releases of the same minor only ("~> 0.3.0" for 0.3.x; never 0.4).
+  @lemon_requirement with {:ok, v} <- Version.parse(@version), do: "~> #{v.major}.#{v.minor}.0"
 
   def project do
     [
       app: :lemon_platform_test,
       version: @version,
       test_pattern: "*_test.exs",
-      elixir: "~> 1.15",
+      elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       # The self-validation suites in test/compliance run the templates against
       # the platform's own implementations, which covers 95%+ of the macro
@@ -62,6 +65,11 @@ defmodule LemonPlatformTest.MixProject do
     [
       licenses: ["MIT"],
       files: ~w(lib .formatter.exs mix.exs README.md CHANGELOG.md LICENSE),
+      # PluginCase targets lemon_channels, which is not published, so it is
+      # repository-only: a Hex consumer could never satisfy it.
+      # scripts/verify_packages fails if a packaged module references a
+      # module outside the published packages.
+      exclude_patterns: [~r{^lib/lemon_platform_test/plugin_case\.ex$}],
       links: %{
         "GitHub" => @source_url,
         "Changelog" => "#{@source_url}/blob/main/apps/lemon_platform_test/CHANGELOG.md"
@@ -77,16 +85,18 @@ defmodule LemonPlatformTest.MixProject do
       source_ref: "main",
       formatters: ["html"],
       groups_for_modules: [
-        "Case templates": [
-          LemonPlatformTest.BackendCase,
-          LemonPlatformTest.PluginCase,
-          LemonPlatformTest.ProviderCase,
-          LemonPlatformTest.EventsCase
-        ],
+        "Case templates":
+          [LemonPlatformTest.BackendCase] ++
+            if(@umbrella, do: [LemonPlatformTest.PluginCase], else: []) ++
+            [LemonPlatformTest.ProviderCase, LemonPlatformTest.EventsCase],
         "Test doubles": [
           LemonPlatformTest.FakeLLM
         ]
-      ]
+      ],
+      # The published docs describe the published modules only.
+      filter_modules: fn module, _metadata ->
+        @umbrella or module != LemonPlatformTest.PluginCase
+      end
     ]
   end
 
@@ -95,9 +105,9 @@ defmodule LemonPlatformTest.MixProject do
   end
 
   defp deps do
-    # lemon_channels is not published to hex, so PluginCase's target exists
-    # only inside the umbrella; a hex consumer who reaches for PluginCase gets
-    # LemonPlatformTest.require_dep!/3's error instead.
+    # lemon_channels is not published to hex, so PluginCase and its target
+    # exist only inside the umbrella (and in path dependencies on a checkout);
+    # the Hex package excludes PluginCase.
     channels = if @umbrella, do: [{:lemon_channels, in_umbrella: true}], else: []
 
     lemon_deps([

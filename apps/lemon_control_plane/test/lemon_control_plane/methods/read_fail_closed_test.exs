@@ -10,8 +10,8 @@ defmodule LemonControlPlane.Methods.ReadFailClosedTest do
   alias LemonControlPlane.ACP
 
   alias LemonControlPlane.Methods.{
+    AgentWait,
     ChatHistory,
-    ConfigGet,
     CronRuns,
     CronStatus,
     ExecApprovalsGet,
@@ -80,14 +80,12 @@ defmodule LemonControlPlane.Methods.ReadFailClosedTest do
   # Each row names a handler, how its dependency is made unreadable, and the
   # call. Every row must answer with an explicit unavailable error.
   @rows [
+    {"agent.wait", :store, &__MODULE__.agent_wait/0},
     {"exec.approvals.get", :store, &__MODULE__.exec_approvals/0},
-    {"config.get (all)", :store, &__MODULE__.config_all/0},
-    {"config.get (key)", :store, &__MODULE__.config_key/0},
     {"cron.runs", :store, &__MODULE__.cron_runs/0},
     {"sessions.preview", :run_history, &__MODULE__.sessions_preview/0},
     {"chat.history", :run_history, &__MODULE__.chat_history/0},
-    {"session.detail", :run_history, &__MODULE__.session_detail/0},
-    {"session.detail (directory)", :store, &__MODULE__.session_detail/0},
+    {"session.detail", :store, &__MODULE__.session_detail/0},
     {"logs.tail", :log_ring, &__MODULE__.logs_tail/0},
     {"tasks.active.list", :task_runtime, &__MODULE__.tasks_active/0},
     {"tasks.recent.list", :task_runtime, &__MODULE__.tasks_recent/0}
@@ -140,9 +138,10 @@ defmodule LemonControlPlane.Methods.ReadFailClosedTest do
     assert {:error, -32_603, _} = A2AHandler.handle("ListTasks", %{}, "hermes")
   end
 
+  def agent_wait,
+    do: AgentWait.handle(%{"runId" => "run-unreadable", "timeoutMs" => 2_000}, @ctx)
+
   def exec_approvals, do: ExecApprovalsGet.handle(%{}, @ctx)
-  def config_all, do: ConfigGet.handle(%{}, @ctx)
-  def config_key, do: ConfigGet.handle(%{"key" => "logLevel"}, @ctx)
   def cron_runs, do: CronRuns.handle(%{"id" => "cron-job-unreadable"}, @ctx)
   def sessions_preview, do: SessionsPreview.handle(%{"sessionKey" => session_key()}, @ctx)
   def chat_history, do: ChatHistory.handle(%{"sessionKey" => session_key()}, @ctx)

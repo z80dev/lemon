@@ -161,8 +161,7 @@ defmodule CodingAgent.Session.DefaultProviderAuthorityWireTest do
     %{
       settings
       | compaction_enabled: false,
-        retry_enabled: false,
-        tools: %{wasm: %{enabled: false}}
+        retry_enabled: false
     }
   end
 

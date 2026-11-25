@@ -1130,6 +1130,19 @@ defmodule LemonCore.Store.SqliteBackendTest do
       assert context.table == :mytable
     end
 
+    test "list decodes past a bad row and reports every corrupt row", %{state: state} do
+      assert {:ok, state} = SqliteBackend.put(state, :mytable, "good-1", %{v: 1})
+      insert_corrupt_row!(state, :mytable, "bad-1", <<0>>)
+      assert {:ok, state} = SqliteBackend.put(state, :mytable, "good-2", %{v: 2})
+      insert_corrupt_row!(state, :mytable, "bad-2", <<1, 2>>)
+
+      assert {:error, {:sqlite_corrupt_data, context, _message}} =
+               SqliteBackend.list(state, :mytable)
+
+      assert context.table == :mytable
+      assert context.corrupt_rows == 2
+    end
+
     test "decode returns structured failure without directly logging decoded sensitive keys", %{
       state: state
     } do

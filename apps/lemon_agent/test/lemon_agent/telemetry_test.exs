@@ -105,6 +105,33 @@ defmodule LemonAgent.TelemetryTest do
         assert [:lemon_agent, :loop | _rest] = event_name
       end
     end
+
+    # #708: the loop must not walk and JSON-encode the whole history before each
+    # request; the removed size scan announced itself through these events.
+    test "a request does not scan the full history for its size", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
+      attach_telemetry(
+        [[:lemon_agent, :context, :size], [:lemon_agent, :context, :warning]],
+        handler_id,
+        collector
+      )
+
+      on_exit(fn -> detach_telemetry(handler_id) end)
+
+      big = String.duplicate("x", 500_000)
+      context = simple_context(messages: [user_message(big)])
+
+      config =
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ok")))
+
+      _events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
+
+      assert get_events(collector) == []
+      refute Code.ensure_loaded?(Module.concat(LemonAgent, "Context"))
+      refute Code.ensure_loaded?(Module.concat(LemonAgent, "Proxy"))
+    end
   end
 
   # ============================================================================

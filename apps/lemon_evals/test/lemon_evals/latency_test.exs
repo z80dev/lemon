@@ -55,6 +55,26 @@ defmodule LemonEvals.LatencyBudgetContractTest do
     """)
   end
 
+  test "a failed probe VM is named by its fixed probe message or exception module only" do
+    python!("""
+    import tempfile
+    from pathlib import Path
+    from latency_benchmark import PROBE_FAILURES, failure_reason
+    assert 'latency trial timed out (missing lifecycle or delta event)' in PROBE_FAILURES
+    assert not any('#' in message for message in PROBE_FAILURES)
+    with tempfile.TemporaryDirectory() as temporary:
+        log = Path(temporary) / 'runtime.log'
+        assert failure_reason(log) == 'no exception reported'
+        log.write_text('booting\\n** (RuntimeError) latency gateway boundary missing\\n')
+        assert failure_reason(log) == 'RuntimeError: latency gateway boundary missing'
+        log.write_text('** (File.Error) could not read file "/private/secret/session.jsonl"\\n'
+                       '    (elixir) lib/file.ex:1: File.read!/1\\n')
+        assert failure_reason(log) == 'File.Error'
+        log.write_text('** (RuntimeError) prompt text from the user\\n')
+        assert failure_reason(log) == 'RuntimeError'
+    """)
+  end
+
   # Boots the offline native runtime (minutes); nightly's latency job runs it.
   @tag :slow
   @tag timeout: 240_000
@@ -88,7 +108,15 @@ defmodule LemonEvals.LatencyBudgetContractTest do
     assert report["baseline_status"] == "bootstrap_no_baseline"
     assert length(report["top_three_session_contributors"]) == 3
 
-    for {_metric, distribution} <- report["metrics"] do
+    metrics = report["metrics"]
+
+    assert Enum.sort(Map.keys(metrics)) ==
+             ~w(boot_to_ready cold_ready completion_to_next_start enter_to_provider
+                gateway_token_to_client provider_to_client provider_to_gateway_token
+                session_environment_capture session_journal_load session_prompt_composition
+                session_tool_registry warm_ready)
+
+    for {_metric, distribution} <- metrics do
       assert distribution["n"] >= 1
       assert distribution["p50_ms"] >= 0
       assert distribution["p99_ms"] >= distribution["p50_ms"]

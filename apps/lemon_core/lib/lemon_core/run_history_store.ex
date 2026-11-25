@@ -140,10 +140,10 @@ defmodule LemonCore.RunHistoryStore do
   Pass a store instance name as a leading argument to target a non-default
   history store: `{LemonCore.RunHistoryStore, :handle_finalize_run, [:my_history]}`.
   """
-  @spec handle_finalize_run(map()) :: :ok
+  @spec handle_finalize_run(map()) :: :ok | {:error, term()}
   def handle_finalize_run(event), do: handle_finalize_run(__MODULE__, event)
 
-  @spec handle_finalize_run(server(), map()) :: :ok
+  @spec handle_finalize_run(server(), map()) :: :ok | {:error, term()}
   def handle_finalize_run(server, %{
         run_id: run_id,
         session_key: session_key,
@@ -152,13 +152,15 @@ defmodule LemonCore.RunHistoryStore do
         summary: summary
       })
       when is_binary(session_key) and session_key != "" do
-    put(server, session_key, started_at, run_id, %{
+    data = %{
       events: Map.get(record, :events, []),
       summary: summary,
       session_key: session_key,
       run_id: run_id,
       started_at: started_at
-    })
+    }
+
+    GenServer.call(server, {:put, session_key, started_at, run_id, data})
   end
 
   def handle_finalize_run(_server, _event), do: :ok
@@ -202,6 +204,26 @@ defmodule LemonCore.RunHistoryStore do
     case GenServer.call(server, {:get, session_key, Keyword.get(opts, :limit, 50)}, 5_000) do
       {:ok, rows} when is_list(rows) -> {:ok, rows}
       {:error, reason} when reason in [:corrupt_history, :history_read_failed] -> {:error, reason}
+      _unexpected -> {:error, :unavailable}
+    end
+  catch
+    :exit, _ -> {:error, :unavailable}
+  end
+
+  @doc """
+  Count retained history rows for a session without confusing an unavailable
+  owner or a failed SQLite read with an empty session.
+  """
+  @spec fetch_count(String.t()) ::
+          {:ok, non_neg_integer()} | {:error, :history_read_failed | :unavailable}
+  def fetch_count(session_key), do: fetch_count(__MODULE__, session_key)
+
+  @spec fetch_count(server(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, :history_read_failed | :unavailable}
+  def fetch_count(server, session_key) do
+    case GenServer.call(server, {:count, session_key}, 5_000) do
+      {:ok, count} when is_integer(count) and count >= 0 -> {:ok, count}
+      {:error, :history_read_failed} -> {:error, :history_read_failed}
       _unexpected -> {:error, :unavailable}
     end
   catch
@@ -282,12 +304,18 @@ defmodule LemonCore.RunHistoryStore do
 
   @impl true
   def handle_cast({:put, session_key, started_at_ms, run_id, data}, state) do
+    persist_history(state, session_key, started_at_ms, run_id, data)
+    {:noreply, state}
+  end
+
+  defp persist_history(state, session_key, started_at_ms, run_id, data) do
     run_id_str = normalize_run_id(run_id)
     encoded = encode(data)
 
     case do_put(state, session_key, started_at_ms, run_id_str, encoded) do
       :ok ->
         maybe_trim_session(state, session_key)
+        :ok
 
       {:error, reason} ->
         if blob_too_big?(reason) do
@@ -297,16 +325,23 @@ defmodule LemonCore.RunHistoryStore do
           Logger.warning("[RunHistoryStore] payload too large, retrying compact write")
 
           case do_put(state, session_key, started_at_ms, run_id_str, compact_encoded) do
-            :ok -> :ok
-            {:error, r} -> Logger.error("[RunHistoryStore] compact put failed: #{inspect(r)}")
+            :ok ->
+              :ok
+
+            {:error, r} = error ->
+              Logger.error("[RunHistoryStore] compact put failed: #{inspect(r)}")
+              error
           end
         else
           Logger.error("[RunHistoryStore] put failed: #{inspect(reason)}")
+          {:error, reason}
         end
     end
-
-    {:noreply, state}
   end
+
+  @impl true
+  def handle_call({:put, session_key, started_at_ms, run_id, data}, _from, state),
+    do: {:reply, persist_history(state, session_key, started_at_ms, run_id, data), state}
 
   @impl true
   def handle_call({:delete_session, session_key}, _from, state) do
@@ -329,6 +364,22 @@ defmodule LemonCore.RunHistoryStore do
     # A failed step or an unfinished count keeps its transaction (and lock)
     # open until the statement is reset.
     _ = Sqlite3.reset(state.stmts.delete_by_session)
+    _ = Sqlite3.reset(state.stmts.count)
+    {:reply, result, state}
+  end
+
+  def handle_call({:count, session_key}, _from, state) do
+    result =
+      with :ok <- reset_and_bind(state.stmts.count, [session_key]),
+           {:row, [count]} when is_integer(count) and count >= 0 <-
+             Sqlite3.step(state.conn, state.stmts.count) do
+        {:ok, count}
+      else
+        err ->
+          Logger.warning("[RunHistoryStore] count failed: #{inspect(error_tag(err))}")
+          {:error, :history_read_failed}
+      end
+
     _ = Sqlite3.reset(state.stmts.count)
     {:reply, result, state}
   end
@@ -522,8 +573,6 @@ defmodule LemonCore.RunHistoryStore do
   defp normalize_run_id(ref) when is_reference(ref), do: inspect(ref)
   defp normalize_run_id(id) when is_binary(id), do: id
   defp normalize_run_id(id), do: inspect(id)
-
-  defp blob_too_big?({:sqlite_bind_failed, :blob_too_big}), do: true
 
   defp blob_too_big?(reason) when is_binary(reason),
     do: String.contains?(String.downcase(reason), "too big")

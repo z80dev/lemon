@@ -351,7 +351,6 @@ defmodule LemonCore.SessionKey do
   # - thread:<thread_id>
   # - sub:<sub_id>
   defp parse_extras([]), do: {:ok, %{}}
-  defp parse_extras(nil), do: {:ok, %{}}
 
   defp parse_extras(rest) when is_list(rest) do
     if rem(length(rest), 2) != 0 do
@@ -372,6 +371,4 @@ defmodule LemonCore.SessionKey do
       end)
     end
   end
-
-  defp parse_extras(_), do: {:error, :invalid}
 end

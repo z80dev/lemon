@@ -39,6 +39,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonCore.Dedupe.Ets
 
   alias LemonCore.{
+    AutomationCommands,
     ChatStateStore,
     Event,
     InboundMessage,
@@ -772,9 +773,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     session_key = build_session_key(state, inbound, scope)
 
-    {model_hint, model_scope} = resolve_model_hint(state, session_key, channel_id, thread_id)
-    {thinking_hint, thinking_scope} = resolve_thinking_hint(state, channel_id, thread_id)
-
+    # Model and thinking level come from the router (`PolicyStore` session and
+    # chat rows), never from channel meta.
     meta =
       inbound.meta
       |> Map.put(:session_key, session_key)
@@ -782,10 +782,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       |> Map.put(:user_msg_id, user_msg_id)
       |> Map.put(:status_msg_id, nil)
       |> Map.put(:topic_id, thread_id)
-      |> maybe_put(:model, model_hint)
-      |> maybe_put(:model_scope, model_scope)
-      |> maybe_put(:thinking_level, thinking_hint)
-      |> maybe_put(:thinking_scope, thinking_scope)
       |> maybe_put(:queue_mode, queue_override)
 
     meta =
@@ -1492,8 +1488,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         nil,
         %{
           maybe_subscribe_to_run: fn _run_id -> :ok end,
-          current_thread_generation: fn _state, _chat_id, _thread_id -> 0 end,
-          maybe_put: &maybe_put/3
+          current_thread_generation: fn _state, _chat_id, _thread_id -> 0 end
         }
       )
     end)
@@ -1902,22 +1897,20 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     # Goal work runs later under this channel's channel-run authority; with no
     # peer kind the router applies the group approval floor. Judge ticks and
     # continuations run off this process and post their result as a follow-up.
+    # A goal service that does not answer yields an outcome-unknown reply.
     text =
-      try do
-        LemonChannels.GoalStatusMessage.handle(session_key, args,
-          agent_id: BindingResolver.resolve_agent_id(scope),
-          workspace: BindingResolver.resolve_cwd(scope),
-          channel_context: %{
-            channel_id: "discord",
-            peer_id: interaction |> interaction_channel_id() |> maybe_to_string()
-          },
-          meta: %{transport: "discord"},
-          start_task: &start_task/1,
-          deliver: &send_followup(interaction, &1)
-        )
-      catch
-        :exit, _ -> "Goal command failed: the goal service did not answer in time."
-      end
+      AutomationCommands.handle(:goal, args,
+        session_key: session_key,
+        agent_id: BindingResolver.resolve_agent_id(scope),
+        workspace: BindingResolver.resolve_cwd(scope),
+        channel_context: %{
+          channel_id: "discord",
+          peer_id: interaction |> interaction_channel_id() |> maybe_to_string()
+        },
+        meta: %{transport: "discord"},
+        start_task: &start_task/1,
+        deliver: &send_followup(interaction, &1)
+      )
 
     respond_ephemeral(interaction, text)
     state
@@ -1938,7 +1931,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     # refused here; reads stay scoped to this channel's own session principal.
     respond_ephemeral(
       interaction,
-      LemonChannels.KanbanStatusMessage.handle(args,
+      AutomationCommands.handle(:kanban, args,
         agent_id: BindingResolver.resolve_agent_id(scope),
         session_key: interaction_session_key(interaction, state),
         workspace: BindingResolver.resolve_cwd(scope),

@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
@@ -37,9 +37,6 @@ async function bootApp(
 	cwd = process.cwd(),
 	promptHistory?: PromptHistoryStore,
 ) {
-	// Local discovery (file commands, palette) must never read the real home.
-	const home = mkdtempSync(join(tmpdir(), "lemon-tui-home-"));
-	teardown.push(() => rmSync(home, { recursive: true, force: true }));
 	// Match the advertised protocol to this fixture's implemented services.
 	// Unrelated activity/routing/approval hydration must not participate in boot.
 	const server = await FakeControlPlane.start({
@@ -55,6 +52,7 @@ async function bootApp(
 			"health",
 			"background.start",
 			"background.result",
+			"commands.list",
 		],
 	});
 	teardown.push(() => server.stop());
@@ -79,6 +77,7 @@ async function bootApp(
 		summary: { totalTokens: 48_000 },
 	});
 	server.respondWith("status", { server: { version: "fake-0.0.0" }, runs: { active: 0 } });
+	server.respondWith("commands.list", { commands: [], truncated: false });
 
 	const terminal = new MemoryTerminal();
 	const client = new ControlPlaneClient({
@@ -94,7 +93,6 @@ async function bootApp(
 		terminal,
 		cwd,
 		promptHistory,
-		resources: { home, env: {} },
 		onExit: (code) => exits.push(code),
 		// Deterministic branch: the real poll would depend on the checkout.
 		readBranch: async () => "main",
@@ -109,15 +107,12 @@ function chatText(app: AppShell): string {
 }
 
 async function bootDisconnectedApp(url: string) {
-	const home = mkdtempSync(join(tmpdir(), "lemon-tui-disconnected-"));
-	teardown.push(() => rmSync(home, { recursive: true, force: true }));
 	const terminal = new MemoryTerminal();
 	const client = new ControlPlaneClient({ url, requestTimeoutMs: 25 });
 	const app = new AppShell({
 		url,
 		client,
 		terminal,
-		resources: { home, env: {} },
 		readBranch: async () => null,
 	});
 	teardown.push(() => app.stop());
@@ -324,26 +319,31 @@ describe("slash commands in the app", () => {
 });
 
 describe("file-defined slash commands", () => {
-	test("are registered locally and delivered verbatim for the daemon to expand", async () => {
+	test("come from the daemon's commands.list and are delivered verbatim for it to expand", async () => {
+		// The client reads nothing here; the daemon owns discovery for this cwd.
 		const project = mkdtempSync(join(tmpdir(), "lemon-tui-project-"));
 		teardown.push(() => rmSync(project, { recursive: true, force: true }));
-		mkdirSync(join(project, ".claude/commands/git"), { recursive: true });
-		writeFileSync(
-			join(project, ".claude/commands/review.md"),
-			"---\ndescription: Review a path\nargument-hint: <path>\n---\nReview $1",
-		);
-		writeFileSync(join(project, ".claude/commands/git/commit.md"), "Commit $ARGUMENTS");
-		writeFileSync(join(project, ".claude/commands/help.md"), "shadowed by /help");
+		const commands = {
+			commands: [
+				{ name: "git:commit", description: "", argumentHint: null },
+				{ name: "help", description: "shadowed by /help", argumentHint: null },
+				{ name: "review", description: "Review a path", argumentHint: "<path>" },
+			],
+			truncated: false,
+		};
 		const { app, server } = await bootApp("tui-test", project);
+		server.respondWith("commands.list", commands);
 
 		await app.submit("/review lib/app.ex");
 		await waitFor(() => server.requestsFor("chat.send").length > 0, { what: "chat.send" });
 		expect(server.requestsFor("chat.send")[0].params).toMatchObject({
 			prompt: "/review lib/app.ex",
 		});
+		expect(server.requestsFor("commands.list")[0].params).toEqual({ cwd: project });
 
 		// Namespaced names are plain prompt text to the client; the daemon expands them.
 		const nested = await bootApp("tui-nested", project);
+		nested.server.respondWith("commands.list", commands);
 		await nested.app.submit("/git:commit fix it");
 		await waitFor(() => nested.server.requestsFor("chat.send").length > 0, { what: "chat.send" });
 		expect(nested.server.requestsFor("chat.send")[0].params).toMatchObject({
@@ -351,7 +351,7 @@ describe("file-defined slash commands", () => {
 		});
 		expect(chatText(app)).not.toContain("unknown command");
 
-		// A command file named help.md must not shadow the built-in /help.
+		// A daemon command named help must not shadow the built-in /help.
 		await app.submit("/help");
 		expect(chatText(app)).toContain("/review <path>");
 		expect(server.requestsFor("chat.send")).toHaveLength(1);

@@ -9,7 +9,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   alias Elixir.CodingAgent.RunGraph
   alias Elixir.CodingAgent.TaskStore
   alias Elixir.CodingAgent.Tools.Task
-  alias Elixir.CodingAgent.Tools.Task.Followup
+  alias CodingAgent.TaskRuntime.Followup
   alias LemonCore.RunRequest
 
   defmodule TaskAsyncStubRunOrchestrator do
@@ -983,17 +983,17 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       task_a = TaskStore.new_task(%{description: "count apps", run_id: run_a})
       task_b = TaskStore.new_task(%{description: "check outbox", run_id: run_b})
 
-      assert :ok =
-               RunGraph.finish(run_a, %LemonAgent.Types.AgentToolResult{
-                 content: [%LemonAi.Types.TextContent{text: "dirs=18"}],
-                 details: %{status: "completed"}
-               })
+      # As the runtime does: the task record first (the status authority), then
+      # the run row that coordinates the join.
+      for {task_id, run_id, text} <- [{task_a, run_a, "dirs=18"}, {task_b, run_b, "outbox=yes"}] do
+        result = %LemonAgent.Types.AgentToolResult{
+          content: [%LemonAi.Types.TextContent{text: text}],
+          details: %{status: "completed"}
+        }
 
-      assert :ok =
-               RunGraph.finish(run_b, %LemonAgent.Types.AgentToolResult{
-                 content: [%LemonAi.Types.TextContent{text: "outbox=yes"}],
-                 details: %{status: "completed"}
-               })
+        TaskStore.finish(task_id, result)
+        assert :ok = RunGraph.finish(run_id, result)
+      end
 
       result =
         Task.execute(
@@ -1043,6 +1043,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       run_id = RunGraph.new_run(%{type: :task, description: "check outbox"})
       task_id = TaskStore.new_task(%{description: "check outbox", run_id: run_id})
 
+      TaskStore.fail(task_id, {:assistant_error, "HTTP 400"})
       assert :ok = RunGraph.fail(run_id, {:assistant_error, "HTTP 400"})
 
       result =

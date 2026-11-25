@@ -65,7 +65,7 @@ defmodule CodingAgent.ExecutionNode.Features do
 
     %{
       "protocol" => 1,
-      "lemonVersion" => LemonCore.Update.Version.current(),
+      "lemonVersion" => LemonCore.BuildInfo.version(),
       "methods" => capabilities |> Map.keys() |> List.delete("node.enrollment") |> Enum.sort(),
       "features" => features,
       "botReady" => missing == [],

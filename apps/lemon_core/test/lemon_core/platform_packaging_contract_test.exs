@@ -27,15 +27,29 @@ defmodule LemonCore.PlatformPackagingContractTest do
     Version.parse!(version)
   end
 
+  # Each package derives its one sibling requirement from its own @version
+  # (`@lemon_requirement`) and applies it to every sibling it declares
+  # `in_umbrella`. This evaluates that derivation as the package would.
   defp lemon_requirements(package) do
-    case Regex.run(~r/@lemon_requirements\s+%\{([^}]*)\}/, mix_exs(package)) do
-      nil ->
+    source = mix_exs(package)
+
+    siblings =
+      ~r/\{:(lemon_\w+),\s*in_umbrella:\s*true/
+      |> Regex.scan(source)
+      |> Enum.map(fn [_, app] -> String.to_atom(app) end)
+      |> Enum.filter(&(&1 in published_packages()))
+
+    case {siblings, Regex.run(~r/^\s*@lemon_requirement\s+(.+)$/m, source)} do
+      {[], _} ->
         %{}
 
-      [_, body] ->
-        ~r/(\w+):\s*"([^"]+)"/
-        |> Regex.scan(body)
-        |> Map.new(fn [_, app, req] -> {String.to_atom(app), req} end)
+      {_, nil} ->
+        flunk("#{package} has sibling packages but no @lemon_requirement")
+
+      {_, [_, expression]} ->
+        own = inspect(to_string(version(package)))
+        {requirement, _} = Code.eval_string(String.replace(expression, "@version", own))
+        Map.new(siblings, &{&1, requirement})
     end
   end
 
@@ -74,6 +88,55 @@ defmodule LemonCore.PlatformPackagingContractTest do
     end
   end
 
+  # Every 0.x minor may break, so a sibling requirement must admit the
+  # sibling's patch releases and nothing on another minor (#730).
+  test "sibling requirements cannot resolve across a 0.x minor" do
+    checked =
+      for package <- published_packages(), {dep, requirement} <- lemon_requirements(package) do
+        %Version{major: major, minor: minor} = version(dep)
+
+        assert Version.match?("#{major}.#{minor}.99", requirement),
+               "#{package} requires #{dep} #{requirement}, which refuses a patch release"
+
+        for other <-
+              ["#{major}.#{minor + 1}.0", "#{major + 1}.0.0"] ++
+                if(minor > 0, do: ["#{major}.#{minor - 1}.99"], else: []) do
+          refute Version.match?(other, requirement),
+                 "#{package} requires #{dep} #{requirement}, which admits #{other}"
+        end
+
+        {package, dep}
+      end
+
+    # The three packages with siblings are covered, not skipped.
+    assert checked |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort() ==
+             [:lemon_agent, :lemon_memory, :lemon_platform_test]
+  end
+
+  # The declared Elixir floor is a claim scripts/verify_packages proves by
+  # running the packaged consumer and doctor on it, as a required CI leg (#730).
+  test "packaging CI requires a leg on the Elixir floor every package declares" do
+    floors =
+      for package <- published_packages(), into: MapSet.new() do
+        [_, requirement] = Regex.run(~r/^\s*elixir: "([^"]+)"/m, mix_exs(package))
+        requirement
+      end
+
+    assert [floor] = MapSet.to_list(floors),
+           "packages declare different floors: #{inspect(floors)}"
+
+    assert [_, minimum] = Regex.run(~r/^~> (\d+\.\d+)$/, floor)
+
+    workflow = read!(".github/workflows/packaging.yml")
+    legs = Regex.scan(~r/^\s*elixir: "(\d+\.\d+)\.\d+"/m, workflow, capture: :all_but_first)
+
+    assert [minimum] in legs, "packaging.yml has no Elixir #{minimum} leg for `#{floor}`"
+    refute workflow =~ "continue-on-error", "the floor leg must be required"
+
+    assert read!("scripts/verify_packages") =~ ~s(elixir: "#{floor}"),
+           "the verify_packages consumer must declare the packages' floor"
+  end
+
   test "published mix.exs files load outside the umbrella" do
     for package <- published_packages() do
       source = mix_exs(package)
@@ -82,11 +145,14 @@ defmodule LemonCore.PlatformPackagingContractTest do
     end
   end
 
-  test "runtime profiles start only umbrella apps, never a published package" do
+  test "runtime profiles start only umbrella apps and dependencies, never a published package" do
     published = MapSet.new(published_packages())
+    deps = Mix.Project.deps_paths()
 
     for name <- Profile.names(), app <- Profile.app_list(name) do
-      assert File.dir?(Path.join(@repo_root, "apps/#{app}")), "#{name} names unknown app #{app}"
+      assert File.dir?(Path.join(@repo_root, "apps/#{app}")) or Map.has_key?(deps, app),
+             "#{name} names unknown app #{app}"
+
       refute MapSet.member?(published, app), "#{name} starts published package #{app}"
     end
   end

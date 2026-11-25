@@ -224,6 +224,25 @@ defmodule LemonAi.Auth.OmpTokenTest do
     assert {:error, :omp_not_found} = OmpToken.discover("relative/omp")
   end
 
+  test "global accounts read omp's kimi-code-global login under their own cache key", %{
+    path: path
+  } do
+    token = jwt(3600)
+
+    script(path, """
+    test "$#" = 2 && test "$1" = token && test "$2" = kimi-code-global || exit 9
+    printf '%s\\n' '#{token}'
+    """)
+
+    assert {:ok, ^token} = OmpToken.resolve(path, provider: "kimi-code-global")
+    assert {^token, _expires_at} = Cache.get(cache_key(path, "kimi-code-global"))
+    assert Cache.get(cache_key(path)) == nil
+    assert {:error, :omp_exit_nonzero} = OmpToken.resolve(path)
+
+    assert {:error, :omp_unsupported_provider} =
+             OmpToken.resolve(path, provider: "anthropic")
+  end
+
   test "non-zero exits discard stdout and stderr", %{path: path} do
     script(path, "printf 'private-access-token'; printf 'private-refresh-token' >&2; exit 1")
     assert {:error, :omp_exit_nonzero} = OmpToken.resolve(path)
@@ -242,9 +261,9 @@ defmodule LemonAi.Auth.OmpTokenTest do
     assert {:error, :omp_output_too_large} = OmpToken.resolve(path)
   end
 
-  defp cache_key(path) do
+  defp cache_key(path, provider \\ "kimi-code") do
     scope = Enum.map(~w(HOME XDG_CONFIG_HOME PI_CODING_AGENT_DIR OMP_PROFILE), &System.get_env/1)
-    {OmpToken, Path.expand(path), scope}
+    {OmpToken, Path.expand(path), provider, scope}
   end
 
   defp jwt(offset) do

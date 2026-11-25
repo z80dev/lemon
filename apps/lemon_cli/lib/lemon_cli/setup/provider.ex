@@ -480,7 +480,8 @@ defmodule LemonCli.Setup.Provider do
               "--auth",
               "--codex-auth-path",
               "--enterprise-domain",
-              "--project-id"
+              "--project-id",
+              "--region"
             ] do
     do_extract_provider_arg(rest, nil, [value, flag | acc])
   end

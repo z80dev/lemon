@@ -22,7 +22,7 @@ defmodule LemonAutomation.KanbanWorktree do
   session runner refuses to start a session in any other directory object.
   """
 
-  alias LemonAgent.Workspace.KanbanAuthority
+  alias LemonAutomation.KanbanAuthority
   alias LemonAutomation.{KanbanGitSandbox, KanbanGitWorkflow}
 
   @type context :: %{

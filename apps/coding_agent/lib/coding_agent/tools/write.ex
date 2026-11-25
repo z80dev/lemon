@@ -34,8 +34,6 @@ defmodule CodingAgent.Tools.Write do
   alias CodingAgent.Tools.PathHelpers
   alias CodingAgent.Tools.Read
   alias CodingAgent.Tools.Task.Messaging
-  alias CodingAgent.Tools.WriteArchive
-  alias CodingAgent.Tools.WriteSqlite
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -67,7 +65,7 @@ defmodule CodingAgent.Tools.Write do
           "path" => %{
             "type" => "string",
             "description" =>
-              "File path, archive.zip:inner/path (also TAR/tgz), db.sqlite:table to insert JSON, or db.sqlite:table:key to update (empty content deletes)"
+              "File path to write (relative paths resolve from the working directory)"
           },
           "content" => %{
             "type" => "string",
@@ -187,18 +185,9 @@ defmodule CodingAgent.Tools.Write do
            {:ok, content} <- get_content(params),
            {:ok, format?} <- LspFormatter.option(params, opts),
            {:ok, diagnostics?} <- LspDiagnostics.option(params, opts) do
-        resolved_path = resolve_path(path, cwd, opts)
-
-        cond do
-          archive = WriteArchive.target(resolved_path) ->
-            WriteArchive.write(archive, content, signal, cwd, opts)
-
-          sqlite = WriteSqlite.target(resolved_path) ->
-            WriteSqlite.write(sqlite, content, signal, cwd, opts)
-
-          true ->
-            write_file(resolved_path, content, signal, format?, diagnostics?, cwd, opts)
-        end
+        path
+        |> resolve_path(cwd, opts)
+        |> write_file(content, signal, format?, diagnostics?, cwd, opts)
       end
     end
   end

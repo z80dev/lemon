@@ -58,6 +58,11 @@ defmodule LemonWeb.SessionCwd do
 
   def remember(_session_key, _cwd), do: :ok
 
+  @doc false
+  # The remembered workspace row of a session, for `LemonWeb.SessionParticipant`.
+  @spec lifecycle_tables() :: [atom()]
+  def lifecycle_tables, do: [@table]
+
   defp remembered(session_key) do
     case LemonCore.Store.get(@table, session_key) do
       cwd when is_binary(cwd) and cwd != "" -> {:ok, cwd}

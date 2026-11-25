@@ -9,7 +9,7 @@ defmodule LemonCore.FinalizeProjectionReplayTest do
 
   import ExUnit.CaptureLog
 
-  alias LemonCore.{RunHistoryStore, RunStore, Store}
+  alias LemonCore.{RunHistoryStore, RunStore, Store, TerminalOutbox}
   alias LemonCore.Store.EtsBackend
 
   @moduletag :tmp_dir
@@ -61,10 +61,12 @@ defmodule LemonCore.FinalizeProjectionReplayTest do
     assert {:ok, %{summary: ^committed}} = Store.fetch_run(store, run_id)
     assert :ets.lookup(deliveries, run_id) == []
     assert {:ok, [{^run_id, %{summary: ^committed}}]} = history_rows(history, session_key)
+    assert {:ok, %{projections: :failed}} = TerminalOutbox.pending(store, run_id)
 
     # Repair is an identical retry: every projection is redelivered, the failed
     # one lands, and the idempotent history row is not duplicated.
     assert :ok = RunStore.finalize(store, run_id, committed)
+    assert :ok = TerminalOutbox.repair(store, run_id)
     assert [{^run_id, ^committed}] = :ets.lookup(deliveries, run_id)
     assert {:ok, [{^run_id, %{summary: ^committed}}]} = history_rows(history, session_key)
     assert %{run_count: 1} = Store.get(store, :sessions_index, session_key)

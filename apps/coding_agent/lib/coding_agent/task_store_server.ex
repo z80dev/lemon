@@ -224,7 +224,7 @@ defmodule CodingAgent.TaskStoreServer do
             if target_status in @terminal_statuses and
                  (is_map(record[:launch_descriptor]) or
                     (record[:orchestration_worker] == true and
-                       CodingAgent.Tools.Task.Restore.enabled?())),
+                       CodingAgent.TaskRuntime.Restore.enabled?())),
                do: durable_mode(state),
                else: :write
 
@@ -266,9 +266,9 @@ defmodule CodingAgent.TaskStoreServer do
         [{^task_id, %{status: :interrupted, parent_run_id: ^parent_run_id} = record, events}] ->
           attempts = Map.get(record, :restart_attempt, 0)
 
-          if CodingAgent.Tools.Task.Restore.enabled?() and
-               CodingAgent.Tools.Task.Restore.resumable?(record[:launch_descriptor]) and
-               attempts < CodingAgent.Tools.Task.Restore.max_attempts() and
+          if CodingAgent.TaskRuntime.Restore.enabled?() and
+               CodingAgent.TaskRuntime.Restore.resumable?(record[:launch_descriptor]) and
+               attempts < CodingAgent.TaskRuntime.Restore.max_attempts() and
                DurableTable.open?(state.dets_table) do
             updated =
               record
@@ -460,9 +460,10 @@ defmodule CodingAgent.TaskStoreServer do
         if status in [:queued, :running, :tracking_lost, :interrupted] do
           resumable? =
             status in [:running, :interrupted] and
-              CodingAgent.Tools.Task.Restore.enabled?() and
-              CodingAgent.Tools.Task.Restore.resumable?(record[:launch_descriptor]) and
-              Map.get(record, :restart_attempt, 0) < CodingAgent.Tools.Task.Restore.max_attempts()
+              CodingAgent.TaskRuntime.Restore.enabled?() and
+              CodingAgent.TaskRuntime.Restore.resumable?(record[:launch_descriptor]) and
+              Map.get(record, :restart_attempt, 0) <
+                CodingAgent.TaskRuntime.Restore.max_attempts()
 
           record
           |> Map.put(:status, if(resumable?, do: :interrupted, else: :lost))

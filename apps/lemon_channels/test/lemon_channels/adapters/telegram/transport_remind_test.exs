@@ -1,8 +1,9 @@
 defmodule LemonChannels.Adapters.Telegram.TransportRemindTest do
   @moduledoc """
   `/remind`, `/reminders`, and `/unremind` through the real Telegram transport
-  against `LemonChannels.Telegram.FakeAPI`, with the cron manager replaced via
-  `config :lemon_channels, :reminder_cron_module`.
+  against `LemonChannels.Telegram.FakeAPI` and the automation chat commands
+  behind `LemonCore.AutomationCommands`, with the cron manager replaced by
+  `FakeCron`.
   """
 
   use ExUnit.Case, async: false
@@ -49,6 +50,19 @@ defmodule LemonChannels.Adapters.Telegram.TransportRemindTest do
     end
   end
 
+  defmodule Commands do
+    @behaviour LemonCore.AutomationCommands
+
+    @impl true
+    def handle(command, args, opts),
+      do:
+        LemonAutomation.ChatCommands.handle(
+          command,
+          args,
+          Keyword.put(opts, :cron_module, FakeCron)
+        )
+  end
+
   @gateway_config_key :"Elixir.LemonGateway.Config"
 
   setup do
@@ -59,10 +73,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportRemindTest do
     stop_transport()
     FakeAPI.reset()
 
-    previous_cron = Application.get_env(:lemon_channels, :reminder_cron_module)
+    {:ok, _} = Application.ensure_all_started(:lemon_automation)
+    previous_commands = LemonCore.AutomationCommands.provider()
     previous_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
-
-    Application.put_env(:lemon_channels, :reminder_cron_module, FakeCron)
+    :ok = LemonCore.AutomationCommands.register(Commands)
 
     Application.put_env(:lemon_gateway, @gateway_config_key, %{
       telegram: %{bot_token: "fake-token", api_mod: FakeAPI}
@@ -73,7 +87,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportRemindTest do
     on_exit(fn ->
       stop_transport()
       FakeAPI.reset()
-      restore_env(:lemon_channels, :reminder_cron_module, previous_cron)
+      :ok = LemonCore.AutomationCommands.register(previous_commands)
       restore_env(:lemon_gateway, @gateway_config_key, previous_gateway)
     end)
 

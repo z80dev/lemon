@@ -6,23 +6,17 @@ for framing, authentication and the domain-specific method reference.
 
 ## HTTP and protocol errors
 
-Non-`/v1` HTTP failures use `{"error":{"code":"UNAUTHORIZED","message":"..."}}`,
-with the same string codes as WebSocket error frames. ACP HTTP authentication
-failures use this HTTP envelope; authenticated ACP method replies retain JSON-RPC
-framing and numeric method-error codes. Local or explicitly enabled `/v1/*`
-retains OpenAI-compatible errors (`error.message` and `error.type`); remote
-hidden routes use the generic 404 envelope. `/healthz` remains `{"ok":true}`.
+HTTP failures use `{"error":{"code":"UNAUTHORIZED","message":"..."}}`, with the
+same string codes as WebSocket error frames; unknown and remote-hidden routes use
+the generic 404 envelope. ACP method replies over `/acp/ws` retain JSON-RPC
+framing and numeric method-error codes. `/healthz` remains `{"ok":true}`.
+There is no OpenAI-compatible `/v1` API and no single-shot `POST /acp` endpoint.
 
-HTTP authentication errors name `Authorization: Bearer <token>` and the server's
-token configuration: `LEMON_ACP_API_TOKEN` for `/acp`,
-`LEMON_OPENAI_COMPAT_API_TOKEN` for `/v1/*` (both also accept `x-api-key`), and
-`LEMON_CONTROL_PLANE_OPERATOR_TOKEN` for `/acp/ws`. Managed launchers store the
-operator token at `~/.lemon/run/control-plane-<port>.token`. Native `/ws` clients
-send that token in `connect.params.auth.token`, not an HTTP header.
-OpenAI/ACP HTTP authentication falls back to that operator token when its
-dedicated token is unset; both APIs require authentication by default.
-Off-loopback main peers see only `/ws` and `/healthz` unless the corresponding
-HTTP API is explicitly enabled with a dedicated token. See
+`/acp/ws` authentication errors name `Authorization: Bearer <token>` and
+`LEMON_CONTROL_PLANE_OPERATOR_TOKEN`. Managed launchers store the operator token
+at `~/.lemon/run/control-plane-<port>.token`. Native `/ws` clients send that
+token in `connect.params.auth.token`, not an HTTP header. Off-loopback main peers
+see only `/ws` and `/healthz`. See
 [listener exposure](../config.md#listener-exposure-breaking-default-change).
 The separate node gateway on `127.0.0.1:4044` is the forwarding target for remote
 nodes: only node/enrollment `/ws` and `/healthz`, never operators.
@@ -109,7 +103,6 @@ sizes, token usage and timings), ignore include flags that would add content
 | Method | Read-only response |
 |---|---|
 | `tasks.active.list`, `tasks.recent.list` | No `description`, `result`, `error`, `latestReasoning`, `events` or `record`. |
-| `session.detail` | Runs keep `ok`, `hasError`, counts, `tokens`; tool calls keep `kind`/`ok`/`phase`; event digests have no `preview`; no prompt, answer, error, raw maps, events or run record. |
 | `cron.runs` | No `output`, `outputPreview`, `error`, `meta`, `runRecord` or `introspection`; byte counts remain. |
 | `cron.list` | No `prompt`, `command` or `meta`; byte counts remain. |
 | `chat.history` | Rows keep `id`, `role`, `timestampMs`, `ok`, `toolCallId`, `toolName`, `phase`, `cancelled`, `durationMs`. |
@@ -152,13 +145,14 @@ All other `operator.read` methods were audited and return metadata only:
 `usage.status`, `blueprints.*`, `mcp.execution_names`, `models.list`,
 `profiles.sync.status`, `node.capabilities.get`, `node.host.info`,
 `node.profile.paths`, `node.runtime.features`, `setup.status`, `status`,
-`skills.hermes.catalog`, `skills.list` and `commands.catalog`.
+`skills.hermes.catalog`, `skills.list`, `commands.catalog` and `commands.list`.
 
 Two deliberate distinctions:
 
 - Published discovery descriptions stay readable: blueprint names and
   descriptions (bundle-authored catalog text), MCP tool descriptions (published
-  by the server) and skill manifest descriptions are bounded discovery metadata,
+  by the server), skill manifest descriptions and file slash command
+  descriptions and argument hints are bounded discovery metadata,
   not transcripts. The exception covers only those fields; MCP command and
   configuration previews are gated as above.
 - Session identity labels stay readable: user-set session titles
@@ -174,12 +168,14 @@ output is JSON-safe. Scrubbing only removes recognisable credentials; it is not
 what keeps ordinary prose away from read-only callers. Task `cleanup` flags
 report the content actually returned, not the options requested.
 
-`config.get` returns, for read scope, only the public fields `logLevel`, `env`,
-`maxPayload`, `tickIntervalMs`, `heartbeatEnabled`, `heartbeatIntervalMs`,
-`cronEnabled`, `skillsPath`, `routerModel` and `routerThinkingLevel`, and only
-scalar values. Any other key (stored through `config.set`) needs
-`operator.admin` and is returned through `LemonCore.Redact.operator/2`; a
-read-scope request for it returns `value: null` with `summary.adminRequired`.
+`commands.list` takes a required absolute `cwd` and returns the file slash
+commands the agent runtime would expand there (its `slash_commands/1`
+projection: `name`, `description`, `argumentHint`), read from disk on every
+call, at most 1,000 entries with `truncated`. Names are verbatim; descriptions
+and hints are single-line and bounded; command paths, sources and templates
+are never returned. Clients list file commands through it instead of scanning
+command roots themselves. Lemon has no control-plane configuration store:
+configuration lives in `config.toml`.
 
 WebSocket events are authorized per recipient (see `LemonControlPlane.EventBridge`):
 approval events need `operator.approvals`, pairing events `operator.pairing`,
@@ -244,7 +240,7 @@ A missing runtime is `UNAVAILABLE`, never an empty roster.
 
 A read whose store or runtime cannot answer returns `UNAVAILABLE`; it never
 reports empty, idle, disabled or not-found state it did not read. This covers
-`exec.approvals.get`, `config.get`, `logs.tail`, `sessions.preview`,
+`exec.approvals.get`, `commands.list`, `logs.tail`, `sessions.preview`,
 `chat.history`, `session.detail`, `cron.runs`, `tasks.active.list` and
 `tasks.recent.list`, ACP `session/list` and session lookup, and A2A task reads
 (JSON-RPC `-32603`). An execution node whose durable registry entry cannot be
@@ -289,10 +285,12 @@ daily totals are unknown because complete history cannot be established.
   `LemonCore.BuildInfo`; status reads environment/stamped commit metadata only,
   never launches git on each poll.
 - `channels.configured` and `channels.connected` retain their existing meanings
-  (registered adapters and running adapter processes). `channels.details` adds
-  one `{id,state,lastError}` per configured adapter. State is `connected`,
+  (registered adapters and running adapter processes). The built-in adapter
+  list registers only channels that canonical config can start, so
+  `configured` never names a channel without a config path. `channels.details`
+  adds one `{id,state,lastError}` per configured adapter. State is `connected`,
   `configured`, or `error`; Telegram polling, Discord READY/RESUMED events, and
-  XMTP/WhatsApp bridge transitions distinguish an observed live connection from
+  XMTP bridge transitions distinguish an observed live connection from
   merely starting a process. Startup failures are retained too. Errors contain
   only a fixed sanitized `message` (at most 256 characters, no tokens or paths)
   and the observed wall-clock `atMs`. A successful connection/poll clears the
@@ -346,6 +344,29 @@ next browser request starts a fresh driver. `lemon browser stop` calls it.
 
 The result is `{"stopped": true}`. If the driver does not confirm in time the
 method fails with `TIMEOUT`; whether it stopped is then unknown.
+
+## `secrets.set` and `secrets.delete`
+
+Scope: `operator.admin` only. Write-only access to the runtime's encrypted
+secret store for one-shot CLI clients: while a runtime owns the store,
+`lemon secrets set|delete|import-env` and the bot-token step of
+`lemon setup gateway` send their write here instead of writing the store from a
+second VM. `secrets.set` takes `name` and `value` (non-empty strings, at most
+256 bytes and 1 MiB) and optional `provider` and `expiresAt` (epoch ms);
+`secrets.delete` takes `name`.
+
+```json
+{"type":"req","id":"secrets-set-1","method":"secrets.set","params":{"name":"GITHUB_TOKEN","value":"<value>"}}
+```
+
+`secrets.set` returns `{"name", "owner", "provider", "expiresAt"}` and never
+the value; `secrets.delete` returns `{"name", "deleted": true}` (deleting an
+absent secret succeeds). A store refusal is `UNAVAILABLE` (`INVALID_REQUEST`
+for a bad name or value) with `details.reason` (`missing_master_key`,
+`weak_master_key`, `keychain_failed`, `master_key_mismatch`,
+`key_rotation_incomplete`, `secrets_locked`, `stale_revision`,
+`secret_store_failed`, ...) and `mutationMayHaveApplied: false`. An error
+without that flag, or no response, may have written: check before retrying.
 
 ## `system.restart` and `system.stop`
 

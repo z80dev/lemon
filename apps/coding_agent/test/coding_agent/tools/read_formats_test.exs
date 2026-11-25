@@ -23,17 +23,10 @@ defmodule CodingAgent.Tools.ReadFormatsTest do
     assert message =~ "numbered line"
   end
 
-  test "directory reads delegate metadata and include hidden entries", %{tmp_dir: cwd} do
-    File.write!(Path.join(cwd, ".hidden"), "hidden")
+  test "directories are refused in favour of ls", %{tmp_dir: cwd} do
     File.mkdir!(Path.join(cwd, "child"))
-    assert {:ok, result} = read(".", cwd)
-    assert result.details.format == :directory
-    assert result.details.is_directory
-    assert result.details.total_entries == 2
-    assert text(result) =~ ".hidden"
-    assert text(result) =~ "child"
-    assert text(result) =~ "d d"
-    assert text(result) =~ "1: "
+    assert {:error, message} = read("child", cwd)
+    assert message =~ "List directories with ls"
   end
 
   test "ZIP lists exact member names and reads numbered member text", %{tmp_dir: cwd} do

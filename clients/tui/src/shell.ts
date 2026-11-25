@@ -13,7 +13,7 @@
  * Neither runs before the user confirms the exact command text at submit (the
  * command controller's `confirmShell`), wherever the text came from. As a
  * usability layer, text that enters the composer other than by typing — a
- * paste, a prompt template or skill from the palette, a restored queue item or
+ * paste, a skill from the palette, a restored queue item or
  * rewound prompt, a delegated send — is escaped first
  * ({@link inertComposerText}), so it reaches the model verbatim without asking.
  *

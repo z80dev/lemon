@@ -16,7 +16,7 @@ defmodule LemonControlPlane.Methods.DoctorRun do
   Check text is not a fixed template set: configuration checks quote validator
   and TOML parser errors (which echo the offending configured value) and some
   checks put `Exception.message/1` into remediation. That text therefore needs
-  `operator.admin`, like non-public `config.get` values. Other callers get each
+  `operator.admin`. Other callers get each
   check's name, status and counts with fixed per-status guidance instead, and
   `detailsWithheld: true`.
 

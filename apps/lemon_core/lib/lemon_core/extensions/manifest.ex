@@ -7,7 +7,7 @@ defmodule LemonCore.Extensions.Manifest do
   @max_manifest_bytes 256 * 1024
   @name_pattern ~r/^[a-z0-9][a-z0-9._-]*$/
   @provider_types MapSet.new(["model", "memory", "tool_executor", "storage"])
-  @host_types MapSet.new(["beam", "wasm", "mcp", "external"])
+  @host_types MapSet.new(["beam", "mcp", "external"])
   @distribution_sources MapSet.new(["local", "git", "github", "registry", "archive"])
   @audit_statuses MapSet.new(["pending", "passed", "warn", "blocked", "unknown"])
 
@@ -53,14 +53,13 @@ defmodule LemonCore.Extensions.Manifest do
 
     with true <- base.byte_size <= @max_manifest_bytes,
          {:ok, content} <- File.read(path),
-         {:ok, manifest} <- Jason.decode(content),
-         true <- is_map(manifest) do
+         {:ok, manifest} when is_map(manifest) <- Jason.decode(content) do
       validation_for_map(base, manifest)
     else
       false -> %{base | errors: ["manifest exceeds #{div(@max_manifest_bytes, 1024)} KiB"]}
       {:error, %Jason.DecodeError{}} -> %{base | errors: ["manifest is not valid JSON"]}
       {:error, _reason} -> %{base | errors: ["manifest could not be read"]}
-      _ -> %{base | errors: ["manifest JSON must be an object"]}
+      {:ok, _manifest} -> %{base | errors: ["manifest JSON must be an object"]}
     end
   end
 

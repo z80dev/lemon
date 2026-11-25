@@ -807,7 +807,8 @@ defmodule LemonCli.Onboarding.RunnerTest do
   end
 
   defp write_codex_cli_login(path) do
-    exp = DateTime.utc_now() |> DateTime.add(3_600, :second) |> DateTime.to_unix()
+    # Plain arithmetic: lemon_cli alone does not load the configured tz database.
+    exp = System.system_time(:second) + 3_600
 
     payload =
       Jason.encode!(%{

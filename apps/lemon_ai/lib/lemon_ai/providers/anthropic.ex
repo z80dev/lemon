@@ -135,14 +135,15 @@ defmodule LemonAi.Providers.Anthropic do
 
         EventStream.error(stream, error_output)
       else
-        debug_log("request", %{
-          trace_id: trace_id,
-          url: url,
-          model: model.id,
-          base_url: base_url,
-          headers: redact_headers(headers),
-          body: body
-        })
+        _ =
+          debug_log("request", %{
+            trace_id: trace_id,
+            url: url,
+            model: model.id,
+            base_url: base_url,
+            headers: redact_headers(headers),
+            body: body
+          })
 
         EventStream.push_async(stream, {:start, output})
 
@@ -172,20 +173,20 @@ defmodule LemonAi.Providers.Anthropic do
 
         case result do
           {:ok, %Req.Response{status: 200, private: %{sse_state: final_state}}} ->
-            debug_log("response", %{status: 200, streamed: true})
+            _ = debug_log("response", %{status: 200, streamed: true})
             # Process any remaining buffer
             final_state = flush_sse_buffer(final_state)
             finalize_stream(final_state)
 
           {:ok, %Req.Response{status: 200} = resp} ->
-            debug_log("response", %{status: 200, streamed: false})
+            _ = debug_log("response", %{status: 200, streamed: false})
             # No streaming occurred (empty response or single chunk)
             final_state = resp.private[:sse_state] || initial_state
             final_state = flush_sse_buffer(final_state)
             finalize_stream(final_state)
 
           {:ok, %Req.Response{status: status, body: body, headers: response_headers}} ->
-            debug_log("response_error", %{status: status, body: body})
+            _ = debug_log("response_error", %{status: status, body: body})
 
             HttpTrace.log_error("anthropic", "response_error", %{
               trace_id: trace_id,
@@ -216,7 +217,7 @@ defmodule LemonAi.Providers.Anthropic do
             EventStream.error(stream, error_output)
 
           {:error, reason} ->
-            debug_log("response_error", %{error: inspect(reason)})
+            _ = debug_log("response_error", %{error: inspect(reason)})
 
             HttpTrace.log_error("anthropic", "transport_error", %{
               trace_id: trace_id,
@@ -407,7 +408,7 @@ defmodule LemonAi.Providers.Anthropic do
         retry: false,
         into: fn {:data, data}, {req, resp} ->
           if resp.status == 200 do
-            debug_log("sse_chunk", data)
+            _ = debug_log("sse_chunk", data)
             acc_state = resp.private[:sse_state] || initial_state
             new_state = process_sse_chunk(data, acc_state)
 
@@ -504,7 +505,7 @@ defmodule LemonAi.Providers.Anthropic do
         delay_ms: delay_ms
       })
 
-    debug_log(tag, payload)
+    _ = debug_log(tag, payload)
     HttpTrace.log("anthropic", tag, Map.put(payload, :trace_id, trace_id))
   end
 
@@ -788,7 +789,7 @@ defmodule LemonAi.Providers.Anthropic do
       session_key: trace_header(opts.headers, "x-lemon-session-key"),
       agent_id: trace_header(opts.headers, "x-lemon-agent-id"),
       url: url,
-      raw_message_count: length(context.messages || []),
+      raw_message_count: length(context.messages),
       prepared_message_count: Map.get(history_info, :prepared_message_count),
       converted_message_count: length(messages),
       history_limit: Map.get(history_info, :max_messages),
@@ -797,7 +798,7 @@ defmodule LemonAi.Providers.Anthropic do
       converted_message_summary: summarize_messages(messages),
       system_prompt_bytes:
         HttpTrace.summarize_text_size(LemonAi.SystemPrompt.text(context.system_prompt)),
-      tools_count: length(context.tools || []),
+      tools_count: length(context.tools),
       max_tokens: Map.get(body, "max_tokens"),
       temperature: opts.temperature
     }
@@ -1095,7 +1096,7 @@ defmodule LemonAi.Providers.Anthropic do
       Enum.reduce(
         [
           OpenCodeGoSession.headers(model, context, opts),
-          model.headers || %{},
+          model.headers,
           opts.headers || %{}
         ],
         %{},
@@ -1125,7 +1126,7 @@ defmodule LemonAi.Providers.Anthropic do
   defp anthropic_oauth_provider?(_), do: false
 
   defp build_request_body(model, context, opts, api_key) do
-    history_messages = context.messages || []
+    history_messages = context.messages
     history_info = %{prepared_message_count: length(history_messages)}
     cache_control = cache_control(model, opts)
     oauth_request? = anthropic_oauth_request?(model.provider, api_key)
@@ -1162,7 +1163,7 @@ defmodule LemonAi.Providers.Anthropic do
 
     # Add tools
     body =
-      if context.tools && context.tools != [] do
+      if context.tools != [] do
         Map.put(body, "tools", convert_tools(context.tools, oauth_request?: oauth_request?))
       else
         body
@@ -1178,13 +1179,6 @@ defmodule LemonAi.Providers.Anthropic do
       cond do
         !model.reasoning or opts.reasoning in [nil, :none] ->
           body
-
-        Map.get(compat, :anthropic_effort_only) || Map.get(compat, "anthropic_effort_only") ->
-          effort = LemonAi.Models.reasoning_effort_for(model, opts.reasoning)
-
-          body
-          |> Map.delete("temperature")
-          |> Map.put("output_config", %{"effort" => Atom.to_string(effort)})
 
         get_in(body, ["tool_choice", "type"]) in ["any", "tool"] ->
           if model.adaptive_thinking and model.reasoning_efforts != [] do

@@ -45,7 +45,7 @@ defmodule LemonCore.RuntimeCache do
 
   @impl true
   def init(_opts) do
-    :ets.new(__MODULE__, [:named_table, :public, :set, read_concurrency: true])
+    _ = :ets.new(__MODULE__, [:named_table, :public, :set, read_concurrency: true])
     {:ok, nil}
   end
 

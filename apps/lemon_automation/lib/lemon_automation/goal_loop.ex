@@ -13,7 +13,7 @@ defmodule LemonAutomation.GoalLoop do
   """
 
   alias LemonAutomation.{GoalContinuation, GoalJudge}
-  alias LemonAgent.Workspace.GoalStore
+  alias LemonAutomation.GoalStore
 
   @spec run_once(binary(), keyword()) ::
           {:ok, map()} | {:error, :not_found | :paused | :completed | term()}

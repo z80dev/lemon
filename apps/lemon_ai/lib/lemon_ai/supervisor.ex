@@ -8,8 +8,8 @@ defmodule LemonAi.Supervisor do
 
   @impl true
   def init(children) do
-    LemonAi.CallDispatcher.Slots.init_table()
-    LemonAi.CallDispatcher.init_table()
+    _ = LemonAi.CallDispatcher.Slots.init_table()
+    _ = LemonAi.CallDispatcher.init_table()
     Supervisor.init(children, strategy: :one_for_one)
   end
 end

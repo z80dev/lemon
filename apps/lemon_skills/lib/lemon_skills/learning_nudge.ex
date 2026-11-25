@@ -7,11 +7,12 @@ defmodule LemonSkills.LearningNudge do
   completion; no transcript, arguments, results or personal memory are retained.
   Session death removes its counters, and a runtime restart starts fresh.
 
-  Configuration uses `learning_nudge` in the global skills.json (a project
-  skills.json can only narrow it; see `LemonSkills.Config.load_config/1`):
+  Configuration is `[skills.learning_nudge]` in `config.toml` (a project
+  `.lemon/config.toml` can only narrow it; see `LemonCore.Config.ProjectLayer`):
   `enabled` (true), `memory_turn_interval` (10), `skill_tool_threshold` (15),
-  and opt-in `background_review` (disabled). Only bounded finished-run summaries
-  enter supervised reviews; the live conversation is never modified.
+  and opt-in operator-only `[skills.learning_nudge.background_review]`
+  (disabled). Only bounded finished-run summaries enter supervised reviews;
+  the live conversation is never modified.
   """
 
   use GenServer
@@ -48,13 +49,7 @@ defmodule LemonSkills.LearningNudge do
 
   def contribute(%{session_scope: :main, session_pid: pid} = request, opts)
       when is_pid(pid) do
-    config =
-      request
-      |> Map.get(:cwd)
-      |> LemonSkills.Config.load_config()
-      |> Map.get("learning_nudge", %{})
-
-    config = if is_map(config), do: config, else: %{}
+    config = learning_nudge_config(Map.get(request, :cwd))
     server = Keyword.get(opts, :server, __MODULE__)
 
     if Map.get(config, "enabled", true) == true do
@@ -68,6 +63,16 @@ defmodule LemonSkills.LearningNudge do
   end
 
   def contribute(_request, _opts), do: :skip
+
+  # An unreadable or invalid config turns reminders off for the turn.
+  defp learning_nudge_config(cwd) do
+    case LemonCore.Config.cached(cwd) do
+      %LemonCore.Config{skills: %{learning_nudge: %{} = config}} -> config
+      _ -> %{"enabled" => false}
+    end
+  rescue
+    _ -> %{"enabled" => false}
+  end
 
   @doc false
   def handle_session_event(

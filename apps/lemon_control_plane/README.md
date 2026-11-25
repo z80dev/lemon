@@ -22,19 +22,10 @@ Listeners default to `127.0.0.1`: control plane **4040**, node gateway **4044**,
 and LemonWeb **4080**. Use `LEMON_CONTROL_PLANE_BIND_IP` to opt into a different
 main bind; a non-loopback main bind requires an operator token, rejects tokenless
 compatibility, and serves only `GET /ws` and `GET /healthz` to remote peers.
-OpenAI/ACP HTTP APIs require bearer authentication even locally (their dedicated
-token, or the operator token when unset). Remote HTTP additionally requires
-`LEMON_CONTROL_PLANE_REMOTE_HTTP=openai,acp` and each enabled API's dedicated token.
-Dedicated tokens are resolved through `LemonCore.Env`: `LEMON_OPENAI_COMPAT_API_TOKEN`
-(with `LEMON_OPENAI_COMPAT_TOKEN` as an alias) and `LEMON_ACP_API_TOKEN`.
-Each dedicated token is its own principal with read/write scopes only
-(`Authorize.authenticate_api/3`): no admin, approvals or pairing. The OpenAI
-token sees only its own runs, session namespace and workspace (see
-`docs/tools/openai-compatible-api.md`). The ACP token's `POST /acp` sessions are
-recorded with their owner: it can only load, resume, fork, prompt, configure,
-list or close sessions it created, `session/new` `cwd` must resolve inside the
-API workspace (`LemonControlPlane.APIWorkspace`), and it cannot set
-`approval=auto` (`/acp/ws` requires the operator approvals scope).
+The loopback-only `GET /acp/ws` serves `lemon acp` and requires the operator
+token (or explicit tokenless loopback compatibility) with the read, write,
+approvals and content scopes. There is no OpenAI-compatible `/v1` API and no
+single-shot `POST /acp` endpoint.
 RPC image arrays are validated directly by `LemonAi.ImageInputs`; usage records
 and summaries are owned by `LemonCore.UsageStore`.
 
@@ -100,16 +91,18 @@ Responses carry the same ID with `ok: true, payload: ...` or
 ```
 
 The event bridge maps Bus run/chat/approval/cron/goal/presence traffic to socket
-events. Non-node clients receive the general event stream; nodes receive only
-targeted node traffic. State-version counters let clients reconcile changed
-presence, health and cron data. They are not durable event replay cursors.
+events. Nodes receive only targeted node traffic. State-version counters reconcile
+presence and cron data; they are not durable event replay cursors.
 
-Native owners also publish `session.event` batches on the `session_events` Bus
-topic. Each batch contains `sessionKey`, `eventId`, `cursor`, and `events`, where
-each inner event is `{event, payload}` projected by the same `EventBridge.project/1`
-as legacy `agent`/`chat` traffic. Empty batches still advance the cursor. For a
-session with a cursor, these batches are authoritative: do not also apply legacy
-`agent`/`chat` events for that session.
+An operator WebSocket selects one live session with `sessions.watch`
+(`{"sessionKey": "…"}`); changing the key replaces the subscription. Re-select
+after reconnect, then use `sessions.events` or `sessions.snapshot` to catch up.
+The socket receives versioned `session.event` batches from `session:<session_key>`
+with `sessionKey`, `eventId`, `schemaVersion`, `attemptId` (when known), `sequence`,
+`cursor`, and `events`. Each inner event is `{event, payload}`. Events without a
+canonical projection consume no session sequence; authorization can still leave
+an empty batch that advances the cursor. A watched session does not also receive
+the legacy run-topic text delta.
 
 Native `message_update` tuples contain only their provider event, without a
 partial assistant message. The native ACP mapper consumes these deltas directly;
@@ -229,7 +222,13 @@ trusted invocation context, without changing any public session/profile identity
 Another principal or changed policy must obtain its own approval even for the
 same public bot session. This private field is not an RPC parameter and is absent
 from pending lists, approval events and resolution receipts. Explicit operator
-global/node grants remain independent.
+global grants remain independent.
+
+`exec.approvals.get` returns `approvals` (the grants remembered with
+`approve_global`: `tool`, `actionHash` (`"*"` for any action), `scope`,
+`approved`, `approvedAtMs`), the active `pending` requests and a `summary`.
+These rows are approval memory, not policy: tool policy is the
+`LemonCore.PolicyStore` session row intersected with the agent profile.
 
 Authenticated sockets receive an RFC WebSocket ping every 25 seconds. Browser,
 Bun and other conforming clients automatically pong, keeping long-running
@@ -796,9 +795,14 @@ Unknown keys return `not_found`; these methods do not invent an empty session or
 read a separate client-local store. Keys are non-empty and bounded to 1,024 bytes.
 
 This management history is distinct from native branch messages returned by
-`chat.history` with `cwd`. `session.detail` remains the richer routing/run
-inspection surface and includes durable title/pin/archive metadata when present,
-so reopening a named session restores its display name.
+`chat.history` with `cwd`. `session.detail` is the routing projection: it
+answers what the session's next run resolves to (`model`, `provider`,
+`contextWindow`, `maxOutput`, `thinkingLevel`, `modelSource`, `modelOverride`)
+plus its durable `agentId`, title/pin/archive metadata, `runCount` and
+timestamps, so reopening a named session restores its display name. It reads
+no run history; unlike `sessions.get` it answers an unknown key with routing
+only. Run and event content come from `chat.history`, `sessions.history` and
+`runs.timeline.get`.
 
 ## Native session navigation
 
@@ -1112,11 +1116,16 @@ as profile memory, but destination repository-specific recall cannot infer a
 new repository mapping.
 
 Private worker methods are `memory.transfer.prepare`, `.snapshot`, `.validate`,
-`.preview`, `.apply`, `.status`, and `.inspect` over the authenticated invocation
+`.release`, `.preview`, `.apply`, `.status`, and `.inspect` over the authenticated invocation
 channel. Each method requires this connection's fresh
 `{version: 1, contextVersion: 1}` advertisement and exact ID/PID dispatch binding,
 before a source snapshot read or destination apply. Old provenance-unaware
 workers cannot strip actor ownership into a legacy copy or attest such a receipt.
+Once the destination receipt is recorded, the controller calls the source node's
+`memory.transfer.release` to delete its frozen snapshot. That call is best effort
+and bounded to five seconds; a source that does not advertise it, or a failed
+call, leaves the snapshot to the source Store's `transfer_ttl_ms`, scope erasure
+and retention, and never changes the returned receipt.
 Full snapshot content is never included in management responses,
 broadcast events, controller operation journals, or logs. Only after `copied`
 is durably acknowledged should the caller perform persona sync and explicitly
@@ -1617,14 +1626,10 @@ See [attaching a bot machine](../../docs/user-guide/attaching-a-bot-machine.md).
 ## Other HTTP surfaces
 
 - `/healthz`: local service health; it does not prove a provider-backed turn.
-- `/v1/*`: [OpenAI-compatible preview](../../docs/tools/openai-compatible-api.md),
-  including model metadata, chat/responses, retrieval and cancellation. Configure
-  `LEMON_OPENAI_COMPAT_API_TOKEN` (or `LEMON_OPENAI_COMPAT_TOKEN`) for bearer/
-  `x-api-key` auth. Generation reuses the router; queued/wait/SSE modes and safe
-  image input limits are described in the linked guide.
-- `/acp`: [ACP editor adapter](../../docs/tools/acp.md); configure
-  `LEMON_ACP_API_TOKEN` for HTTP bearer/`x-api-key` auth. The guide also describes
-  the line-oriented stdio bridge and client filesystem/permission callbacks.
+- `/acp/ws`: loopback-only duplex transport for the
+  [ACP editor adapter](../../docs/tools/acp.md) (`lemon acp`), authenticated with
+  the operator token. The guide describes the stdio bridge and client
+  filesystem/permission callbacks.
 - Optional [A2A](../../docs/user-guide/a2a-peers.md) uses a separate listener
   (default 9901) enabled by `[gateway] enable_a2a = true`. Peers are independent
   principals. Task access is peer-scoped and message IDs durably replay the

@@ -246,7 +246,7 @@ defmodule LemonAi.Providers.OpenAIResponsesWebSocket do
 
   @impl true
   def terminate(_reason, state) do
-    drop_connection(state)
+    _ = drop_connection(state)
     :ok
   end
 
@@ -494,7 +494,7 @@ defmodule LemonAi.Providers.OpenAIResponsesWebSocket do
   end
 
   defp cancel_idle(state) do
-    if state.idle_timer, do: Process.cancel_timer(state.idle_timer)
+    _ = if state.idle_timer, do: Process.cancel_timer(state.idle_timer)
     %{state | idle_timer: nil, idle_token: nil}
   end
 
@@ -616,9 +616,9 @@ defmodule LemonAi.Providers.OpenAIResponsesWebSocket do
     def handle_connect(conn, state) do
       # WebSockex defaults to active:true. Active-N also emits a passive notice,
       # allowing us to rearm only after all frames in this chunk were consumed.
-      :ok = WebSockex.Conn.set_active(conn, 1)
-      send(state.owner, {:connected, self()})
       socket_module = if conn.conn_mod == :gen_tcp, do: :inet, else: :ssl
+      :ok = socket_module.setopts(conn.socket, active: 1)
+      send(state.owner, {:connected, self()})
       {:ok, %{state | socket: {socket_module, conn.socket}}}
     end
 

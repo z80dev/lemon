@@ -1,7 +1,8 @@
 defmodule CodingAgent.InternalUrls.HistoryProtocol do
   @moduledoc "Concise, bounded visible transcripts of owned child tasks. Never includes hidden reasoning."
+  alias CodingAgent.TaskRuntime.Control
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Control, Result}
+  alias CodingAgent.Tools.Task.Result
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent

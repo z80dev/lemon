@@ -344,9 +344,26 @@ for launcher in ("bin/lemon", "rel/overlays/bin/lemon"):
                  "test", str(ports)], env=env, text=True)
             assert result == f"{explicit if explicit is not None else saved}:", result
 
-fake = temp / "legacy-bin"
+# The gateway launcher is `bin/lemon start` with its own default node name: it
+# keeps the loopback distribution defaults, reuses a healthy runtime before
+# compiling or naming a node, and never mutates dependencies (#701).
+import http.server
+import socket
+import threading
+
+assert not (root / "bin/lemon-control-plane").exists(), "bin/lemon-control-plane was removed"
+for launcher in (root / "bin").iterdir():
+    if launcher.is_file():
+        assert "deps.get" not in launcher.read_text(errors="ignore"), launcher
+
+def free_port():
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return str(probe.getsockname()[1])
+
+fake = temp / "launcher-bin"
 fake.mkdir()
-(fake / "mix").write_text("#!/bin/sh\nexit 0\n")
+(fake / "mix").write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$MIX_LOG"\n')
 (fake / "elixir").write_text("""#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["CAPTURE"], "w") as f:
@@ -354,46 +371,77 @@ with open(os.environ["CAPTURE"], "w") as f:
                "opts": os.getenv("ELIXIR_ERL_OPTIONS", ""),
                "cookie": os.getenv("RELEASE_COOKIE", "")}, f)
 """)
+# Never read the developer's real Keychain item.
+(fake / "security").write_text("#!/bin/sh\nexit 1\n")
 for path in fake.iterdir():
     path.chmod(0o755)
-home = temp / "legacy-home"
+home = temp / "launcher-home"
 home.mkdir()
-env = {key: value for key, value in os.environ.items()
-       if key not in ("ELIXIR_ERL_OPTIONS", "ERL_EPMD_ADDRESS",
-                      "LEMON_GATEWAY_NODE_COOKIE", "LEMON_GATEWAY_COOKIE",
-                      "LEMON_GATEWAY_NODE_NAME", "RELEASE_COOKIE")}
-env.update(HOME=str(home), PATH=f"{fake}:{os.environ['PATH']}",
-           CAPTURE=str(temp / "capture.json"), LEMON_SECRETS_MASTER_KEY="test")
-def launch(name, args=(), overrides=None):
-    subprocess.run(["bash", str(root / "bin" / name), *args],
-                   env=dict(env, **(overrides or {})), check=True,
-                   stdout=subprocess.DEVNULL)
-    return json.loads(Path(env["CAPTURE"]).read_text())
-cookies = []
-for name in ("lemon-control-plane", "lemon-gateway"):
-    result = launch(name)
-    assert result["epmd"] == "127.0.0.1", result
-    assert "inet_dist_use_interface {127,0,0,1}" in result["opts"], result
-    cookie = result["cookie"]
-    assert cookie not in result["args"] and "--cookie" not in result["args"], result
-    assert result["args"][:2] == ["--erl", "-kernel start_distribution false -nocookie"], result
-    assert re.fullmatch("[0-9a-f]{64}", cookie)
-    cookies.append(cookie)
-    assert stat.S_IMODE((home / ".lemon/cookie").stat().st_mode) == 0o600
-    result = launch(name, ["--name", "test@host"], {"RELEASE_COOKIE": "explicit"})
-    assert result["epmd"] == "127.0.0.1" and not result["opts"], result
-    assert result["cookie"] == "explicit" and "explicit" not in result["args"], result
-    result = launch(name, overrides={"ERL_EPMD_ADDRESS": "0.0.0.0",
-        "ELIXIR_ERL_OPTIONS": "-kernel inet_dist_use_interface {10,0,0,1}",
-        "LEMON_GATEWAY_NODE_COOKIE": "environment"})
-    assert result["epmd"] == "0.0.0.0" and "{10,0,0,1}" in result["opts"], result
-    assert result["cookie"] == "environment" and "environment" not in result["args"], result
-assert cookies[0] == cookies[1] == (home / ".lemon/cookie").read_text().strip()
+capture, mix_log = temp / "capture.json", temp / "mix.log"
+env = {key: os.environ[key] for key in ("TMPDIR", "LANG") if key in os.environ}
+env.update(HOME=str(home), PATH=f"{fake}:{os.environ['PATH']}", CAPTURE=str(capture),
+           MIX_LOG=str(mix_log), LEMON_CONTROL_PLANE_PORT=free_port(),
+           LEMON_WEB_PORT=free_port())
+def launch(args=(), overrides=None):
+    capture.unlink(missing_ok=True)
+    mix_log.unlink(missing_ok=True)
+    output = subprocess.run(["bash", str(root / "bin/lemon-gateway"), *args],
+                            env=dict(env, **(overrides or {})), check=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True).stdout
+    mix = mix_log.read_text().splitlines() if mix_log.exists() else []
+    assert not any("deps.get" in line for line in mix), mix
+    result = json.loads(capture.read_text()) if capture.exists() else None
+    return result, mix, output
+
+result, mix, _ = launch()
+assert mix == ["compile"], mix
+assert result["epmd"] == "127.0.0.1", result
+assert "inet_dist_use_interface {127,0,0,1}" in result["opts"], result
+cookie = result["cookie"]
+assert cookie not in result["args"] and "--cookie" not in result["args"], result
+assert result["args"][:4] == ["--erl", "-kernel start_distribution false -nocookie",
+                              "--sname", "lemon_gateway"], result
+assert any("LemonCore.Runtime.Boot.start!(:runtime_full)" in arg for arg in result["args"]), result
+assert re.fullmatch("[0-9a-f]{64}", cookie)
+assert cookie == (home / ".lemon/cookie").read_text().strip()
+assert stat.S_IMODE((home / ".lemon/cookie").stat().st_mode) == 0o600
+result, _, _ = launch(["--name", "test@host"], {"RELEASE_COOKIE": "explicit"})
+assert result["epmd"] == "127.0.0.1" and not result["opts"], result
+assert result["args"][2:4] == ["--name", "test@host"], result
+assert result["cookie"] == "explicit" and "explicit" not in result["args"], result
+result, _, _ = launch(overrides={"ERL_EPMD_ADDRESS": "0.0.0.0",
+    "ELIXIR_ERL_OPTIONS": "-kernel inet_dist_use_interface {10,0,0,1}",
+    "LEMON_GATEWAY_NODE_COOKIE": "environment"})
+assert result["epmd"] == "0.0.0.0" and "{10,0,0,1}" in result["opts"], result
+assert result["cookie"] == "environment" and "environment" not in result["args"], result
 isolated = temp / "override-home"
-result = launch("lemon-control-plane", ["--home", str(isolated)])
+isolated.mkdir()
+result, _, _ = launch(overrides={"HOME": str(isolated)})
 assert (isolated / ".lemon/cookie").is_file()
-assert result["cookie"] != cookies[0]
-print("[test] Saved node ports and retained launcher distribution defaults OK")
+assert result["cookie"] != cookie
+
+# A healthy runtime already serving the control port is reused: no compile,
+# no node registration and no second router.
+class Healthy(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b'{"ok":true}' if self.path == "/healthz" else b"{}"
+        self.send_response(200 if self.path == "/healthz" else 404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *args):
+        pass
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Healthy)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+try:
+    result, mix, output = launch(overrides={
+        "LEMON_CONTROL_PLANE_PORT": str(server.server_address[1])})
+finally:
+    server.shutdown()
+assert result is None and mix == [], (result, mix, output)
+assert "reusing it" in output, output
+print("[test] Saved node ports and gateway launcher delegation defaults OK")
 PY
 
 echo "[test] All launcher and container checks passed successfully."

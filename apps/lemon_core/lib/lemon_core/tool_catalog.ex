@@ -20,7 +20,7 @@ defmodule LemonCore.ToolCatalog do
   Restricted profiles are allow lists derived from this table, so they fail
   closed: a name it does not list is unclassified and denied by every restricted
   profile. That covers satellite registrations through `LemonAgent.ToolRegistry`
-  (omp, computer use, Honcho), MCP, extension, WASM and hand-assembled tools.
+  (omp, computer use, Honcho), MCP, extension and hand-assembled tools.
   Full-access, orchestrator and custom policies may still grant them by name.
 
   | Profile | Grants catalogued tools |
@@ -60,7 +60,6 @@ defmodule LemonCore.ToolCatalog do
     {"ask_parent", :read, [], []},
     {"parent_question", :exec, [], []},
     {"extensions_status", :read, [], []},
-    {"report_issue", :read, [], []},
     {"tool_search", :read, [], []},
     # A dispatcher: the hidden target keeps its own policy check and approval
     # gate, so the bridge itself needs review only when a policy names it.
@@ -68,8 +67,6 @@ defmodule LemonCore.ToolCatalog do
     {"submit_result", :exec, [], []},
     {"propose_plan", :exec, [], []},
     {"todo", :write, [], []},
-    {"todoread", :exec, [], []},
-    {"todowrite", :write, [], []},
     {"write", :write, [:dangerous], []},
     {"edit", :write, [:dangerous], []},
     {"patch", :write, [:dangerous], []},
@@ -91,11 +88,10 @@ defmodule LemonCore.ToolCatalog do
     {"lsp_diagnostics", :exec, [:dangerous], []},
     # Routes tool calls to other machines.
     {"nodes", :read, [:dangerous], []},
-    {"tool_auth", :exec, [:dangerous], []},
     {"task", :exec, [:dangerous, :delegation], []},
     {"agent", :exec, [:dangerous, :delegation], []},
-    {"goal", :write, [:dangerous, :delegation], []},
-    {"kanban", :write, [:dangerous, :delegation], []},
+    {"goal", :write, [:dangerous, :delegation], [registry: true]},
+    {"kanban", :write, [:dangerous, :delegation], [registry: true]},
     {"cron", :write, [:dangerous, :delegation], [registry: true]},
     # Bare names and `agent://` reach this family; named targets (`@handle`,
     # `session://`, `bot://`) need delegation authority, checked by the tool.
@@ -149,7 +145,7 @@ defmodule LemonCore.ToolCatalog do
   @minimal_core ~w(
     read read_skill skill_manage remember recall fs_checkpoint checkpoint rewind
     write edit patch ast_grep bash bash_output kill_process process_input eval
-    grep find semantic_find ls report_issue webfetch websearch
+    grep find semantic_find ls webfetch websearch
     browser_tabs browser_tab_open browser_tab_activate browser_tab_close
     browser_navigate browser_snapshot browser_get_content browser_click
     browser_type browser_hover browser_select_option browser_upload_file
@@ -227,7 +223,7 @@ defmodule LemonCore.ToolCatalog do
 
   @doc """
   True when `name` is catalogued and therefore reserved for its platform owner.
-  MCP, extension, WASM and satellite tools must not use a reserved name.
+  MCP, extension and satellite tools must not use a reserved name.
   """
   @spec reserved?(term()) :: boolean()
   def reserved?(name), do: is_binary(name) and Map.has_key?(@index, name)

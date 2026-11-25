@@ -85,8 +85,8 @@ defmodule LemonAi.Types do
             api: atom() | String.t(),
             provider: atom() | String.t(),
             model: String.t(),
-            usage: LemonAi.Types.Usage.t(),
-            stop_reason: stop_reason(),
+            usage: LemonAi.Types.Usage.t() | nil,
+            stop_reason: stop_reason() | nil,
             error_message: String.t() | nil,
             error_details: LemonAi.Error.parsed_error() | nil,
             retry_after_ms: non_neg_integer() | nil,
@@ -253,10 +253,10 @@ defmodule LemonAi.Types do
     exceeds the threshold.
     """
     @type t :: %__MODULE__{
-            input: float(),
-            output: float(),
-            cache_read: float(),
-            cache_write: float(),
+            input: number(),
+            output: number(),
+            cache_read: number(),
+            cache_write: number(),
             long_context: map() | nil
           }
     defstruct input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, long_context: nil

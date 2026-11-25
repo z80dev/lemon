@@ -11,7 +11,7 @@ defmodule LemonAgent.EventStream do
   @type t :: LemonAi.EventStream.t()
   @type event :: term()
   @type drop_strategy :: LemonAi.EventStream.drop_strategy()
-  @type option :: LemonAi.EventStream.option() | {:abort_signal, reference()}
+  @type option :: LemonAi.EventStream.option() | {:abort_signal, LemonAgent.AbortSignal.t() | nil}
 
   @doc false
   def child_spec(opts) do

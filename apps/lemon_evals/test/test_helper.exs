@@ -2,8 +2,8 @@
 # latency job includes it (`--include slow`).
 excluded =
   if :os.type() == {:unix, :darwin},
-    do: [:integration, :slow],
-    else: [:integration, :slow, :darwin_only]
+    do: [:slow],
+    else: [:slow, :darwin_only]
 
 ExUnit.configure(exclude: excluded)
 

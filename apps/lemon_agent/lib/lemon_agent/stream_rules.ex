@@ -226,5 +226,7 @@ defmodule LemonAgent.StreamRules do
   end
 
   defp clear(state), do: {%{state | buffers: %{}}, nil}
+
+  @spec fail!(term()) :: no_return()
   defp fail!(reason), do: raise(Error, reason: reason)
 end

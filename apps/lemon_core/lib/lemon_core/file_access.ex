@@ -348,19 +348,21 @@ defmodule LemonCore.FileAccess do
   end
 
   defp remove_copy_dir(fs, name) do
-    with {:ok, dir} <- ConfinedFS.open_dir(fs, :root, [name]) do
-      case ConfinedFS.list(fs, dir) do
-        {:ok, entries} ->
-          for {entry, %Stat{type: type}} <- entries,
-              type != :directory,
-              do: ConfinedFS.unlink(fs, dir, entry)
+    _ =
+      with {:ok, dir} <- ConfinedFS.open_dir(fs, :root, [name]) do
+        _ =
+          case ConfinedFS.list(fs, dir) do
+            {:ok, entries} ->
+              for {entry, %Stat{type: type}} <- entries,
+                  type != :directory,
+                  do: ConfinedFS.unlink(fs, dir, entry)
 
-        {:error, _} ->
-          :ok
+            {:error, _} ->
+              :ok
+          end
+
+        ConfinedFS.close_dir(fs, dir)
       end
-
-      ConfinedFS.close_dir(fs, dir)
-    end
 
     _ = ConfinedFS.rmdir(fs, :root, name)
     :ok
@@ -604,7 +606,7 @@ defmodule LemonCore.FileAccess do
     case ConfinedFS.open_dir(fs, dir, [name]) do
       {:ok, child} ->
         result = collect(fs, child, parts, acc, patterns, budget)
-        ConfinedFS.close_dir(fs, child)
+        _ = ConfinedFS.close_dir(fs, child)
         result
 
       {:error, _} ->

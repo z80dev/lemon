@@ -584,17 +584,6 @@ Disconnect preserves identity but makes the transport offline; reconnect rebinds
 identity, never replays pending/unknown messages. Private message bodies are not
 broadcast as global named-agent events.
 
-The on-demand `sh scripts/smoke_named_agents.sh` uses private local state,
-authenticated loopback WebSockets and scripted inference. It exercises native
-existing-context routing and external transport, plus the real product REST
-addressed service, authentication, owner ACL, nonce journal, peer provenance and
-two-way messaging. Its product fixture executor forwards to actual native
-sessions; it does **not** exercise unchanged managed-node TLS/MCP invocation
-proof, provisioning, live providers/platforms, or physical Apple clients.
-It is not part of default tests/CI, and its presence is not passing evidence.
-See the [TUI smoke instructions](../../../clients/tui/README.md#on-demand-offline-smoke)
-for prerequisites and the opt-in private fixture server for manual UI checks.
-
 | Tool name | Input type | structuredContent result | Blocking | Behavior |
 |---|---|---|---|---|
 | `list_agents` | `AgentListQuery` | `{ agents: AgentIdentity[] }` | No | Bounded content-free roster in the authenticated owner's scope; optional query/limit. |

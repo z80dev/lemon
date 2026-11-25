@@ -12,7 +12,6 @@ name: CI
 #   clients      scripts/test clients (TUI + lemon-browser-node)
 #   lemon_bot    scripts/test lemon_bot (backend tests + web build/tests)
 #   apple        Lemon Bot iOS Simulator build + share-extension tests (macOS)
-#   wasm-runtime cargo tests + WASM integration test
 #   history      pull requests only: reject unrelated Git history
 #   result       single required status; fails if any job failed or was cancelled,
 #                summarizes failing jobs/tests, and on main pushes keeps the
@@ -68,7 +67,6 @@ jobs:
       partitions: ${{ github.event_name != 'pull_request' && '4' || steps.shards.outputs.partitions }}
       matrix: ${{ github.event_name != 'pull_request' && '[1,2,3,4]' || steps.shards.outputs.matrix }}
       clients: ${{ github.event_name != 'pull_request' || steps.select.outputs.clients == 'true' }}
-      wasm: ${{ github.event_name != 'pull_request' || steps.select.outputs.wasm == 'true' }}
       apple: ${{ github.event_name != 'pull_request' || steps.select.outputs.apple == 'true' }}
       lemon_bot: ${{ github.event_name != 'pull_request' || steps.select.outputs.lemon_bot == 'true' }}
 
@@ -228,7 +226,11 @@ jobs:
         run: mix dialyzer --plt
 
       # The full umbrella keeps a documented backlog, so this run is advisory;
-      # the gate below is what blocks. `--format github`/`short` crash on
+      # the gate below is what blocks. It stays on pull requests: measured at
+      # 317-369 s per job (PR run 44444860833, nightly 45111786191) against
+      # 382-736 s test shards, it is not the critical path, and umbrella apps
+      # are kept out of the PLT (root mix.exs) so code changes no longer
+      # rebuild it. `--format github`/`short` crash on
       # OTP 28.5's `:exact_compare` tag, so use Erlang's own formatter.
       # --ignore-exit-status is required: with `list_unused_filters: true` a
       # stale .dialyzer_ignore.exs entry otherwise makes dialyxir discard the
@@ -408,59 +410,6 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/lemonbot-dd" CODE_SIGNING_ALLOWED=NO \
             test -only-testing:LemonBotShareTests
 
-  wasm-runtime:
-    needs: changes
-    if: needs.changes.outputs.wasm == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: BEAM setup
-        uses: ./.github/actions/beam-setup
-        with:
-          family: test
-
-      - name: Setup Rust
-        id: rust
-        uses: dtolnay/rust-toolchain@stable
-
-      # _build/lemon-wasm-runtime holds the release runtime that
-      # CodingAgent.Wasm.Builder builds for the integration test; cold, that
-      # wasmtime build is most of this job. A hit never re-saves, so the key
-      # includes rustc: a new stable would otherwise rebuild everything forever.
-      - name: Cache Cargo registry and native runtime target dirs
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            native/lemon-wasm-runtime/target
-            _build/lemon-wasm-runtime
-          key: ${{ runner.os }}-cargo-wasm-runtime-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('native/lemon-wasm-runtime/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-wasm-runtime-${{ steps.rust.outputs.cachekey }}-
-            ${{ runner.os }}-cargo-wasm-runtime-
-
-      - name: Install WASM target
-        run: rustup target add wasm32-wasip2
-
-      - name: Run WASM runtime tests
-        run: cargo test --manifest-path native/lemon-wasm-runtime/Cargo.toml
-
-      # Builder reuses any existing runtime binary, so rebuild the restored one
-      # from this checkout (same command as Builder.manual_build_command/0).
-      - name: Build release WASM runtime
-        run: CARGO_TARGET_DIR=_build/lemon-wasm-runtime cargo build --release --manifest-path native/lemon-wasm-runtime/Cargo.toml
-
-      # The coding_agent test_helper isolates HOME, so pin the rustup/cargo
-      # toolchain homes installed by dtolnay/rust-toolchain explicitly.
-      - name: Run WASM integration tests
-        run: |
-          RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" \
-            scripts/test path apps/coding_agent/test/coding_agent/wasm_integration_test.exs --include integration
-
   history:
     if: github.event_name == 'pull_request'
     name: Reject unrelated history
@@ -496,7 +445,7 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [changes, check, test, dialyzer, install, clients, lemon_bot, apple, wasm-runtime, history]
+    needs: [changes, check, test, dialyzer, install, clients, lemon_bot, apple, history]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

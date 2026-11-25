@@ -233,7 +233,8 @@ defmodule CodingAgent.Executor.UsageTest do
     assert completed.ok
     assert completed.usage.turns == 4
     assert completed.usage.total_tokens == nil
-    assert completed.usage.cost_usd == nil
+    assert completed.usage.cost.total == nil
+    refute Map.has_key?(completed.usage, :cost_usd)
     assert length(completed.usage.occurrences) == 4
 
     entries =
@@ -303,6 +304,47 @@ defmodule CodingAgent.Executor.UsageTest do
       assert partial.total_tokens == nil
       assert partial.cost.total == nil
     end
+  end
+
+  test "a five-call run reports its latest context beside 100K cumulative input" do
+    usage = %LemonAi.Types.Usage{
+      input: 20_000,
+      output: 500,
+      cache_read: 0,
+      cache_write: 0,
+      total_tokens: 20_500,
+      cost: %Cost{total: 0.01}
+    }
+
+    message = %AssistantMessage{usage: usage, provider: :openai, model: "gpt-4o"}
+
+    translator =
+      CodingAgent.Session.RunTranslator.new(
+        emitter: Emitter,
+        emitter_state: %{completed: []},
+        engine: "lemon",
+        label: "five calls",
+        cwd: "/fixture",
+        run_id: "five-call-run"
+      )
+
+    translator =
+      Enum.reduce(1..5, translator, fn _, translator ->
+        CodingAgent.Session.RunTranslator.handle_event(translator, {:provider_usage, message})
+      end)
+      |> CodingAgent.Session.RunTranslator.handle_event({:agent_end, [message]})
+
+    assert [%{usage: %LemonCore.Events.Usage{} = run}] = translator.emitter_state.completed
+    assert run.input == 100_000
+    assert run.total_tokens == 102_500
+    assert run.context_tokens == 20_500
+    assert length(run.occurrences) == 5
+    assert LemonCore.Events.Usage.context_tokens(run) == 20_500
+
+    # The wire form keeps the same split.
+    wire = run |> Jason.encode!() |> Jason.decode!() |> LemonCore.Events.Usage.from_map()
+    assert wire.input == 100_000
+    assert LemonCore.Events.Usage.context_tokens(wire) == 20_500
   end
 
   test "trace options retain map callbacks and native parent identity" do

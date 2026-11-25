@@ -140,6 +140,33 @@ defmodule LemonControlPlane.ChatSubmission do
     end
   end
 
+  @doc false
+  # A caller cwd must name an absolute existing directory.
+  def valid_cwd?(cwd) when is_binary(cwd) and cwd != "" do
+    Path.type(cwd) == :absolute and File.dir?(cwd)
+  end
+
+  def valid_cwd?(_cwd), do: false
+
+  @doc false
+  # A profile's canonical session runs in that profile's workspace; an
+  # unreadable profile store fails closed.
+  def profile_session?(session_key) when is_binary(session_key) do
+    case LemonCore.SessionKey.parse(session_key) do
+      %{kind: :main, agent_id: id} ->
+        case LemonCore.ProfileStore.get(id) do
+          {:ok, profile} -> profile["canonicalSessionKey"] == session_key
+          {:error, :not_found} -> false
+          {:error, _} -> true
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  def profile_session?(_session_key), do: false
+
   def submit(request, callback) do
     case callback.(request) do
       {:ok,
@@ -165,6 +192,9 @@ defmodule LemonControlPlane.ChatSubmission do
            "retrySafe" => false
          })}
 
+      {:error, :invalid_submission} ->
+        {:error, {:invalid_request, "Run submission is invalid", nil}}
+
       {:error, _} ->
         {:error, {:internal_error, "Chat submission failed", nil}}
 
@@ -184,7 +214,7 @@ defmodule LemonControlPlane.ChatSubmission do
       "state" => to_string(receipt.state),
       "effectiveMode" => if(receipt.effective_mode, do: to_string(receipt.effective_mode)),
       "targetRunId" => receipt.target_run_id,
-      "retrySafe" => false
+      "retrySafe" => receipt.state == :rejected
     }
   end
 

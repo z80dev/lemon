@@ -627,6 +627,56 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     refute_receive {:router_submitted, _}, 100
   end
 
+  # #620: cron.run allocates the cron run ID before calling the scheduler, so a
+  # lost reply still names the run. The scheduler claims exactly that ID, writes
+  # it durably before announcing it, and never overwrites an existing run.
+  test "run_now_with_id claims the caller's fixed run ID and refuses a reused one", ctx do
+    assert {:ok, job} = add_job(ctx)
+    job_id = job.id
+    run_id = "cron_fixed_#{System.unique_integer([:positive])}"
+    :ok = Bus.subscribe("cron")
+    on_exit(fn -> Bus.unsubscribe("cron") end)
+
+    assert {:ok, %CronRun{id: ^run_id, triggered_by: :manual}} =
+             CronManager.run_now_with_id(job.id, run_id)
+
+    assert_receive %Event{type: :cron_run_started, payload: %{cron_run_id: ^run_id}}, 5_000
+    assert %CronRun{id: ^run_id, job_id: ^job_id} = CronStore.get_run(run_id)
+    assert_receive {:submit_attempted, ^job_id, ^run_id}, 5_000
+    first = await_terminal(run_id)
+
+    assert {:error, :exists} = CronManager.run_now_with_id(job.id, run_id)
+    refute_receive {:submit_attempted, ^job_id, ^run_id}, 200
+    assert CronStore.get_run(run_id) == first
+  end
+
+  # #620: an earlier run with an unknown outcome blocks the trigger before the
+  # fixed ID is claimed, so the refusal names that earlier run, never the new ID.
+  test "run_now_with_id names the earlier unresolved run and never claims its own ID", ctx do
+    assert {:ok, job} = add_job(ctx)
+    job_id = job.id
+
+    prior =
+      job.id
+      |> CronRun.new(:manual)
+      |> CronRun.start("router_prior_#{System.unique_integer([:positive])}")
+      |> Map.put(:meta, %{outcome_unknown: true})
+
+    :ok = CronStore.put_run(prior)
+    prior_id = prior.id
+    run_id = "cron_blocked_#{System.unique_integer([:positive])}"
+
+    assert {:error, {:prior_run_unresolved, ^prior_id}} =
+             CronManager.run_now_with_id(job.id, run_id)
+
+    assert CronStore.get_run(run_id) == nil
+    refute_receive {:admission_checked, %{id: ^job_id}, _}, 200
+    refute_receive {:submit_attempted, ^job_id, _}, 100
+
+    # The ID-less trigger keeps its existing contract.
+    assert {:error, :outcome_unknown} = CronManager.run_now(job.id)
+  end
+
   defp owner_mcp_servers do
     [
       %{

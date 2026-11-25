@@ -45,11 +45,6 @@ docs/agent-loop/runs/
 # Hex package tarballs (built via "mix hex.build" in an app directory).
 apps/*/*.tar
 
-# Local Rust sidecar build artifacts
-native/lemon-wasm-runtime/target/
-native/wasm-tools/*/target/
-
-
 .agent/
 .claude/worktrees/
 .worktrees/

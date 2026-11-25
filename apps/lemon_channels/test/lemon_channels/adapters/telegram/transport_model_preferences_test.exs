@@ -2,12 +2,11 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapterTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
-  alias LemonChannels.Telegram.StateStore
-  alias LemonChannels.ModelPolicy
+  alias LemonCore.PolicyStore
 
   setup do
-    ModelPolicy.list()
-    |> Enum.each(fn {route, _policy} -> ModelPolicy.clear(route) end)
+    {:ok, rows} = PolicyStore.fetch_chats()
+    for {{"telegram", _, _, _} = route, _row} <- rows, do: :ok = PolicyStore.delete_chat(route)
 
     :ok
   end
@@ -17,10 +16,7 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapterTest do
     topic_id = System.unique_integer([:positive])
     session_key = "telegram:test:model:#{System.unique_integer([:positive])}"
 
-    on_exit(fn ->
-      _ = StateStore.delete_session_model(session_key)
-      _ = StateStore.delete_default_model({"default", chat_id, topic_id})
-    end)
+    on_exit(fn -> PolicyStore.delete_session(session_key) end)
 
     :ok =
       ModelPolicyAdapter.put_default_model_preference(
@@ -33,6 +29,17 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapterTest do
     :ok = ModelPolicyAdapter.put_session_model_override(session_key, "anthropic:claude-opus-4.1")
 
     assert {"anthropic:claude-opus-4.1", :session} =
+             ModelPolicyAdapter.resolve_model_hint("default", session_key, chat_id, topic_id)
+
+    # Both live in the one policy plane every surface reads.
+    assert {:ok, %{model: "anthropic:claude-opus-4.1"}} = PolicyStore.fetch_session(session_key)
+
+    assert {:ok, %{model: "openai:gpt-5"}} =
+             PolicyStore.fetch_chat(ModelPolicyAdapter.route_for("default", chat_id, topic_id))
+
+    :ok = ModelPolicyAdapter.delete_session_model_override(session_key)
+
+    assert {"openai:gpt-5", :future} =
              ModelPolicyAdapter.resolve_model_hint("default", session_key, chat_id, topic_id)
   end
 
@@ -71,10 +78,11 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapterTest do
     assert "openai:gpt-5" ==
              ModelPolicyAdapter.default_model_preference("default", chat_id, topic_id)
 
-    assert nil == ModelPolicy.get(ModelPolicyAdapter.route_for("default", chat_id, topic_id))
+    assert {:ok, nil} ==
+             PolicyStore.fetch_chat(ModelPolicyAdapter.route_for("default", chat_id, topic_id))
   end
 
-  test "clearing a thinking-only override removes the placeholder policy" do
+  test "clearing a thinking-only override removes the chat row" do
     chat_id = System.unique_integer([:positive])
 
     :ok = ModelPolicyAdapter.put_default_thinking_preference("default", chat_id, nil, "high")
@@ -82,7 +90,9 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapterTest do
     assert ModelPolicyAdapter.clear_default_thinking_preference("default", chat_id, nil) == true
     assert nil == ModelPolicyAdapter.default_thinking_preference("default", chat_id, nil)
     assert nil == ModelPolicyAdapter.default_model_preference("default", chat_id, nil)
-    assert nil == ModelPolicy.get(ModelPolicyAdapter.route_for("default", chat_id, nil))
+
+    assert {:ok, nil} ==
+             PolicyStore.fetch_chat(ModelPolicyAdapter.route_for("default", chat_id, nil))
   end
 
   test "resolve_thinking_hint reports chat scope when only a chat default exists" do

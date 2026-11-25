@@ -17,7 +17,8 @@ defmodule Mix.Tasks.Lemon.Quality do
       dependency policy
     * vacuous_assertions - no tracked `apps/*/test` file asserts a literal
       (`assert true`, `refute false`) that cannot fail
-    * duplicate test module guard (`mix lemon.check_duplicate_tests`)
+    * duplicate test module and layered test-family guard
+      (`mix lemon.check_duplicate_tests`)
 
   Usage:
     mix lemon.quality

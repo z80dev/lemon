@@ -26,7 +26,6 @@ defmodule LemonCore.ApplicationBootModeTest do
       ids = ids(children)
 
       for absent <- [
-            LemonCore.RuntimeOwner,
             LemonCore.RunHistoryStore,
             LemonCore.ConfigReloader,
             LemonCore.ConfigReloader.Watcher,
@@ -40,6 +39,10 @@ defmodule LemonCore.ApplicationBootModeTest do
 
     assert Keyword.get(opts(LemonCore.Application.children(:read_only_client), Store), :read_only)
     refute Keyword.get(opts(LemonCore.Application.children(:client), Store), :read_only)
+    assert Keyword.get(opts(LemonCore.Application.children(:client), Store), :defer_to_runtime)
+    # Only a writable client holds the ownership locks (and never recovers).
+    assert opts(LemonCore.Application.children(:client), LemonCore.RuntimeOwner) == [client: true]
+    refute LemonCore.RuntimeOwner in ids(LemonCore.Application.children(:read_only_client))
   end
 
   test "the runtime child list keeps ownership, recovery, sweeps and reloaders" do
@@ -89,6 +92,91 @@ defmodule LemonCore.ApplicationBootModeTest do
     assert {:ok, nil} = Store.fetch(name, :probe, :key)
     assert {:ok, []} = Store.fetch_all(name, :probe)
     assert Process.alive?(store)
+  end
+
+  # Both start orders over one database; a RuntimeOwner started without its
+  # registered name plays the daemon beside the test VM's own.
+  @tag :tmp_dir
+  test "a runtime started first keeps a writable client store from writing", %{tmp_dir: tmp_dir} do
+    {database, client} = client_store_opts(tmp_dir)
+    {:ok, runtime} = GenServer.start(LemonCore.RuntimeOwner, database: database)
+    on_exit(fn -> stop_quietly(runtime) end)
+    assert GenServer.call(runtime, :owner?)
+
+    start_supervised!({Store, [name: :boot_mode_owned_client] ++ client}, id: :owned)
+    assert {:error, :runtime_owned} = Store.write_access(:boot_mode_owned_client)
+
+    for result <- [
+          Store.put(:boot_mode_owned_client, :probe, :key, :after),
+          Store.delete(:boot_mode_owned_client, :probe, :key),
+          Store.finalize_run(:boot_mode_owned_client, "run-owned", %{})
+        ],
+        do: assert(result == {:error, :runtime_owned})
+
+    assert {:ok, nil} = Store.fetch(:boot_mode_owned_client, :probe, :key)
+    assert GenServer.call(runtime, :owner?)
+  end
+
+  @tag :tmp_dir
+  test "a runtime started after a writable client refuses instead of writing", %{
+    tmp_dir: tmp_dir
+  } do
+    {database, client} = client_store_opts(tmp_dir)
+    start_supervised!({Store, [name: :boot_mode_leased_client] ++ client}, id: :leased)
+    assert {:error, :runtime_owned} = Store.write_access(:boot_mode_leased_client)
+
+    # The client's ownership process holds the locks, then lets its store write.
+    {:ok, client_owner} =
+      GenServer.start(LemonCore.RuntimeOwner,
+        client: true,
+        database: database,
+        store: :boot_mode_leased_client
+      )
+
+    assert :ok = Store.write_access(:boot_mode_leased_client)
+    assert :ok = Store.put(:boot_mode_leased_client, :probe, :key, :before)
+
+    # A runtime booting meanwhile waits its lock deadline, then refuses.
+    Process.flag(:trap_exit, true)
+
+    assert {:error, :store_held_by_client} =
+             GenServer.start(LemonCore.RuntimeOwner, database: database)
+
+    assert :ok = Store.put(:boot_mode_leased_client, :probe, :key, :still_only_writer)
+
+    # The client ends: its store stops writing and the runtime can own the database.
+    GenServer.stop(client_owner)
+    assert {:error, :runtime_owned} = Store.write_access(:boot_mode_leased_client)
+    {:ok, runtime} = GenServer.start(LemonCore.RuntimeOwner, database: database)
+    on_exit(fn -> stop_quietly(runtime) end)
+    assert GenServer.call(runtime, :owner?)
+    assert {:ok, :still_only_writer} = Store.fetch(:boot_mode_leased_client, :probe, :key)
+  end
+
+  defp client_store_opts(tmp_dir) do
+    database = Path.join(tmp_dir, "store.sqlite3")
+
+    {database,
+     [
+       sweep: false,
+       defer_to_runtime: true,
+       backend: LemonCore.Store.SqliteBackend,
+       backend_opts: [path: database]
+     ]}
+  end
+
+  defp stop_quietly(pid) do
+    if Process.alive?(pid), do: GenServer.stop(pid)
+  catch
+    :exit, _ -> :ok
+  end
+
+  test "read-only and in-memory stores report their write access" do
+    start_supervised!({Store, name: :boot_mode_access_ro, read_only: true}, id: :ro)
+    start_supervised!({Store, name: :boot_mode_access_mem, defer_to_runtime: true}, id: :mem)
+
+    assert {:error, :read_only} = Store.write_access(:boot_mode_access_ro)
+    assert :ok = Store.write_access(:boot_mode_access_mem)
   end
 
   test "LemonCore.CLI.start/2 keeps the mode of a running :lemon_core" do

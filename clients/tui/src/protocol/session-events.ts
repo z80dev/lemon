@@ -34,7 +34,13 @@ export function sameSessionEventStream(a: SessionEventCursor, b: SessionEventCur
 export function parseSessionEventBatch(value: unknown, sessionKey: string): SessionEventBatch {
 	if (!value || typeof value !== "object") throw new Error("invalid session event batch");
 	const batch = value as Partial<SessionEventBatch>;
-	parseSessionEventCursor(batch.cursor);
+	const cursor = parseSessionEventCursor(batch.cursor);
+	if (batch.schemaVersion !== undefined) {
+		if (batch.schemaVersion !== 1)
+			throw new SessionEventCursorError("unsupported session event schema version");
+		if (batch.eventId !== `${cursor.streamId}:${cursor.seq}` || batch.sequence !== cursor.seq)
+			throw new SessionEventCursorError("invalid session event identity");
+	}
 	if (
 		!Array.isArray(batch.events) ||
 		!batch.events.every((entry) => {

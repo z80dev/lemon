@@ -77,14 +77,14 @@ defmodule LemonAgent.Loop.ToolReaper do
 
       {:DOWN, mon, :process, _pid, _reason} when is_map_key(state.tasks, mon) ->
         {task, tasks} = Map.pop!(state.tasks, mon)
-        cancel_deadline(task.timer)
+        _ = cancel_deadline(task.timer)
         loop(%{state | tasks: tasks})
 
       {:deadline, mon} when is_map_key(state.tasks, mon) ->
         task = Map.fetch!(state.tasks, mon)
         # The loop observes the timeout before the task's DOWN.
         send(loop_pid, {:tool_task_timeout, task.ref})
-        Task.Supervisor.terminate_child(state.supervisor, task.pid)
+        _ = Task.Supervisor.terminate_child(state.supervisor, task.pid)
         loop(%{state | tasks: Map.put(state.tasks, mon, %{task | timer: nil})})
 
       {:stop, ^loop_pid} ->
@@ -122,7 +122,7 @@ defmodule LemonAgent.Loop.ToolReaper do
     receive do
       {:DOWN, mon, :process, _pid, _reason} when is_map_key(state.tasks, mon) ->
         {task, tasks} = Map.pop!(state.tasks, mon)
-        cancel_deadline(task.timer)
+        _ = cancel_deadline(task.timer)
         await_exits(%{state | tasks: tasks}, deadline)
     after
       remaining_ms -> state
@@ -131,8 +131,8 @@ defmodule LemonAgent.Loop.ToolReaper do
 
   defp terminate(state) do
     Enum.each(state.tasks, fn {mon, task} ->
-      cancel_deadline(task.timer)
-      Task.Supervisor.terminate_child(state.supervisor, task.pid)
+      _ = cancel_deadline(task.timer)
+      _ = Task.Supervisor.terminate_child(state.supervisor, task.pid)
       Process.demonitor(mon, [:flush])
     end)
 

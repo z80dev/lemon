@@ -1,7 +1,7 @@
 defmodule LemonAutomation.TaskAdmissionTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Workspace.{GoalStore, KanbanStore}
+  alias LemonAutomation.{GoalStore, KanbanStore}
 
   alias LemonAutomation.{GoalLoopManager, IntervalRunner, KanbanDispatcher, KanbanGitWorkflow}
 
@@ -35,7 +35,7 @@ defmodule LemonAutomation.TaskAdmissionTest do
 
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Do not start rejected work",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     on_exit(fn -> GoalStore.clear(session_key) end)
@@ -49,7 +49,7 @@ defmodule LemonAutomation.TaskAdmissionTest do
     on_exit(fn -> File.rm_rf!(workspace) end)
 
     {:ok, authority} =
-      LemonAgent.Workspace.KanbanAuthority.new(
+      LemonAutomation.KanbanAuthority.new(
         %{agent_id: "default", session_key: "agent:default:main"},
         nil,
         workspace

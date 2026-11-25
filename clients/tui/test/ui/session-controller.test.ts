@@ -993,12 +993,13 @@ describe("synthesizeHistory", () => {
 });
 
 describe("SessionController routing hydration", () => {
-	test("a switch learns the target session's resolved model", async () => {
+	test("a switch learns the target session's resolved model and title", async () => {
 		const { app, server } = await bootApp("tui-a");
 		server.respondWith("session.detail", {
 			sessionKey: "tui-b",
 			session: {
 				sessionKey: "tui-b",
+				title: "Release prep",
 				model: "claude-sonnet-4",
 				provider: "anthropic",
 				contextWindow: 200_000,
@@ -1013,11 +1014,13 @@ describe("SessionController routing hydration", () => {
 		});
 
 		const session = app.store.session("tui-b");
+		expect(session.title).toBe("Release prep");
 		expect(session.model).toBe("claude-sonnet-4");
 		expect(session.provider).toBe("anthropic");
 		expect(session.contextWindow).toBe(200_000);
 		expect(session.thinkingLevel).toBe("high");
 		expect(session.modelSource).toBe("detail");
+		expect(server.requestsFor("session.detail").at(-1)?.params).toEqual({ sessionKey: "tui-b" });
 	});
 
 	test("hydration does not undo a model the session already ran on", async () => {

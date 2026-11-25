@@ -67,7 +67,7 @@ defmodule LemonGateway.WebhookCallbackSsrfTest do
 
     {:ok, wait_setup, _} = Response.prepare_wait_before_submit(:sync, run_ctx, [])
 
-    LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), %{
+    LemonCore.Bus.broadcast(LemonCore.Bus.run_done_topic(run_id), %{
       type: :run_completed,
       payload: %{completed: %{ok: true, answer: "done"}, duration_ms: 1}
     })

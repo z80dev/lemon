@@ -176,9 +176,19 @@ defmodule LemonCore.ToolPolicyAuthorityPropertyTest do
               assert_within_gates(parsed, [floor, requested])
             end
 
+            assert {:ok, layered} = ToolPolicy.layer(floor, requested)
+            assert_subset(layered, [floor_policy, requested])
+            assert_within_gates(layered, [floor, requested])
+
+            # Delegation: the result is strictly within the parent, read
+            # exemption included; an unset request inherits it.
             assert {:ok, restricted} = ToolPolicy.restrict(floor, requested)
-            assert_subset(restricted, [floor_policy, requested])
+            assert ToolPolicy.subset?(restricted, floor_policy)
+            assert_subset(restricted, [requested])
             assert_within_gates(restricted, [floor, requested])
+
+            if floor_policy.workspace_read_exempt != true,
+              do: refute(restricted.workspace_read_exempt)
 
           {:error, _reason} ->
             # A malformed overlay is rejected, never treated as absent.
@@ -243,37 +253,28 @@ defmodule LemonCore.ToolPolicyAuthorityPropertyTest do
     end
   end
 
-  # `subset?/2` ranks a `dangerous` gate below `always`, while
-  # `requires_approval?/4` enforces both identically; compare the result's
-  # enforced gates.
   defp assert_subset(result, sources) do
-    enforced =
-      Map.update!(result, :approvals, fn approvals ->
-        Map.new(approvals, fn
-          {tool, :dangerous} -> {tool, :always}
-          entry -> entry
-        end)
-      end)
-
     for source <- sources do
-      assert ToolPolicy.subset?(enforced, neutral_read_exemption(source, result))
+      assert ToolPolicy.subset?(result, neutral_read_exemption(source, result))
     end
   end
 
-  # Every tool the result grants is granted by each source, and every default
-  # (argument-free) approval gate of a source still applies to the result.
+  # Every tool the result grants is granted by each source, and every approval
+  # gate a source applies at any tier (the tier depends on call arguments and
+  # tool source) still applies to the result at that tier.
   defp assert_within_gates(result, sources) do
     for tool <- @tools, ToolPolicy.allowed?(result, tool), source <- sources do
       assert ToolPolicy.allowed?(source, tool)
 
-      if ToolPolicy.requires_approval?(source, tool),
-        do: assert(ToolPolicy.requires_approval?(result, tool))
+      for tier <- [:read, :write, :exec],
+          ToolPolicy.requires_approval?(source, tool, %{}, tier),
+          do: assert(ToolPolicy.requires_approval?(result, tool, %{}, tier))
     end
   end
 
-  # Intersection treats `workspace_read_exempt: nil` as neutral (the other
-  # side's explicit value wins) while `subset?/2` ranks nil below true, so
-  # compare against the side resolved to the result's value when it is unset.
+  # An unset `workspace_read_exempt` inherits (restrict) or is neutral (layer),
+  # while `subset?/2` ranks nil below true, so compare against the side resolved
+  # to the result's value when it is unset.
   defp neutral_read_exemption(%{workspace_read_exempt: nil} = requested, restricted),
     do: %{requested | workspace_read_exempt: restricted.workspace_read_exempt}
 

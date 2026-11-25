@@ -173,7 +173,7 @@ jobs:
   # Reuse a green CI push run of the source commit (or of its last code commit,
   # past release-metadata-only cuts), waiting for one still in progress. Only
   # when none exists run ci.yml itself: the same sharded, parallel jobs a push
-  # to main runs (fast x4, quality/eval, install, clients, dialyzer, wasm), so
+  # to main runs (fast x4, quality/eval, install, clients, dialyzer), so
   # release gates and main's gates cannot drift apart. Tag pushes and
   # tag-ref dispatches gate their existing source commit too.
   preflight-coverage:

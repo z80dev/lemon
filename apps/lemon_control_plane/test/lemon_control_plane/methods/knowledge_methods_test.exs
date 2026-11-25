@@ -157,6 +157,30 @@ defmodule LemonControlPlane.Methods.KnowledgeMethodsTest do
       refute LemonSkills.Config.skill_disabled?("beta-skill")
     end
 
+    test "skills.enable refuses to lift a curator archive" do
+      assert {:ok, _} = call("skills.disable", %{"skillKey" => "beta-skill"})
+      assert :ok = LemonSkills.Usage.set_state("beta-skill", :archived)
+
+      assert {:error, {:conflict, "Skill is archived; restore it before enabling"}} =
+               call("skills.enable", %{"skillKey" => "beta-skill"})
+
+      assert LemonSkills.Config.skill_disabled?("beta-skill")
+    end
+
+    test "an unreadable skills.json is an error, not an empty disabled list", %{
+      agent_dir: agent_dir
+    } do
+      File.write!(Path.join(agent_dir, "skills.json"), "{corrupt")
+
+      assert {:error, {:unavailable, message}} = call("skills.list", %{})
+      assert message =~ "lemon doctor"
+
+      assert {:error, {:unavailable, _}} =
+               call("skills.enable", %{"skillKey" => "beta-skill"})
+
+      assert File.read!(Path.join(agent_dir, "skills.json")) == "{corrupt"
+    end
+
     test "toggle validates the key and refuses unknown skills" do
       assert {:error, {:not_found, "Skill not found"}} =
                call("skills.enable", %{"skillKey" => "no-such-skill"})

@@ -469,7 +469,9 @@ defmodule LemonAi.Auth.AnthropicOAuth do
     ]
 
     spec =
-      Map.merge(refresh_spec(), %{
+      refresh_spec()
+      |> Map.delete(:resolve)
+      |> Map.merge(%{
         lock: __MODULE__,
         decode: &decode_secret/1,
         encode: &encode_secret/1

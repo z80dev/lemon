@@ -2,7 +2,7 @@ defmodule LemonSkills.Learn do
   @moduledoc """
   Review and explicitly confirm bounded learning from local or remote sources.
 
-  This service composes `LemonCore.Context`, `LemonMemory.Store`, and the
+  This service composes `LemonSkills.Context`, `LemonMemory.Store`, and the
   existing synthesized-skill draft store. Review is always non-mutating and
   returns only counts, digests, provenance hashes, audit rule identifiers, and
   conflict state. It never returns source text, prompts, paths, URLs, secret
@@ -441,7 +441,7 @@ defmodule LemonSkills.Learn do
   defp action_status("unchanged"), do: "unchanged"
   defp action_status(other), do: other
 
-  defp context_mod(opts), do: Keyword.get(opts, :context_mod, LemonCore.Context)
+  defp context_mod(opts), do: Keyword.get(opts, :context_mod, LemonSkills.Context)
   defp memory_store(opts), do: Keyword.get(opts, :memory_store, Store)
   defp memory_server(opts), do: Keyword.get(opts, :memory_server, Store)
   defp draft_store(opts), do: Keyword.get(opts, :draft_store, DraftStore)

@@ -34,7 +34,7 @@ interface AdmissionView {
   lifecycle: { action: LifecycleAction; status: LifecycleStatus; canReaddress: boolean } | null;
   nextAction: 'update_address' | 'reconcile_read_only' | 'finish_setup' | 'none' | 'inspect_in_browser';
 }
-interface StatusResult {
+export interface StatusResult {
   schemaVersion: 1;
   status: 'ok' | 'owner_action_required' | 'unavailable';
   source: 'local_read_only';
@@ -142,20 +142,26 @@ const defaults: ReaddressCliDependencies = {
   stdout(value) { process.stdout.write(value); }, stderr(value) { process.stderr.write(value); },
 };
 
-/** Owner-only readdressing has no session-free operator equivalent; --all never impersonates owners. */
-export async function runReaddressCli(args: string[], deps: ReaddressCliDependencies = defaults): Promise<number> {
-  if (args.some(arg => arg !== '--status' && arg !== '--all' && arg !== '--json') || new Set(args).size !== args.length || args.includes('--status') === args.includes('--all')) {
-    deps.stderr('Usage: lemon-bot readdress --status [--json] | --all [--json]\n'); return 2;
-  }
-  const result: StatusResult = { schemaVersion: 1, status: args.includes('--all') ? 'owner_action_required' : 'ok', source: 'local_read_only', readdressAvailable: false, reason: 'owner_session_required', totalBots: null, truncated: false, bots: [], guidance };
+/** The saved per-Bot admission snapshot for this instance's public URL; read-only and never throws. */
+export function admissionStatus(env: Record<string, string | undefined>, readLocal: ReaddressCliDependencies['readLocal'], all = false): StatusResult {
+  const result: StatusResult = { schemaVersion: 1, status: all ? 'owner_action_required' : 'ok', source: 'local_read_only', readdressAvailable: false, reason: 'owner_session_required', totalBots: null, truncated: false, bots: [], guidance };
   try {
-    const settings = localSettings(deps.env);
-    const snapshot = deps.readLocal(settings.dataDir, maxBots);
+    const settings = localSettings(env);
+    const snapshot = readLocal(settings.dataDir, maxBots);
     const expected = new URL(callbackPath, settings.publicUrl).toString();
     result.bots = snapshot.bots.slice(0, maxBots).map(row => project(row, expected));
     result.totalBots = snapshot.totalBots;
     result.truncated = snapshot.truncated || snapshot.totalBots > result.bots.length;
   } catch { result.status = 'unavailable'; result.guidance = 'Could not inspect saved Bot admission state. Check the local instance configuration and database; no changes were made.'; }
+  return result;
+}
+
+/** Owner-only readdressing has no session-free operator equivalent; --all never impersonates owners. */
+export async function runReaddressCli(args: string[], deps: ReaddressCliDependencies = defaults): Promise<number> {
+  if (args.some(arg => arg !== '--status' && arg !== '--all' && arg !== '--json') || new Set(args).size !== args.length || args.includes('--status') === args.includes('--all')) {
+    deps.stderr('Usage: lemon-bot readdress --status [--json] | --all [--json]\n'); return 2;
+  }
+  const result = admissionStatus(deps.env, deps.readLocal, args.includes('--all'));
   if (args.includes('--json')) deps.stdout(`${JSON.stringify(result)}\n`);
   else {
     deps.stdout('Bot admission status (local saved snapshot; read-only).\n');

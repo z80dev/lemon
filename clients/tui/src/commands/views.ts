@@ -2,7 +2,7 @@ import type { SlashCommand } from "./registry.ts";
 
 export const paletteCommand: SlashCommand = {
 	name: "palette",
-	summary: "search commands, local skills and prompt templates",
+	summary: "search commands and skills, including the daemon's file commands",
 	usage: "[query]",
 	group: "interface",
 	availableWhen: (ctx) => (ctx.ui.openCommandPalette ? true : "no command palette in this client"),

@@ -16,7 +16,7 @@ defmodule LemonControlPlane.A2A.PeerScopeTest do
     # reached the peer in which conversation.
     def submit(request) do
       Task.start(fn ->
-        topic = LemonCore.Bus.run_topic(request.run_id)
+        topic = LemonCore.Bus.run_done_topic(request.run_id)
         await_subscriber(topic, System.monotonic_time(:millisecond) + 5_000)
         answer = "echo: " <> request.prompt
 

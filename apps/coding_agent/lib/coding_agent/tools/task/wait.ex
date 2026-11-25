@@ -10,7 +10,8 @@ defmodule CodingAgent.Tools.Task.Wait do
   """
 
   alias CodingAgent.{TaskStore, TaskStoreServer}
-  alias CodingAgent.Tools.Task.{Control, Result}
+  alias CodingAgent.TaskRuntime.Control
+  alias CodingAgent.Tools.Task.Result
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
 
   @safety_cap_ms 30 * 60 * 1000

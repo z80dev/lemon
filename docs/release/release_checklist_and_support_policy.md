@@ -31,7 +31,7 @@ a version, it requires a green `ci.yml` run on the exact source commit (reused
 through `scripts/ci_verified_commit`, otherwise by calling `ci.yml`, which runs
 `scripts/test fast`, `quality`, `eval-fast` and `clients`,
 `scripts/verify_source_install` and `scripts/verify_install_script`, the
-Dialyzer gate and the WASM runtime lane). It validates
+Dialyzer gate). It validates
 version/changelog consistency and release notes, then builds and boot-verifies
 the published artifacts on native runners and re-verifies the assembled
 manifest. Do not repeat these manually for an ordinary release.
@@ -50,7 +50,7 @@ steps.
       ```bash
       gh secret set LEMON_EVAL_API_KEY --repo z80dev/lemon
 
-      mix lemon.secrets.set release_eval_api_key <token>
+      ./bin/lemon secrets set release_eval_api_key <token>
       LEMON_EVAL_API_KEY_SECRET=release_eval_api_key scripts/test live-eval
 
       gh workflow run live-eval.yml \
@@ -96,7 +96,7 @@ steps.
 - [ ] When the release touches a real external integration, run the matching
       manual smoke: `scripts/live_telegram_matrix.py`,
       `scripts/live_discord_matrix.py`, `scripts/live_provider_fallback_smoke.exs`,
-      `scripts/live_provider_ownership_smoke.exs`, or
+      `scripts/live_provider_ownership_smoke.exs` (loopback fixtures only), or
       `scripts/live_cron_runtime_restart_smoke.exs`. MCP has no live smoke
       script; its client and transports are covered by `apps/lemon_mcp/test`.
 - [ ] Run `scripts/verify_docs_site`. It installs docs dependencies in a temp
@@ -105,8 +105,8 @@ steps.
 - [ ] Confirm docs generated artifacts are not left in the repository.
 - [ ] Confirm issue templates and support-bundle docs reference the current artifact names.
 - [ ] Confirm known dependency audit findings are recorded and accepted or fixed.
-- [ ] Confirm the OSV Scanner workflow is present and scoped to the first-party
-      Mix, npm, and Bun lockfiles before publishing a release candidate.
+- [ ] Confirm the OSV Scanner workflow is green on the release commit and that
+      no `osv-scanner.toml` acceptance covering a runtime finding has expired.
 - [ ] Confirm the `history` job in `.github/workflows/ci.yml` blocks
       unrelated-history PRs before merge.
 - [ ] Confirm the Bun TUI package and release lanes validate `clients/tui` and
@@ -122,15 +122,15 @@ Runtime release artifacts must not ship known high or critical dependency
 advisories without a release-blocking issue, an explicit mitigation, and a
 maintainer decision recorded in the launch ledger.
 
-`.github/workflows/osv-scanner.yml` scans the first-party lockfiles on pull
-requests and pushes that touch dependency manifests, on a weekly `main`
-schedule, and through manual dispatch. It uses Google's pinned reusable OSV
-scanner workflow, grants `security-events: write` for SARIF upload, and scans
-      `mix.lock`, the Lemon web/browser npm lockfiles, `clients/tui/bun.lock`,
-      the gateway private npm lockfile, and the diagrams npm lockfile. The workflow is
-configured with `fail-on-vuln: false` so findings are detection signals, not
-automatic release decisions; release candidates still require maintainer triage
-for high or critical runtime findings.
+`.github/workflows/osv-scanner.yml` scans every shipped lockfile (Mix, npm,
+Bun and SwiftPM; `scripts/test_ci_gates.py` checks the list against
+`git ls-files`) on pull requests and pushes that touch dependency manifests, on
+a weekly `main` schedule, and through manual dispatch. It uses Google's pinned
+reusable OSV scanner workflow and grants `security-events: write` for SARIF
+upload. It is a gate (`fail-on-vuln: true`): a finding fails the job unless
+`osv-scanner.toml` accepts it with a reason and an expiry date, and a scan that
+errors fails too. Accept a finding only with a recorded mitigation; remove the
+entry in the change that upgrades the dependency.
 
 ## Repository History Integrity
 

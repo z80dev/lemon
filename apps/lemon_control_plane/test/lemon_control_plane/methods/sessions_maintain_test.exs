@@ -3,7 +3,7 @@ defmodule LemonControlPlane.Methods.SessionsMaintainTest do
 
   alias LemonControlPlane.Methods.{Registry, SessionsMaintain}
   alias LemonControlPlane.Protocol.Schemas
-  alias LemonCore.{AgentRuntime, Store}
+  alias LemonCore.Store
 
   @cutoff 1_700_000_000_000
   @preview_table :session_maintenance_previews
@@ -39,7 +39,7 @@ defmodule LemonControlPlane.Methods.SessionsMaintainTest do
       Enum.each(previews, fn {key, value} -> Store.put(@preview_table, key, value) end)
     end)
 
-    :ok = AgentRuntime.register(Runtime)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, Runtime)
     plan = plan()
     Process.put({Runtime, :plan}, {:ok, plan})
 

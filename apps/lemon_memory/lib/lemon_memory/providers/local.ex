@@ -10,6 +10,6 @@ defmodule LemonMemory.Providers.Local do
   @impl true
   def put(doc, opts) do
     store = Keyword.get(opts, :memory_store, Store)
-    Store.put(store, doc)
+    Store.put_sync(store, doc)
   end
 end

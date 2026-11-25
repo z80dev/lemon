@@ -126,8 +126,6 @@ defmodule LemonGateway.Run do
       control_ctx: nil,
       executor_pid: nil,
       executor_monitor_ref: nil,
-      renderer: LemonGateway.Renderers.Basic,
-      renderer_state: nil,
       completed: false,
       claim_key: claim_key,
       last_resume: request.resume,
@@ -226,8 +224,18 @@ defmodule LemonGateway.Run do
   end
 
   defp terminal_fence(state) do
+    case LemonCore.TerminalOutbox.decision(state.run_id) do
+      {:ok, %{} = _decision} -> :terminal
+      {:ok, nil} -> legacy_terminal_fence(state)
+      _ -> :unavailable
+    end
+  end
+
+  defp legacy_terminal_fence(state) do
     case RunStore.fetch(state.run_id) do
       {:ok, %{summary: %{completed: completed}}} when is_map(completed) -> :terminal
+      # Finalized, then evicted by `:runs` retention: never reopen it.
+      {:error, :evicted} -> :terminal
       {:ok, nil} -> :open
       {:ok, %{summary: nil}} -> :open
       _ -> :unavailable
@@ -248,7 +256,6 @@ defmodule LemonGateway.Run do
     )
 
     state = maybe_track_phase(state, :starting_engine)
-    renderer_state = state.renderer.init(%{engine: @engine_provenance})
 
     cwd =
       cond do
@@ -259,7 +266,7 @@ defmodule LemonGateway.Run do
           Cwd.default_cwd()
       end
 
-    opts = [cwd: cwd, run_id: state.run_id]
+    opts = [cwd: cwd, run_id: state.run_id, canonical_delta: true]
 
     emit_to_bus(
       state.run_id,
@@ -296,19 +303,18 @@ defmodule LemonGateway.Run do
              control_ctx: control_ctx,
              executor_pid: executor_pid(control_ctx),
              executor_monitor_ref: monitor_executor(control_ctx),
-             renderer_state: renderer_state,
              progress_mapping_registered?: true
          }}
 
       {:error, reason} ->
         finalize_start_failure(
-          %{state | executor: executor, renderer_state: renderer_state},
+          %{state | executor: executor},
           reason
         )
 
       other ->
         finalize_start_failure(
-          %{state | executor: executor, renderer_state: renderer_state},
+          %{state | executor: executor},
           {:invalid_executor_start_result, other}
         )
     end
@@ -319,8 +325,6 @@ defmodule LemonGateway.Run do
       "Gateway run start failed run_id=#{inspect(state.run_id)} reason=#{inspect(reason)}"
     )
 
-    renderer_state = state.renderer_state || state.renderer.init(%{engine: @engine_provenance})
-
     completed =
       Event.completed(%{
         engine: @engine_provenance,
@@ -330,9 +334,6 @@ defmodule LemonGateway.Run do
         run_id: state.run_id,
         session_key: state.session_key
       })
-
-    {renderer_state, _render_action} = state.renderer.apply_event(renderer_state, completed)
-    state = %{state | renderer_state: renderer_state}
 
     {:stop, :normal, finalize(state, completed)}
   end
@@ -448,10 +449,6 @@ defmodule LemonGateway.Run do
     # Emit event to bus
     emit_engine_event_to_bus(state, event)
 
-    # Update renderer state for answer tracking (but no rendering)
-    {renderer_state, _render_action} = state.renderer.apply_event(state.renderer_state, event)
-    state = %{state | renderer_state: renderer_state}
-
     cond do
       is_started(event) ->
         resume = event.resume
@@ -480,10 +477,43 @@ defmodule LemonGateway.Run do
   end
 
   # Handle delta events from engine (for streaming)
+  def handle_info(
+        {:engine_delta, run_ref, %LemonCore.Event{type: :delta} = event},
+        %{run_ref: run_ref} = state
+      ) do
+    on_delta(state, event)
+  end
+
   def handle_info({:engine_delta, run_ref, text}, %{run_ref: run_ref} = state)
       when is_binary(text) do
+    ts = LemonCore.Event.now_ms()
+
+    delta =
+      Events.Delta.new(%{run_id: state.run_id, ts_ms: ts, seq: state.delta_seq + 1, text: text})
+
+    on_delta(state, LemonCore.Event.new_with_ts(:delta, ts, delta, build_event_meta(state)))
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, pid, reason},
+        %{executor_pid: pid, executor_monitor_ref: ref} = state
+      ) do
+    finalize_executor_down(state, reason)
+  end
+
+  def handle_info({:EXIT, pid, reason}, %{executor_pid: pid} = state) when is_pid(pid) do
+    finalize_executor_down(state, reason)
+  end
+
+  def handle_info(:cancel_timeout, %{cancelled: true, completed: false} = state) do
+    finalize_cancel(state)
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  defp on_delta(state, event) do
     state = maybe_track_phase(state, :streaming)
-    new_seq = state.delta_seq + 1
+    %{seq: new_seq, text: text} = event.payload
 
     # Emit first_token telemetry on first delta
     state =
@@ -504,43 +534,11 @@ defmodule LemonGateway.Run do
         state
       end
 
-    delta = Event.Delta.new(state.run_id, new_seq, text, %{session_key: state.session_key})
-
-    # Emit delta to bus (subscribers like StreamCoalescer will handle channel delivery)
-    # Bus payloads must be plain maps; do not leak LemonGateway.Event structs.
-    emit_to_bus(
-      state.run_id,
-      :delta,
-      Events.Delta.new(%{
-        run_id: delta.run_id,
-        ts_ms: delta.ts_ms,
-        seq: delta.seq,
-        text: delta.text,
-        meta: delta.meta || %{}
-      }),
-      build_event_meta(state)
-    )
+    LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(state.run_id), event)
 
     # Accumulate text for final answer
     {:noreply, %{state | delta_seq: new_seq, accumulated_text: state.accumulated_text <> text}}
   end
-
-  def handle_info(
-        {:DOWN, ref, :process, pid, reason},
-        %{executor_pid: pid, executor_monitor_ref: ref} = state
-      ) do
-    finalize_executor_down(state, reason)
-  end
-
-  def handle_info({:EXIT, pid, reason}, %{executor_pid: pid} = state) when is_pid(pid) do
-    finalize_executor_down(state, reason)
-  end
-
-  def handle_info(:cancel_timeout, %{cancelled: true, completed: false} = state) do
-    finalize_cancel(state)
-  end
-
-  def handle_info(_msg, state), do: {:noreply, state}
 
   defp finalize_executor_down(%{cancelled: true} = state, _reason), do: finalize_cancel(state)
 
@@ -787,8 +785,10 @@ defmodule LemonGateway.Run do
              completed: completed,
              session_key: state.session_key,
              run_id: state.run_id,
+             attempt_id: attempt_id(state),
              completed_at_ms: System.system_time(:millisecond),
              run_ref: state.run_ref,
+             presentation_cwd: state.execution_request.cwd,
              prompt: state.execution_request.prompt,
              duration_ms: duration_ms,
              engine: @engine_provenance,
@@ -809,14 +809,16 @@ defmodule LemonGateway.Run do
         Map.get(completed, :ok)
       )
 
-      emit_to_bus(
+      LemonCore.TerminalOutbox.publish(
         state.run_id,
-        :run_completed,
-        Events.RunCompleted.new(%{
-          completed: completed_to_bus_map(completed),
-          duration_ms: duration_ms
-        }),
-        build_event_meta(state)
+        LemonCore.Event.new(
+          :run_completed,
+          Events.RunCompleted.new(%{
+            completed: completed_to_bus_map(completed),
+            duration_ms: duration_ms
+          }),
+          Map.put(build_event_meta(state), :run_id, state.run_id)
+        )
       )
     end
 
@@ -900,10 +902,15 @@ defmodule LemonGateway.Run do
 
   # Emit events to the LemonCore.Bus.
   defp emit_to_bus(run_id, event_type, payload, extra_meta) do
-    topic = "run:#{run_id}"
-    meta = Map.merge(%{run_id: run_id}, extra_meta)
-    event = LemonCore.Event.new(event_type, payload, meta)
-    LemonCore.Bus.broadcast(topic, event)
+    event = LemonCore.Event.new(event_type, payload, Map.put(extra_meta, :run_id, run_id))
+
+    if event_type in [:run_started, :run_completed] do
+      event
+      |> LemonCore.Event.identify_run(run_id)
+      |> LemonCore.Bus.publish_run_lifecycle()
+    else
+      LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), event)
+    end
   end
 
   # Tracks the run's phase and validates each transition, but does not publish it.
@@ -972,6 +979,8 @@ defmodule LemonGateway.Run do
 
     meta = if state.session_key, do: Map.put(meta, :session_key, state.session_key), else: meta
 
+    meta = Map.put(meta, :attempt_id, attempt_id(state))
+
     origin = meta_field(state.execution_request, :origin)
     meta = if origin, do: Map.put(meta, :origin, origin), else: meta
 
@@ -979,6 +988,13 @@ defmodule LemonGateway.Run do
     # a client that attached mid-run still learns what it is talking to at `run_completed`.
     model = meta_field(state.execution_request, :model)
     if model, do: Map.put(meta, :model, model), else: meta
+  end
+
+  defp attempt_id(state) do
+    case state.execution_request.execution_context do
+      %{attempt_id: id} when is_binary(id) -> id
+      _ -> "#{state.run_id}:attempt:1"
+    end
   end
 
   defp emit_engine_event_to_bus(state, event) do

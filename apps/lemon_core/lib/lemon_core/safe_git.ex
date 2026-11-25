@@ -238,7 +238,7 @@ defmodule LemonCore.SafeGit do
   @spec close(handle()) :: :ok
   def close(%{port: port, private_dir: dir}) do
     kill(port)
-    File.rm_rf(dir)
+    _ = File.rm_rf(dir)
     :ok
   end
 
@@ -255,7 +255,7 @@ defmodule LemonCore.SafeGit do
           {:ok, %{port: port, private_dir: dir}}
 
         error ->
-          File.rm_rf(dir)
+          _ = File.rm_rf(dir)
           error
       end
     end
@@ -395,11 +395,11 @@ defmodule LemonCore.SafeGit do
         {:ok, dir}
 
       {:error, reason} when reason in [:timeout, :command_unavailable] ->
-        File.rm_rf(dir)
+        _ = File.rm_rf(dir)
         {:error, reason}
 
       _ ->
-        File.rm_rf(dir)
+        _ = File.rm_rf(dir)
         {:error, :repository_unreadable}
     end
   end
@@ -631,9 +631,10 @@ defmodule LemonCore.SafeGit do
   end
 
   defp kill(port) do
-    with {:os_pid, pid} when pid > 1 <- Port.info(port, :os_pid) do
-      LemonCore.ProcessGroup.terminate(pid, scope: :process)
-    end
+    _ =
+      with {:os_pid, pid} when pid > 1 <- Port.info(port, :os_pid) do
+        LemonCore.ProcessGroup.terminate(pid, scope: :process)
+      end
 
     Port.close(port)
 

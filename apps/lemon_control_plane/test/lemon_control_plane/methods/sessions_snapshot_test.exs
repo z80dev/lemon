@@ -10,12 +10,9 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
   # remain authoritative; barriers replace sleeps and synchronize the lost-event
   # window before a second collection.
   defmodule MissingRuntime do
-    @behaviour LemonCore.AgentRuntime.Provider
   end
 
   defmodule Runtime do
-    @behaviour LemonCore.AgentRuntime.Provider
-
     def session_recovery_snapshot(_key, _cwd) do
       pid = Application.fetch_env!(:lemon_control_plane, __MODULE__)
 
@@ -73,7 +70,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
       )
 
     Application.put_env(:lemon_control_plane, Runtime, state)
-    :ok = AgentRuntime.register(Runtime)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, Runtime)
     :ok = RunStore.create_session_index(key, LemonCore.SessionKey.agent_id(key), :tui)
     if Process.whereis(Registry) == nil, do: start_supervised!(Registry)
 
@@ -660,7 +657,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
 
     Agent.update(c.state, &%{&1 | native_result: {:error, :unavailable}})
     assert {:error, {:unavailable, _, nil}} = SessionsSnapshot.handle(params(c), ctx())
-    :ok = AgentRuntime.register(MissingRuntime)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, MissingRuntime)
     assert {:error, {:unavailable, _, nil}} = SessionsSnapshot.handle(params(c), ctx())
   end
 

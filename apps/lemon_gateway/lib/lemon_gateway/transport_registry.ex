@@ -44,9 +44,7 @@ defmodule LemonGateway.TransportRegistry do
   @impl true
   def init(_opts) do
     transports =
-      Application.get_env(:lemon_gateway, :transports, [
-        # Intentionally empty by default: Telegram polling is owned by lemon_channels.
-      ])
+      Application.get_env(:lemon_gateway, :transports, [LemonGateway.Transports.Webhook])
 
     map =
       transports

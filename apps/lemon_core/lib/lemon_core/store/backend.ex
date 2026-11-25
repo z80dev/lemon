@@ -88,6 +88,9 @@ defmodule LemonCore.Store.Backend do
   """
   @type error_reason :: term()
 
+  @typedoc "Backend-defined handle for reads outside the Store process (`c:reader/1`)."
+  @type reader :: term()
+
   @doc """
   Initialize the backend with the given options.
 
@@ -198,6 +201,55 @@ defmodule LemonCore.Store.Backend do
               {:ok, [{key(), value()}], state()} | {:error, error_reason()}
 
   @doc """
+  Returns a handle that any process may pass to `c:read_list/2`,
+  `c:read_range/5` and `c:read_recent/3` while the Store keeps writing.
+
+  Optional, together with `c:read_list/2`. When exported, the Store runs
+  full-table and time-range reads in the calling process, so a large scan never
+  holds up the Store's other callers; without it those reads run inside the
+  Store process. A read through the handle must observe every write the backend
+  acknowledged before the handle was requested, and must fail (never return a
+  partial table) when it cannot read the complete result.
+  """
+  @callback reader(state()) :: reader()
+
+  @doc "Like `c:list/2`, through a `c:reader/1` handle in the caller's process."
+  @callback read_list(reader(), table()) ::
+              {:ok, [{key(), value()}]} | {:error, error_reason()}
+
+  @doc "List only keys, without fetching or decoding their values."
+  @callback read_keys(reader(), table()) :: {:ok, [key()]} | {:error, error_reason()}
+
+  @doc """
+  Rows with a `range_timestamp/3` in `[from_ms, to_ms)`, plus untimed rows
+  when `include_untimed` is true.
+
+  Optional. A backend that indexes `:at_ms` reads only the matching rows; the
+  Store filters `c:read_list/2` otherwise.
+  """
+  @callback read_range(reader(), table(), integer(), integer(), boolean()) ::
+              {:ok, [{key(), value()}]} | {:error, error_reason()}
+
+  @doc false
+  def range_timestamp(table, key, value)
+
+  def range_timestamp(table, key, _value) when table in [:usage_records, "usage_records"] do
+    with true <- is_binary(key),
+         {:ok, date} <- Date.from_iso8601(key) do
+      Date.diff(date, ~D[1970-01-01]) * 86_400_000
+    else
+      _ -> nil
+    end
+  end
+
+  def range_timestamp(_table, _key, %{at_ms: ms}) when is_integer(ms), do: ms
+  def range_timestamp(_table, _key, _value), do: nil
+
+  @doc "Like `c:list_recent/3`, through a `c:reader/1` handle in the caller's process."
+  @callback read_recent(reader(), table(), pos_integer()) ::
+              {:ok, [{key(), value()}]} | {:error, error_reason()}
+
+  @doc """
   Performs a non-mutating backend liveness check.
 
   Optional. Returns `{:ok, state}` when the backend can reach its storage and
@@ -248,7 +300,21 @@ defmodule LemonCore.Store.Backend do
   """
   @callback close(state()) :: :ok | {:error, error_reason()}
 
+  @doc """
+  Whether data written through this backend survives a restart of the VM.
+
+  Optional; a backend that omits it is not durable. A product that requires
+  the `:durable_store` capability (`LemonCore.Capabilities`) refuses to boot
+  when the default store's configured backend is not durable.
+  """
+  @callback durable?() :: boolean()
+
   @optional_callbacks list_recent: 3,
+                      reader: 1,
+                      read_list: 2,
+                      read_keys: 2,
+                      read_range: 5,
+                      read_recent: 3,
                       ping: 1,
                       compare_and_delete_many: 2,
                       compare_and_swap: 5,
@@ -256,5 +322,6 @@ defmodule LemonCore.Store.Backend do
                       confirm_durable: 1,
                       sync: 1,
                       sweep: 3,
-                      close: 1
+                      close: 1,
+                      durable?: 0
 end

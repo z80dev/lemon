@@ -11,7 +11,8 @@ defmodule CodingAgent.SideQuery do
   """
 
   alias CodingAgent.{Session, SessionRegistry}
-  alias CodingAgent.Tools.Task.{Params, Result, Runner}
+  alias CodingAgent.TaskRuntime.Runner
+  alias CodingAgent.Tools.Task.{InvocationAuthority, Result}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.{AssistantMessage, TextContent, UserMessage}
@@ -152,7 +153,7 @@ defmodule CodingAgent.SideQuery do
 
   defp run(context, question, opts) do
     source_context = context[:approval_context] || %{}
-    requested_context = Params.inherited_execution_context(opts)
+    requested_context = InvocationAuthority.inherited_execution_context(opts)
     context_fields = [:invocation_context_key, :memory_context_key, :memory_context_verified]
     requested_approval_context = Keyword.get(opts, :approval_context) || %{}
 

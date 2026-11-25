@@ -266,11 +266,7 @@ defmodule LemonControlPlane.Protocol.Frames do
       "presence",
       # System events
       "tick",
-      "shutdown",
-      "health",
       "heartbeat",
-      "metrics",
-      "log",
       # Cron events
       "cron",
       "cron.job",

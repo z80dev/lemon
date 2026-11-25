@@ -74,7 +74,7 @@ defmodule LemonCore.Secrets.Usage do
   defp schedule(state), do: state
 
   defp persist(state) do
-    if state.timer, do: Process.cancel_timer(elem(state.timer, 1))
+    _ = if state.timer, do: Process.cancel_timer(elem(state.timer, 1))
 
     Enum.each(state.pending, fn {{store, key}, {entry, count, used_at}} ->
       updated =

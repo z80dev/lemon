@@ -32,7 +32,7 @@ returns:
 
 It never returns source text, extracted document text, a generated prompt,
 skill body, local path, URL, secret name, or secret value. Content selected by
-`LemonCore.Context` is redacted again at the durable-memory boundary.
+`LemonSkills.Context` is redacted again at the durable-memory boundary.
 
 ## Confirm the exact fresh plan
 

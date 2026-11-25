@@ -6,8 +6,9 @@ defmodule CodingAgent.Tools.Task.Swarm do
   Ready nodes retain declaration order while waiting for native budget capacity.
   """
 
+  alias CodingAgent.TaskRuntime.Control
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Control, Execution, Params, Result}
+  alias CodingAgent.Tools.Task.{Execution, InvocationAuthority, Params, Result}
   alias CodingAgent.Tools.Task.Swarm.Graph
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
@@ -16,7 +17,7 @@ defmodule CodingAgent.Tools.Task.Swarm do
   def execute(tool_call_id, params, signal, on_update, cwd, opts) do
     # Capture the caller's execution context once; the coordinator outlives this call
     # and must not re-read parent session state for each node.
-    opts = Keyword.merge(opts, Map.to_list(Params.inherited_execution_context(opts)))
+    opts = Keyword.merge(opts, Map.to_list(InvocationAuthority.inherited_execution_context(opts)))
 
     # The coordinator root is not a persona launch, so a spawns allowlist applies to nodes only.
     root_opts = Keyword.delete(opts, :task_allowed_agents)
@@ -25,7 +26,8 @@ defmodule CodingAgent.Tools.Task.Swarm do
     # to model sessions; otherwise it would remove delegation from its nodes.
     with {:ok, graph} <- Graph.prepare(params, cwd, opts),
          {:ok, root} <- Params.validate_run_params(root_params(params, graph), cwd, root_opts),
-         {:ok, root} <- Params.restrict_to_parent(%{root | tool_policy: nil}, cwd, root_opts),
+         {:ok, root} <-
+           InvocationAuthority.restrict_to_parent(%{root | tool_policy: nil}, cwd, root_opts),
          :ok <- Params.check_budget_and_policy(root, opts),
          :ok <- check_nodes(graph.nodes, opts) do
       root_opts =
@@ -243,7 +245,7 @@ defmodule CodingAgent.Tools.Task.Swarm do
             |> Map.merge(%{async: true, auto_followup: false})
 
           outcome =
-            with {:ok, validated} <- Params.restrict_to_parent(validated, cwd, opts),
+            with {:ok, validated} <- InvocationAuthority.restrict_to_parent(validated, cwd, opts),
                  :ok <- Params.check_budget_and_policy(validated, opts) do
               Execution.run(nil, validated, signal, update, cwd, opts)
             end
