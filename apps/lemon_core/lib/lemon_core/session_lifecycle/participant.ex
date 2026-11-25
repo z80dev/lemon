@@ -69,6 +69,11 @@ defmodule LemonCore.SessionLifecycle.Participant do
       module: LemonCore.SessionLifecycle.ExecApprovalGrants,
       operations: [:delete, :reset],
       order: 10
+    },
+    run_diagnostics: %{
+      module: LemonCore.SessionLifecycle.RunDiagnostics,
+      operations: [:delete],
+      order: 80
     }
   }
 

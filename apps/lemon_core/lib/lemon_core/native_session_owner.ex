@@ -52,6 +52,27 @@ defmodule LemonCore.NativeSessionOwner do
           {:ok, binary() | nil} | {:error, :store_unavailable}
   def fetch(store \\ Store, %ResumeToken{} = resume), do: Store.fetch(store, @table, key(resume))
 
+  @doc false
+  def fetch_bindings, do: Store.fetch_all(@table)
+
+  @doc false
+  def delete_bindings(session_key, bindings) do
+    rows = for {token, ^session_key} <- bindings, do: {@table, token, session_key}
+
+    with :ok <-
+           if(rows == [],
+             do: :ok,
+             else: Store.compare_and_delete_many(Store, rows, durable: true)
+           ),
+         {:ok, remaining} <- fetch_bindings(),
+         false <- Enum.any?(remaining, fn {_token, owner} -> owner == session_key end) do
+      :ok
+    else
+      true -> {:error, :native_bindings_remain}
+      error -> error
+    end
+  end
+
   @doc "Whether `resume` is bound to exactly `session_key`; unavailable reads are `false`."
   @spec owned_by?(Store.server(), ResumeToken.t(), term()) :: boolean()
   def owned_by?(store \\ Store, resume, session_key)

@@ -232,9 +232,11 @@ defmodule LemonCore.Store do
   caller-side budget. Failure or budget exhaustion is isolated from persistence.
   Hooks that require a session must ignore missing or invalid keys.
 
-  Hook delivery is **at least once**. Hooks run only after the run record and
-  any eligible session index are written, but retrying a successful finalization
-  invokes them again. Hook implementations must therefore be idempotent by `run_id`.
+  Hook delivery is **at least once**. Hooks run after the run record and any
+  eligible session index are written. Retries can invoke them again while the
+  run record or a replay payload remains. Once only the terminal decision
+  remains, an identical retry is acknowledged without running the hooks.
+  Hook implementations must be idempotent by `run_id`.
   """
   @spec finalize_run(server(), term(), map()) :: :ok | {:error, term()}
   def finalize_run(server \\ __MODULE__, run_id, summary)
@@ -830,6 +832,32 @@ defmodule LemonCore.Store do
   def get_run_with_events(server \\ __MODULE__, run_id),
     do: with_run_events(server, run_id, get_run(server, run_id))
 
+  @doc false
+  def fetch_session_runs(session_key, known_run_ids) do
+    safe_store_call(
+      __MODULE__,
+      {:fetch_session_runs, session_key, known_run_ids},
+      {:error, :store_unavailable},
+      op: :fetch_session_runs,
+      table: :runs,
+      key: :session
+    )
+  end
+
+  @doc false
+  def discard_run_event_buffers([]), do: :ok
+
+  def discard_run_event_buffers(run_ids) do
+    safe_store_call(
+      __MODULE__,
+      {:discard_run_event_buffers, run_ids},
+      {:error, :store_unavailable},
+      op: :discard_run_event_buffers,
+      table: :runs,
+      key: :multiple
+    )
+  end
+
   defp with_run_events(server, run_id, record) when is_map(record) and is_atom(server) do
     case Hooks.published(server, :run_events, nil) do
       nil -> record
@@ -1196,7 +1224,8 @@ defmodule LemonCore.Store do
     :generic_delete,
     :generic_take,
     :durable_write,
-    :finalize_run
+    :finalize_run,
+    :discard_run_event_buffers
   ]
 
   @impl true
@@ -1274,6 +1303,39 @@ defmodule LemonCore.Store do
            backend_state: backend_state
        }}
     end
+  end
+
+  def handle_call({:fetch_session_runs, session_key, known_run_ids}, _from, state) do
+    # In addition to IDs in durable history or introspection, find hot
+    # summaries that have already aged out of those projections. Do not copy
+    # unrelated runs out of ETS.
+    rows =
+      :ets.select(state.read_cache.runs, [
+        {{:_, %{summary: %{session_key: session_key}}}, [], [:"$_"]}
+      ])
+
+    result =
+      Enum.reduce_while(known_run_ids, {:ok, Map.new(rows), state.backend_state}, fn
+        id, {:ok, rows, _backend_state} = acc when is_map_key(rows, id) ->
+          {:cont, acc}
+
+        id, {:ok, rows, backend_state} ->
+          case backend_get(state, backend_state, :runs, id) do
+            {:ok, nil, backend_state} -> {:cont, {:ok, rows, backend_state}}
+            {:ok, row, backend_state} -> {:cont, {:ok, Map.put(rows, id, row), backend_state}}
+            {:error, _} = error -> {:halt, error}
+          end
+      end)
+
+    case result do
+      {:ok, rows, backend_state} -> {:reply, {:ok, rows}, %{state | backend_state: backend_state}}
+      {:error, _} -> {:reply, {:error, :store_unavailable}, state}
+    end
+  end
+
+  def handle_call({:discard_run_event_buffers, run_ids}, _from, state) do
+    Enum.each(run_ids, &drop_run_events(state, &1))
+    {:reply, :ok, state}
   end
 
   def handle_call({:get_run, run_id}, _from, state) do
@@ -1379,7 +1441,7 @@ defmodule LemonCore.Store do
   def handle_call({:generic_put_new, table, key, value}, _from, state) do
     case state.backend.put_new(state.backend_state, table, key, value) do
       {:ok, backend_state} ->
-        if table in state.cached_tables do
+        if table == :runs or table in state.cached_tables do
           ReadCache.put(state.read_cache, table, key, value)
         end
 
@@ -1813,6 +1875,9 @@ defmodule LemonCore.Store do
 
       {{:finalized, finalize_run_hooks(state), payload}, %{state | backend_state: backend_state}}
     else
+      {:already_projected, backend_state} ->
+        {:ok, %{state | backend_state: backend_state}}
+
       {:error, reason, backend_state} ->
         {{:error, reason}, %{state | backend_state: backend_state}}
 
@@ -1854,15 +1919,18 @@ defmodule LemonCore.Store do
 
   defp final_record_for_commit(state, backend_state, existing, decision, run_id, summary) do
     case final_record(existing, run_id, summary) do
-      {:persist, record} when is_map(decision) ->
+      {:persist, _record} when is_map(decision) ->
         with {:ok, pending, backend_state} <-
                state.backend.get(backend_state, :run_terminal_pending, run_id) do
           case {decision, pending} do
             {%{digest: digest}, %{digest: digest, record: original}} ->
               {:ok, original, backend_state}
 
-            {%{started_at: started_at}, nil} ->
-              {:ok, %{record | started_at: started_at}, backend_state}
+            {%{started_at: _}, nil} ->
+              # The decision remains a duplicate barrier after the active row
+              # and replay payload are gone. The caller's retry is not a new
+              # source for content we have already discarded.
+              {:already_projected, backend_state}
 
             _ ->
               {:error, :invalid_terminal_payload, backend_state}
@@ -2377,9 +2445,7 @@ defmodule LemonCore.Store do
 
   defp invalidate_snapshot_cache(state, entries) do
     Enum.each(entries, fn {table, key, _expected} ->
-      if table in state.cached_tables do
-        ReadCache.delete(state.read_cache, table, key)
-      end
+      ReadCache.delete(state.read_cache, table, key)
     end)
   end
 

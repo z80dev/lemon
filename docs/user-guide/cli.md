@@ -1294,11 +1294,16 @@ piece of state kept for the session: chat state, session policy, lifecycle
 metadata, session-scoped approval grants, memory documents (so recall and
 search no longer return the conversation), the session goal, Telegram and
 Discord message indexes and model overrides, the web workspace, router
-compaction and agent-messaging state, and the native session journals with
-their model pins. Canonical run history is deleted last. Success is reported
-only after every store verified its deletion; if any step fails before run
-history is deleted, everything is restored and the session stays intact. A
-store that cannot be read stops the deletion before anything changes.
+compaction and agent-messaging state, run diagnostics, and native task records
+and journals with their model pins. Archived journals and interrupted-delete
+staging files are included when they can be attributed to the session; an
+independent fork is not deleted with its source. The content-free terminal run
+decision stays to reject duplicate completion.
+
+Success is reported only after every store verifies deletion. A store that
+cannot be read stops deletion before mutation. Failure before canonical
+deletion rolls back; if canonical deletion or final cleanup may have applied,
+the operation reports an unknown outcome rather than verified success.
 
 `sessions.reset` keeps the session and its preferences (model overrides,
 goal, workspace, memory) but revokes its session-scoped approval grants and

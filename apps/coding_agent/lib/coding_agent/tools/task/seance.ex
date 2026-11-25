@@ -58,7 +58,7 @@ defmodule CodingAgent.Tools.Task.Seance do
     destination = Path.join(Path.dirname(source), id <> ".jsonl")
 
     fork_opts =
-      [id: id, fresh_budget: true]
+      [id: id, fresh_budget: true, session_key: Keyword.get(opts, :session_key)]
       |> then(fn fork_opts ->
         case present(Keyword.get(opts, :session_id)) do
           nil -> fork_opts

@@ -46,6 +46,7 @@ defmodule CodingAgent.SessionManager do
             timestamp: integer(),
             cwd: String.t(),
             parent_session: String.t() | nil,
+            session_key: String.t() | nil,
             active_leaf_id: String.t() | nil,
             checkpoint_entry_count: non_neg_integer() | nil
           }
@@ -55,6 +56,7 @@ defmodule CodingAgent.SessionManager do
               timestamp: 0,
               cwd: "",
               parent_session: nil,
+              session_key: nil,
               active_leaf_id: nil,
               checkpoint_entry_count: nil
   end
@@ -298,6 +300,7 @@ defmodule CodingAgent.SessionManager do
 
   - `:id` - Session ID (auto-generated if not provided)
   - `:parent_session` - ID of parent session for forking
+  - `:session_key` - logical session that owns the journal
   """
   @spec new(String.t(), keyword()) :: Session.t()
   def new(cwd, opts \\ []) do
@@ -307,7 +310,8 @@ defmodule CodingAgent.SessionManager do
       id: Keyword.get(opts, :id) || generate_session_id(),
       timestamp: System.system_time(:millisecond),
       cwd: cwd,
-      parent_session: Keyword.get(opts, :parent_session)
+      parent_session: Keyword.get(opts, :parent_session),
+      session_key: Keyword.get(opts, :session_key)
     }
 
     %Session{
@@ -556,7 +560,8 @@ defmodule CodingAgent.SessionManager do
         child =
           new(source.header.cwd,
             id: Keyword.get(opts, :id),
-            parent_session: Keyword.get(opts, :parent_session, source.header.id)
+            parent_session: Keyword.get(opts, :parent_session, source.header.id),
+            session_key: Keyword.get(opts, :session_key)
           )
 
         child = %{
@@ -1373,6 +1378,7 @@ defmodule CodingAgent.SessionManager do
       timestamp: data["timestamp"],
       cwd: data["cwd"],
       parent_session: data["parentSession"],
+      session_key: data["sessionKey"],
       active_leaf_id: data["activeLeafId"],
       checkpoint_entry_count: data["checkpointEntryCount"]
     }
@@ -1390,6 +1396,7 @@ defmodule CodingAgent.SessionManager do
       "timestamp" => header.timestamp,
       "cwd" => header.cwd,
       "parentSession" => header.parent_session,
+      "sessionKey" => header.session_key,
       "activeLeafId" => header.active_leaf_id,
       "checkpointEntryCount" => header.checkpoint_entry_count
     }

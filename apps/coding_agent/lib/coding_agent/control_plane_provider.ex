@@ -561,6 +561,7 @@ defmodule CodingAgent.ControlPlaneProvider do
           nil -> [id: id]
           entry_id -> [id: id, leaf_id: entry_id]
         end
+        |> Keyword.put(:session_key, destination_key)
 
       with {:ok, _session} <-
              CodingAgent.SessionManager.fork_file(source_path, destination_path, fork_opts) do
@@ -723,7 +724,7 @@ defmodule CodingAgent.ControlPlaneProvider do
   end
 
   defp create_native_session(session_key, cwd, action \\ :status) do
-    session = CodingAgent.SessionManager.new(cwd)
+    session = CodingAgent.SessionManager.new(cwd, session_key: session_key)
 
     # Resolve the initial planning role before publishing a resume token or
     # creating a journal. Invalid configuration leaves creation untouched.

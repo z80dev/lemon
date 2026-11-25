@@ -82,7 +82,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
     session_manager =
       Keyword.get_lazy(opts, :loaded_session, fn ->
-        load_or_create_session(cwd, session_file, session_id, parent_session)
+        load_or_create_session(cwd, session_file, session_id, parent_session, opts[:session_key])
       end)
 
     session_manager =
@@ -807,7 +807,7 @@ defmodule CodingAgent.Session.Lifecycle do
           SessionManager.build_session_context(state.session_manager).model_explicit
 
         new_session_manager =
-          SessionManager.new(state.cwd)
+          SessionManager.new(state.cwd, session_key: state.tool_opts[:session_key])
           |> SessionManager.append_entry(
             SessionManager.SessionEntry.model_change(state.model.provider, state.model.id,
               explicit: model_explicit,
@@ -921,11 +921,15 @@ defmodule CodingAgent.Session.Lifecycle do
 
   defp rebind_approval_context(context, _previous, _session_id), do: context
 
-  defp load_or_create_session(cwd, nil, session_id, parent_session) do
-    SessionManager.new(cwd, id: session_id, parent_session: parent_session)
+  defp load_or_create_session(cwd, nil, session_id, parent_session, session_key) do
+    SessionManager.new(cwd,
+      id: session_id,
+      parent_session: parent_session,
+      session_key: session_key
+    )
   end
 
-  defp load_or_create_session(_cwd, session_file, _session_id, _parent_session) do
+  defp load_or_create_session(_cwd, session_file, _session_id, _parent_session, _session_key) do
     case SessionManager.load_from_file(session_file) do
       {:ok, session} ->
         session
