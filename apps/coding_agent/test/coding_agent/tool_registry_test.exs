@@ -811,8 +811,9 @@ defmodule CodingAgent.ToolRegistryTest do
     test "global extension disable policy blocks explicit extension path execution", %{
       tmp_dir: tmp_dir
     } do
+      env = LemonCore.Testing.HermeticEnv.snapshot_env(["LEMON_EXTENSIONS_ENABLED"])
+      on_exit(fn -> LemonCore.Testing.HermeticEnv.restore_env(env) end)
       System.put_env("LEMON_EXTENSIONS_ENABLED", "false")
-      on_exit(fn -> System.delete_env("LEMON_EXTENSIONS_ENABLED") end)
 
       File.write!(
         Path.join(tmp_dir, "global.toml"),

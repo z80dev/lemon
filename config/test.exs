@@ -42,12 +42,6 @@ end
 File.mkdir_p!(lemon_test_home)
 System.put_env("HOME", lemon_test_home)
 
-# Session fixtures stub the agent stream, not background fact extraction.
-# Tests exercising extraction opt in via project config or a new test home.
-lemon_config_dir = Path.join(lemon_test_home, ".lemon")
-File.mkdir_p!(lemon_config_dir)
-File.write!(Path.join(lemon_config_dir, "config.toml"), "[features]\nsession_search = \"off\"\n")
-
 # Tests must not depend on or mutate a developer's persistent state on disk.
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,
