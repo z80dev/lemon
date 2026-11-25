@@ -180,16 +180,24 @@ It builds each package with `mix hex.build --unpack` and inspects the tarballs:
 no packaged source names a module a tarball excludes, `lemon_platform_test`
 never names `LemonChannels`, and each sibling requirement in `hex_metadata.config`
 admits its sibling's 0.x minor and no other. It then compiles a scratch consumer
-project that depends on nothing but the unpacked directories, boots
-`:lemon_agent`, checks the repo-only modules are absent, fails if xref finds a
-packaged call into a published namespace the packages do not define, and runs
-the packaged doctor: `LemonCore.Doctor.Checks.Runtime` must report the build
-identity with no failure on the running toolchain, and no doctor check may
-crash. Finally it runs `mix lemon.new --packages-path` for the base and
-`--memory` shapes against the same tarballs and runs their tests. It needs Hex
-and network access to hex.pm. `.github/workflows/packaging.yml` runs it on pull
-requests that touch the packages and nightly, plus an advisory Elixir 1.15 /
-OTP 26 leg for the declared floor, where the packaged runtime check must pass too.
+project that depends on nothing but the unpacked directories (failing when any
+dependency requires a newer Elixir than the running one), boots `:lemon_agent`,
+checks the repo-only modules are absent, fails if xref finds a packaged call into
+a published namespace the packages do not define or a function the running
+Elixir/OTP lacks, and runs the packaged doctor: `LemonCore.Doctor.Checks.Runtime`
+must report the build identity with no failure on the running toolchain, and no
+doctor check may crash. Finally it runs `mix lemon.new --packages-path` for the
+base and `--memory` shapes against the same tarballs and runs their tests. It
+needs Hex and network access to hex.pm. `.github/workflows/packaging.yml` runs it
+on pull requests that touch the packages and nightly, on Elixir 1.20.5 / OTP
+29.1.2 and on the declared floor, Elixir 1.17.3 / OTP 26.2; both legs are
+required.
+
+The packages declare `elixir: "~> 1.17"`. That is the honest floor: exqlite 0.43
+(required by `lemon_memory`, optional for `lemon_core`) requires Elixir 1.17, and
+the packages call `String.replace_invalid/2` (Elixir 1.16). Elixir 1.15.8 / OTP
+26.2 fails both checks above. `PlatformPackagingContractTest` keeps every package
+on one floor and requires a packaging leg on it.
 
 ## Releasing a package
 

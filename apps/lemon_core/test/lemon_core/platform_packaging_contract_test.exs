@@ -113,6 +113,30 @@ defmodule LemonCore.PlatformPackagingContractTest do
              [:lemon_agent, :lemon_memory, :lemon_platform_test]
   end
 
+  # The declared Elixir floor is a claim scripts/verify_packages proves by
+  # running the packaged consumer and doctor on it, as a required CI leg (#730).
+  test "packaging CI requires a leg on the Elixir floor every package declares" do
+    floors =
+      for package <- published_packages(), into: MapSet.new() do
+        [_, requirement] = Regex.run(~r/^\s*elixir: "([^"]+)"/m, mix_exs(package))
+        requirement
+      end
+
+    assert [floor] = MapSet.to_list(floors),
+           "packages declare different floors: #{inspect(floors)}"
+
+    assert [_, minimum] = Regex.run(~r/^~> (\d+\.\d+)$/, floor)
+
+    workflow = read!(".github/workflows/packaging.yml")
+    legs = Regex.scan(~r/^\s*elixir: "(\d+\.\d+)\.\d+"/m, workflow, capture: :all_but_first)
+
+    assert [minimum] in legs, "packaging.yml has no Elixir #{minimum} leg for `#{floor}`"
+    refute workflow =~ "continue-on-error", "the floor leg must be required"
+
+    assert read!("scripts/verify_packages") =~ ~s(elixir: "#{floor}"),
+           "the verify_packages consumer must declare the packages' floor"
+  end
+
   test "published mix.exs files load outside the umbrella" do
     for package <- published_packages() do
       source = mix_exs(package)

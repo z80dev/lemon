@@ -10,6 +10,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking:** requires Elixir 1.17 (was `~> 1.15`). The published packages
+  share one floor, which CI now proves on Elixir 1.17.3 / OTP 26.2 (#730).
 - **Breaking (0.3.0):** provider streaming is delta-only: events carry deltas,
   accumulation happens once, and deltas are coalesced (#571). Migration:
   consumers that read accumulated partial messages from every event must

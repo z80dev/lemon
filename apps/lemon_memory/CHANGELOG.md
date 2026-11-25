@@ -10,6 +10,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking:** requires Elixir 1.17 (was `~> 1.15`); its exqlite 0.43
+  dependency requires 1.17. CI proves the floor on Elixir 1.17.3 / OTP 26.2
+  (#730).
 - Requires `lemon_core ~> 0.3.0` (was `~> 0.2`), derived from this package's own
   version: the published packages share one 0.x release line and every minor
   may break, so a sibling on another minor no longer resolves (#730).

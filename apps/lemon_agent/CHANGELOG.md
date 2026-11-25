@@ -59,6 +59,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking:** requires Elixir 1.17 (was `~> 1.15`, which the package did not
+  meet: it calls `String.replace_invalid/2`, Elixir 1.16). CI proves the floor
+  on Elixir 1.17.3 / OTP 26.2 (#730).
 - Sibling requirements are `~> 0.3.0` (`lemon_ai`, `lemon_core`), derived from
   this package's own version: every 0.x minor may break, so a 0.4 sibling no
   longer resolves (#730).

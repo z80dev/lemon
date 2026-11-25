@@ -8,6 +8,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking:** requires Elixir 1.17 (was `~> 1.15`, which the package did not
+  meet: it calls `String.replace_invalid/1`, Elixir 1.16, and its optional
+  exqlite 0.43 requires 1.17). CI proves the floor on Elixir 1.17.3 / OTP 26.2,
+  and `LemonCore.ConfinedFS.Stat` moved to its own file so the package compiles
+  there (#730).
 - **Breaking:** the test harness (`LemonCore.Testing`, `Testing.Case`,
   `Testing.HermeticEnv`, `Testing.AsyncHelpers`, `Testing.FileServerTap`) is no
   longer shipped in the Hex package; it serves the lemon repository's own

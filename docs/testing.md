@@ -151,7 +151,7 @@ responsibilities. No live provider calls are needed for `premerge` or `changed`.
 | `docs-site.yml` | `docs/**` changes | VitePress build and link check |
 | `release.yml` | tag / dispatch | Skips the gates when `scripts/ci_verified_commit` finds (or waits up to 30 minutes for) a green `ci.yml` push run on the release commit or on an ancestor it differs from only by version fields and changelogs; otherwise calls `ci.yml` itself, so the release runs the same sharded jobs. Then builds and publishes artifacts. |
 | `live-eval.yml` | dispatch | `scripts/test live-eval` with repository secrets |
-| `packaging.yml` | PRs touching the five Hex packages, `lemon_channels`, `installer/` or the packaging scripts; nightly; dispatch | `scripts/verify_packages` (consumer project and generated projects built from the unpacked Hex tarballs; advisory Elixir 1.15 leg) and `scripts/verify_generator` (both generator shapes against the checkout) |
+| `packaging.yml` | PRs touching the five Hex packages, `lemon_channels`, `installer/` or the packaging scripts; nightly; dispatch | `scripts/verify_packages` (consumer project, packaged doctor and generated projects built from the unpacked Hex tarballs; required on Elixir 1.20.5 / OTP 29.1.2 and on the declared 1.17.3 / OTP 26.2 floor) and `scripts/verify_generator` (both generator shapes against the checkout) |
 | `publish.yml` | `<package>-v<version>` tag / dispatch | `scripts/release_package --verify`, then `--publish-tagged` when `HEX_API_KEY` is set |
 
 In `ci.yml`, pull requests run only what their diff can affect, chosen by

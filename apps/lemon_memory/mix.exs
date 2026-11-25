@@ -27,7 +27,7 @@ defmodule LemonMemory.MixProject do
       app: :lemon_memory,
       version: @version,
       test_pattern: "*_test.exs",
-      elixir: "~> 1.15",
+      elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       # Floor, not a target: `SessionSearch` now has a direct suite, but
       # `mix lemon.memory` is still untested, so the threshold stays where the

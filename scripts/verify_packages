@@ -27,11 +27,13 @@
 #      minor and no other.
 #   2. A scratch consumer project depends on those directories by path (the
 #      packages' own sibling requirements are hex requirements, so the path deps
-#      carry `override: true`), fetches the rest from hex.pm, compiles, boots
-#      :lemon_agent, checks the repo-only tooling stayed out of lemon_core and
-#      that no packaged module calls an undefined module of a published
-#      package (xref), and runs the packaged doctor: the runtime check must
-#      pass on this toolchain and no doctor check may crash.
+#      carry `override: true`), fetches the rest from hex.pm, compiles (no
+#      dependency may require a newer Elixir), boots :lemon_agent, checks the
+#      repo-only tooling stayed out of lemon_core and that no packaged module
+#      calls an undefined module of a published package or a function this
+#      Elixir/OTP lacks (xref), and runs the packaged doctor: the runtime check
+#      must pass on this toolchain and no doctor check may crash. CI runs it on
+#      the packages' declared Elixir floor as well as the current toolchain.
 #   3. The installer generates the base and --memory project shapes against the
 #      same unpacked packages (`--packages-path`), compiles them with
 #      --warnings-as-errors and runs their tests.
@@ -190,7 +192,7 @@ defmodule PackagesConsumer.MixProject do
   use Mix.Project
 
   def project do
-    [app: :packages_consumer, version: "0.1.0", elixir: "~> 1.15", deps: deps()]
+    [app: :packages_consumer, version: "0.1.0", elixir: "~> 1.17", deps: deps()]
   end
 
   # :tools provides :xref for the inspection below.
@@ -214,7 +216,13 @@ echo "==> consumer: deps.get"
 (cd "$CONSUMER" && consumer mix deps.get >/dev/null)
 
 echo "==> consumer: compile"
-(cd "$CONSUMER" && consumer mix compile)
+(cd "$CONSUMER" && consumer mix compile 2>&1) | tee "$TMP/consumer_compile.log"
+# Mix only warns when a dependency requires a newer Elixir than the running
+# one; for the packages' declared floor that is a failure.
+if grep -n 'requires Elixir' "$TMP/consumer_compile.log"; then
+  echo "a dependency of the packages does not support Elixir $(elixir -e 'IO.write(System.version())')" >&2
+  exit 1
+fi
 
 echo "==> consumer: boot and inspect"
 (cd "$CONSUMER" && consumer mix run -e '
@@ -242,7 +250,10 @@ echo "==> consumer: boot and inspect"
   end
 
   # No packaged module may call a module or function of a published package
-  # that the packages do not contain: that is a raise waiting for a consumer.
+  # that the packages do not contain, nor a function the running Elixir/OTP
+  # lacks (String.replace_invalid/2 before Elixir 1.16): each is a raise
+  # waiting for a consumer. Calls into an absent optional dependency (Sentry,
+  # Phoenix.PubSub, ...) are guarded by the callers and are not counted.
   published = [:lemon_ai, :lemon_core, :lemon_agent, :lemon_memory, :lemon_platform_test]
   namespaces = ~w(LemonAi LemonCore LemonAgent LemonMemory LemonPlatformTest Mix.Tasks.Lemon)
 
@@ -258,9 +269,9 @@ echo "==> consumer: boot and inspect"
     Enum.any?(namespaces, &(name == &1 or String.starts_with?(name, &1 <> ".")))
   end
 
-  case for({from, {module, _, _} = to} <- calls, ours?.(module), do: {from, to}) do
+  case for({from, {module, _, _} = to} <- calls, ours?.(module) or Code.ensure_loaded?(module), do: {from, to}) do
     [] -> :ok
-    broken -> raise "packaged code calls what the packages do not contain:\n#{inspect(broken, pretty: true)}"
+    broken -> raise "packaged code calls what the packages or Elixir #{System.version()} do not provide:\n#{inspect(broken, pretty: true)}"
   end
 
   # The packaged doctor runs: its runtime check must pass on this toolchain

@@ -27,7 +27,7 @@ defmodule LemonPlatformTest.MixProject do
       app: :lemon_platform_test,
       version: @version,
       test_pattern: "*_test.exs",
-      elixir: "~> 1.15",
+      elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       # The self-validation suites in test/compliance run the templates against
       # the platform's own implementations, which covers 95%+ of the macro

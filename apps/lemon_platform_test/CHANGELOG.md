@@ -10,6 +10,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking:** requires Elixir 1.17 (was `~> 1.15`), the floor of the packages
+  it tests. CI proves it on Elixir 1.17.3 / OTP 26.2 (#730).
 - **Breaking:** `PluginCase` is no longer in the Hex package. Its target,
   `lemon_channels`, is not published, so no Hex consumer could use it; a path
   dependency on `apps/lemon_platform_test` in a lemon checkout still provides

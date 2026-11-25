@@ -19,7 +19,7 @@ defmodule LemonCore.MixProject do
       app: :lemon_core,
       version: @version,
       test_pattern: "*_test.exs",
-      elixir: "~> 1.15",
+      elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 69]],
       deps: deps(),

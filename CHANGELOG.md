@@ -124,6 +124,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   across a 0.x minor (lemon_memory and lemon_platform_test join the 0.3.0
   line); `PluginCase` leaves the lemon_platform_test package; and
   `mix lemon.store.migrate_jsonl_to_sqlite` is removed (#730).
+- **Breaking (Hex packages):** the five published packages require Elixir 1.17
+  (was `~> 1.15`, which they did not meet: exqlite 0.43 requires 1.17 and they
+  call `String.replace_invalid`, Elixir 1.16; lemon_core did not compile on
+  1.15). `packaging.yml` now requires `scripts/verify_packages` on the floor,
+  Elixir 1.17.3 / OTP 26.2, and the script fails on functions the running
+  toolchain lacks or dependencies that refuse it (#730).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
