@@ -325,6 +325,15 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
     end
   end
 
+  # Kimi Code models listed for the effective credential and endpoint win over
+  # the bundled catalog; without a cached listing the registry lookup applies.
+  defp preset_model(providers_or_cfg, :kimi_coding, cfg, model_id, _known_only) do
+    LemonAi.Models.KimiCodeDiscovery.cached_model(model_id,
+      access_token: Credentials.build_get_api_key(providers_or_cfg).(:kimi_coding),
+      base_url: non_empty(value(cfg, :base_url))
+    )
+  end
+
   defp preset_model(providers_or_cfg, registry, cfg, model_id, known_only) do
     if preset = Presets.get(registry) do
       url = non_empty(value(cfg, :base_url)) || Presets.base_url(registry)

@@ -2,11 +2,15 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
   @moduledoc """
   Kimi Code subscription sign-in through the device authorization grant.
 
-  `login_device_flow/1` requests a device code from `auth.kimi.com`, shows the
-  verification URL and user code through `:on_auth`, polls until the user
-  approves, and returns a refreshable secret payload for the `kimi_coding`
-  provider. `KIMI_CODE_OAUTH_HOST` (or `KIMI_OAUTH_HOST`) and the `:base_url`
-  option override the auth host.
+  `login_device_flow/1` requests a device code from the Kimi Code auth host,
+  shows the verification URL and user code through `:on_auth`, polls until the
+  user approves, and returns a refreshable secret payload for the `kimi_coding`
+  provider. The auth host is the `:base_url` option, else the `:region`
+  option's host (`region/1`: `auth.kimi.com` for `"china"`, `auth.kimi.ai` for
+  `"global"`), else `KIMI_CODE_OAUTH_HOST` (or `KIMI_OAUTH_HOST`), else
+  `auth.kimi.com`. The payload records that host as `auth_base_url`, and
+  refreshes use it, because Kimi Code tokens belong to the deployment that
+  issued them.
 
   Kimi identifies clients by a Kimi CLI fingerprint: `request_headers/0` is sent
   with every auth request and, by `LemonAi.Providers.Anthropic`, with every
@@ -23,6 +27,18 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
 
   @client_id "17e5f671-d194-4dfb-9706-5516cb48c098"
   @default_base_url "https://auth.kimi.com"
+  @regions %{
+    "china" => %{
+      auth_base_url: "https://auth.kimi.com",
+      api_base_url: "https://api.kimi.com/coding",
+      omp_provider: "kimi-code"
+    },
+    "global" => %{
+      auth_base_url: "https://auth.kimi.ai",
+      api_base_url: "https://api.kimi.ai/coding",
+      omp_provider: "kimi-code-global"
+    }
+  }
   @host_env_vars ["KIMI_CODE_OAUTH_HOST", "KIMI_OAUTH_HOST"]
   @secret_type "kimi_code_oauth"
   @refresh_skew_ms 5 * 60 * 1000
@@ -35,14 +51,13 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
   @doc """
   Sign in with the device authorization grant.
 
-  Requires `:on_auth`. Optional: `:on_progress`, `:base_url`, `:sleep`,
-  `:req_options`. Returns the secret payload; callers own storage.
+  Requires `:on_auth`. Optional: `:on_progress`, `:base_url`, `:region`,
+  `:sleep`, `:req_options`. Returns the secret payload; callers own storage.
   """
   @spec login_device_flow(keyword()) :: {:ok, oauth_secret()} | {:error, term()}
   def login_device_flow(opts \\ []) when is_list(opts) do
-    base = base_url(opts)
-
-    with :ok <- OAuthFlow.notify_progress(opts, "Requesting Kimi device authorization..."),
+    with {:ok, base} <- login_base_url(opts),
+         :ok <- OAuthFlow.notify_progress(opts, "Requesting Kimi device authorization..."),
          {:ok, response} <-
            OAuthFlow.request(
              base <> "/api/oauth/device_authorization",
@@ -67,6 +82,7 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
          "access_token" => token.access_token,
          "refresh_token" => token.refresh_token,
          "expires_at_ms" => token.expires_at_ms,
+         "auth_base_url" => base,
          "created_at_ms" => now,
          "updated_at_ms" => now
        }
@@ -148,6 +164,49 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
 
   def oauth_token?(_), do: false
 
+  @doc """
+  Kimi Code deployment endpoints for a region: `"china"` (kimi.com, the
+  default) or `"global"` (kimi.ai). Accounts and tokens are scoped to the
+  deployment that issued them, as in omp's `kimi-code`/`kimi-code-global`
+  providers. Returns `:error` for an unknown region.
+  """
+  @spec region(String.t() | nil) ::
+          {:ok, %{auth_base_url: String.t(), api_base_url: String.t(), omp_provider: String.t()}}
+          | :error
+  def region(name) when is_binary(name) do
+    Map.fetch(@regions, name |> String.trim() |> String.downcase())
+  end
+
+  def region(_), do: :error
+
+  @doc "Region names accepted by `region/1`."
+  @spec regions() :: [String.t()]
+  def regions, do: Map.keys(@regions) |> Enum.sort()
+
+  @doc """
+  The region a Kimi Code API base URL belongs to: `"global"` for a `kimi.ai`
+  host, else `"china"` (including unset and non-Kimi hosts).
+  """
+  @spec region_for_base_url(String.t() | nil) :: String.t()
+  def region_for_base_url(base_url) when is_binary(base_url) do
+    case URI.parse(String.trim(base_url)).host do
+      host when is_binary(host) ->
+        if host == "kimi.ai" or String.ends_with?(host, ".kimi.ai"), do: "global", else: "china"
+
+      _ ->
+        "china"
+    end
+  end
+
+  def region_for_base_url(_), do: "china"
+
+  @doc "omp's provider id for the Kimi Code deployment serving `base_url`."
+  @spec omp_provider(String.t() | nil) :: String.t()
+  def omp_provider(base_url) do
+    {:ok, %{omp_provider: provider}} = base_url |> region_for_base_url() |> region()
+    provider
+  end
+
   @doc "Kimi CLI fingerprint headers (lower-case names), cached for the auth cache owner's lifetime."
   @spec request_headers() :: [{String.t(), String.t()}]
   def request_headers do
@@ -216,7 +275,7 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
 
     with {:ok, response} <-
            OAuthFlow.request(
-             base_url(opts) <> "/api/oauth/token",
+             refresh_base_url(secret, opts) <> "/api/oauth/token",
              [form: body, headers: request_headers()],
              opts
            ),
@@ -232,6 +291,27 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
   end
 
   # ── Helpers ────────────────────────────────────────────────────────────────
+
+  defp login_base_url(opts) do
+    with {:ok, name} when not is_nil(name) <- Keyword.fetch(opts, :region),
+         nil <- Keyword.get(opts, :base_url) do
+      case region(name) do
+        {:ok, %{auth_base_url: url}} -> {:ok, url}
+        :error -> {:error, :unknown_kimi_region}
+      end
+    else
+      _ -> {:ok, base_url(opts)}
+    end
+  end
+
+  # A token refreshes against the host that issued it; payloads saved before
+  # `auth_base_url` was recorded use the configured host.
+  defp refresh_base_url(secret, opts) do
+    case {Keyword.get(opts, :base_url), OAuthFlow.non_empty_binary(secret["auth_base_url"])} do
+      {nil, stored} when is_binary(stored) -> String.trim_trailing(stored, "/")
+      _ -> base_url(opts)
+    end
+  end
 
   defp base_url(opts) do
     (Keyword.get(opts, :base_url) ||

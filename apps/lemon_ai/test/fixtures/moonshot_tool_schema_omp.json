@@ -1,0 +1,336 @@
+[
+  {
+    "name": "defs_with_siblings",
+    "input": {
+      "type": "object",
+      "$defs": {
+        "Mode": {
+          "const": "fast",
+          "description": "Mode"
+        },
+        "Point": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": 0
+            },
+            "mode": {
+              "$ref": "#/$defs/Mode"
+            }
+          },
+          "required": [
+            "x"
+          ]
+        }
+      },
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/Point",
+          "description": "Start point"
+        },
+        "target": {
+          "$ref": "#/$defs/Point"
+        },
+        "level": {
+          "$ref": "#/$defs/Level"
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "properties": {
+        "origin": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number",
+              "description": "{minimum: 0}"
+            },
+            "mode": {
+              "description": "Mode",
+              "enum": [
+                "fast"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "x"
+          ],
+          "description": "Start point"
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number",
+              "description": "{minimum: 0}"
+            },
+            "mode": {
+              "description": "Mode",
+              "enum": [
+                "fast"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "x"
+          ]
+        },
+        "level": {
+          "$ref": "#/$defs/Level"
+        }
+      }
+    }
+  },
+  {
+    "name": "definitions_cycle",
+    "input": {
+      "definitions": {
+        "Node": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "children": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Node"
+              }
+            }
+          }
+        }
+      },
+      "type": "object",
+      "properties": {
+        "root": {
+          "$ref": "#/definitions/Node"
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "string"
+            },
+            "children": {
+              "type": "array",
+              "items": {}
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "unresolved_refs_stay",
+    "input": {
+      "$defs": {
+        "Known": {
+          "enum": [
+            "a",
+            "b"
+          ]
+        }
+      },
+      "type": "object",
+      "properties": {
+        "remote": {
+          "$ref": "https://example.com/schema.json"
+        },
+        "missing": {
+          "$ref": "#/$defs/Missing"
+        },
+        "pointer": {
+          "$ref": "#/properties/known"
+        },
+        "known": {
+          "$ref": "#/$defs/Known"
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "properties": {
+        "remote": {
+          "$ref": "https://example.com/schema.json"
+        },
+        "missing": {
+          "$ref": "#/$defs/Missing"
+        },
+        "pointer": {
+          "$ref": "#/properties/known"
+        },
+        "known": {
+          "enum": [
+            "a",
+            "b"
+          ],
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "ref_to_union",
+    "input": {
+      "$defs": {
+        "Choice": {
+          "oneOf": [
+            {
+              "const": 1
+            },
+            {
+              "const": 2
+            }
+          ]
+        },
+        "Name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "email"
+        }
+      },
+      "type": "object",
+      "properties": {
+        "choice": {
+          "$ref": "#/$defs/Choice"
+        },
+        "name": {
+          "$ref": "#/$defs/Name",
+          "default": "a@b.c"
+        },
+        "many": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Name"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "properties": {
+        "choice": {
+          "enum": [
+            1,
+            2
+          ],
+          "type": "number"
+        },
+        "name": {
+          "type": "string",
+          "default": "a@b.c",
+          "description": "{format: \"email\"}"
+        },
+        "many": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "{format: \"email\"}"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "no_root_defs_keeps_ref",
+    "input": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "$ref": "#/$defs/A"
+        },
+        "b": {
+          "$defs": {
+            "A": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "$ref": "#/$defs/A"
+        },
+        "b": {
+          "$defs": {
+            "A": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      }
+    }
+  },
+  {
+    "name": "nested_defs_stripped",
+    "input": {
+      "$defs": {
+        "S": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "properties": {
+        "inner": {
+          "type": "object",
+          "$defs": {
+            "Ignored": {
+              "type": "number"
+            }
+          },
+          "properties": {
+            "s": {
+              "$ref": "#/$defs/S"
+            }
+          }
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "properties": {
+        "inner": {
+          "type": "object",
+          "properties": {
+            "s": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+]

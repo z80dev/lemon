@@ -1180,13 +1180,6 @@ defmodule LemonAi.Providers.Anthropic do
         !model.reasoning or opts.reasoning in [nil, :none] ->
           body
 
-        Map.get(compat, :anthropic_effort_only) || Map.get(compat, "anthropic_effort_only") ->
-          effort = LemonAi.Models.reasoning_effort_for(model, opts.reasoning)
-
-          body
-          |> Map.delete("temperature")
-          |> Map.put("output_config", %{"effort" => Atom.to_string(effort)})
-
         get_in(body, ["tool_choice", "type"]) in ["any", "tool"] ->
           if model.adaptive_thinking and model.reasoning_efforts != [] do
             body

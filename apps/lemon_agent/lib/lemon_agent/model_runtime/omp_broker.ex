@@ -21,7 +21,8 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
 
     * `omp_provider` - the omp provider id to read. Defaults to the Lemon
       provider name with dashes (`openai_codex` -> `openai-codex`) and a few
-      renames (`kimi_coding` -> `kimi-code`, `kimi` -> `moonshot`, `opencode` ->
+      renames (`kimi_coding` -> `kimi-code`, or `kimi-code-global` when its
+      `base_url` is on kimi.ai; `kimi` -> `moonshot`; `opencode` ->
       `opencode-zen`). Custom providers must set it.
     * `omp_account` - an OAuth `identityKey` (as listed by
       `omp usage accounts`). Only that account is used; API keys are not.
@@ -50,7 +51,6 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
   @default_url "http://127.0.0.1:8765"
 
   @omp_provider_overrides %{
-    "kimi_coding" => "kimi-code",
     "kimi" => "moonshot",
     "opencode" => "opencode-zen"
   }
@@ -85,6 +85,9 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
         case ProviderNames.canonical_name(provider) do
           nil ->
             nil
+
+          "kimi_coding" ->
+            LemonAi.Auth.KimiCodeOAuth.omp_provider(config_value(provider_cfg, :base_url))
 
           canonical ->
             Map.get(@omp_provider_overrides, canonical, String.replace(canonical, "_", "-"))

@@ -36,6 +36,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   alias LemonAi.Auth.OAuthSecretResolver
   alias LemonAi.Auth.OmpToken
+  alias LemonAi.Providers.KimiCodeRanking
   alias LemonAgent.ModelRuntime.CredentialHealth
   alias LemonAgent.ModelRuntime.CustomProviders
   alias LemonAgent.ModelRuntime.OmpBroker
@@ -66,13 +67,29 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   whose secret/env fails to resolve are skipped. `config` may be a bare
   providers map or any map carrying `:providers` and `:provider_routing`
   (e.g. a settings struct or `LemonCore.Config`).
+
+  With two or more Kimi Code subscription logins, `kimi_coding` entries are
+  ordered by quota headroom (`LemonAi.Providers.KimiCodeRanking`;
+  `opts[:kimi_ranking]` passes its options).
   """
   @spec list_provider_api_keys(map() | nil, atom() | String.t(), keyword()) :: [
           credential_entry()
         ]
   def list_provider_api_keys(config, provider, opts \\ []) do
-    pool_credential_entries(config, provider, opts) ++
-      default_credential_entries(config, provider, opts)
+    entries =
+      pool_credential_entries(config, provider, opts) ++
+        default_credential_entries(config, provider, opts)
+
+    if ProviderNames.canonical_name(provider) == "kimi_coding" do
+      base_url = provider_config_value(provider_config(config, provider, opts), :base_url)
+
+      KimiCodeRanking.rank(
+        entries,
+        Keyword.merge([base_url: base_url], Keyword.get(opts, :kimi_ranking, []))
+      )
+    else
+      entries
+    end
   end
 
   # An omp-broker provider lists one entry per broker account; a broker
@@ -168,7 +185,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
       credential_ref == "default" and ProviderNames.canonical_name(provider) == "kimi_coding" and
           auth_source == :omp ->
-        OmpToken.resolve(provider_config_value(provider_cfg, :omp_path), force_refresh: true)
+        resolve_omp_token(provider_cfg, force_refresh: true)
 
       true ->
         case refresh_target(config, provider, credential_ref) do
@@ -664,7 +681,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   end
 
   defp resolve_omp_api_key(provider_cfg) do
-    case OmpToken.resolve(provider_config_value(provider_cfg, :omp_path)) do
+    case resolve_omp_token(provider_cfg) do
       {:ok, token} ->
         token
 
@@ -672,6 +689,17 @@ defmodule LemonAgent.ModelRuntime.Credentials do
         Logger.warning(OmpToken.error_message(reason))
         ""
     end
+  end
+
+  # A kimi.ai `base_url` selects omp's `kimi-code-global` login.
+  defp resolve_omp_token(provider_cfg, opts \\ []) do
+    OmpToken.resolve(
+      provider_config_value(provider_cfg, :omp_path),
+      [
+        provider:
+          LemonAi.Auth.KimiCodeOAuth.omp_provider(provider_config_value(provider_cfg, :base_url))
+      ] ++ opts
+    )
   end
 
   # `auth_source = "oauth"` makes the selected stored sign-in authoritative:

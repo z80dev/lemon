@@ -44,6 +44,9 @@ defmodule LemonAi.Providers.OpenAICompletions do
   - `requires_mistral_tool_ids` - Normalize tool IDs to 9 alphanumeric chars
   - `thinking_format` - "openai" (default) or "zai"
   - `open_router_routing` - OpenRouter provider-routing object, or `nil` to omit it
+  - `moonshot_tool_schema` - Normalize tool parameters to Moonshot Flavored JSON
+    Schema (`LemonAi.Providers.MoonshotToolSchema`); detected for Moonshot/Kimi
+    native hosts
   """
 
   @behaviour LemonAi.Provider
@@ -68,6 +71,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
   alias LemonAi.Models.Presets
 
   alias LemonAi.Providers.{
+    MoonshotToolSchema,
     OpenAIResponsesShared,
     OpenCodeGoSession,
     RequestHeaders,
@@ -453,9 +457,9 @@ defmodule LemonAi.Providers.OpenAICompletions do
   defp maybe_add_temperature(params, %{temperature: temp}),
     do: Map.put(params, "temperature", temp)
 
-  defp maybe_add_tools(params, %{tools: tools}, _compat)
+  defp maybe_add_tools(params, %{tools: tools}, compat)
        when is_list(tools) and tools != [] do
-    Map.put(params, "tools", convert_tools(tools))
+    Map.put(params, "tools", convert_tools(tools, compat))
   end
 
   defp maybe_add_tools(params, %{messages: messages}, _compat) do
@@ -925,14 +929,18 @@ defmodule LemonAi.Providers.OpenAICompletions do
     end
   end
 
-  defp convert_tools(tools) do
+  defp convert_tools(tools, compat) do
     Enum.map(tools, fn %Tool{name: name, description: description, parameters: parameters} ->
       %{
         "type" => "function",
         "function" => %{
           "name" => name,
           "description" => description,
-          "parameters" => parameters,
+          "parameters" =>
+            if(compat.moonshot_tool_schema,
+              do: MoonshotToolSchema.normalize(parameters),
+              else: parameters
+            ),
           "strict" => false
         }
       }
@@ -972,7 +980,9 @@ defmodule LemonAi.Providers.OpenAICompletions do
         Map.get(model_compat, :requires_mistral_tool_ids, detected.requires_mistral_tool_ids),
       thinking_format: Map.get(model_compat, :thinking_format, detected.thinking_format),
       open_router_routing:
-        Map.get(model_compat, :open_router_routing, detected.open_router_routing)
+        Map.get(model_compat, :open_router_routing, detected.open_router_routing),
+      moonshot_tool_schema:
+        Map.get(model_compat, :moonshot_tool_schema, detected.moonshot_tool_schema)
     }
   end
 
@@ -1015,7 +1025,8 @@ defmodule LemonAi.Providers.OpenAICompletions do
       requires_thinking_as_text: is_mistral,
       requires_mistral_tool_ids: is_mistral,
       thinking_format: if(is_zai, do: "zai", else: "openai"),
-      open_router_routing: %{}
+      open_router_routing: %{},
+      moonshot_tool_schema: MoonshotToolSchema.native_host?(model.base_url)
     }
   end
 
