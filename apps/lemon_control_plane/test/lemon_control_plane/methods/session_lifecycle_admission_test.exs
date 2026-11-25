@@ -95,9 +95,9 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     def delete(state, table, key), do: EtsBackend.delete(state, table, key)
   end
 
-  # Suspends RunHistoryStore right after session_policies deletion for the
-  # target key, pausing a confirmed reset mid-operation (between ancillary
-  # deletion and run-history deletion) while the lifecycle fence is held.
+  # Let the lifecycle operation read history for its snapshots, then suspend
+  # the history owner before the policy deletion returns. The main Store stays
+  # available for admission checks while the lifecycle fence is held.
   defmodule SuspendHistoryOnPolicyDeleteBackend do
     alias LemonCore.Store.EtsBackend
 
@@ -114,10 +114,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
       if Application.get_env(:lemon_router, :sessions_reset_suspend_history_key) == key do
         Application.delete_env(:lemon_router, :sessions_reset_suspend_history_key)
 
-        if pid = Process.whereis(LemonCore.RunHistoryStore) do
-          spawn(fn -> :sys.suspend(pid) end)
-          Process.sleep(20)
-        end
+        :ok = :sys.suspend(LemonCore.RunHistoryStore)
       end
 
       result
@@ -746,11 +743,14 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     seed_session(key)
     reset_params = confirm_reset_params(key)
     history = Process.whereis(RunHistoryStore)
-    :ok = :sys.suspend(history)
-    delete = Task.async(fn -> SessionsDelete.handle(%{"sessionKey" => key}, %{}) end)
+
+    delete =
+      with_suspend_history_on_policy_delete(key, fn ->
+        Task.async(fn -> SessionsDelete.handle(%{"sessionKey" => key}, %{}) end)
+      end)
 
     try do
-      # The deletion has removed policy and is now verifying run-history deletion.
+      # The snapshots read history before this point; verification still needs it.
       await(fn -> policy(key) == nil end)
 
       assert {:error, :session_lifecycle_in_progress} =
@@ -768,6 +768,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
                  method.handle(call_params, %{})
       end
     after
+      restore_store_backend()
       :sys.resume(history)
     end
 
