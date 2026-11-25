@@ -1,4 +1,4 @@
-defmodule LemonAgent.Workspace.GoalAuthority do
+defmodule LemonAutomation.GoalAuthority do
   @moduledoc """
   Durable caller authority recorded on a goal (`goal.authority`).
 
@@ -38,7 +38,7 @@ defmodule LemonAgent.Workspace.GoalAuthority do
   surface records fresh authority.
   """
 
-  alias LemonAgent.Workspace.KanbanAuthority
+  alias LemonAutomation.KanbanAuthority
   alias LemonCore.ToolPolicy
 
   @version 1

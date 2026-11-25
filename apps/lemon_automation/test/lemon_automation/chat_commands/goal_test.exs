@@ -1,9 +1,8 @@
-defmodule LemonChannels.GoalStatusMessageTest do
+defmodule LemonAutomation.ChatCommands.GoalTest do
   use ExUnit.Case, async: false
 
-  alias LemonChannels.Adapters.Telegram.Transport.Commands
-  alias LemonChannels.GoalStatusMessage
-  alias LemonAgent.Workspace.GoalStore
+  alias LemonAutomation.ChatCommands.Goal
+  alias LemonAutomation.GoalStore
 
   defmodule HangingLoop do
     @moduledoc false
@@ -78,9 +77,9 @@ defmodule LemonChannels.GoalStatusMessageTest do
     on_exit(fn -> GoalStore.clear(session_key) end)
 
     set_text =
-      GoalStatusMessage.handle(session_key, "set #{private_objective}", chat_opts())
+      Goal.handle(session_key, "set #{private_objective}", chat_opts())
 
-    status_text = GoalStatusMessage.handle(session_key, "status")
+    status_text = Goal.handle(session_key, "status")
 
     assert set_text =~ "Goal Set"
     assert set_text =~ "Objective bytes:"
@@ -98,9 +97,9 @@ defmodule LemonChannels.GoalStatusMessageTest do
     on_exit(fn -> GoalStore.clear(session_key) end)
 
     set_text =
-      GoalStatusMessage.handle(session_key, "set --max-continuations 3 ship it", chat_opts())
+      Goal.handle(session_key, "set --max-continuations 3 ship it", chat_opts())
 
-    status_text = GoalStatusMessage.handle(session_key, "status")
+    status_text = Goal.handle(session_key, "status")
 
     assert set_text =~ "Goal Set"
     assert set_text =~ "Max continuations: 3"
@@ -109,7 +108,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
 
   test "cannot replace a goal while its run outcome is unresolved" do
     key = session_key()
-    assert GoalStatusMessage.handle(key, "set Original", chat_opts()) =~ "Goal Set"
+    assert Goal.handle(key, "set Original", chat_opts()) =~ "Goal Set"
     run_id = "run_goal_channel_#{System.unique_integer([:positive])}"
 
     {:ok, _} =
@@ -121,7 +120,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
       GoalStore.clear(key)
     end)
 
-    text = GoalStatusMessage.handle(key, "set Replacement", chat_opts())
+    text = Goal.handle(key, "set Replacement", chat_opts())
     assert text =~ "active or unresolved work"
     assert GoalStore.get(key).objective == "Original"
   end
@@ -130,9 +129,9 @@ defmodule LemonChannels.GoalStatusMessageTest do
     session_key = session_key()
     on_exit(fn -> GoalStore.clear(session_key) end)
 
-    assert GoalStatusMessage.handle(session_key, "set ship it", chat_opts()) =~ "Goal Set"
-    assert GoalStatusMessage.handle(session_key, "clear") == "Goal cleared."
-    assert GoalStatusMessage.handle(session_key, "") =~ "State: none"
+    assert Goal.handle(session_key, "set ship it", chat_opts()) =~ "Goal Set"
+    assert Goal.handle(session_key, "clear") == "Goal cleared."
+    assert Goal.handle(session_key, "") =~ "State: none"
   end
 
   test "pauses and resumes goal state" do
@@ -141,15 +140,15 @@ defmodule LemonChannels.GoalStatusMessageTest do
 
     on_exit(fn -> GoalStore.clear(session_key) end)
 
-    assert GoalStatusMessage.handle(session_key, "set #{private_objective}", chat_opts()) =~
+    assert Goal.handle(session_key, "set #{private_objective}", chat_opts()) =~
              "Goal Set"
 
-    paused_text = GoalStatusMessage.handle(session_key, "pause")
+    paused_text = Goal.handle(session_key, "pause")
     assert paused_text =~ "Goal Paused"
     assert paused_text =~ "Status: paused"
     refute paused_text =~ private_objective
 
-    resumed_text = GoalStatusMessage.handle(session_key, "resume")
+    resumed_text = Goal.handle(session_key, "resume")
     assert resumed_text =~ "Goal Resumed"
     assert resumed_text =~ "Status: active"
     refute resumed_text =~ private_objective
@@ -158,15 +157,15 @@ defmodule LemonChannels.GoalStatusMessageTest do
   test "pause and resume report missing goal" do
     session_key = session_key()
 
-    assert GoalStatusMessage.handle(session_key, "pause") == "No goal is set for this session."
-    assert GoalStatusMessage.handle(session_key, "resume") == "No goal is set for this session."
+    assert Goal.handle(session_key, "pause") == "No goal is set for this session."
+    assert Goal.handle(session_key, "resume") == "No goal is set for this session."
   end
 
   test "continue submits one continuation off the caller and delivers the run id" do
     session_key = session_key()
 
     text =
-      GoalStatusMessage.handle(
+      Goal.handle(
         session_key,
         "continue --max-continuations 4 --model worker-model",
         [loop_module: FakeLoop] ++ chat_opts()
@@ -196,7 +195,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
     started = System.monotonic_time(:millisecond)
 
     for args <- ["loop once", "continue"] do
-      assert GoalStatusMessage.handle(
+      assert Goal.handle(
                session_key,
                args,
                [loop_module: HangingLoop] ++ chat_opts()
@@ -217,7 +216,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
 
   test "goal work without a background runner is refused, not run inline" do
     text =
-      GoalStatusMessage.handle(
+      Goal.handle(
         session_key(),
         "loop once",
         [loop_module: FakeLoop] ++ Keyword.drop(chat_opts(), [:start_task])
@@ -231,7 +230,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
     session_key = session_key()
 
     once_text =
-      GoalStatusMessage.handle(
+      Goal.handle(
         session_key,
         "loop once --judge-model judge-model --judge-failure-policy continueOnce",
         [loop_module: FakeLoop] ++ chat_opts()
@@ -253,7 +252,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
     assert once_text =~ "Reason: still open"
 
     start_text =
-      GoalStatusMessage.handle(
+      Goal.handle(
         session_key,
         "loop start --auto --max-ticks 5 --interval-ms 20",
         [loop_module: FakeLoop] ++ chat_opts()
@@ -270,12 +269,12 @@ defmodule LemonChannels.GoalStatusMessageTest do
     assert start_text =~ "Goal Loop Started"
     assert start_text =~ "Loop status: running"
 
-    status_text = GoalStatusMessage.handle(session_key, "loop status", loop_module: FakeLoop)
+    status_text = Goal.handle(session_key, "loop status", loop_module: FakeLoop)
     assert_receive {:loop_status, ^session_key}
     assert status_text =~ "Goal Loop Status"
     assert status_text =~ "Running: true"
 
-    stop_text = GoalStatusMessage.handle(session_key, "loop stop", loop_module: FakeLoop)
+    stop_text = Goal.handle(session_key, "loop stop", loop_module: FakeLoop)
     assert_receive {:loop_stop, ^session_key}
     assert stop_text =~ "Goal Loop Stopped"
   end
@@ -284,7 +283,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
     session_key = session_key()
 
     for args <- ["continue", "loop once", "loop start"] do
-      assert GoalStatusMessage.handle(session_key, args,
+      assert Goal.handle(session_key, args,
                agent_id: "agent-1",
                start_task: &start_task/1,
                deliver: &deliver/1,
@@ -295,12 +294,6 @@ defmodule LemonChannels.GoalStatusMessageTest do
     refute_received {:goal_reply, _, _}
     refute_received {:loop_once, _, _}
     refute_received {:loop_start, _, _}
-  end
-
-  test "recognizes telegram goal command for bot" do
-    assert Commands.goal_command?("/goal", "lemon_bot")
-    assert Commands.goal_command?("/goal@lemon_bot", "lemon_bot")
-    refute Commands.goal_command?("/goal@other_bot", "lemon_bot")
   end
 
   defp session_key do

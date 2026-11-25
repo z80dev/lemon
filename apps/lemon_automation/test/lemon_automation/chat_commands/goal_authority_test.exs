@@ -1,4 +1,4 @@
-defmodule LemonChannels.GoalChannelAuthorityTest do
+defmodule LemonAutomation.ChatCommands.GoalAuthorityTest do
   @moduledoc """
   A chat-set goal runs its judge and continuations under the chat's channel-run
   authority (channel policy, group approval floor, bound workspace), through
@@ -7,8 +7,8 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Workspace.GoalStore
-  alias LemonChannels.GoalStatusMessage
+  alias LemonAutomation.GoalStore
+  alias LemonAutomation.ChatCommands.Goal
   alias LemonCore.ToolPolicy
 
   defmodule Runtime do
@@ -63,7 +63,7 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
       Path.join(System.tmp_dir!(), "goal-chat-authority-#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(workspace)
-    {:ok, workspace} = LemonAgent.Workspace.KanbanAuthority.canonical_directory(workspace)
+    {:ok, workspace} = LemonAutomation.KanbanAuthority.canonical_directory(workspace)
     peer = "-100#{System.unique_integer([:positive])}"
     key = "agent:default:telegram:default:group:#{peer}"
 
@@ -95,10 +95,10 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
     opts: opts,
     workspace: workspace
   } do
-    assert GoalStatusMessage.handle(key, "set Fix the failing build", opts) =~ "Goal Set"
+    assert Goal.handle(key, "set Fix the failing build", opts) =~ "Goal Set"
     assert GoalStore.get(key).cwd == workspace
 
-    assert GoalStatusMessage.handle(key, "loop once", opts) =~ "Goal Loop Tick Queued"
+    assert Goal.handle(key, "loop once", opts) =~ "Goal Loop Tick Queued"
     assert_receive {:goal_reply, tick}, 5_000
     assert tick =~ "Goal Loop Tick"
     assert tick =~ "Run id:"
@@ -115,7 +115,7 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
       assert ToolPolicy.approval_mode(worker.tool_policy, tool) == :always
     end
 
-    assert GoalStatusMessage.handle(key, "continue", opts) =~ "Goal Continuation Queued"
+    assert Goal.handle(key, "continue", opts) =~ "Goal Continuation Queued"
     assert_receive {:goal_reply, continued_text}, 5_000
     assert continued_text =~ "Goal Continuation Submitted"
     assert_receive {:execution, continued}, 2_000
@@ -124,7 +124,7 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
   end
 
   test "a chat without trusted channel context cannot set a goal", %{key: key, opts: opts} do
-    text = GoalStatusMessage.handle(key, "set Anything", Keyword.delete(opts, :channel_context))
+    text = Goal.handle(key, "set Anything", Keyword.delete(opts, :channel_context))
     refute text =~ "Goal Set"
     assert GoalStore.get(key) == %{}
   end
@@ -143,11 +143,11 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
              :"Elixir.LemonAutomation.GoalLoopManager".set_goal(key, "Operator goal elsewhere",
                agent_id: "default",
                cwd: elsewhere,
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     for args <- ["loop once", "loop start", "continue"] do
-      text = GoalStatusMessage.handle(key, args, opts)
+      text = Goal.handle(key, args, opts)
       refute text =~ "Started"
 
       if args != "loop start" do

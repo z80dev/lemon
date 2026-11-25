@@ -14,8 +14,9 @@ See [README](README.md) for usage and [BEAM invariants](../../docs/beam_agents.m
 - `ModelRuntime` resolves Lemon config and concrete credentials before calling
   `lemon_ai`. Provider OAuth helpers may refresh encoded payloads, but credential
   persistence is injected here. Do not teach provider modules about Lemon config.
-- Workspace goal/kanban state belongs here, not in core's generic Store API.
-  Optional integrations register through `ContextRegistry` and `ToolRegistry`;
+- Goal and kanban state is Lemon product state owned by `lemon_automation`;
+  do not add product stores to this published runtime.
+- Optional integrations register through `ContextRegistry` and `ToolRegistry`;
   the platform must not depend on a satellite integration.
 
 ## Lifecycle and trust
@@ -45,13 +46,8 @@ See [README](README.md) for usage and [BEAM invariants](../../docs/beam_agents.m
   Tool-returned metadata is not evidence that the transform has run.
 - Introspection records lifecycle metadata, never prompt/response content.
 
-## Workspace and contributor invariants
+## Contributor invariants
 
-- Kanban terminal writes require the exact lease ID. Complete/fail/reclaim via
-  the lease-guarded APIs; stale workers must not mutate newly leased tasks.
-  Board-scoped locking serializes task read-modify-write and claim operations.
-- A restarting dispatcher reclaims only unsubmitted leases. Tracked kanban router
-  runs retain their exact lease until completion or confirmed cancellation.
 - Context contributors are bounded in time and size. Stable session context
   belongs in the system prefix; volatile turn-local context belongs on the user
   message. Do not let network latency or a cache refresh block every turn.

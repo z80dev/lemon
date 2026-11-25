@@ -14,8 +14,6 @@ defmodule LemonSkills.Tools.ToolDeadlinesTest do
       assert module.tool("/tmp", []).timeout_ms == :infinity
     end
 
-    for module <- [Tools.MediaStatus, Tools.Goal, Tools.Kanban] do
-      assert module.tool("/tmp", []).timeout_ms == nil
-    end
+    assert Tools.MediaStatus.tool("/tmp", []).timeout_ms == nil
   end
 end

@@ -9,7 +9,7 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
     GoalStatus
   }
 
-  alias LemonAgent.Workspace.GoalStore
+  alias LemonAutomation.GoalStore
 
   @ctx %{conn_id: "goal-test", auth: %{role: :operator}}
 
@@ -40,7 +40,7 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
     assert set["budget"]["maxContinuations"] == 2
     # Goal targets are stored canonically (symlinks resolved).
     assert {:ok, GoalStore.get(session_key).cwd} ==
-             LemonAgent.Workspace.KanbanAuthority.canonical_directory(System.tmp_dir!())
+             LemonAutomation.KanbanAuthority.canonical_directory(System.tmp_dir!())
 
     assert set["summary"]["objectiveReturned"] == false
     assert set["summary"]["cleanup"]["includesObjectiveText"] == false
@@ -149,7 +149,7 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
 
     assert {:ok, _} =
              GoalStore.set(session_key, "Finish parity",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     # A stored verdict whose source is not a known provenance value (e.g. one a

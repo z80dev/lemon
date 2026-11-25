@@ -383,6 +383,14 @@ Discord while their coding sessions run elsewhere. Automation binds each run to
 its exact session and target before submission. Approval requests and successful
 resolution edits go through Outbox, as do completion/failure notices.
 
+Transports route `/goal`, `/kanban`, `/remind`, `/reminders` and `/unremind`
+through `LemonCore.AutomationCommands` to the provider `lemon_automation`
+registers at boot (`LemonAutomation.ChatCommands`), passing only trusted
+context: session key, agent, bound workspace, channel context, operator
+attestation and the background task callbacks. Without the automation runtime
+each command answers a fixed unavailable reply; a provider that fails answers
+an outcome-unknown reply that is never retried.
+
 `/goal set` records the chat as the goal principal, the chat's channel-run
 tool policy (resolved as the router resolves a run from that chat, including
 the group approval floor) and its bound project directory (or the assistant

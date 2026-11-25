@@ -1,4 +1,4 @@
-defmodule LemonAgent.Workspace.KanbanStore do
+defmodule LemonAutomation.KanbanStore do
   @moduledoc """
   Durable BEAM-native kanban board state for multi-agent work.
 
@@ -6,7 +6,7 @@ defmodule LemonAgent.Workspace.KanbanStore do
   `track_leased_run/4` under the exact card lease; `update_task/3` rejects them,
   rejects `meta`, and refuses any edit while a card is leased or tracking a run.
 
-  Board authority (`LemonAgent.Workspace.KanbanAuthority`) is supplied once, by
+  Board authority (`LemonAutomation.KanbanAuthority`) is supplied once, by
   a trusted caller, through `create_board/2`'s `:authority` option. Afterwards
   only `restrict_authority/2` (narrowing), `share_board/2` and
   `reauthorize_board/1` (operator surfaces) change it. Card creators and editors
@@ -17,7 +17,7 @@ defmodule LemonAgent.Workspace.KanbanStore do
 
   require Logger
 
-  alias LemonAgent.Workspace.KanbanAuthority
+  alias LemonAutomation.KanbanAuthority
   alias LemonCore.{Introspection, Store, ToolPolicy}
 
   @protected_task_attrs ~w(run_id runId session_key sessionKey meta)

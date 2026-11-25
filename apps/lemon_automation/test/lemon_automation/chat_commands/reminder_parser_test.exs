@@ -1,7 +1,7 @@
-defmodule LemonChannels.Reminders.ParserTest do
+defmodule LemonAutomation.ChatCommands.ReminderParserTest do
   use ExUnit.Case, async: true
 
-  alias LemonChannels.Reminders.Parser
+  alias LemonAutomation.ChatCommands.ReminderParser, as: Parser
 
   # Sunday 2026-09-27 10:15:30 server-local time.
   @now ~N[2026-09-27 10:15:30]

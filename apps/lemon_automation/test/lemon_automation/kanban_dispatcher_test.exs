@@ -2,7 +2,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
   use ExUnit.Case, async: false
 
   alias LemonAutomation.{KanbanDispatcher, KanbanRunWorker}
-  alias LemonAgent.Workspace.KanbanStore
+  alias LemonAutomation.KanbanStore
 
   defmodule KanbanDispatcherPassingWorker do
     @moduledoc false
@@ -588,7 +588,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
     {:ok, board} = authorized_board("Interactive control")
 
     call = fn action, extra ->
-      LemonSkills.Tools.Kanban.execute(
+      LemonAutomation.Tools.Kanban.execute(
         "tool",
         Map.merge(
           %{
@@ -671,7 +671,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
     on_exit(fn -> File.rm_rf!(dir) end)
 
     {:ok, authority} =
-      LemonAgent.Workspace.KanbanAuthority.new(
+      LemonAutomation.KanbanAuthority.new(
         %{agent_id: "default", session_key: "agent:default:main"},
         nil,
         dir
@@ -682,7 +682,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
            Keyword.merge([workspace: dir, authority: authority], opts)
          ) do
       {:ok, board} ->
-        digest = LemonAgent.Workspace.KanbanAuthority.workspace_digest(board.workspace)
+        digest = LemonAutomation.KanbanAuthority.workspace_digest(board.workspace)
         assert {:ok, _} = KanbanStore.grant_in_place(board.id, digest)
         {:ok, board}
 

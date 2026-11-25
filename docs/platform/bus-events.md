@@ -112,7 +112,7 @@ automatically.
 | `cron_job_created`, `cron_job_updated`, `cron_job_deleted` | durable | `LemonAutomation.CronStore.get_job/1` |
 | `cron_run_started`, `cron_run_completed` | durable | `LemonAutomation.CronStore.get_run/1` |
 | `cron_lifecycle_action` | durable | `LemonAutomation.CronStore.list_audit_events/1` |
-| `goal_set`, `goal_paused`, `goal_resumed`, `goal_completed`, `goal_cleared`, `goal_continuation_submitted`, `goal_loop_verdict`, `goal_loop_status` | durable | `LemonAgent.Workspace.GoalStore.get/1` |
+| `goal_set`, `goal_paused`, `goal_resumed`, `goal_completed`, `goal_cleared`, `goal_continuation_submitted`, `goal_loop_verdict`, `goal_loop_status` | durable | `LemonAutomation.GoalStore.get/1` |
 | `run_started` | transient | `sessions.events`, then `sessions.snapshot` (current run identity) |
 | `delta` | transient | `sessions.events`, then `sessions.snapshot` (answer state); final text from the run's completion |
 | `engine_action` | transient | `sessions.events`, then `sessions.snapshot` (actions and process receipts) |
@@ -300,7 +300,7 @@ source file `apps/lemon_control_plane/README.md`, under “Live named-node runs�
 |---|---|---|
 | everything forwarded from `run:*` | `LemonRouter.RunProcess` | unchanged from source |
 | `:checkpoint_*` | `LemonCore.Checkpoint` | as §2.1 |
-| `:goal_*` | `LemonAgent.Workspace.GoalStore` | `Events.GoalChanged` (also on `goals`) |
+| `:goal_*` | `LemonAutomation.GoalStore` | `Events.GoalChanged` (also on `goals`) |
 | `:run_completed` (cron summary) | `LemonAutomation.CronManager` | `Events.RunCompleted`, `meta.origin == :cron` |
 | `:stream_resync` | `LemonRouter.CoalescerIngress` after bounded-ingress overflow | `%{reason: :overflow}` (not registered) |
 | `:coalesced_output` | `LemonRouter.StreamCoalescer` | **raw** `%{type: :coalesced_output, session_key, channel_id, run_id, text, seq}` — no envelope |
@@ -358,7 +358,7 @@ the four to a WS event (§6).
 ### 2.6 `goals`
 
 `:goal_set`, `_paused`, `_resumed`, `_completed`, `_cleared`, `_continuation_submitted`,
-`_loop_verdict`, `_loop_status`, published by `LemonAgent.Workspace.GoalStore` as
+`_loop_verdict`, `_loop_status`, published by `LemonAutomation.GoalStore` as
 `Events.GoalChanged` on `goals` and on the goal's `session:<key>`. All map to the WS
 `goal` event. Subscribers: `EventBridge`, `LemonWeb.WorkManagementLive`.
 
@@ -402,7 +402,7 @@ topic subscriptions.
 | `profiles:changed` | `LemonCore.ProfileStore` (every create/clone/update/rename/delete) → `LemonRouter.AgentProfiles` | bare atom `:profiles_changed` — a doorbell; the router re-reads the profile config so no writer leaves its cache stale |
 | `a2a:task:<id>` | `LemonControlPlane.A2A.Runner` → A2A runner/router | tuple `{:a2a_task_terminal, task_id}` |
 | `lemon_web:runs` | `LemonWeb.ShellLive.RunEvents` → `ShellLive` | tuple `{:lemon_web_run, phase, info}` |
-| `kanban` | `LemonAgent.Workspace.KanbanStore` (every operator-visible board/task write, not lease renewals) and `LemonAutomation.KanbanDispatcher` (start/stop) → `LemonWeb.WorkManagementLive` | tuple `{:kanban_changed, board_id}` — a doorbell; the page re-reads the store (`KanbanStore.changed_topic/0`, `ring_changed/1`) |
+| `kanban` | `LemonAutomation.KanbanStore` (every operator-visible board/task write, not lease renewals) and `LemonAutomation.KanbanDispatcher` (start/stop) → `LemonWeb.WorkManagementLive` | tuple `{:kanban_changed, board_id}` — a doorbell; the page re-reads the store (`KanbanStore.changed_topic/0`, `ring_changed/1`) |
 
 The typed `kanban*` broadcasts were deleted (the durable record is the
 `Introspection.record/3` call); the content-free `kanban` doorbell above replaced
@@ -420,7 +420,7 @@ is not its publisher's sibling. Contract topics, all registered in `LemonCore.Ev
 | `exec_approvals` | consumed by channel plugins, ACP, coding_agent, web |
 | `cron` | crosses `lemon_automation` → `lemon_control_plane` → WS clients |
 | `system` | publishers in `lemon_core`; reaches WS clients and the web pane |
-| `goals` | crosses `lemon_agent` → `lemon_control_plane` → WS clients |
+| `goals` | crosses `lemon_automation` → `lemon_control_plane` → WS clients |
 | `routing_feedback` | crosses `lemon_memory` → `lemon_router` |
 | `channels` | outbound delivery observations from `lemon_channels` |
 

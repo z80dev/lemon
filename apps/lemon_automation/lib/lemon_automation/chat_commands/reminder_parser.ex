@@ -1,4 +1,4 @@
-defmodule LemonChannels.Reminders.Parser do
+defmodule LemonAutomation.ChatCommands.ReminderParser do
   @moduledoc """
   Deterministic parser for `/remind <when> <what>`.
 

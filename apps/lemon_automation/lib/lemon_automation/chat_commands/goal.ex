@@ -1,6 +1,7 @@
-defmodule LemonChannels.GoalStatusMessage do
+defmodule LemonAutomation.ChatCommands.Goal do
   @moduledoc """
-  `/goal` chat commands.
+  `/goal` chat commands, reached from channel transports through
+  `LemonCore.AutomationCommands`.
 
   The transport supplies trusted context only: the chat session (the
   `session_key` argument), `:agent_id`, the bound workspace (`:workspace`) and
@@ -8,14 +9,16 @@ defmodule LemonChannels.GoalStatusMessage do
   (`:channel_context`). `set` records the chat as the goal principal, the
   chat's effective channel-run policy (`LemonRouter.Policy`, including the
   group approval floor) and the bound workspace (or the assistant home) as the
-  goal authority (`LemonAgent.Workspace.GoalAuthority`). `continue`,
+  goal authority (`LemonAutomation.GoalAuthority`). `continue`,
   `loop once` and `loop start` pass the same chat authority as the starter:
   the goal must belong to this chat and agent and its target must lie inside
   the chat's workspace, and the recorded authority is durably narrowed to it.
   Without trusted channel context the chat cannot set or start goal work.
+  Loop work goes to `LemonAutomation.GoalLoopManager` (tests pass a stand-in as
+  `:loop_module`).
   """
 
-  alias LemonAgent.Workspace.GoalAuthority
+  alias LemonAutomation.{GoalAuthority, GoalLoopManager, GoalStore}
 
   @spec handle(binary(), binary() | nil, keyword()) :: String.t()
   def handle(session_key, args, opts \\ []) when is_binary(session_key) do
@@ -63,7 +66,7 @@ defmodule LemonChannels.GoalStatusMessage do
 
   @spec status_text(binary()) :: String.t()
   def status_text(session_key) when is_binary(session_key) do
-    case LemonAgent.Workspace.GoalStore.get(session_key) do
+    case GoalStore.get(session_key) do
       %{} = goal when map_size(goal) == 0 ->
         Enum.join(
           [
@@ -154,20 +157,14 @@ defmodule LemonChannels.GoalStatusMessage do
   # The chat's effective channel-run policy, resolved exactly as the router
   # resolves a run from this chat. Missing context or resolution fails closed.
   defp chat_policy(session_key, opts) do
-    module = :"Elixir.LemonRouter.Policy"
-
     with %{} = context <- opts[:channel_context],
-         true <- Code.ensure_loaded?(module),
-         true <- function_exported?(module, :resolve_validated_for_run, 1),
          {:ok, policy} <-
-           apply(module, :resolve_validated_for_run, [
-             %{
-               agent_id: opts[:agent_id],
-               session_key: session_key,
-               origin: :channel,
-               channel_context: context
-             }
-           ]) do
+           LemonRouter.Policy.resolve_validated_for_run(%{
+             agent_id: opts[:agent_id],
+             session_key: session_key,
+             origin: :channel,
+             channel_context: context
+           }) do
       {:ok, policy}
     else
       _ -> {:error, :policy_unavailable}
@@ -176,7 +173,7 @@ defmodule LemonChannels.GoalStatusMessage do
 
   @spec clear_text(binary(), keyword()) :: String.t()
   def clear_text(session_key, opts \\ []) when is_binary(session_key) do
-    case LemonAgent.Workspace.GoalStore.clear(session_key, opts) do
+    case GoalStore.clear(session_key, opts) do
       :ok -> "Goal cleared."
       {:error, reason} -> "Goal clear failed: #{inspect(reason)}"
     end
@@ -184,7 +181,7 @@ defmodule LemonChannels.GoalStatusMessage do
 
   @spec pause_text(binary(), keyword()) :: String.t()
   def pause_text(session_key, opts \\ []) when is_binary(session_key) do
-    case LemonAgent.Workspace.GoalStore.pause(session_key, opts) do
+    case GoalStore.pause(session_key, opts) do
       {:ok, goal} -> transition_text("Goal Paused", goal)
       {:error, :not_found} -> "No goal is set for this session."
       {:error, reason} -> "Goal pause failed: #{inspect(reason)}"
@@ -193,7 +190,7 @@ defmodule LemonChannels.GoalStatusMessage do
 
   @spec resume_text(binary(), keyword()) :: String.t()
   def resume_text(session_key, opts \\ []) when is_binary(session_key) do
-    case LemonAgent.Workspace.GoalStore.resume(session_key, opts) do
+    case GoalStore.resume(session_key, opts) do
       {:ok, goal} -> transition_text("Goal Resumed", goal)
       {:error, :not_found} -> "No goal is set for this session."
       {:error, reason} -> "Goal resume failed: #{inspect(reason)}"
@@ -676,21 +673,7 @@ defmodule LemonChannels.GoalStatusMessage do
     |> then(fn <<first::binary-size(1), rest::binary>> -> String.downcase(first) <> rest end)
   end
 
-  defp call_module(module, function, args) do
-    with true <- Code.ensure_loaded?(module),
-         true <- function_exported?(module, function, length(args)) do
-      apply(module, function, args)
-    else
-      _ -> {:error, :not_available}
-    end
-  end
+  defp call_module(module, function, args), do: apply(module, function, args)
 
-  defp loop_module(opts) do
-    opts[:loop_module] ||
-      Application.get_env(
-        :lemon_channels,
-        :goal_loop_module,
-        :"Elixir.LemonAutomation.GoalLoopManager"
-      )
-  end
+  defp loop_module(opts), do: Keyword.get(opts, :loop_module, GoalLoopManager)
 end

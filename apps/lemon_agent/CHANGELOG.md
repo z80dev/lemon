@@ -8,6 +8,16 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 **Release version: 0.3.0.**
 
+### Removed
+
+- **Breaking:** `LemonAgent.Workspace.{GoalStore, KanbanStore, GoalAuthority,
+  KanbanAuthority}` (about 2.5K lines of Lemon product state with no
+  `lemon_agent` consumer) moved to `lemon_automation` as
+  `LemonAutomation.{GoalStore, KanbanStore, GoalAuthority, KanbanAuthority}`,
+  unchanged, including `KanbanStore.changed_topic/0`/`ring_changed/1` (#687)
+  and the lease-guarded `update_task/3`. The published package no longer owns
+  the `:goals`, `:kanban_boards` or `:kanban_tasks` tables (#729).
+
 ### Added
 
 - `LemonAgent.AbortSignal.t()` (an `:atomics` reference); abort-signal,

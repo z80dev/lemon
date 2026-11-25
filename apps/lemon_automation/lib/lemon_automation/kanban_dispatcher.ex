@@ -15,7 +15,7 @@ defmodule LemonAutomation.KanbanDispatcher do
   its durable cards and the exact dispatcher invocation and owned workers.
   Drift returns `{:error, :stale}` without touching the replacement invocation.
 
-  A board without recorded `LemonAgent.Workspace.KanbanAuthority` is
+  A board without recorded `LemonAutomation.KanbanAuthority` is
   quarantined: `start_board/2` returns `{:error, :kanban_authority_missing}`.
   Only the operator surfaces `reauthorize_board/2` (idle boards only) and
   `share_board/3`, both bound to `expected_revision:`, change authority here.
@@ -24,7 +24,7 @@ defmodule LemonAutomation.KanbanDispatcher do
 
   use GenServer
 
-  alias LemonAgent.Workspace.{KanbanAuthority, KanbanStore}
+  alias LemonAutomation.{KanbanAuthority, KanbanStore}
   alias LemonAutomation.{KanbanCodingWorkflow, KanbanGitWorkflow}
 
   def start_link(opts \\ []) do

@@ -21,6 +21,21 @@
   submitted only once it is confirmed. An unpersisted terminal is not
   announced, delivered or retried, and `abort_run` replies
   `{:error, :outcome_unknown}` for it; recovery finishes the run (#87).
+- **Breaking:** lemon_automation owns goal and kanban state and their agent
+  tools. `LemonAutomation.{GoalStore, KanbanStore, GoalAuthority,
+  KanbanAuthority}` replace `LemonAgent.Workspace.*` with the same lease and
+  authority rules, and the `kanban` and `goal` tools (`LemonAutomation.Tools.Kanban`,
+  `LemonAutomation.Tools.Goal`, schemas unchanged) register at boot through
+  `LemonAgent.ToolRegistry` with managed native-process ownership, like `cron`.
+  Registered tool results are untrusted. The tools call the goal loop manager,
+  kanban dispatcher, delivery validator and git workflow directly; their
+  "runtime unavailable" branches are gone (#721, #729).
+- **Breaking:** the `/goal`, `/kanban`, `/remind`, `/reminders` and `/unremind`
+  chat commands moved from lemon_channels to
+  `LemonAutomation.ChatCommands.{Goal, Kanban, Reminders, ReminderParser}`.
+  `LemonAutomation.ChatCommands` is the `LemonCore.AutomationCommands`
+  provider registered at boot, and resolves chat policy with
+  `LemonRouter.Policy` directly (#721, #725).
 - **Breaking:** cron numeric fields are validated by the new shared
   `CronJob.numeric_bounds/0` / `CronJob.validate_numeric/2` (add, update, the
   `cron` tool and blueprints); out-of-range or non-integer values return

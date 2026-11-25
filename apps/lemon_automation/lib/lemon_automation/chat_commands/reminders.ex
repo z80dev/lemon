@@ -1,21 +1,19 @@
-defmodule LemonChannels.Reminders do
+defmodule LemonAutomation.ChatCommands.Reminders do
   @moduledoc """
-  Channel-agnostic `/remind`, `/reminders`, and `/unremind` handling.
+  Channel-agnostic `/remind`, `/reminders`, and `/unremind` handling, reached
+  from channel transports through `LemonCore.AutomationCommands`.
 
   Reminders are ordinary one-shot or recurring cron jobs created through the
   same `LemonAutomation.CronManager` API the agent `cron` tool uses. The job's
   `session_key` is the originating chat's session key, so cron delivery sends
-  the result back to that chat/topic without an explicit `deliver_to`.
-
-  `lemon_channels` has no compile-time dependency on `lemon_automation`: the
-  cron module is resolved at runtime from the `:cron_module` option or
-  `config :lemon_channels, :reminder_cron_module` (default
-  `LemonAutomation.CronManager`).
+  the result back to that chat/topic without an explicit `deliver_to`. Tests
+  pass a cron manager stand-in as `:cron_module`.
 
   Every public function returns the reply text for the chat.
   """
 
-  alias LemonChannels.Reminders.Parser
+  alias LemonAutomation.ChatCommands.ReminderParser
+  alias LemonAutomation.CronManager
   alias LemonCore.SessionKey
 
   @name_max 60
@@ -29,13 +27,13 @@ defmodule LemonChannels.Reminders do
     * `:agent_id` - agent that runs the reminder (defaults to the session key's agent)
     * `:created_via` - channel name stored in job meta (default `"telegram"`)
     * `:now` - local `NaiveDateTime` used by the parser
-    * `:cron_module` - cron manager module override
+    * `:cron_module` - cron manager stand-in for tests
   """
   @spec create(String.t() | nil, keyword()) :: String.t()
   def create(args_text, opts) do
     session_key = Keyword.fetch!(opts, :session_key)
 
-    with {:ok, parsed} <- Parser.parse(args_text || "", Keyword.take(opts, [:now])),
+    with {:ok, parsed} <- ReminderParser.parse(args_text || "", Keyword.take(opts, [:now])),
          {:ok, job} <- call_cron(:add, [add_params(parsed, session_key, opts)], opts) do
       created_text(job, parsed)
     else
@@ -194,7 +192,7 @@ defmodule LemonChannels.Reminders do
     ms
     |> :calendar.system_time_to_local_time(:millisecond)
     |> NaiveDateTime.from_erl!()
-    |> Parser.format_naive()
+    |> ReminderParser.format_naive()
   end
 
   defp format_next_run(_ms), do: "not scheduled"
@@ -215,21 +213,10 @@ defmodule LemonChannels.Reminders do
 
   defp format_reason(reason), do: inspect(reason)
 
+  # A scheduler that is not running (or does not answer) leaves the chat with
+  # the unavailable reply.
   defp call_cron(function, args, opts) do
-    module =
-      opts[:cron_module] ||
-        Application.get_env(
-          :lemon_channels,
-          :reminder_cron_module,
-          :"Elixir.LemonAutomation.CronManager"
-        )
-
-    with true <- Code.ensure_loaded?(module),
-         true <- function_exported?(module, function, length(args)) do
-      apply(module, function, args)
-    else
-      _ -> {:error, :not_available}
-    end
+    apply(Keyword.get(opts, :cron_module, CronManager), function, args)
   catch
     :exit, _reason -> {:error, :not_available}
   end

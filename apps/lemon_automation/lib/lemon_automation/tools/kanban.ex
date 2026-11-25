@@ -1,15 +1,16 @@
-defmodule LemonSkills.Tools.Kanban do
+defmodule LemonAutomation.Tools.Kanban do
   @moduledoc """
-  Durable kanban board tool backed by LemonAgent.Workspace.KanbanStore.
+  Durable kanban board tool backed by `LemonAutomation.KanbanStore`.
 
-  Wired into CodingAgent.ToolRegistry's builtin tool list. No external service or credentials are
-  required; boards and tasks persist in the workspace KanbanStore.
+  `LemonAutomation.Application` contributes the tool through
+  `LemonAgent.ToolRegistry`. No external service or credentials are required;
+  boards and tasks persist in the automation KanbanStore.
 
   `board_create` optionally accepts `coding_workflow`: an explicit opt-in map
   for isolated coding, review of the exact diff, and a local branch commit before
   completion. Omission or `false` preserves coding-only behavior. Publishing is
   disabled unless an explicit `publish` map selects `branch` or `pull_request`.
-  Workflow settings are validated by the optional automation service and stored
+  Workflow settings are validated by `LemonAutomation.KanbanGitWorkflow` and stored
   unchanged as JSON-safe string-key settings under board metadata `codingWorkflow`;
   arbitrary metadata, force-push, and command options are not accepted.
 
@@ -17,7 +18,7 @@ defmodule LemonSkills.Tools.Kanban do
 
     * Every action needs the invoking session's trusted identity (`:session_key`
       and `:agent_id` opts). A board records that session as its principal
-      (`LemonAgent.Workspace.KanbanAuthority`); only it, and sessions an
+      (`LemonAutomation.KanbanAuthority`); only it, and sessions an
       operator shared the board with, can list, read, edit, start or stop it.
       Missing, quarantined and other principals' boards look the same.
     * `session_key`, `run_id`, `owner` and `worker_profile` params are rejected;
@@ -33,7 +34,8 @@ defmodule LemonSkills.Tools.Kanban do
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias LemonAgent.Workspace.{KanbanAuthority, KanbanStore}
+  alias LemonAutomation.{CronDelivery, KanbanAuthority, KanbanDispatcher, KanbanGitWorkflow}
+  alias LemonAutomation.KanbanStore
   alias LemonCore.ToolPolicy
 
   @actions ~w(board_list board_create board_get task_list task_get task_create task_update task_comment dispatch_start dispatch_stop dispatch_status)
@@ -145,11 +147,10 @@ defmodule LemonSkills.Tools.Kanban do
   rejected for every action.
 
   `dispatch_start`, `dispatch_stop`, and `dispatch_status` require `"board_id"`
-  and operate on the long-running automation dispatcher. Start accepts
-  `"max_concurrency"` (1–8) and an optional worker `"model"`. No scheduler is
-  started by this tool when the automation runtime is unavailable.
-  Supplied `"coding_workflow"` settings also require the automation service and
-  are validated before board creation. Only explicit caller settings are stored;
+  and operate on the long-running `LemonAutomation.KanbanDispatcher`. Start
+  accepts `"max_concurrency"` (1–8) and an optional worker `"model"`; the tool
+  never starts a scheduler of its own. Supplied `"coding_workflow"` settings are
+  validated before board creation. Only explicit caller settings are stored;
   publishing settings are never inferred from the repository or coding output.
 
   On success returns a `%LemonAgent.Types.AgentToolResult{}` whose `content`
@@ -243,37 +244,41 @@ defmodule LemonSkills.Tools.Kanban do
   end
 
   defp dispatch(operation, params, opts) do
-    module = :"Elixir.LemonAutomation.KanbanDispatcher"
     concurrency = Map.get(params, "max_concurrency", 1)
 
     with {:ok, board_id} <- required_string(params, "board_id"),
          {:ok, _board} <- authorized_board(board_id, opts),
          true <- is_integer(concurrency) and concurrency in 1..8,
-         true <- Code.ensure_loaded?(module) and function_exported?(module, operation, 2),
          :ok <- record_starter(operation, board_id, opts) do
-      opts =
-        if operation == :start_board do
-          worker_opts =
-            []
-            |> put_opt(:model, params["model"])
-            |> put_opt(:agent_id, caller_agent(opts))
-
-          [max_concurrency: concurrency, worker_opts: worker_opts]
-        else
-          []
-        end
-
-      case apply(module, operation, [board_id, opts]) do
+      case dispatcher(operation, board_id, concurrency, params, opts) do
         {:ok, dispatch} -> result("kanban dispatch #{board_id}", %{dispatch: dispatch})
         {:error, reason} -> {:error, format_error(reason)}
       end
     else
-      false -> {:error, "kanban dispatcher unavailable or max_concurrency must be 1..8"}
+      false -> {:error, "max_concurrency must be 1..8"}
       {:error, reason} -> {:error, reason}
     end
   catch
     :exit, _ -> {:error, "kanban dispatcher unavailable"}
   end
+
+  defp dispatcher(:start_board, board_id, concurrency, params, opts) do
+    worker_opts =
+      []
+      |> put_opt(:model, params["model"])
+      |> put_opt(:agent_id, caller_agent(opts))
+
+    KanbanDispatcher.start_board(board_id,
+      max_concurrency: concurrency,
+      worker_opts: worker_opts
+    )
+  end
+
+  defp dispatcher(:stop_board, board_id, _concurrency, _params, _opts),
+    do: KanbanDispatcher.stop_board(board_id, [])
+
+  defp dispatcher(:status, board_id, _concurrency, _params, _opts),
+    do: KanbanDispatcher.status(board_id, [])
 
   # A starter durably narrows the board authority before any worker can run, so
   # later restarts (including operator restarts) keep its restrictions.
@@ -306,13 +311,7 @@ defmodule LemonSkills.Tools.Kanban do
 
   defp validate_delivery(nil), do: {:ok, nil}
 
-  defp validate_delivery(value) do
-    module = :"Elixir.LemonAutomation.CronDelivery"
-
-    if Code.ensure_loaded?(module),
-      do: apply(module, :validate, [value]),
-      else: {:error, "kanban supervision unavailable"}
-  end
+  defp validate_delivery(value), do: CronDelivery.validate(value)
 
   defp board_create(params, cwd, opts) do
     with {:ok, principal} <- principal(opts),
@@ -396,12 +395,7 @@ defmodule LemonSkills.Tools.Kanban do
         {:ok, nil}
 
       {:ok, settings} ->
-        module = :"Elixir.LemonAutomation.KanbanGitWorkflow"
-
         cond do
-          not (Code.ensure_loaded?(module) and function_exported?(module, :normalize, 1)) ->
-            {:error, "kanban coding workflow unavailable"}
-
           not (is_map(settings) or settings == false) ->
             {:error, "coding_workflow must be an object or false"}
 
@@ -409,7 +403,7 @@ defmodule LemonSkills.Tools.Kanban do
             {:error, "coding_workflow settings must use string keys"}
 
           true ->
-            case apply(module, :normalize, [settings]) do
+            case KanbanGitWorkflow.normalize(settings) do
               {:ok, _runtime_config} -> {:ok, %{"codingWorkflow" => settings}}
               {:error, reason} -> {:error, format_error(reason)}
             end

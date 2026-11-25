@@ -612,19 +612,18 @@ expires; hooks are not automatically retried. Successful persistence still
 returns `:ok` even when a hook fails or times out. Explicit finalization retries
 can redeliver hooks, so implementations must be idempotent by run id.
 
-The `:runs` table contains summaries and lifecycle metadata only. Events stay in
-the bounded per-run buffer (first 200 plus latest, 2,000 in all). For event detail,
-call `RunStore.get_with_events/1`; ordinary `get/1` and `fetch/1` do not copy
-the buffer. The Store sweeps both the summary and frozen buffer
-`:runs_retention_ms` (default 24 hours) after finalization. A durable terminal
-marker in `:run_terminals`
-makes `RunStore.fetch/1` answer `{:error, :evicted}` for a
-finished run whose record is gone, including after a restart drops the
-ephemeral `:runs` table; treat it as finished. Durable per-session history is
-`LemonCore.RunHistoryStore`. Usage pages read only ledger occurrences, never
-`:runs`.
+The `:runs` table contains summaries and lifecycle metadata only. The Store
+keeps events in a separate bounded per-run buffer (first 200 plus latest, 2,000
+in all), so ordinary run reads do not copy it. The summary and frozen buffer
+are swept `:runs_retention_ms` (default 24 hours) after finalization. A durable
+marker in `:run_terminals` makes `RunStore.fetch/1` return `{:error, :evicted}`
+for finished runs without a retained summary, including after a restart.
+Durable per-session history is in `LemonCore.RunHistoryStore`. Usage pages read
+only ledger occurrences, not `:runs`.
 
-Agent workspace coordination — goals and kanban boards — is built on this Store but lives in `lemon_agent` as `LemonAgent.Workspace.{GoalStore, KanbanStore}`. Heartbeats use automation cron jobs and cron history.
+Goal and kanban coordination uses this Store but belongs to
+`LemonAutomation.{GoalStore, KanbanStore}`. Heartbeats use automation cron jobs
+and cron history.
 
 ### ReadCache
 

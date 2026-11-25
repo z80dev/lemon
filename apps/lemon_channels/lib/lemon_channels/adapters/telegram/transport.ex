@@ -42,7 +42,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonChannels.Telegram.Delivery
   alias LemonChannels.Telegram.{OffsetStore, PollerLock}
   alias LemonChannels.Telegram.TransportShared
-  alias LemonCore.ChatScope
+  alias LemonCore.{AutomationCommands, ChatScope}
   alias LemonCore.Config
   alias LemonCore.MapHelpers
 
@@ -1518,7 +1518,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       _ =
         reply.(
-          LemonChannels.GoalStatusMessage.handle(session_key, args,
+          AutomationCommands.handle(:goal, args,
+            session_key: session_key,
             agent_id: agent_id,
             workspace: BindingResolver.resolve_cwd(scope),
             # Goal work runs later under this chat's channel-run authority.
@@ -1559,7 +1560,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           chat_id,
           thread_id,
           user_msg_id,
-          LemonChannels.KanbanStatusMessage.handle(args,
+          AutomationCommands.handle(:kanban, args,
             agent_id: BindingResolver.resolve_agent_id(scope),
             session_key: session_key,
             workspace: BindingResolver.resolve_cwd(scope),
@@ -1581,31 +1582,22 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     state
   end
 
-  defp handle_remind_command(state, inbound) do
-    handle_reminder_command(state, inbound, "remind", fn args, opts ->
-      LemonChannels.Reminders.create(args, opts)
-    end)
-  end
+  defp handle_remind_command(state, inbound),
+    do: handle_reminder_command(state, inbound, :remind)
 
-  defp handle_reminders_command(state, inbound) do
-    handle_reminder_command(state, inbound, "reminders", fn _args, opts ->
-      LemonChannels.Reminders.list(opts)
-    end)
-  end
+  defp handle_reminders_command(state, inbound),
+    do: handle_reminder_command(state, inbound, :reminders)
 
-  defp handle_unremind_command(state, inbound) do
-    handle_reminder_command(state, inbound, "unremind", fn args, opts ->
-      LemonChannels.Reminders.cancel(args, opts)
-    end)
-  end
+  defp handle_unremind_command(state, inbound),
+    do: handle_reminder_command(state, inbound, :unremind)
 
-  defp handle_reminder_command(state, inbound, command, reply_fun) do
+  defp handle_reminder_command(state, inbound, command) do
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
 
     if is_integer(chat_id) do
       scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
       session_key = build_session_key(state, inbound, scope)
-      args = Commands.telegram_command_args(inbound.message.text || "", command)
+      args = Commands.telegram_command_args(inbound.message.text || "", Atom.to_string(command))
       agent_id = BindingResolver.resolve_agent_id(scope)
 
       _ =
@@ -1614,7 +1606,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           chat_id,
           thread_id,
           user_msg_id,
-          reply_fun.(args,
+          AutomationCommands.handle(command, args,
             session_key: session_key,
             agent_id: agent_id,
             created_via: "telegram"
