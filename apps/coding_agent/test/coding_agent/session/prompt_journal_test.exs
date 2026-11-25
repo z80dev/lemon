@@ -15,14 +15,15 @@ defmodule CodingAgent.Session.PromptJournalTest do
   end
 
   defp reply(session, blocks) do
-    message =
-      PromptJournal.attach(
-        %{"role" => "assistant", "content" => [], "timestamp" => 1},
-        %{session_manager: session, response_system_prompt: blocks}
-      )
-
-    SessionManager.append_message(session, message)
+    PromptJournal.append_reply(
+      session,
+      %{"role" => "assistant", "content" => [], "timestamp" => 1},
+      %{session_manager: session, response_system_prompt: blocks}
+    )
   end
+
+  defp snapshots(session),
+    do: Enum.filter(SessionManager.entries(session), &(&1.custom_type == "lemon.prompt_snapshot"))
 
   test "matching ordered blocks adopt rebuilt sections; changed boundaries retain the journal", %{
     tmp_dir: dir
@@ -103,20 +104,114 @@ defmodule CodingAgent.Session.PromptJournalTest do
   test "corrupt snapshot digests are refused instead of silently replacing the prompt", %{
     tmp_dir: dir
   } do
-    session = SessionManager.new(dir)
-
-    message =
-      PromptJournal.attach(%{"role" => "assistant"}, %{
-        session_manager: session,
-        response_system_prompt: [%{text: "saved", directory_derived: false}]
-      })
-      |> put_in(["system-prompt-digest", "digest"], String.duplicate("0", 64))
-
-    session = SessionManager.append_message(session, message)
+    saved = [%{text: "saved", directory_derived: false}]
+    session = reply(SessionManager.new(dir), saved)
+    [snapshot] = snapshots(session)
+    other = [%{text: "other", directory_derived: false}]
+    tampered = %{snapshot | data: %{snapshot.data | "prompt" => other}}
+    session = %{session | by_id: Map.put(session.by_id, snapshot.id, tampered)}
 
     assert_raise ArgumentError, "journaled system prompt digest does not match its blocks", fn ->
       PromptJournal.restore(session, "rebuilt", [])
     end
+
+    missing = %{session | by_id: Map.delete(session.by_id, snapshot.id)}
+
+    assert_raise ArgumentError, "journaled system prompt snapshot is missing", fn ->
+      PromptJournal.restore(missing, "rebuilt", [])
+    end
+  end
+
+  test "new journals store one prompt snapshot per unchanged digest", %{tmp_dir: dir} do
+    prompt = [%{text: String.duplicate("stable instructions ", 2_500), directory_derived: false}]
+    path = Path.join(dir, "unchanged.jsonl")
+    session = SessionManager.persist(SessionManager.new(dir), path)
+    session = Enum.reduce(1..100, session, fn _, session -> reply(session, prompt) end)
+    :ok = SessionManager.close(session)
+
+    assert [_] = snapshots(session)
+    # 100 replies used to write the prompt (and an equal base prompt) 200 times.
+    assert File.stat!(path).size < 2 * byte_size(SystemPrompt.text(prompt))
+
+    assert {:ok, loaded} = SessionManager.load_from_file(path)
+    assert PromptJournal.latest(loaded).prompt == prompt
+    assert PromptJournal.latest(loaded).base_prompt == SystemPrompt.text(prompt)
+    refute Map.has_key?(hd(snapshots(loaded)).data, "base_prompt")
+
+    replies =
+      Enum.filter(SessionManager.entries(loaded), &(&1.type == :message))
+      |> Enum.map(& &1.message["system-prompt-digest"])
+
+    assert Enum.uniq(replies) == [
+             %{"version" => 2, "digest" => SystemPrompt.digest(prompt), "plan_revision" => nil}
+           ]
+  end
+
+  test "a digest returning on its branch reuses that branch's snapshot", %{tmp_dir: dir} do
+    first = [%{text: "first", directory_derived: false}]
+    second = [%{text: "second", directory_derived: false}]
+    session = SessionManager.new(dir) |> reply(first) |> reply(second) |> reply(first)
+    assert length(snapshots(session)) == 2
+    assert PromptJournal.latest(session).prompt == first
+    assert PromptJournal.cache_report(session).previous_digest == SystemPrompt.digest(second)
+  end
+
+  test "rewrite and fork paths keep each reply's snapshot", %{tmp_dir: dir} do
+    first = [%{text: "first", directory_derived: false}]
+    second = [%{text: "second", directory_derived: true}]
+    session = reply(SessionManager.new(dir), first)
+    branch_point = session.leaf_id
+    session = reply(session, first)
+    first_leaf = session.leaf_id
+    session = session |> SessionManager.set_leaf_id(branch_point) |> reply(second)
+
+    rewritten = Path.join(dir, "rewritten.jsonl")
+    assert :ok = SessionManager.save_to_file(rewritten, session)
+    assert {:ok, loaded} = SessionManager.load_from_file(rewritten)
+    assert length(snapshots(loaded)) == 2
+    assert PromptJournal.latest(loaded).prompt == second
+    assert PromptJournal.latest(SessionManager.set_leaf_id(loaded, first_leaf)).prompt == first
+
+    fork = Path.join(dir, "fork.jsonl")
+    assert {:ok, _} = SessionManager.fork_file(rewritten, fork, leaf_id: first_leaf)
+    assert {:ok, forked} = SessionManager.load_from_file(fork)
+    assert [_] = snapshots(forked)
+    assert PromptJournal.latest(forked).prompt == first
+  end
+
+  test "a pre-change journal still restores its inline prompt and plan overlay", %{tmp_dir: dir} do
+    path = Path.join(dir, "v1.jsonl")
+
+    File.write!(
+      path,
+      "../../fixtures/journals/prompt_snapshot_v1.jsonl"
+      |> Path.expand(__DIR__)
+      |> File.read!()
+      |> String.replace("__CWD__", dir)
+    )
+
+    assert {:ok, session} = SessionManager.load_from_file(path)
+    saved = PromptJournal.latest(session)
+    plan = SessionManager.latest_custom_entry(session, "lemon.plan")
+    assert saved.plan_revision == plan.id
+
+    assert saved.base_prompt ==
+             "Fixture base instructions captured before the prompt snapshot change."
+
+    assert SystemPrompt.text(saved.prompt) =~ "Fixture overlay journaled before the change."
+
+    restored = PromptJournal.restore(session, "a rebuilt base", [])
+    assert restored.system_prompt == SystemPrompt.text(saved.prompt)
+    assert restored.base_system_prompt == saved.base_prompt
+    assert restored.journaled_prompt == %{blocks: saved.prompt, plan_revision: plan.id}
+
+    state = Map.put(restored, :session_manager, session)
+    assert PromptJournal.planning_prompt(state) == SystemPrompt.text(saved.prompt)
+
+    # The next reply journals the same prompt once, in the shared format.
+    next = reply(session, saved.prompt)
+    assert [_] = snapshots(next)
+    assert PromptJournal.latest(next).prompt == saved.prompt
   end
 
   test "cache diagnostics compare boundaries without disclosing journaled text", %{tmp_dir: dir} do

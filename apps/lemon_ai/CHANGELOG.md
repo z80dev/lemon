@@ -111,6 +111,31 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- Streaming providers fail closed on truncation. Chat Completions, Responses,
+  Codex, Bedrock and the Google family (Generative AI, Vertex, Cloud Code
+  Assist) report a stream that ends, loses its connection, idles out or sends
+  a malformed event before the provider's terminal event (`finish_reason` or
+  `[DONE]`, `response.completed`, `messageStop`, `finishReason`) as a
+  transient `:error`, never a `:stop`/`:tool_use` completion with half-written
+  tool arguments. They share `LemonAi.Providers.StreamTransport`: one bounded,
+  classified pre-body retry path (`LemonAi.Retry.run/2`), SSE frames buffered
+  across chunks, only the response's own messages consumed and the response
+  canceled on every exit. Google and Vertex now retry 429/5xx per policy;
+  Cloud Code Assist no longer re-POSTs empty responses with a fixed sleep and
+  emits `:start` only with content. A non-stop Gemini finish reason or a
+  blocked prompt is an error. **Breaking:** `GoogleShared.normalize_sse_message/1`,
+  `extract_retry_delay/2`, `retryable_error?/2`, `extract_error_message/1` and
+  `SSEParser.events/2` are removed; `GoogleShared.normalize_http_error_body/1,2`
+  moved to `StreamTransport.error_body/1,2`.
+- `AzureOpenAIResponses` streams through `StreamTransport` (classified
+  `LemonAi.Retry` retries, own-ref consumption, cancel on every exit, no
+  `inspect/1` of response bodies). **Breaking:** Azure settings
+  (`api_key`, `base_url`, `resource_name`, `api_version`, `deployment_name`,
+  `deployment_name_map`) are read only from
+  `provider_options[:azure_openai_responses]`, whose `api_key` takes
+  precedence over `StreamOptions.api_key`; `thinking_budgets` `azure_*` keys
+  are ignored (#680).
+
 - `CircuitBreaker` no longer stores its default clock as a closure, so a
   running breaker survives a reload of its module (cover compilation or hot
   upgrade) instead of crashing with `BadFunctionError`.

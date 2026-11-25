@@ -4,8 +4,10 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
 
   `status: "ok"` contains an opaque identity and a snapshot. `status: "retry"`
   contains no snapshot: an owner changed during collection, or expectedIdentity
-  no longer matches. Reconciliation compares two complete collections; it is not
-  a transaction across owners. The live native event cursor is owner-scoped, not
+  no longer matches. Reconciliation compares two complete collections (except
+  `consistency.eventCursor`); it is not a transaction across owners. The live
+  native event cursor is read with the native projection in one owner call and
+  returned only as `consistency.eventCursor`; it is owner-scoped, not
   durable/global. Clients must fence the selected session/request generation and
   replay subsequent sequenced events. Never append unsequenced text deltas to a
   replacement answer; refresh it from this authority.
@@ -44,8 +46,12 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
     process_id processId run_id runId session_id sessionId session_key sessionKey
     tool_call_id toolCallId action_id actionId name count total duration_ms durationMs
     cancelled outcome reason execution_duration_ms)
-  @approval_action_fields ~w(title plan command_hash commandHash cwd_hash cwdHash env_keys
-    checkpoint_hash kind reason authorization_url)
+  @approval_action_fields ~w(title plan command cmd path file_path command_hash commandHash
+    cwd_hash cwdHash env_keys checkpoint_hash kind reason authorization_url)
+  # An approval card must show the target it authorizes; every other private
+  # key stays dropped, including from the argument preview.
+  @approval_private_keys @private_keys -- ["path"]
+  @approval_preview_bytes 2_048
   @todo_fields ~w(id content status priority dependencies)
   @public_key_atoms Map.new(
                       @argument_fields ++
@@ -74,7 +80,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
          {:ok, second} <- collect(key, cwd, limit, ctx, continuation),
          :ok <- authorize(ctx, key) do
       cond do
-        first != second ->
+        without_cursor(first) != without_cursor(second) ->
           retry(key, second["identity"], "snapshot_raced")
 
         params["expectedIdentity"] not in [nil, second["identity"]] ->
@@ -89,6 +95,10 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
   catch
     _, _ -> unavailable()
   end
+
+  # The event cursor is read with the native projection in one owner call, so a
+  # live event between collections only advances it; clients replay past it.
+  defp without_cursor(result), do: put_in(result, ["consistency", "eventCursor"], nil)
 
   defp cwd(%{"cwd" => _} = params), do: NativeSessions.string(params, "cwd", 4096)
   defp cwd(_), do: {:ok, nil}
@@ -514,20 +524,45 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
               (is_nil(expiry) or (is_integer(expiry) and expiry > now))
           end)
           |> Enum.sort_by(&elem(&1, 0))
-          |> Enum.map(fn {_id, p} ->
-            projected = ExecApprovalsGet.format_pending(p)
+          |> Enum.map(fn {_id, p} -> approval(ExecApprovalsGet.format_pending(p)) end)
 
-            Map.put(
-              projected,
-              "action",
-              public_fields(projected["action"], @approval_action_fields)
-            )
-          end)
-
-        collection(items, 8_192)
+        collection(items, 16_384, @approval_private_keys)
       end)
     else
       %{"status" => "forbidden"}
+    end
+  end
+
+  # Allowlisted display fields (command, path, plan, hashes) plus a bounded
+  # preview of the remaining arguments. `truncated` reports a field clipped by
+  # the collection's 4 KiB string bound or a cut preview, `planTruncated` a
+  # clipped plan, so a client never approves what it could not show in full.
+  defp approval(projected) do
+    action = if is_map(projected["action"]), do: projected["action"], else: %{}
+    public = public_fields(action, @approval_action_fields)
+
+    preview =
+      approval_preview(Map.drop(action, @approval_action_fields ++ @approval_private_keys))
+
+    plan_cut = clipped?(public["plan"])
+
+    cut =
+      plan_cut or clipped?(Map.delete(public, "plan")) or clipped?(projected["rationale"]) or
+        (is_binary(preview) and byte_size(preview) > @approval_preview_bytes)
+
+    projected
+    |> Map.put("action", public)
+    |> Map.put("argumentsPreview", preview && text(preview, @approval_preview_bytes))
+    |> Map.put("planTruncated", plan_cut)
+    |> Map.put("truncated", cut)
+  end
+
+  defp approval_preview(arguments) when map_size(arguments) == 0, do: nil
+
+  defp approval_preview(arguments) do
+    case Jason.encode(arguments, pretty: true) do
+      {:ok, json} -> safe_text(json)
+      {:error, _} -> arguments |> inspect(limit: 50, printable_limit: 4_096) |> safe_text()
     end
   end
 
@@ -669,9 +704,9 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
 
   defp plan(_, _content?), do: %{"status" => "unavailable"}
 
-  defp collection(items, budget) do
+  defp collection(items, budget, drop_keys \\ @private_keys) do
     projected =
-      items |> Enum.take(100) |> Enum.map(&LemonCore.Redact.project(&1, drop_keys: @private_keys))
+      items |> Enum.take(100) |> Enum.map(&LemonCore.Redact.project(&1, drop_keys: drop_keys))
 
     {bounded, cut} = fit(projected, budget, false)
 

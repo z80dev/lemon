@@ -1220,6 +1220,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
 
   test "steering is observed while safe tools wait without canceling started invocations" do
     parent = self()
+    signal = AbortSignal.new()
     supervisor = start_supervised!(Task.Supervisor)
     steering_message = user_message("use different reads next")
     steering_queue = start_supervised!({Agent, fn -> [] end})
@@ -1250,7 +1251,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
           [],
           calls,
           config,
-          nil,
+          signal,
           stream
         )
       end)
@@ -1258,6 +1259,9 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert_receive {:tool_started, "steered_read_1", first}, 1_000
     assert_receive {:tool_started, "steered_read_2", second}, 1_000
     Agent.update(steering_queue, fn _ -> [steering_message] end)
+    # Standalone callbacks are peeked at tool boundaries and no timer polls the
+    # queue: a queue change wakes the waiting collector with the notification.
+    send(runner.pid, {:lemon_steering_changed, signal})
     assert_receive :steering_observed, 1_000
     assert Process.alive?(first)
     assert Process.alive?(second)

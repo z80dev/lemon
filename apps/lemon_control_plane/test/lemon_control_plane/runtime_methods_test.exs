@@ -17,14 +17,14 @@ defmodule LemonControlPlane.RuntimeMethodsTest do
   end
 
   describe "methods without an agent runtime" do
-    test "tasks.active.list answers with an empty list, not an error" do
-      assert {:ok, payload} = LemonControlPlane.Methods.TasksActiveList.handle(%{}, %{})
-      assert payload["tasks"] == []
+    test "tasks.active.list reports the runtime as unavailable, not an empty list" do
+      assert {:error, {:unavailable, "Task state is unavailable"}} =
+               LemonControlPlane.Methods.TasksActiveList.handle(%{}, %{})
     end
 
-    test "tasks.recent.list answers with an empty list" do
-      assert {:ok, payload} = LemonControlPlane.Methods.TasksRecentList.handle(%{}, %{})
-      assert payload["tasks"] == []
+    test "tasks.recent.list reports the runtime as unavailable, not an empty list" do
+      assert {:error, {:unavailable, "Task state is unavailable"}} =
+               LemonControlPlane.Methods.TasksRecentList.handle(%{}, %{})
     end
 
     test "sessions.compact reports the runtime as unavailable, in the pre-existing shape" do

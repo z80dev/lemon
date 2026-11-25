@@ -1,7 +1,7 @@
 defmodule LemonChannels.Adapters.Discord.Approval do
   @moduledoc "Account- and conversation-bound Discord approval controls, delivered through Outbox."
 
-  alias LemonChannels.Adapters.Discord.StatusRenderer
+  alias LemonChannels.Adapters.Discord.{StatusRenderer, ThreadResolver}
   alias LemonChannels.BindingResolver
   alias LemonChannels.Discord.KnownTargetStore
   alias LemonChannels.RemoteApproval
@@ -86,23 +86,23 @@ defmodule LemonChannels.Adapters.Discord.Approval do
     end
   end
 
+  # The control location is the same {parent channel, thread} pair every
+  # Discord session key uses; an unresolvable channel never matches.
   defp matches?(interaction, target) do
     peer = target.peer
-    channel = get(interaction, :channel)
-    channel_id = RemoteApproval.integer(get(interaction, :channel_id))
-    parent_id = RemoteApproval.integer(get(channel, :parent_id))
-    thread? = is_map(get(channel, :thread_metadata)) or is_integer(parent_id)
     message_id = RemoteApproval.integer(get(get(interaction, :message), :id))
     guild_id = RemoteApproval.integer(get(interaction, :guild_id))
     kind = if is_integer(guild_id), do: :group, else: :dm
 
-    is_integer(message_id) and message_id > 0 and kind == peer.kind and
-      if is_nil(peer.thread_id) do
-        not thread? and channel_id == RemoteApproval.integer(peer.id)
-      else
-        thread? and channel_id == RemoteApproval.integer(peer.thread_id) and
-          (peer.id == peer.thread_id or parent_id == RemoteApproval.integer(peer.id))
-      end
+    case ThreadResolver.locate(interaction) do
+      {:ok, %{channel_id: channel_id, thread_id: thread_id}} ->
+        is_integer(message_id) and message_id > 0 and kind == peer.kind and
+          channel_id == RemoteApproval.integer(peer.id) and
+          thread_id == RemoteApproval.integer(peer.thread_id)
+
+      {:error, _} ->
+        false
+    end
   end
 
   defp authorized_target?(state, target) do

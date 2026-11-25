@@ -6,6 +6,8 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Added
 
+- `lemon browser stop` stops the runtime's local browser driver and the
+  Chrome it launched through the admin `browser.stop` method (#660).
 - `lemon setup omp [status|disconnect]` connects Lemon providers to omp's auth
   broker (`auth_source = "omp_broker"`), installing the `omp-broker` service
   when the local broker is not running; the full setup wizard offers it when

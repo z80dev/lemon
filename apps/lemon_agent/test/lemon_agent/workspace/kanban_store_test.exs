@@ -366,4 +366,20 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
              "bash"
            )
   end
+
+  test "board/task writes ring the kanban doorbell; lease renewals do not" do
+    assert {:ok, board} = KanbanStore.create_board("Doorbell board")
+    :ok = LemonCore.Bus.subscribe(KanbanStore.changed_topic())
+    board_id = board.id
+
+    assert {:ok, task} = KanbanStore.create_task(board.id, "Ring")
+    assert_receive {:kanban_changed, ^board_id}
+
+    assert {:ok, leased} = KanbanStore.lease_task(board.id, "worker")
+    assert_receive {:kanban_changed, ^board_id}
+
+    lease_id = leased.meta["kanbanLease"]["id"]
+    assert {:ok, _} = KanbanStore.renew_task_lease(task.id, lease_id, lease_ms: 60_000)
+    refute_receive {:kanban_changed, _}, 100
+  end
 end

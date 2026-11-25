@@ -21,9 +21,10 @@ import {
 import { ensureThemeSync } from "@oh-my-pi/pi-tui/theme/theme";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import {
+	ConnectionLostError,
 	ControlPlaneError,
+	classifyMutationError,
 	MethodUnavailableError,
-	NotConnectedError,
 	RequestTimeoutError,
 } from "../protocol/errors.ts";
 import { InvalidJobsReceiptError } from "../protocol/jobs.ts";
@@ -421,31 +422,36 @@ export function jobsFailure(action: "list" | "cancel", error: unknown): [string,
 	if (error instanceof MethodUnavailableError) {
 		return [`This daemon does not support ${error.method}.`, "warning"];
 	}
-	if (error instanceof NotConnectedError) {
+	const outcome = classifyMutationError(error);
+	if (outcome === "not-sent") {
 		return [`${noun}: no live daemon connection; nothing was sent.`, "warning"];
 	}
-	if (error instanceof RequestTimeoutError) {
-		return action === "cancel"
-			? [
-					"Cancel did not answer in time. The job may already be stopping; the request was not retried — check /jobs before trying again.",
-					"warning",
-				]
-			: ["Background jobs did not answer in time", "warning"];
-	}
-	if (error instanceof ControlPlaneError) {
-		const details = error.details as { reason?: unknown } | null | undefined;
-		if (action === "cancel") {
-			if (details?.reason === "outcome_unknown") {
-				return [
-					"Cancel outcome unknown: the daemon could not confirm the job stopped. It was not retried — check the job before trying again.",
-					"warning",
-				];
-			}
-			if (error.code === "NOT_FOUND") return ["That job is no longer listed.", "info"];
-			if (error.code === "CONFLICT") return ["That job already finished.", "info"];
+	if (action === "list") {
+		if (error instanceof RequestTimeoutError) {
+			return ["Background jobs did not answer in time", "warning"];
 		}
-		if (error.code === "UNAVAILABLE") return [`${noun} runtime is unavailable.`, "warning"];
+		if (error instanceof ConnectionLostError) {
+			return ["Background jobs: the connection dropped before the reply.", "warning"];
+		}
+		if (error instanceof ControlPlaneError) {
+			if (error.code === "UNAVAILABLE") return [`${noun} runtime is unavailable.`, "warning"];
+			return [`${noun} request failed (${error.code}).`, "error"];
+		}
+		return [`The daemon returned an unreadable ${noun.toLowerCase()} receipt.`, "error"];
+	}
+	if (outcome === "refused" && error instanceof ControlPlaneError) {
+		if (error.code === "NOT_FOUND") return ["That job is no longer listed.", "info"];
+		if (error.code === "CONFLICT") return ["That job already finished.", "info"];
 		return [`${noun} request failed (${error.code}).`, "error"];
 	}
-	return [`The daemon returned an unreadable ${noun.toLowerCase()} receipt.`, "error"];
+	if (error instanceof RequestTimeoutError) {
+		return [
+			"Cancel did not answer in time. The job may already be stopping; the request was not retried — check /jobs before trying again.",
+			"warning",
+		];
+	}
+	return [
+		"Cancel outcome unknown: the daemon could not confirm the job stopped. It was not retried — check the job before trying again.",
+		"warning",
+	];
 }

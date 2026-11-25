@@ -50,7 +50,7 @@ defmodule LemonChannels.Adapters.Discord.ApprovalTest do
     interaction = %{
       channel_id: "456",
       guild_id: "789",
-      channel: %{parent_id: "123"},
+      channel: %{parent_id: "123", type: 11},
       message: %{id: "999"},
       data: %{custom_id: RemoteApproval.callback(pending, :deny)}
     }
@@ -141,8 +141,8 @@ defmodule LemonChannels.Adapters.Discord.ApprovalTest do
   test "foreign channel/thread/parent/account and denied guild never consume or edit", c do
     interactions = [
       %{c.interaction | channel_id: "457"},
-      %{c.interaction | channel: %{parent_id: "124"}},
-      %{c.interaction | channel: %{}},
+      %{c.interaction | channel: %{parent_id: "124", type: 11}},
+      %{c.interaction | channel: %{type: 0}},
       %{c.interaction | guild_id: "790"},
       %{c.interaction | channel_id: "456garbage"},
       %{c.interaction | message: %{id: "999garbage"}},

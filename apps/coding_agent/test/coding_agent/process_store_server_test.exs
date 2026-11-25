@@ -122,9 +122,11 @@ defmodule CodingAgent.ProcessStoreServerTest do
   end
 
   test "restart marks a flushed running tail lost without losing capture metadata", %{
-    name: name,
     dets_path: dets_path
   } do
+    # The canonical name is free (setup stopped that child), so the public
+    # store API addresses this fixture owner.
+    name = ProcessStoreServer
     id = "flushed-tail"
     path = Path.join(Path.dirname(dets_path), "output.log")
     File.write!(path, "head")
@@ -140,14 +142,14 @@ defmodule CodingAgent.ProcessStoreServerTest do
 
     {:ok, first} = ProcessStoreServer.start_link(name: name, dets_path: dets_path)
 
-    ProcessStoreServer.transaction(first, fn ->
-      CodingAgent.ProcessStore.new_process(%{
-        id: id,
-        status: :running,
-        command: "test",
-        full_output_path: path
-      })
+    CodingAgent.ProcessStore.new_process(%{
+      id: id,
+      status: :running,
+      command: "test",
+      full_output_path: path
+    })
 
+    :ok =
       CodingAgent.ProcessStore.append_logs(id, ["cc", "dd"],
         keep: 2,
         total_lines: 4,
@@ -155,7 +157,6 @@ defmodule CodingAgent.ProcessStoreServerTest do
         partial_line: "",
         read_cursor: 0
       )
-    end)
 
     GenServer.stop(first)
 
@@ -212,9 +213,7 @@ defmodule CodingAgent.ProcessStoreServerTest do
       old_time = System.system_time(:second) - 1000
       record = %{status: :completed, completed_at: old_time, updated_at: old_time}
 
-      ProcessStoreServer.transaction(pid, fn ->
-        CodingAgent.ProcessStore.insert_record("test_proc_1", record, [])
-      end)
+      :ok = GenServer.call(pid, {:insert_record, "test_proc_1", record, []})
 
       # The ETS table is global; other suites may leave expired rows, so assert
       # on this record rather than on the total deleted count.
@@ -233,9 +232,7 @@ defmodule CodingAgent.ProcessStoreServerTest do
       recent_time = System.system_time(:second) - 10
       record = %{status: :completed, completed_at: recent_time, updated_at: recent_time}
 
-      ProcessStoreServer.transaction(pid, fn ->
-        CodingAgent.ProcessStore.insert_record("test_proc_2", record, [])
-      end)
+      :ok = GenServer.call(pid, {:insert_record, "test_proc_2", record, []})
 
       # Cleanup with TTL of 60 seconds should NOT remove the recent record
       assert {:ok, deleted} = ProcessStoreServer.cleanup(pid, 60)
@@ -252,9 +249,7 @@ defmodule CodingAgent.ProcessStoreServerTest do
       old_time = System.system_time(:second) - 1000
       record = %{status: :running, inserted_at: old_time}
 
-      ProcessStoreServer.transaction(pid, fn ->
-        CodingAgent.ProcessStore.insert_record("test_proc_3", record, [])
-      end)
+      :ok = GenServer.call(pid, {:insert_record, "test_proc_3", record, []})
 
       # Cleanup should NOT remove running processes
       assert {:ok, deleted} = ProcessStoreServer.cleanup(pid, 60)
@@ -270,10 +265,8 @@ defmodule CodingAgent.ProcessStoreServerTest do
       ProcessStoreServer.ensure_table(pid)
 
       # Insert test processes
-      ProcessStoreServer.transaction(pid, fn ->
-        CodingAgent.ProcessStore.insert_record("proc_1", %{status: :running}, [])
-        CodingAgent.ProcessStore.insert_record("proc_2", %{status: :completed}, [])
-      end)
+      :ok = GenServer.call(pid, {:insert_record, "proc_1", %{status: :running}, []})
+      :ok = GenServer.call(pid, {:insert_record, "proc_2", %{status: :completed}, []})
 
       assert :ok = ProcessStoreServer.clear(pid)
       assert :ets.info(:coding_agent_processes, :size) == 0

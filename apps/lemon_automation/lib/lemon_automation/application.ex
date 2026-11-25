@@ -9,7 +9,6 @@ defmodule LemonAutomation.Application do
       [
         LemonCore.TaskSupervisor.child_spec(name: LemonAutomation.TaskSupervisor),
         LemonAutomation.CronManager,
-        LemonAutomation.GoalContinuationManager,
         LemonAutomation.GoalLoopManager,
         LemonAutomation.KanbanDispatcher,
         LemonAutomation.SkillCuratorManager,

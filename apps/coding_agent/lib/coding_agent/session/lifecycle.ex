@@ -30,7 +30,7 @@ defmodule CodingAgent.Session.Lifecycle do
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
   alias CodingAgent.ToolPolicy
-  alias CodingAgent.Tools.Task.Params
+  alias CodingAgent.Tools.Task.InvocationAuthority
   alias CodingAgent.Workspace
   alias CodingAgent.WorkspaceReads
   alias LemonAgent.ModelRuntime.StreamOptions
@@ -76,7 +76,10 @@ defmodule CodingAgent.Session.Lifecycle do
     register_session = Keyword.get(opts, :register, false)
     session_registry = Keyword.get(opts, :registry, CodingAgent.SessionRegistry)
 
-    Workspace.ensure_workspace(workspace_dir: workspace_dir)
+    # Only a session that reads assistant-home bootstrap seeds it, once per
+    # workspace; a read-only home never fails session start.
+    if persona and context_snapshot == nil,
+      do: Workspace.seed_workspace(workspace_dir: workspace_dir)
 
     stage_started = System.monotonic_time()
 
@@ -118,7 +121,12 @@ defmodule CodingAgent.Session.Lifecycle do
 
     config_cwd = Keyword.get(opts, :config_cwd) || cwd
     settings_manager = Keyword.get(opts, :settings_manager) || SettingsManager.load(config_cwd)
-    budget_limits = Keyword.get(opts, :budget_limits, settings_manager.budgets)
+    # A delegated `agent` run can only tighten the configured caps.
+    budget_limits =
+      opts
+      |> Keyword.get(:budget_limits, settings_manager.budgets)
+      |> CodingAgent.BudgetEnforcer.apply_delegated_limits(Keyword.get(opts, :delegated_budget))
+
     {session_manager, budget_usage} = BudgetLedger.initialize(session_manager)
 
     {:ok, budget_scope} =
@@ -289,7 +297,7 @@ defmodule CodingAgent.Session.Lifecycle do
         (approval_context || %{})[:shared_memory_grant] == true
       )
       |> Keyword.merge(private_native_opts(approval_context))
-      |> Keyword.put(:native_managed_context, Params.named_messaging_managed?(opts))
+      |> Keyword.put(:native_managed_context, InvocationAuthority.named_messaging_managed?(opts))
       |> Keyword.put(:wasm_tools, wasm_boot.wasm_tools)
       |> Keyword.put(:wasm_status, wasm_boot.wasm_status)
       |> Keyword.put(:plan_gate, plan_gate)
@@ -745,7 +753,7 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.merge(private_native_opts(state.approval_context))
       |> Keyword.put(
         :native_managed_context,
-        Params.named_messaging_managed?(state.tool_opts)
+        InvocationAuthority.named_messaging_managed?(state.tool_opts)
       )
 
     lifecycle =
@@ -1012,7 +1020,7 @@ defmodule CodingAgent.Session.Lifecycle do
       Keyword.get(opts, :channel_identity, (approval_context || %{})[:channel_identity])
 
     native_managed? =
-      Params.managed_context?(Map.merge(Map.new(opts), approval_context || %{}))
+      InvocationAuthority.managed_context?(Map.merge(Map.new(opts), approval_context || %{}))
 
     invocation_context_key =
       LemonCore.MapHelpers.get_key(approval_context, :invocation_context_key) ||

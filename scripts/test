@@ -81,7 +81,8 @@ Canonical test lanes:
   premerge   Stop-on-failure diff checks: [--base REF] (default: origin/main); runs `changed --narrow`:
              changed apps whole, downstream apps only tests naming a changed module
   quality    CI check lane: compile -Werror, format check, credo, skip-tag guard, shellcheck, launcher
-             script tests, changelog guard, selector self-test, skill lint, mix lemon.quality, focused quality tests;
+             script tests, changelog guard, selector self-test, docs source-reference check, skill lint,
+             mix lemon.quality, focused quality tests;
              [--base REF] (PR CI) limits format/credo to files changed since REF unless the diff is full scope
   clients    CI client lane: tui (typecheck, lint, bun test) and lemon-browser-node (typecheck, lint, build, vitest)
   lemon_bot  Lemon Bot backend tests, web production build and isolated web tests
@@ -290,6 +291,8 @@ run_quality() {
   scripts/check_changelog
   python3 scripts/test_changed_tests.py
   python3 scripts/test_ci_gates.py
+  node --test scripts/check_docs_source_refs.test.mjs
+  node scripts/check_docs_source_refs.mjs
   run_shellcheck
   bash scripts/test_lemon_tui_auth.sh
   bash scripts/test_lemon_launcher_reuse.sh

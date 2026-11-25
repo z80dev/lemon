@@ -20,12 +20,14 @@ defmodule LemonAgent.StreamRules do
       Indices must be nonnegative signed-32-bit integers. Block starts reset
       their buffer; block ends release it. Response lifecycle events clear all
       buffers. Deltas without a start event are also supported.
-    * Each buffer retains at most 4,096 bytes. A delta may contain at most 16,384
-      bytes and is scanned from its beginning in chunks of at most 1,024 bytes.
-      Every chunk is appended to the buffer and the resulting 4,096-byte suffix
-      is searched. No accepted delta's prefix is silently skipped.
-    * Each delta runs at most 16 * 32 regex searches, with `match_limit: 10_000`
-      and `match_limit_recursion: 100` for each search. As documented by Erlang's
+    * Each buffer retains at most 4,096 bytes. A delta of any size is scanned
+      from its beginning in chunks of at most 1,024 bytes, so a provider that
+      sends a whole tool-argument object as one delta is checked like the same
+      text streamed in pieces. Every chunk is appended to the buffer and the
+      resulting 4,096-byte suffix is searched. No delta's prefix is skipped.
+    * Each 1,024-byte chunk runs at most 32 regex searches, with
+      `match_limit: 10_000` and `match_limit_recursion: 100` for each search,
+      so matching work is linear in the delta size. As documented by Erlang's
       `:re.run/3`, the match counter can restart at each candidate position, so
       the 4,096-byte subject bound is also essential. Captures are not returned.
       `:report_errors` ensures engine exhaustion is never mistaken for a miss.
@@ -39,7 +41,7 @@ defmodule LemonAgent.StreamRules do
   and end anchors describe output so far, not future output. Within a window,
   declaration order breaks ties; the first matching window ends the search.
 
-  Invalid configuration, oversized deltas, exhausted stream capacity, and regex
+  Invalid configuration, exhausted stream capacity, and regex
   engine limits raise `LemonAgent.StreamRules.Error` with a content-free reason.
   Callers must fail the attempt, not ignore the error or continue unchecked.
   With no rules, every event is a no-op and no output is retained.
@@ -61,7 +63,6 @@ defmodule LemonAgent.StreamRules do
   @max_index 2_147_483_647
   @window_bytes 4096
   @chunk_bytes 1024
-  @max_delta_bytes 16_384
   @match_options [
     :report_errors,
     {:capture, :none},
@@ -175,10 +176,7 @@ defmodule LemonAgent.StreamRules do
 
   defp compile_rule!(_rule), do: fail!(:invalid_rule)
 
-  defp validate_delta!(delta) when is_binary(delta) and byte_size(delta) <= @max_delta_bytes,
-    do: :ok
-
-  defp validate_delta!(delta) when is_binary(delta), do: fail!(:delta_too_large)
+  defp validate_delta!(delta) when is_binary(delta), do: :ok
   defp validate_delta!(_delta), do: fail!(:invalid_delta)
 
   defp stream_key!(kind, index) when is_integer(index) and index >= 0 and index <= @max_index,

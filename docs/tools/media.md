@@ -1,7 +1,12 @@
 # Media Tools
 
 Lemon's media tools are preview surfaces built around BEAM supervision,
-redacted metadata, and managed local artifacts.
+redacted metadata, and managed local artifacts. The tools in `lemon_skills`
+only validate parameters and resolve credentials; every provider HTTP client
+(OpenAI, Google, ElevenLabs, Deepgram) lives in `lemon_media` behind
+`LemonMedia.Providers.run/1`, and channel and gateway voice paths call the
+same clients. Google service-account access tokens are cached until shortly
+before expiry, so consecutive Vertex or Google TTS jobs reuse one token.
 
 - `media_status`: model-facing read-only status for generated-media jobs,
   recent artifacts, cleanup policy, and worker supervisor state.
@@ -18,21 +23,28 @@ redacted metadata, and managed local artifacts.
 
 ## Defaults and limits
 
-When `provider` is omitted, every tool uses its deterministic local preview
-provider (`local_svg`, `local_wav`, `local_transcript`, `local_vision`,
-`local_mp4`). Pass a provider-backed value explicitly for real generation or
-analysis. Common optional parameters are `filename` (always written under the
-managed artifact directory), `maxRetries` (default 1, clamped to 0–3),
-`sendToChannel` (default false) and `timeoutMs`, which is clamped to 100 ms up to
-a per-tool maximum:
+`provider` is required: omitting it returns `provider is required` without
+recording a job. The deterministic local preview providers (`local_svg`,
+`local_wav`, `local_transcript`, `local_vision`, `local_mp4`) are opt-in and must
+be named explicitly. Common optional parameters are `filename` (always written
+under the managed artifact directory), `maxRetries` (default 1, clamped to 0–3),
+`sendToChannel` (default false) and `timeoutMs`. The default depends on the
+provider (local preview or real provider) and the value is clamped to 100 ms up
+to a per-tool maximum:
 
-| Tool | Default `timeoutMs` | Maximum | Input limit |
-| --- | --- | --- | --- |
-| `media_generate_image` | 5000 | 30000 | |
-| `media_generate_speech` | 10000 | 120000 | |
-| `media_transcribe_audio` | 15000 | 120000 | 25 MiB audio file |
-| `media_analyze_image` | 15000 | 120000 | 20 MiB image file |
-| `media_generate_video` | 20000 | 300000 | |
+| Tool | Local default | Provider default | Maximum | Input limit |
+| --- | --- | --- | --- | --- |
+| `media_generate_image` | 5000 | 180000 | 600000 | |
+| `media_generate_speech` | 10000 | 120000 | 300000 | |
+| `media_transcribe_audio` | 15000 | 180000 | 600000 | 25 MiB audio file |
+| `media_analyze_image` | 15000 | 120000 | 300000 | 20 MiB image file |
+| `media_generate_video` | 20000 | 900000 | 1800000 | |
+
+`timeoutMs` is one fixed deadline for the whole job. A job never outlives its
+tool call: on timeout or abort the job process is killed, which cancels any
+in-flight provider request, and its record ends `cancelled`. The timeout error
+names the job id so it stays visible in `media_status`. A job that dies on its
+own ends `failed`.
 
 `media_status` takes an optional `limit` (default 10, clamped to 0–50) of recent jobs.
 

@@ -247,6 +247,21 @@ defmodule LemonAutomation.RunSubmitterTest do
     refute_receive {:router_submit, _}
   end
 
+  test "an exit before router submission is a definite failure, not outcome unknown" do
+    for crash <- [fn -> exit(:claim_timeout) end, fn -> raise "claim boom" end] do
+      assert {:error, reason} =
+               RunSubmitter.submit(sample_job(), sample_run(%{run_id: "fixed_pre_submit"}),
+                 router_mod: RouterOk,
+                 waiter_mod: Waiter,
+                 on_submitting: fn _id, _session -> crash.() end
+               )
+
+      assert is_binary(reason)
+      assert reason =~ "not submitted"
+      refute_receive {:router_submit, _}
+    end
+  end
+
   test "profile is resolved at run time with its current node and persona" do
     assert {:ok, profile} =
              LemonCore.ProfileStore.create(%{

@@ -10,8 +10,9 @@ defmodule Mix.Tasks.Lemon.Quality do
   Run the repository quality checks:
 
     * docs - local markdown links in tracked `docs/**/*.md` resolve
-    * architecture_docs - the generated dependency-policy section in
-      `docs/architecture_boundaries.md` matches the policy
+    * architecture_docs - the generated dependency-policy and package-map
+      sections in `docs/architecture_boundaries.md` are current, and the Hex
+      publish set in `apps/*/mix.exs` equals `scripts/verify_packages`
     * architecture - every umbrella app's `deps/0` matches the direct
       dependency policy
     * duplicate test module guard (`mix lemon.check_duplicate_tests`)

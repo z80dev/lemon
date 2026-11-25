@@ -3,7 +3,9 @@ import { FakeControlPlane } from "../../src/dev/fake-server.ts";
 import { acceptDeltaSeq, ControlPlaneClient } from "../../src/protocol/client.ts";
 import {
 	AuthenticationError,
+	ConnectionLostError,
 	ControlPlaneError,
+	classifyMutationError,
 	describeError,
 	HandshakeError,
 	MethodUnavailableError,
@@ -15,6 +17,7 @@ import {
 	SKILL_MUTATION_REQUEST_TIMEOUT_MS,
 } from "../../src/protocol/methods.ts";
 import type { ChatDeltaEvent } from "../../src/protocol/types.ts";
+import { waitFor } from "../helpers/wait.ts";
 import { AUTHENTICATED_CONNECT_PARAMS } from "./fixtures/control-plane-connect-contract.ts";
 
 const teardown: Array<() => void> = [];
@@ -340,18 +343,47 @@ describe("reconnect", () => {
 		expect(server.requestsFor("connect")).toHaveLength(2);
 	});
 
-	test("in-flight requests reject when the connection drops", async () => {
+	test("a request dropped after dispatch fails as lost with an unknown outcome", async () => {
+		const server = await withServer();
+		server.silenceMethod("chat.send");
+		const client = makeClient(server.url);
+		await client.connect();
+
+		const pending = client
+			.request("chat.send", { sessionKey: "s1", prompt: "hi" })
+			.catch((e: unknown) => e);
+		await waitFor(() => server.requestsFor("chat.send").length === 1);
+		server.dropConnections();
+
+		const error = await pending;
+		expect(error).toBeInstanceOf(ConnectionLostError);
+		expect(error).not.toBeInstanceOf(NotConnectedError);
+		expect((error as ConnectionLostError).method).toBe("chat.send");
+		expect(classifyMutationError(error)).toBe("unknown");
+		expect(describeError(error)).toContain("outcome is unknown");
+		// The client never replays it on the next connection.
+		await waitFor(() => client.online);
+		expect(server.requestsFor("chat.send")).toHaveLength(1);
+	});
+
+	test("/reconnect fails in-flight requests as lost, not as unsent", async () => {
 		const server = await withServer();
 		server.silenceMethod("status");
 		const client = makeClient(server.url);
 		await client.connect();
 
-		const pending = client.request("status").catch((e: any) => e);
-		await Bun.sleep(10);
-		server.dropConnections();
+		const pending = client.request("status").catch((e: unknown) => e);
+		await waitFor(() => server.requestsFor("status").length === 1);
+		await client.reconnect("test");
 
-		const error: any = await pending;
+		expect(await pending).toBeInstanceOf(ConnectionLostError);
+	});
+
+	test("only the pre-send gate reports a request as not sent", async () => {
+		const client = makeClient("ws://127.0.0.1:1/ws");
+		const error = await client.request("sessions.delete", {}).catch((e: unknown) => e);
 		expect(error).toBeInstanceOf(NotConnectedError);
+		expect(classifyMutationError(error)).toBe("not-sent");
 	});
 
 	test("overflow routes through reconnect recovery without replaying a mutation", async () => {

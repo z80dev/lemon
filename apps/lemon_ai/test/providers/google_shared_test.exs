@@ -7,7 +7,7 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
   """
   use ExUnit.Case, async: true
 
-  alias LemonAi.Providers.GoogleShared
+  alias LemonAi.Providers.{GoogleShared, StreamTransport}
 
   alias LemonAi.Types.{
     AssistantMessage,
@@ -484,36 +484,6 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
   end
 
   # ============================================================================
-  # SSE Helpers
-  # ============================================================================
-
-  describe "normalize_sse_message/1" do
-    test "normalizes {:data, binary} tuple" do
-      assert GoogleShared.normalize_sse_message({:data, "hello"}) == {:data, "hello"}
-    end
-
-    test "normalizes nested data tuple" do
-      assert GoogleShared.normalize_sse_message({:something, {:data, "hello"}}) ==
-               {:data, "hello"}
-    end
-
-    test "normalizes :done messages" do
-      assert GoogleShared.normalize_sse_message({:done, nil}) == :done
-      assert GoogleShared.normalize_sse_message({:something, :done}) == :done
-      assert GoogleShared.normalize_sse_message({:something, {:done, nil}}) == :done
-    end
-
-    test "normalizes :DOWN messages" do
-      assert GoogleShared.normalize_sse_message({:DOWN, :ref, :process, :pid, :reason}) == :down
-    end
-
-    test "returns :ignore for unknown messages" do
-      assert GoogleShared.normalize_sse_message(:unknown) == :ignore
-      assert GoogleShared.normalize_sse_message({:other, "data"}) == :ignore
-    end
-  end
-
-  # ============================================================================
   # Thinking Budget Helpers
   # ============================================================================
 
@@ -654,129 +624,15 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
     end
   end
 
-  # ============================================================================
-  # Retry Helpers
-  # ============================================================================
-
-  describe "extract_retry_delay/2" do
-    test "extracts delay from retry-after header" do
-      headers = %{"retry-after" => "5"}
-      delay = GoogleShared.extract_retry_delay("", headers)
-
-      # Should be ~6000ms (5s + 1000ms buffer)
-      assert delay >= 5000
-      assert delay <= 7000
-    end
-
-    test "extracts delay from x-ratelimit-reset-after header" do
-      headers = %{"x-ratelimit-reset-after" => "2.5"}
-      delay = GoogleShared.extract_retry_delay("", headers)
-
-      assert delay >= 2500
-      assert delay <= 4000
-    end
-
-    test "extracts delay from quota reset message" do
-      text = "Your quota will reset after 39s"
-      delay = GoogleShared.extract_retry_delay(text, %{})
-
-      assert delay >= 39_000
-      assert delay <= 41_000
-    end
-
-    test "extracts delay from complex duration" do
-      text = "Your quota will reset after 1h30m45s"
-      delay = GoogleShared.extract_retry_delay(text, %{})
-
-      expected_ms = (1 * 3600 + 30 * 60 + 45) * 1000 + 1000
-      assert delay == expected_ms
-    end
-
-    test "extracts delay from 'Please retry in' message" do
-      text = "Please retry in 5s"
-      delay = GoogleShared.extract_retry_delay(text, %{})
-
-      assert delay >= 5000
-      assert delay <= 6500
-    end
-
-    test "extracts delay from retryDelay JSON field" do
-      text = ~s({"error": {"retryDelay": "34.074824224s"}})
-      delay = GoogleShared.extract_retry_delay(text, %{})
-
-      assert delay >= 34_000
-      assert delay <= 36_000
-    end
-
-    test "returns nil when no delay can be extracted" do
-      assert GoogleShared.extract_retry_delay("Some error message", %{}) == nil
-    end
-
-    test "prioritizes headers over body text" do
-      headers = %{"retry-after" => "10"}
-      text = "Your quota will reset after 5s"
-
-      delay = GoogleShared.extract_retry_delay(text, headers)
-
-      # Should use header value (10s + buffer)
-      assert delay >= 10_000
-    end
-  end
-
-  describe "retryable_error?/2" do
-    test "returns true for rate limit status code" do
-      assert GoogleShared.retryable_error?(429, "")
-    end
-
-    test "returns true for server error status codes" do
-      assert GoogleShared.retryable_error?(500, "")
-      assert GoogleShared.retryable_error?(502, "")
-      assert GoogleShared.retryable_error?(503, "")
-      assert GoogleShared.retryable_error?(504, "")
-    end
-
-    test "returns true for rate limit text" do
-      assert GoogleShared.retryable_error?(400, "Rate limit exceeded")
-      assert GoogleShared.retryable_error?(400, "Resource exhausted")
-    end
-
-    test "returns true for overloaded text" do
-      assert GoogleShared.retryable_error?(400, "Service overloaded")
-    end
-
-    test "returns false for client errors" do
-      refute GoogleShared.retryable_error?(400, "Bad request")
-      refute GoogleShared.retryable_error?(401, "Unauthorized")
-      refute GoogleShared.retryable_error?(404, "Not found")
-    end
-  end
-
-  describe "extract_error_message/1" do
-    test "extracts message from JSON error" do
-      json = ~s({"error": {"message": "Something went wrong"}})
-      assert GoogleShared.extract_error_message(json) == "Something went wrong"
-    end
-
-    test "returns original text for non-JSON" do
-      text = "Plain error message"
-      assert GoogleShared.extract_error_message(text) == text
-    end
-
-    test "returns original text for JSON without error message" do
-      json = ~s({"status": "error"})
-      assert GoogleShared.extract_error_message(json) == json
-    end
-  end
-
-  describe "normalize_http_error_body/1" do
+  describe "StreamTransport.error_body/1 with safe_http_error/4" do
     test "returns binary bodies unchanged" do
       body = ~s({"error":{"message":"Not found"}})
-      assert GoogleShared.normalize_http_error_body(body) == body
+      assert StreamTransport.error_body(body) == body
     end
 
     test "encodes map bodies as JSON" do
       body = %{"error" => %{"message" => "No access"}}
-      assert GoogleShared.normalize_http_error_body(body) == Jason.encode!(body)
+      assert StreamTransport.error_body(body) == Jason.encode!(body)
     end
 
     test "collects async chunks and closes the transport after completion" do
@@ -787,7 +643,7 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
       send(self(), {ref, {:data, "\"message\":\"Prompt is too long\"}}"}})
       send(self(), {ref, :done})
 
-      text = GoogleShared.normalize_http_error_body(async)
+      text = StreamTransport.error_body(async)
 
       assert %{status: 400, category: :context_length, retryable: false} =
                GoogleShared.safe_http_error(400, text)
@@ -801,7 +657,7 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
       ref = async.ref
       send(self(), :unrelated_message)
 
-      text = GoogleShared.normalize_http_error_body(async, 0)
+      text = StreamTransport.error_body(async, 0)
       assert byte_size(text) <= 16_384
       details = GoogleShared.safe_http_error(401, text)
       assert %{status: 401, category: :auth, retryable: false} = details
@@ -819,7 +675,7 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
       send(self(), {ref, {:data, "credential-that-must-not-be-collected"}})
       send(self(), {ref, :done})
 
-      text = GoogleShared.normalize_http_error_body(async)
+      text = StreamTransport.error_body(async)
       assert byte_size(text) <= 16_384
       refute text =~ "credential-that-must-not-be-collected"
       assert %{status: 400, category: :context_length} = GoogleShared.safe_http_error(400, text)
@@ -834,7 +690,7 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
       send(self(), {ref, {:error, %{credentials: "private-upstream-token"}}})
       send(self(), {ref, {:data, "private-upstream-token"}})
 
-      text = GoogleShared.normalize_http_error_body(async)
+      text = StreamTransport.error_body(async)
       details = GoogleShared.safe_http_error(400, text)
       assert %{status: 400, category: :client, retryable: false} = details
       refute Jason.encode!(details) =~ "private-upstream-token"
@@ -861,7 +717,7 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
       send(self(), {ref, {:data, "suffix-after-deadline"}})
       send(self(), {ref, :done})
 
-      text = GoogleShared.normalize_http_error_body(async, 50)
+      text = StreamTransport.error_body(async, 50)
       refute text =~ "suffix-after-deadline"
       assert %{status: 400, category: :context_length} = GoogleShared.safe_http_error(400, text)
       assert_receive {:transport_canceled, ^ref}
@@ -873,7 +729,7 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
         "Prompt is too long. " <>
           String.duplicate("x", 16_364) <> "🌍" <> String.duplicate("x", 32_768)
 
-      normalized = GoogleShared.normalize_http_error_body(text)
+      normalized = StreamTransport.error_body(text)
       assert byte_size(normalized) <= 16_384
       assert String.valid?(normalized)
 
@@ -883,7 +739,7 @@ defmodule LemonAi.Providers.GoogleSharedComprehensiveTest do
 
     test "unknown response structs never become public error details" do
       body = %Req.Response{body: "private-response-credential"}
-      normalized = GoogleShared.normalize_http_error_body(body)
+      normalized = StreamTransport.error_body(body)
       details = GoogleShared.safe_http_error(403, normalized)
       assert %{status: 403, category: :auth, retryable: false} = details
       assert byte_size(details.message) in 1..512

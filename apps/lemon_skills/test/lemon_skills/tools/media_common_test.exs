@@ -1,6 +1,8 @@
 defmodule LemonSkills.Tools.MediaCommonTest do
   use ExUnit.Case, async: true
 
+  alias LemonAgent.AbortSignal
+  alias LemonMedia.MediaJobs
   alias LemonSkills.Tools.MediaCommon
 
   @moduletag :tmp_dir
@@ -133,21 +135,50 @@ defmodule LemonSkills.Tools.MediaCommonTest do
              MediaCommon.artifact_path(%{}, tmp_dir, [output_guard: refuse], "png", "media")
   end
 
-  test "waits through progress and unrelated messages and returns completed jobs" do
-    job = %{job_id: "job-1", status: :completed}
-    send(self(), :unrelated)
-    send(self(), {:media_job, :running, %{job_id: "job-1"}})
-    send(self(), {:media_job, :completed, job})
-    assert MediaCommon.wait_for_job("job-1", 100, nil) == {:ok, job}
+  test "returns completed jobs and failed-job error kinds", %{tmp_dir: tmp_dir} do
+    opts = [dir: tmp_dir, runner: fn _attrs -> {:ok, %{}} end]
+    assert {:ok, %{status: :completed}} = MediaCommon.run_job(%{type: :image}, opts, 1_000, nil)
+
+    opts = [dir: tmp_dir, runner: fn _attrs -> {:error, :safe_failure} end]
+
+    assert MediaCommon.run_job(%{type: :image}, opts, 1_000, nil) ==
+             {:error, "media job failed: safe_failure"}
   end
 
-  test "reports failed and timed-out jobs" do
-    send(self(), {:media_job, :failed, %{job_id: "job-1", error_kind: "safe_failure"}})
+  test "100 unrelated media_jobs events do not extend the deadline", %{tmp_dir: tmp_dir} do
+    for n <- 1..100, do: send(self(), {:media_job, :running, %{job_id: "other-#{n}"}})
+    started = System.monotonic_time(:millisecond)
+    opts = [dir: tmp_dir, runner: fn _attrs -> Process.sleep(:infinity) end]
 
-    assert MediaCommon.wait_for_job("job-1", 100, nil) ==
-             {:error, "media job failed: safe_failure"}
+    assert {:error, message} =
+             MediaCommon.run_job(%{job_id: "slow-job", type: :image}, opts, 200, nil)
 
-    assert MediaCommon.wait_for_job("job-2", 0, nil) == {:error, "media job timed out after 0ms"}
+    assert System.monotonic_time(:millisecond) - started < 1_000
+
+    assert message ==
+             "media job slow-job timed out after 200ms and was cancelled; see media_status"
+
+    assert [%{job_id: "slow-job", status: :cancelled}] = MediaJobs.recent(dir: tmp_dir)
+    assert {:messages, messages} = Process.info(self(), :messages)
+    assert length(messages) == 100
+  end
+
+  test "abort cancels the running job", %{tmp_dir: tmp_dir} do
+    signal = AbortSignal.new()
+    parent = self()
+
+    runner = fn _attrs ->
+      send(parent, {:started, self()})
+      AbortSignal.abort(signal)
+      Process.sleep(:infinity)
+    end
+
+    assert {:error, "Operation aborted"} =
+             MediaCommon.run_job(%{type: :image}, [dir: tmp_dir, runner: runner], 5_000, signal)
+
+    assert_received {:started, pid}
+    refute Process.alive?(pid)
+    assert [%{status: :cancelled, error_kind: "aborted"}] = MediaJobs.recent(dir: tmp_dir)
   end
 
   test "explicit provider keys bypass credential resolution" do

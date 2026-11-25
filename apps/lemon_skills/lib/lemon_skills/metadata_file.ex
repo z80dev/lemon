@@ -16,6 +16,11 @@ defmodule LemonSkills.MetadataFile do
 
   @max_bytes 16 * 1_048_576
   @mode 0o600
+  # Every lock acquisition captures the VM's process identity (`ps`) and
+  # publishes an owner record, and waiters poll. A burst of concurrent writers
+  # in one VM (for example ten parallel installs on macOS) takes over a second
+  # to drain, so the wait bounds a stuck live holder, not ordinary contention.
+  @lock_wait_ms 10_000
 
   @doc "Reads `path` below `anchor`; a missing file or directory is `{:error, :enoent}`."
   @spec read(String.t(), String.t()) :: {:ok, binary()} | {:error, term()}
@@ -54,7 +59,8 @@ defmodule LemonSkills.MetadataFile do
 
   @doc """
   Runs `fun` holding the file lock of `path`; the lock directory is created
-  only after the parent chain below `anchor` is checked.
+  only after the parent chain below `anchor` is checked. Waits up to ten
+  seconds for a live holder, then returns `{:error, :lock_timeout}`.
   """
   @spec with_lock(String.t(), String.t(), (-> result)) :: result | {:error, term()}
         when result: term()
@@ -62,7 +68,7 @@ defmodule LemonSkills.MetadataFile do
     path = Path.expand(path)
 
     with :ok <- SkillRoot.ensure_dir(anchor, Path.dirname(path)) do
-      LemonCore.Service.Lock.with_lock_path(path <> ".lock", [timeout: 1_000], fun)
+      LemonCore.Service.Lock.with_lock_path(path <> ".lock", [timeout: @lock_wait_ms], fun)
     end
   end
 

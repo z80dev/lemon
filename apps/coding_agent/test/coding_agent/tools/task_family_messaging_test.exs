@@ -753,11 +753,14 @@ defmodule CodingAgent.Tools.TaskFamilyMessagingTest do
         prompt: "private task content"
       })
 
-    signal = AbortSignal.new()
-    :ok = Control.register(id, signal, nil, parent, fn _ -> :ok end, opts[:task_owner_pid])
+    :ok =
+      CodingAgent.TaskRuntimeHelpers.register(id, parent,
+        signal: AbortSignal.new(),
+        owner_pid: opts[:task_owner_pid]
+      )
 
     on_exit(fn ->
-      if Process.whereis(Control), do: Control.complete(id)
+      CodingAgent.TaskRuntimeHelpers.stop(id)
       TaskStore.delete_task(id)
     end)
 

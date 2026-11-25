@@ -22,7 +22,7 @@ silent permissions.
 | `lemon_control_plane` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_mcp`, `lemon_media`, `lemon_memory`, `lemon_omp`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_mcp`, `lemon_media`, `lemon_memory`, `lemon_omp`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_core` | *(none)* | *(none)* | *(none)* |
 | `lemon_evals` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* |
-| `lemon_gateway` | `lemon_agent`, `lemon_core` | `lemon_agent`, `lemon_core` | `lemon_ai` |
+| `lemon_gateway` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_ai` |
 | `lemon_honcho` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_platform_test` | *(none)* |
 | `lemon_lsp` | `lemon_core` | `lemon_core` | *(none)* |
 | `lemon_mcp` | `lemon_core`, `lemon_skills` | `lemon_core`, `lemon_skills` | *(none)* |
@@ -35,22 +35,60 @@ silent permissions.
 | `lemon_web` | `lemon_agent`, `lemon_automation`, `lemon_control_plane`, `lemon_core`, `lemon_memory`, `lemon_router` | `lemon_agent`, `lemon_automation`, `lemon_control_plane`, `lemon_core`, `lemon_memory`, `lemon_router` | *(none)* |
 <!-- architecture_policy:end -->
 
+## Package Map
+
+Every umbrella app, its version in `mix.exs`, and whether it is in the Hex
+publish set (its `project/0` declares `package:` metadata). The publish set must
+equal the `PACKAGES` list in `scripts/verify_packages`, which
+`scripts/release_package` publishes from; `mix lemon.quality` fails when they
+differ. In-repo versions are not publication claims: which versions are on Hex
+is in [package status](platform-split.md). Apps outside the publish set ship
+only inside the product releases.
+
+<!-- package_map:start -->
+| App | Version in `mix.exs` | Hex publish set |
+| --- | --- | --- |
+| `coding_agent` | 0.1.0 | no |
+| `lemon_agent` | 0.3.0 | yes |
+| `lemon_ai` | 0.3.0 | yes |
+| `lemon_automation` | 0.1.0 | no |
+| `lemon_browser` | 0.1.0 | no |
+| `lemon_channels` | 0.1.0 | no |
+| `lemon_cli` | 0.1.0 | no |
+| `lemon_computer_use` | 0.1.0 | no |
+| `lemon_control_plane` | 0.1.0 | no |
+| `lemon_core` | 0.3.0 | yes |
+| `lemon_evals` | 0.1.0 | no |
+| `lemon_gateway` | 0.1.0 | no |
+| `lemon_honcho` | 0.1.0 | no |
+| `lemon_lsp` | 0.1.0 | no |
+| `lemon_mcp` | 0.1.0 | no |
+| `lemon_media` | 0.1.0 | no |
+| `lemon_memory` | 0.2.0 | yes |
+| `lemon_omp` | 0.1.0 | no |
+| `lemon_platform_test` | 0.2.0 | yes |
+| `lemon_router` | 0.1.0 | no |
+| `lemon_skills` | 0.1.0 | no |
+| `lemon_web` | 0.1.0 | no |
+<!-- package_map:end -->
+
 ## Enforcement
 
 Run:
 
 ```bash
 mix lemon.quality          # also part of `scripts/test quality`
-mix lemon.architecture.docs          # regenerate the policy table above
-mix lemon.architecture.docs --check  # fail if the table is stale
+mix lemon.architecture.docs          # regenerate the generated tables above
+mix lemon.architecture.docs --check  # fail if a table is stale
 ```
 
 The policy lives in `LemonCore.Quality.ArchitecturePolicy`
-(`apps/lemon_core/lib/lemon_core/quality/architecture_policy.ex`); the table
-between the `architecture_policy` markers is generated from it and must not be
-edited by hand. `mix lemon.quality` runs the docs link check (local Markdown
-links in `docs/**/*.md` must resolve), the generated-table freshness check, the
-architecture check and the duplicate test-module guard.
+(`apps/lemon_core/lib/lemon_core/quality/architecture_policy.ex`); the tables
+between the `architecture_policy` and `package_map` markers are generated from
+it and from `apps/*/mix.exs`, and must not be edited by hand. `mix lemon.quality`
+runs the docs link check (local Markdown links in `docs/**/*.md` must resolve),
+the generated-table freshness and publish-set checks, the architecture check and
+the duplicate test-module guard.
 
 The architecture checker enforces all of the following:
 
@@ -145,7 +183,7 @@ These rules complement the dependency policy table above. They must be respected
 | Durable memory documents, scoped search/recall, context scopes and lifecycle | `lemon_memory` | `lemon_core` (generic Store only), any other app |
 | Browser capability driver | `lemon_browser` | `lemon_core`, `coding_agent`, `lemon_control_plane` |
 | Agent runtime and channel supervision capability contracts/registries | `lemon_core` | Consumer apps (provider implementations remain in their owning products) |
-| Media job driver | `lemon_media` | `lemon_core`, `lemon_skills`, `lemon_router`, `lemon_control_plane` |
+| Media job driver and media provider drivers (OpenAI, Google, ElevenLabs and Deepgram HTTP clients, Google service-account token cache) | `lemon_media` | `lemon_core`, `lemon_skills`, `lemon_channels`, `lemon_gateway`, `lemon_router`, `lemon_control_plane` |
 | LSP server driver | `lemon_lsp` | `lemon_core`, `coding_agent`, `lemon_control_plane` |
 | Debug adapter (DAP) client | `coding_agent` | `lemon_core`, `lemon_control_plane` |
 | omp delegate driver (RPC protocol, session processes, discovery, `omp` tool) | `lemon_omp` | `lemon_core`, `coding_agent`, `lemon_gateway`, `lemon_control_plane` |

@@ -11,7 +11,7 @@ defmodule CodingAgent.Tools.Task.Messaging do
   """
 
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Control, Params, Result}
+  alias CodingAgent.Tools.Task.{Control, InvocationAuthority, Result}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -179,7 +179,7 @@ defmodule CodingAgent.Tools.Task.Messaging do
   defp named_target?(_), do: false
 
   defp named_roster(opts) do
-    with {:ok, source_id, _source} <- Params.named_messaging_source(opts),
+    with {:ok, source_id, _source} <- InvocationAuthority.named_messaging_source(opts),
          {:ok, agents} when is_list(agents) <- AgentMessaging.list("operator") do
       agents = Enum.map(agents, &public_identity/1)
       details = %{source_id: source_id, agents: agents}
@@ -191,7 +191,7 @@ defmodule CodingAgent.Tools.Task.Messaging do
   end
 
   defp rename_current(params, opts) do
-    with {:ok, source_id, _source} <- Params.named_messaging_source(opts),
+    with {:ok, source_id, _source} <- InvocationAuthority.named_messaging_source(opts),
          {:ok, name} <- Map.fetch(params, "name"),
          {:ok, normalized} <- normalize_name(name),
          {:ok, %{id: ^source_id, name: ^normalized} = entry} <-
@@ -230,7 +230,7 @@ defmodule CodingAgent.Tools.Task.Messaging do
   defp normalize_name(_), do: {:error, :invalid_name}
 
   defp named_send(call_id, target, text, opts) do
-    with {:ok, source_id, source} <- Params.named_messaging_source(opts),
+    with {:ok, source_id, source} <- InvocationAuthority.named_messaging_source(opts),
          {:ok, run_id} <- source_turn(source),
          true <- is_binary(call_id) and call_id != "",
          :ok <- validate_text(text) do
@@ -271,7 +271,7 @@ defmodule CodingAgent.Tools.Task.Messaging do
   defp validate_text(_), do: {:error, :invalid_message}
 
   defp message_status(message_id, opts) do
-    with {:ok, source_id, _source} <- Params.named_messaging_source(opts),
+    with {:ok, source_id, _source} <- InvocationAuthority.named_messaging_source(opts),
          true <- is_binary(message_id) and message_id != "" do
       case AgentMessaging.get("operator", source_id, message_id) do
         {:ok, receipt} -> receipt_result(receipt, source_id, message_id)

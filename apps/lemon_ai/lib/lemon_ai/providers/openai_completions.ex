@@ -71,12 +71,11 @@ defmodule LemonAi.Providers.OpenAICompletions do
     OpenAIResponsesShared,
     OpenCodeGoSession,
     RequestHeaders,
-    StreamingHelper
+    StreamingHelper,
+    StreamTransport
   }
 
   alias LemonAi.Retry
-
-  require Logger
 
   @fallback_tool_name "unknown_tool"
 
@@ -120,16 +119,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
       output =
         stream
-        |> stream_request_with_retries(
-          output,
-          url,
-          headers,
-          params,
-          LemonAi.Provider.retry_policy(opts),
-          0,
-          opts,
-          metadata
-        )
+        |> stream_request_with_retries(output, url, headers, params, opts, metadata)
         |> with_cost(model)
 
       if output.stop_reason in [:error, :aborted] do
@@ -1033,126 +1023,65 @@ defmodule LemonAi.Providers.OpenAICompletions do
   # HTTP Streaming
   # ============================================================================
 
-  defp stream_request_with_retries(
-         stream,
-         initial_output,
-         url,
-         headers,
-         params,
-         policy,
-         attempt,
-         opts,
-         metadata
-       ) do
-    retry = fn ->
-      stream_request_with_retries(
-        stream,
-        initial_output,
-        url,
-        headers,
-        params,
-        policy,
-        attempt + 1,
-        opts,
-        metadata
+  # One `LemonAi.Retry` budget covers both pre-body HTTP failures and streams
+  # that failed before committing any output; a stream that emitted output is
+  # never replayed.
+  defp stream_request_with_retries(stream, initial_output, url, headers, params, opts, metadata) do
+    policy = LemonAi.Provider.retry_policy(opts)
+
+    transport_opts = [
+      provider: initial_output.provider,
+      idle_timeout: StreamTransport.idle_timeout_for(opts.stream_idle_timeout)
+    ]
+
+    result =
+      Retry.run(
+        fn _attempt ->
+          case StreamTransport.post_sse(
+                 url,
+                 headers,
+                 params,
+                 %{policy | max_attempts: 1},
+                 transport_opts
+               ) do
+            {:ok, events} -> {:streamed, consume_sse_events(stream, initial_output, events)}
+            {:error, details, retry_after_ms} -> {:error, details, retry_after_ms}
+          end
+        end,
+        policy
+        |> Map.from_struct()
+        |> Map.merge(%{
+          failure: &stream_attempt_failure/1,
+          retryable?: &(LemonAi.Error.retryable?(&1) and not Retry.rotate_rate_limit?(policy, &1))
+        })
       )
-    end
 
-    case stream_request(url, headers, params) do
-      {:ok, response} ->
-        cond do
-          response.status in 200..299 ->
-            {output, committed, raw_usage} = process_sse_stream(stream, initial_output, response)
+    case result do
+      {:streamed, %{output: output, raw_usage: raw_usage}} ->
+        if is_map(raw_usage) and is_function(opts.on_usage, 2),
+          do: opts.on_usage.(raw_usage, metadata)
 
-            retry_delay =
-              if Retry.retry_allowed?(attempt, policy) and not committed and
-                   retryable_stream_output_error?(output) do
-                http_retry_delay_ms(attempt, policy, output.error_message, %{})
-              else
-                :give_up
-              end
+        output
 
-            case retry_delay do
-              :give_up ->
-                if is_map(raw_usage) and is_function(opts.on_usage, 2),
-                  do: opts.on_usage.(raw_usage, metadata)
-
-                output
-
-              delay_ms ->
-                LemonAi.Provider.retry_sleep(delay_ms, policy)
-                retry.()
-            end
-
-          true ->
-            error_body = materialize_response_body(response)
-
-            retry_delay =
-              if not Retry.rotate_rate_limit?(
-                   policy,
-                   {:http_error, response.status, error_body}
-                 ) and
-                   Retry.retry_allowed?(attempt, policy) and
-                   LemonAi.Error.retryable_http_error?(response.status, error_body) do
-                http_retry_delay_ms(
-                  attempt,
-                  policy,
-                  error_body,
-                  response.headers,
-                  response.status
-                )
-              else
-                :give_up
-              end
-
-            case retry_delay do
-              :give_up ->
-                error =
-                  LemonAi.Error.parse_http_error(
-                    response.status,
-                    error_body,
-                    response.headers,
-                    initial_output.provider
-                  )
-
-                %{
-                  initial_output
-                  | stop_reason: :error,
-                    error_message: error.message,
-                    retry_after_ms: Retry.retry_after_ms(response.headers)
-                }
-
-              delay_ms ->
-                LemonAi.Provider.retry_sleep(delay_ms, policy)
-                retry.()
-            end
-        end
-
-      {:error, %Req.TransportError{reason: reason} = error} ->
-        if Retry.retry_allowed?(attempt, policy) and
-             LemonAi.Error.retryable_transport_error?(error) do
-          LemonAi.Provider.retry_sleep(Retry.backoff_delay_ms(attempt, policy), policy)
-          retry.()
-        else
-          Logger.warning("Provider transport failed: #{inspect(reason)}")
-
-          %{
-            initial_output
-            | stop_reason: :error,
-              error_message: LemonAi.Error.format_error(reason, initial_output.provider)
-          }
-        end
-
-      {:error, error} ->
-        Logger.warning("Provider request failed: #{inspect(error)}")
-
+      {:error, details, retry_after_ms} ->
         %{
           initial_output
           | stop_reason: :error,
-            error_message: LemonAi.Error.format_error(error, initial_output.provider)
+            error_message: details.message,
+            error_details: details,
+            retry_after_ms: retry_after_ms
         }
     end
   end
+
+  defp stream_attempt_failure({:streamed, %{committed?: false, output: output}})
+       when output.stop_reason == :error and output.content in [nil, []],
+       do: {:failed, output}
+
+  defp stream_attempt_failure({:streamed, _state}), do: :success
+
+  defp stream_attempt_failure({:error, details, retry_after_ms}),
+    do: {:failed, Map.put(details, :retry_after_ms, retry_after_ms)}
 
   defp with_cost(%AssistantMessage{usage: %Usage{} = usage} = output, model) do
     %{output | usage: %{usage | cost: LemonAi.calculate_cost(model, usage)}}
@@ -1160,170 +1089,58 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   defp with_cost(output, _model), do: output
 
-  defp stream_request(url, headers, params) do
-    Req.new(
-      method: :post,
-      url: url,
-      headers: headers,
-      json: params,
-      retry: false,
-      receive_timeout: 120_000,
-      into: :self
-    )
-    |> Req.request()
-  end
-
-  defp process_sse_stream(stream, output, response) do
-    {pid, ref} = extract_stream_ref(response)
-
+  # `finish_reason` or `[DONE]` is the terminal event. A stream that ends,
+  # errors or idles out before it fails, so a truncated tool call is never
+  # delivered as a completed one.
+  defp consume_sse_events(stream, output, events) do
     state = %{
       output: output,
       current_block: nil,
-      buffer: "",
       committed?: false,
       raw_usage: nil,
-      tool_call_blocks: %{}
+      tool_call_blocks: %{},
+      terminal?: false
     }
 
-    state = receive_sse_chunks(stream, state, pid, ref)
-
     state =
-      state
-      |> finalize_current_block(stream)
-      |> finalize_tool_call_blocks(stream)
+      Enum.reduce_while(events, state, fn
+        :done, state ->
+          {:halt, %{state | terminal?: true}}
 
-    {state.output, state.committed?, state.raw_usage}
-  end
+        {:stream_error, details}, %{terminal?: false} = state ->
+          {:halt, fail_stream(state, details)}
 
-  defp materialize_response_body(%Req.Response{body: %Req.Response.Async{}} = response) do
-    {pid, ref} = extract_stream_ref(response)
-    receive_response_body(pid, ref, [])
-  end
+        {:stream_error, _details}, state ->
+          {:halt, state}
 
-  defp materialize_response_body(%Req.Response{body: body}), do: body
+        %{} = data, state ->
+          {:cont, process_event_data(stream, state, data)}
+      end)
 
-  defp receive_response_body(pid, ref, chunks) do
-    receive do
-      {^ref, {:data, chunk}} ->
-        receive_response_body(pid, ref, [chunk | chunks])
+    state = finalize_current_block(state, stream)
 
-      {^ref, :done} ->
-        chunks
-        |> Enum.reverse()
-        |> IO.iodata_to_binary()
-
-      {:DOWN, ^ref, :process, ^pid, reason} ->
-        case chunks do
-          [] -> "Response body stream ended unexpectedly: #{inspect(reason)}"
-          _ -> chunks |> Enum.reverse() |> IO.iodata_to_binary()
-        end
-    after
-      5_000 ->
-        case chunks do
-          [] -> "Response body stream timed out"
-          _ -> chunks |> Enum.reverse() |> IO.iodata_to_binary()
-        end
-    end
-  end
-
-  defp extract_stream_ref(%Req.Response{body: %Req.Response.Async{pid: pid, ref: ref}})
-       when is_pid(pid) and not is_nil(ref),
-       do: {pid, ref}
-
-  defp extract_stream_ref(%Req.Response{} = response) do
-    raise "Stream response missing pid/ref: #{inspect(response)}"
-  end
-
-  defp receive_sse_chunks(stream, state, pid, ref) do
-    receive do
-      {^ref, {:data, chunk}} ->
-        state = process_chunk(stream, state, chunk)
-        receive_sse_chunks(stream, state, pid, ref)
-
-      {^ref, :done} ->
+    cond do
+      state.output.stop_reason == :error ->
         state
 
-      {:DOWN, ^ref, :process, ^pid, reason} ->
-        if reason != :normal do
-          %{
-            state
-            | output: %{
-                state.output
-                | stop_reason: :error,
-                  error_message: "Stream ended unexpectedly: #{inspect(reason)}",
-                  error_details: LemonAi.Error.to_error_details(reason)
-              }
-          }
-        else
-          state
-        end
-    after
-      120_000 ->
-        %{
-          state
-          | output: %{
-              state.output
-              | stop_reason: :error,
-                error_message: "Stream timeout",
-                error_details: LemonAi.Error.to_error_details(:timeout)
-            }
-        }
+      state.terminal? ->
+        finalize_tool_call_blocks(state, stream)
+
+      true ->
+        fail_stream(state, StreamTransport.truncated(output.provider))
     end
   end
 
-  defp process_chunk(stream, state, chunk) do
-    # Combine with buffer and split on newlines
-    data = state.buffer <> chunk
-    lines = String.split(data, "\n")
+  defp fail_stream(state, details) do
+    output = %{
+      state.output
+      | stop_reason: :error,
+        error_message: details.message,
+        error_details: details
+    }
 
-    # Last element might be incomplete
-    {complete_lines, incomplete} =
-      if String.ends_with?(data, "\n") do
-        {lines, [""]}
-      else
-        Enum.split(lines, -1)
-      end
-
-    state = %{state | buffer: List.first(incomplete) || ""}
-
-    # Process complete lines
-    Enum.reduce(complete_lines, state, fn line, acc ->
-      process_sse_line(stream, acc, line)
-    end)
+    %{state | output: output}
   end
-
-  defp process_sse_line(_stream, state, ""), do: state
-  defp process_sse_line(_stream, state, ":" <> _comment), do: state
-
-  defp process_sse_line(stream, state, "data: [DONE]") do
-    state
-    |> finalize_current_block(stream)
-    |> finalize_tool_call_blocks(stream)
-  end
-
-  defp process_sse_line(stream, state, "data: " <> json_data) do
-    case Jason.decode(json_data) do
-      {:ok, data} ->
-        process_event_data(stream, state, data)
-
-      {:error, _} ->
-        Logger.warning("Failed to parse SSE JSON: #{json_data}")
-        state
-    end
-  end
-
-  defp process_sse_line(_stream, state, _line), do: state
-
-  # Shared timing preserves structured body hints and throttle backoff.
-  defp http_retry_delay_ms(attempt, policy, error_body, headers, status \\ 0) do
-    error = LemonAi.Error.parse_http_error(status, error_body, headers)
-    Retry.http_retry_delay_ms(attempt, headers, policy, error)
-  end
-
-  defp retryable_stream_output_error?(%AssistantMessage{stop_reason: :error} = output),
-    do: output.content in [nil, []] and LemonAi.Error.retryable?(output)
-
-  defp retryable_stream_output_error?(_), do: false
 
   # OpenAI-compatible routers (OpenRouter, the omp auth gateway) report an
   # upstream failure after the response started as a `{"error": ...}` chunk.
@@ -1376,7 +1193,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
     state =
       if choice["finish_reason"] do
         stop_reason = map_stop_reason(choice["finish_reason"])
-        %{state | output: %{state.output | stop_reason: stop_reason}}
+        %{state | output: %{state.output | stop_reason: stop_reason}, terminal?: true}
       else
         state
       end

@@ -5,14 +5,22 @@ defmodule LemonAi.Providers.GoogleShared do
   This module handles:
   - Content conversion to Gemini format
   - Tool declaration formatting
+  - The shared response stream loop (`stream_response/5`)
   - Stop reason mapping
   - Thought signature validation
   - Unicode sanitization
   """
 
+  alias LemonAi.EventStream
+  alias LemonAi.Providers.StreamTransport
+
+  import LemonAi.Providers.AssistantMessageHelper,
+    only: [error_assistant_message: 2, error_assistant_message: 3]
+
   alias LemonAi.Types.{
     AssistantMessage,
     Context,
+    Cost,
     ImageContent,
     Model,
     StreamOptions,
@@ -21,6 +29,7 @@ defmodule LemonAi.Providers.GoogleShared do
     Tool,
     ToolCall,
     ToolResultMessage,
+    Usage,
     UserMessage
   }
 
@@ -460,33 +469,282 @@ defmodule LemonAi.Providers.GoogleShared do
   def sanitize_surrogates(text), do: to_string(text)
 
   # ============================================================================
-  # SSE Helpers
+  # Response Streaming
   # ============================================================================
 
-  @doc false
-  @spec normalize_sse_message(term()) :: {:data, binary()} | :done | :down | :ignore
-  def normalize_sse_message(message) do
-    case message do
-      {:data, data} when is_binary(data) ->
-        {:data, data}
+  @doc """
+  Streams a Gemini `streamGenerateContent?alt=sse` response into `stream`.
 
-      {_, {:data, data}} when is_binary(data) ->
-        {:data, data}
+  `result` is a `LemonAi.Providers.StreamTransport.post_sse/5` result, so events
+  split across transport frames are decoded once complete. The Generative AI,
+  Vertex and Cloud Code Assist providers share this one loop:
 
-      {:done, _} ->
-        :done
+    * `:start` is emitted with the first content part; a response that fails
+      before producing content is reported without one.
+    * A candidate `finishReason` or a `promptFeedback.blockReason` is the
+      terminal event. A stream that ends, fails, idles out or sends a malformed
+      event before it errors with classified transient details. A finish reason
+      other than `STOP`/`MAX_TOKENS`, or a blocked prompt, errors with that
+      reason. Only a terminal stop completes, as `:tool_use` when it contains a
+      function call.
 
-      {_, :done} ->
-        :done
+  Options: `:unwrap_response` maps each event to its `GenerateContentResponse`
+  (Cloud Code Assist wraps it in `response`), `:adjust_usage` adjusts the mapped
+  `Usage` before costing, and `:empty_response_error` fails a completed response
+  without content with that transient message.
+  """
+  @spec stream_response(
+          EventStream.t(),
+          AssistantMessage.t(),
+          Model.t(),
+          StreamTransport.result(),
+          keyword()
+        ) :: :ok
+  def stream_response(stream, output, model, result, opts \\ [])
 
-      {_, {:done, _}} ->
-        :done
+  def stream_response(stream, output, model, {:ok, events}, opts) do
+    state = %{
+      stream: stream,
+      model: model,
+      opts: opts,
+      output: output,
+      current_block: nil,
+      tool_call_counter: 0,
+      started?: false,
+      terminal?: false,
+      failure: nil
+    }
 
-      {:DOWN, _ref, :process, _pid, _reason} ->
-        :down
+    events
+    |> receive_sse_events(state)
+    |> close_current_block()
+    |> finish_stream()
+  end
 
-      _ ->
-        :ignore
+  def stream_response(stream, output, _model, {:error, details, retry_after_ms}, _opts),
+    do: EventStream.error(stream, error_assistant_message(output, details, retry_after_ms))
+
+  defp receive_sse_events(events, state) do
+    unwrap = Keyword.get(state.opts, :unwrap_response, & &1)
+
+    Enum.reduce_while(events, state, fn
+      %{} = event, state -> {:cont, process_response(state, unwrap.(event))}
+      :done, state -> {:cont, state}
+      {:stream_error, details}, state -> {:halt, %{state | failure: details}}
+    end)
+  end
+
+  defp process_response(state, %{} = response) do
+    candidate = get_in(response, ["candidates", Access.at(0)])
+
+    state =
+      case candidate do
+        %{"content" => %{"parts" => parts}} when is_list(parts) ->
+          Enum.reduce(parts, state, &process_part(&2, &1))
+
+        _ ->
+          state
+      end
+
+    state
+    |> put_finish_reason(candidate)
+    |> put_block_reason(response)
+    |> put_usage(response["usageMetadata"])
+  end
+
+  defp process_response(state, _response), do: state
+
+  defp put_finish_reason(state, %{"finishReason" => reason}) when is_binary(reason) do
+    output =
+      case map_stop_reason(reason) do
+        :error ->
+          %{state.output | stop_reason: :error, error_message: "Gemini stopped: #{reason}"}
+
+        stop_reason ->
+          %{state.output | stop_reason: stop_reason}
+      end
+
+    %{state | output: output, terminal?: true}
+  end
+
+  defp put_finish_reason(state, _candidate), do: state
+
+  defp put_block_reason(state, %{"promptFeedback" => %{"blockReason" => reason}})
+       when is_binary(reason) do
+    output = %{
+      state.output
+      | stop_reason: :error,
+        error_message: "Gemini blocked the prompt: #{reason}"
+    }
+
+    %{state | output: output, terminal?: true}
+  end
+
+  defp put_block_reason(state, _response), do: state
+
+  defp put_usage(state, %{} = usage) do
+    usage = %Usage{
+      input: usage["promptTokenCount"] || 0,
+      output: (usage["candidatesTokenCount"] || 0) + (usage["thoughtsTokenCount"] || 0),
+      cache_read: usage["cachedContentTokenCount"] || 0,
+      cache_write: 0,
+      total_tokens: usage["totalTokenCount"] || 0,
+      cost: %Cost{}
+    }
+
+    usage = Keyword.get(state.opts, :adjust_usage, & &1).(usage)
+    usage = %{usage | cost: LemonAi.calculate_cost(state.model, usage)}
+    %{state | output: %{state.output | usage: usage}}
+  end
+
+  defp put_usage(state, _usage), do: state
+
+  defp process_part(state, %{"text" => _} = part),
+    do: state |> ensure_started() |> process_text_part(part)
+
+  defp process_part(state, %{"functionCall" => _} = part),
+    do: state |> ensure_started() |> process_function_call_part(part)
+
+  defp process_part(state, _part), do: state
+
+  defp ensure_started(%{started?: true} = state), do: state
+
+  defp ensure_started(state) do
+    EventStream.push_async(state.stream, {:start, state.output})
+    %{state | started?: true}
+  end
+
+  defp process_text_part(state, part) do
+    text = part["text"]
+    thinking? = thinking_part?(part)
+    stream = state.stream
+
+    state =
+      case {state.current_block, thinking?} do
+        {%ThinkingContent{}, true} -> state
+        {%TextContent{}, false} -> state
+        {_current, true} -> state |> close_current_block() |> open_block(%ThinkingContent{})
+        {_current, false} -> state |> close_current_block() |> open_block(%TextContent{})
+      end
+
+    idx = length(state.output.content) - 1
+    signature = part["thoughtSignature"]
+
+    {block, event} =
+      case state.current_block do
+        %ThinkingContent{} = block ->
+          {%{
+             block
+             | thinking: block.thinking <> text,
+               thinking_signature: retain_thought_signature(block.thinking_signature, signature)
+           }, :thinking_delta}
+
+        %TextContent{} = block ->
+          {%{
+             block
+             | text: block.text <> text,
+               text_signature: retain_thought_signature(block.text_signature, signature)
+           }, :text_delta}
+      end
+
+    EventStream.push_async(stream, {event, idx, text})
+    content = List.replace_at(state.output.content, idx, block)
+    %{state | output: %{state.output | content: content}, current_block: block}
+  end
+
+  defp open_block(state, block) do
+    output = %{state.output | content: state.output.content ++ [block]}
+    idx = length(output.content) - 1
+
+    event =
+      case block do
+        %ThinkingContent{} -> {:thinking_start, idx}
+        %TextContent{} -> {:text_start, idx}
+      end
+
+    EventStream.push_async(state.stream, event)
+    %{state | output: output, current_block: block}
+  end
+
+  defp close_current_block(%{current_block: %TextContent{} = block} = state) do
+    idx = length(state.output.content) - 1
+    EventStream.push_async(state.stream, {:text_end, idx, block.text})
+    %{state | current_block: nil}
+  end
+
+  defp close_current_block(%{current_block: %ThinkingContent{} = block} = state) do
+    idx = length(state.output.content) - 1
+    EventStream.push_async(state.stream, {:thinking_end, idx, block.thinking})
+    %{state | current_block: nil}
+  end
+
+  defp close_current_block(state), do: state
+
+  defp process_function_call_part(state, part) do
+    state = close_current_block(state)
+    func_call = part["functionCall"]
+    provided_id = func_call["id"]
+
+    needs_new_id =
+      is_nil(provided_id) or
+        Enum.any?(state.output.content, fn
+          %ToolCall{id: id} -> id == provided_id
+          _ -> false
+        end)
+
+    tool_call_id =
+      if needs_new_id do
+        counter = state.tool_call_counter + 1
+        "#{func_call["name"]}_#{System.system_time(:millisecond)}_#{counter}"
+      else
+        provided_id
+      end
+
+    tool_call = %ToolCall{
+      type: :tool_call,
+      id: tool_call_id,
+      name: func_call["name"] || "",
+      arguments: func_call["args"] || %{},
+      thought_signature: part["thoughtSignature"]
+    }
+
+    output = %{state.output | content: state.output.content ++ [tool_call]}
+    idx = length(output.content) - 1
+    stream = state.stream
+
+    EventStream.push_async(stream, {:tool_call_start, idx, %{tool_call | arguments: %{}}})
+    EventStream.push_async(stream, {:tool_call_delta, idx, Jason.encode!(tool_call.arguments)})
+    EventStream.push_async(stream, {:tool_call_end, idx, tool_call})
+
+    %{state | output: output, tool_call_counter: state.tool_call_counter + 1}
+  end
+
+  defp finish_stream(%{stream: stream, output: output} = state) do
+    cond do
+      not state.terminal? ->
+        failure = state.failure || StreamTransport.truncated(output.provider)
+        EventStream.error(stream, error_assistant_message(output, failure))
+
+      output.stop_reason == :error ->
+        EventStream.error(stream, error_assistant_message(output, output.error_message))
+
+      output.content == [] and is_binary(state.opts[:empty_response_error]) ->
+        details = %{
+          LemonAi.Error.to_error_details(:closed)
+          | message: state.opts[:empty_response_error]
+        }
+
+        EventStream.error(stream, error_assistant_message(output, details))
+
+      true ->
+        _ = ensure_started(state)
+
+        output =
+          if Enum.any?(output.content, &match?(%ToolCall{}, &1)),
+            do: %{output | stop_reason: :tool_use},
+            else: output
+
+        EventStream.complete(stream, output)
     end
   end
 
@@ -585,145 +843,15 @@ defmodule LemonAi.Providers.GoogleShared do
   def clamp_reasoning(_), do: nil
 
   # ============================================================================
-  # Retry Helpers
+  # HTTP Error Classification
   # ============================================================================
-
-  @doc """
-  Extract retry delay from error response (in milliseconds).
-  Parses patterns like:
-  - "Your quota will reset after 39s"
-  - "Your quota will reset after 18h31m10s"
-  - "Please retry in Xs" or "Please retry in Xms"
-  - "retryDelay": "34.074824224s" (JSON field)
-  """
-  @spec extract_retry_delay(String.t(), map()) :: non_neg_integer() | nil
-  def extract_retry_delay(error_text, headers \\ %{}) do
-    LemonAi.Retry.extract_retry_delay_ms(error_text, headers)
-  end
-
-  @doc """
-  Check if an error is retryable (rate limit, server error, network error, etc.)
-  """
-  @spec retryable_error?(non_neg_integer(), String.t()) :: boolean()
-  def retryable_error?(status, error_text) do
-    LemonAi.Error.retryable_http_error?(status, error_text)
-  end
-
-  @doc """
-  Extract a clean, user-friendly error message from Google API error response.
-  """
-  @spec extract_error_message(String.t()) :: String.t()
-  def extract_error_message(error_text) do
-    case Jason.decode(error_text) do
-      {:ok, %{"error" => %{"message" => message}}} when is_binary(message) -> message
-      _ -> error_text
-    end
-  end
-
-  @max_http_error_body_bytes 16_384
-
-  @doc """
-  Collect a bounded HTTP error body for classification, not public display.
-
-  Async bodies are limited to 16 KiB and a total elapsed deadline (one second by
-  default). The transport is canceled and its queued messages cleaned up before
-  returning, including on completion, timeout or transport failure. Unknown body
-  terms are never inspected.
-  """
-  @spec normalize_http_error_body(term()) :: String.t()
-  def normalize_http_error_body(body), do: normalize_http_error_body(body, 1_000)
-
-  @spec normalize_http_error_body(term(), non_neg_integer()) :: String.t()
-  def normalize_http_error_body(body, _timeout_ms) when is_binary(body) do
-    body
-    |> binary_part(0, min(byte_size(body), @max_http_error_body_bytes))
-    |> :binary.copy()
-    |> error_body_utf8()
-  end
-
-  def normalize_http_error_body(%Req.Response.Async{} = async, timeout_ms)
-      when is_integer(timeout_ms) and timeout_ms >= 0 do
-    response = %Req.Response{body: async}
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-
-    try do
-      collect_async_error_body(response, [], 0, deadline)
-      |> Enum.reverse()
-      |> IO.iodata_to_binary()
-      |> error_body_utf8()
-    after
-      Req.cancel_async_response(response)
-    end
-  end
-
-  def normalize_http_error_body(%_{} = _body, _timeout_ms), do: ""
-
-  def normalize_http_error_body(body, timeout_ms) when is_map(body) do
-    case Jason.encode(body) do
-      {:ok, text} -> normalize_http_error_body(text, timeout_ms)
-      {:error, _} -> ""
-    end
-  end
-
-  def normalize_http_error_body(_body, _timeout_ms), do: ""
-
-  # Discard incomplete/invalid suffixes rather than growing the byte-limited
-  # body with replacement characters, or passing invalid UTF-8 to classifiers.
-  defp error_body_utf8(text) do
-    case :unicode.characters_to_binary(text, :utf8, :utf8) do
-      {:error, valid, _} -> valid
-      {:incomplete, valid, _} -> valid
-      valid when is_binary(valid) -> valid
-    end
-  end
-
-  defp collect_async_error_body(_response, chunks, size, _deadline)
-       when size >= @max_http_error_body_bytes,
-       do: chunks
-
-  defp collect_async_error_body(
-         %Req.Response{body: %Req.Response.Async{ref: ref, pid: pid}} = response,
-         chunks,
-         size,
-         deadline
-       ) do
-    remaining = deadline - System.monotonic_time(:millisecond)
-
-    if remaining <= 0 do
-      chunks
-    else
-      receive do
-        {^ref, _} = message ->
-          case Req.parse_message(response, message) do
-            {:ok, [data: chunk]} when is_binary(chunk) ->
-              length = min(byte_size(chunk), @max_http_error_body_bytes - size)
-              chunk = binary_part(chunk, 0, length)
-              collect_async_error_body(response, [chunk | chunks], size + length, deadline)
-
-            {:ok, [:done]} ->
-              chunks
-
-            {:error, _} ->
-              chunks
-
-            _ ->
-              collect_async_error_body(response, chunks, size, deadline)
-          end
-
-        {:DOWN, ^ref, :process, ^pid, _reason} ->
-          chunks
-      after
-        remaining -> chunks
-      end
-    end
-  end
 
   @doc """
   Classify a collected HTTP error without exposing untrusted upstream text.
 
   Keeps typed status, category, retryability and retry metadata. Public errors
   contain only bounded actionable summaries, never response bodies, credentials
-  or transport structs. Pass a normalized body from `normalize_http_error_body/1`.
+  or transport structs. Pass a body bounded by `LemonAi.Providers.StreamTransport.error_body/1`.
   """
   @spec safe_http_error(
           non_neg_integer(),

@@ -527,10 +527,10 @@ defmodule LemonAutomation.Blueprint do
              {:ok, schedule} <- normalize_schedule(raw["schedule"]),
              {:ok, enabled} <- optional_boolean(raw, "enabled", false),
              {:ok, timezone} <- utc_timezone(raw["timezone"]),
-             {:ok, jitter} <- bounded_integer(raw, "jitterSec", 0, 0, 86_400),
-             {:ok, timeout} <- bounded_integer(raw, "timeoutMs", 300_000, 1_000, 3_600_000),
-             {:ok, retries} <- bounded_integer(raw, "maxRetries", 0, 0, 10),
-             {:ok, backoff} <- bounded_integer(raw, "retryBackoffMs", 30_000, 1_000, 86_400_000),
+             {:ok, jitter} <- job_numeric(raw, "jitterSec", :jitter_sec, 0),
+             {:ok, timeout} <- job_numeric(raw, "timeoutMs", :timeout_ms, 300_000),
+             {:ok, retries} <- job_numeric(raw, "maxRetries", :max_retries, 0),
+             {:ok, backoff} <- job_numeric(raw, "retryBackoffMs", :retry_backoff_ms, 30_000),
              {:ok, monitor} <- optional_boolean(raw, "monitor", false),
              {:ok, notify_first} <- optional_boolean(raw, "monitorNotifyFirstRun", true) do
           projection = %{
@@ -1242,10 +1242,10 @@ defmodule LemonAutomation.Blueprint do
     end
   end
 
-  defp bounded_integer(map, key, default, min, max) do
+  defp job_numeric(map, key, field, default) do
     value = Map.get(map, key, default)
 
-    if is_integer(value) and value >= min and value <= max do
+    if CronJob.validate_numeric(field, value) == :ok do
       {:ok, value}
     else
       error(:invalid_automation, "Automation numeric field is outside its allowed range")

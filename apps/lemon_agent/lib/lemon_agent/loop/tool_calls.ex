@@ -3,7 +3,7 @@ defmodule LemonAgent.Loop.ToolCalls do
 
   alias LemonAgent.AbortSignal
   alias LemonAgent.EventStream
-  alias LemonAgent.Loop.Queue
+  alias LemonAgent.Loop.{Queue, ToolReaper}
   alias LemonAgent.Types.{AgentLoopConfig, AgentToolResult}
 
   alias LemonAi.Types.{
@@ -14,6 +14,7 @@ defmodule LemonAgent.Loop.ToolCalls do
   @tool_abort_grace_ms 250
   @max_error_bytes 16_384
   @pending_tools_key {__MODULE__, :pending_tools}
+  @tool_reaper_key {__MODULE__, :tool_reaper}
 
   @unicode_whitespace for codepoint <- [
                             0x00A0,
@@ -41,47 +42,41 @@ defmodule LemonAgent.Loop.ToolCalls do
           [LemonAgent.Types.agent_message()],
           [LemonAi.Types.ToolCall.t()],
           AgentLoopConfig.t(),
-          AbortSignal.t() | nil,
+          reference() | nil,
           EventStream.t()
         ) ::
           {[ToolResultMessage.t()], LemonAgent.Types.AgentContext.t(),
            [LemonAgent.Types.agent_message()]}
   def execute_and_collect_tools(context, new_messages, tool_calls, config, signal, stream) do
+    # Tools always get a real signal: the reaper aborts it if this process dies.
+    signal = signal || AbortSignal.new()
+    tool_task_supervisor = config.tool_task_supervisor || LemonAgent.ToolTaskSupervisor
     context = Map.put_new(context, :terminate_turn, false)
     AbortSignal.subscribe(signal)
     Process.put(@pending_tools_key, {%{}, %{}})
+
+    reaper =
+      case ToolReaper.start(self(), signal, tool_task_supervisor) do
+        {:ok, reaper} -> reaper
+        {:error, _reason} -> nil
+      end
+
+    Process.put(@tool_reaper_key, reaper)
 
     try do
       # Queue consumption belongs to the loop, after it decides whether another
       # turn is allowed. A terminal tool-turn budget must not discard queued input.
       execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream)
     catch
-      :throw, {:event_stream_push_failed, _reason} = failure ->
-        if signal, do: AbortSignal.abort(signal)
+      kind, reason ->
+        # Every abnormal exit cancels the batch before the failure propagates.
+        AbortSignal.abort(signal)
         {pending_by_ref, pending_by_mon} = Process.get(@pending_tools_key)
-
-        _ =
-          stop_aborted_tools(
-            pending_by_ref,
-            pending_by_mon,
-            config.tool_task_supervisor || LemonAgent.ToolTaskSupervisor
-          )
-
-        throw(failure)
-
-      :exit, {:loop_queue_failed, _reason} = failure ->
-        if signal, do: AbortSignal.abort(signal)
-        {pending_by_ref, pending_by_mon} = Process.get(@pending_tools_key)
-
-        _ =
-          stop_aborted_tools(
-            pending_by_ref,
-            pending_by_mon,
-            config.tool_task_supervisor || LemonAgent.ToolTaskSupervisor
-          )
-
-        exit(failure)
+        _ = stop_aborted_tools(pending_by_ref, pending_by_mon, tool_task_supervisor)
+        :erlang.raise(kind, reason, __STACKTRACE__)
     after
+      if reaper, do: ToolReaper.stop(reaper)
+      Process.delete(@tool_reaper_key)
       Process.delete(@pending_tools_key)
       AbortSignal.unsubscribe(signal)
     end
@@ -239,7 +234,6 @@ defmodule LemonAgent.Loop.ToolCalls do
             tool_timeout_ms,
             signal,
             stream,
-            tool_task_supervisor,
             config
           )
 
@@ -334,7 +328,9 @@ defmodule LemonAgent.Loop.ToolCalls do
                   nil ->
                     {context, new_messages, pending_by_ref, pending_by_mon, results}
 
-                  %{tool_call: tool_call, pid: pid, timeout_ms: timeout_ms} = pending ->
+                  %{tool_call: tool_call, timeout_ms: timeout_ms} = pending ->
+                    # The reaper owns the deadline and has already terminated
+                    # the task; the loop only records the outcome.
                     result =
                       LemonAgent.InterruptedToolResult.build(:timeout,
                         details: %{error_type: :tool_task_timeout, timeout_ms: timeout_ms}
@@ -344,8 +340,6 @@ defmodule LemonAgent.Loop.ToolCalls do
 
                     {pending_by_ref, pending_by_mon} =
                       drop_pending_task(pending_by_ref, pending_by_mon, ref)
-
-                    _ = Task.Supervisor.terminate_child(tool_task_supervisor, pid)
 
                     LemonCore.Telemetry.emit(
                       [:lemon_agent, :tool_task, :error],
@@ -444,7 +438,6 @@ defmodule LemonAgent.Loop.ToolCalls do
          _tool_timeout_ms,
          _signal,
          _stream,
-         _tool_task_supervisor,
          _config
        )
        when available_slots <= 0 do
@@ -460,7 +453,6 @@ defmodule LemonAgent.Loop.ToolCalls do
          tool_timeout_ms,
          signal,
          stream,
-         tool_task_supervisor,
          config
        ) do
     unsafe_pending? =
@@ -511,20 +503,20 @@ defmodule LemonAgent.Loop.ToolCalls do
 
                 case prepare_tool_call(tool, tool_call) do
                   {:ok, prepared_tool_call, intent} ->
+                    timeout_ms = tool_timeout(tool, tool_timeout_ms)
+
                     case start_tool_task(
-                           tool_task_supervisor,
                            parent,
                            ref,
                            tool,
                            prepared_tool_call,
                            signal,
                            stream,
-                           intent
+                           intent,
+                           timeout_ms
                          ) do
                       {:ok, pid} ->
                         mon_ref = Process.monitor(pid)
-                        timeout_ms = tool_timeout(tool, tool_timeout_ms)
-                        timeout_ref = schedule_tool_timeout(ref, timeout_ms)
 
                         state = {
                           Map.put(by_ref, ref, %{
@@ -532,7 +524,6 @@ defmodule LemonAgent.Loop.ToolCalls do
                             started_at: started_at,
                             mon_ref: mon_ref,
                             pid: pid,
-                            timeout_ref: timeout_ref,
                             timeout_ms: timeout_ms,
                             parallel_safe: parallel_safe?,
                             partial: nil,
@@ -587,14 +578,23 @@ defmodule LemonAgent.Loop.ToolCalls do
     end
   end
 
-  defp start_tool_task(tool_task_supervisor, parent, ref, tool, tool_call, signal, stream, intent) do
-    LemonCore.TaskSupervisor.start_child(tool_task_supervisor, fn ->
-      LemonAgent.ToolIntent.put(intent)
-      {result, is_error} = execute_tool_call(tool, tool_call, signal, stream, parent, ref)
-      send(parent, {:tool_task_result, ref, tool_call, result, is_error})
-    end)
-  catch
-    :exit, reason -> {:error, {:task_start_outcome_unknown, reason}}
+  defp start_tool_task(parent, ref, tool, tool_call, signal, stream, intent, timeout_ms) do
+    case Process.get(@tool_reaper_key) do
+      nil ->
+        {:error, :tool_reaper_unavailable}
+
+      reaper ->
+        ToolReaper.start_tool(
+          reaper,
+          ref,
+          fn ->
+            LemonAgent.ToolIntent.put(intent)
+            {result, is_error} = execute_tool_call(tool, tool_call, signal, stream, parent, ref)
+            send(parent, {:tool_task_result, ref, tool_call, result, is_error})
+          end,
+          timeout_ms
+        )
+    end
   end
 
   defp emit_start_failures(start_failures, context, new_messages, results, stream) do
@@ -677,9 +677,8 @@ defmodule LemonAgent.Loop.ToolCalls do
       {nil, pending_by_ref} ->
         {pending_by_ref, pending_by_mon}
 
-      {%{mon_ref: mon_ref, timeout_ref: timeout_ref}, pending_by_ref} ->
+      {%{mon_ref: mon_ref}, pending_by_ref} ->
         Process.demonitor(mon_ref, [:flush])
-        cancel_tool_timeout(timeout_ref)
         pending_by_mon = Map.delete(pending_by_mon, mon_ref)
         Process.put(@pending_tools_key, {pending_by_ref, pending_by_mon})
         {pending_by_ref, pending_by_mon}
@@ -1209,24 +1208,7 @@ defmodule LemonAgent.Loop.ToolCalls do
 
   defp tool_timeout(_tool, default), do: default
 
-  defp schedule_tool_timeout(_ref, nil), do: nil
-
-  defp schedule_tool_timeout(ref, timeout_ms) do
-    Process.send_after(self(), {:tool_task_timeout, ref}, timeout_ms)
-  end
-
-  defp cancel_tool_timeout(nil), do: :ok
-
-  defp cancel_tool_timeout(timeout_ref) do
-    _ = Process.cancel_timer(timeout_ref)
-    :ok
-  end
-
   defp stop_aborted_tools(pending_by_ref, pending_by_mon, supervisor) do
-    Enum.each(pending_by_ref, fn {_ref, pending} ->
-      cancel_tool_timeout(pending.timeout_ref)
-    end)
-
     # Give cooperative tools time to stop external work before killing their
     # BEAM worker. The run's abort signal stays set throughout this drain.
     {remaining, finished} =

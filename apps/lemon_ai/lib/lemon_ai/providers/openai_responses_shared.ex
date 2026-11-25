@@ -816,6 +816,11 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
 
   @doc """
   Process OpenAI Responses API stream events and emit to EventStream.
+
+  `events` yields decoded Responses events; `LemonAi.Providers.SSEParser`'s
+  `:done` sentinel is ignored and a `{:stream_error, details}` item fails the
+  stream. A stream that ends before `response.completed`, `response.incomplete`,
+  `response.failed` or an `error` event is a transient error, never a stop.
   """
   @spec process_stream(
           Enumerable.t(),
@@ -838,19 +843,26 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
     }
 
     try do
-      Enum.reduce_while(events, state, fn event, state ->
-        state = activate_item(event, state)
+      Enum.reduce_while(events, state, fn
+        :done, state ->
+          {:cont, state}
 
-        case process_event(event, state) do
-          {:ok, new_state} -> {:cont, remember_item(event, new_state)}
-          {:done, new_state} -> {:halt, {:ok, new_state}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
+        {:stream_error, reason}, _state ->
+          {:halt, {:error, reason}}
+
+        event, state ->
+          state = activate_item(event, state)
+
+          case process_event(event, state) do
+            {:ok, new_state} -> {:cont, remember_item(event, new_state)}
+            {:done, new_state} -> {:halt, {:ok, new_state}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
       end)
       |> case do
         {:ok, final_state} -> {:ok, final_state.output}
         {:error, reason} -> {:error, reason}
-        _final_state -> {:error, "Connection closed before the provider completed the response"}
+        _final_state -> {:error, LemonAi.Providers.StreamTransport.truncated(model.provider)}
       end
     rescue
       e ->

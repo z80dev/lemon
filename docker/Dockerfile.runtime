@@ -68,6 +68,8 @@ LABEL org.opencontainers.image.title="lemon" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.revision=$LEMON_GIT_SHA
 
+# procps provides `ps`: cross-process locks (Telegram polling, skills metadata,
+# updates, usage state) verify other holders' PID and start time with it.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       libstdc++6 \
@@ -78,6 +80,7 @@ RUN apt-get update && \
       inotify-tools \
       libncurses6 \
       libtinfo6 \
+      procps \
       sqlite3 && \
     rm -rf /var/lib/apt/lists/*
 

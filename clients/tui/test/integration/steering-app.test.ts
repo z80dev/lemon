@@ -9,6 +9,7 @@ import type { PendingSteer, SessionSteerParams } from "../../src/protocol/types.
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal } from "../helpers/memory-terminal.ts";
+import { waitFor } from "../helpers/wait.ts";
 
 const teardown: Array<() => void> = [];
 const key = "tui-steering";
@@ -186,6 +187,50 @@ describe("journaled steering in the real shell", () => {
 		expect(await app.sendPrompt("do not replay", { mode: "steer" })).toBe("uncertain");
 		expect(server.requestsFor("sessions.steer")).toHaveLength(1);
 		expect(server.requestsFor("chat.send")).toHaveLength(0);
+	});
+
+	test("an uncertain steer the daemon does not hold can be dismissed after review", async () => {
+		const { app, server } = await boot();
+		server.silenceMethod("sessions.steer");
+		const sending = app.sendPrompt("lost correction", { mode: "steer" });
+		await waitFor(() => server.requestsFor("sessions.steer").length === 1);
+		// The answer never arrives: the outcome of the steer is unknown.
+		await app.client.reconnect("test");
+		expect(await sending).toBe("uncertain");
+		const item = app.store.queue.items(key)[0]!;
+		expect(item.state).toBe("needs-review");
+		expect(await app.sendPrompt("blocked", { mode: "steer" })).toBe("uncertain");
+
+		// Edit stays refused (it could duplicate a pending steer); `d` checks with
+		// the daemon, which reports it is not pending, and the review ends.
+		app.editQueued(item);
+		expect(app.store.queue.items(key)).toHaveLength(1);
+		await app.deleteQueued(item);
+		expect(server.requestsFor("sessions.steer.withdraw")).toHaveLength(1);
+		expect(app.store.queue.items(key)).toEqual([]);
+
+		server.onMethod("sessions.steer", (params: SessionSteerParams) => ({
+			...params,
+			acceptedAfterTurn: 3,
+		}));
+		expect(await app.sendPrompt("unblocked", { mode: "steer" })).toBe("accepted");
+	});
+
+	test("an uncertain steer that is still pending is withdrawn, not dismissed blindly", async () => {
+		const { app, server, pending } = await boot();
+		server.onMethod("sessions.steer", (params: SessionSteerParams) => {
+			pending.set(params.messageId, {
+				messageId: params.messageId,
+				preview: params.prompt,
+				acceptedAfterTurn: 2,
+			});
+			return errorResult("INTERNAL_ERROR", "Method execution failed");
+		});
+		expect(await app.sendPrompt("maybe journaled", { mode: "steer" })).toBe("uncertain");
+		const item = app.store.queue.items(key)[0]!;
+		await app.deleteQueued(item);
+		expect(pending.size).toBe(0);
+		expect(app.store.queue.items(key)).toEqual([]);
 	});
 
 	test("a stale run rejection is not silently rerouted or queued", async () => {

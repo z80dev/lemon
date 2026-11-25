@@ -203,7 +203,12 @@ export class OmpController {
 			this.panel.setDiscover({ cwd, rows: sessions, loading: false });
 		} catch (error) {
 			if (generation !== this.#discoverGeneration || this.panel.mode !== "discover") return;
-			this.panel.setDiscover({ cwd, rows: [], loading: false, error: describeOmpError(error) });
+			this.panel.setDiscover({
+				cwd,
+				rows: [],
+				loading: false,
+				error: describeOmpError(error, false),
+			});
 		}
 	}
 
@@ -249,7 +254,7 @@ export class OmpController {
 				},
 			);
 		} catch (error) {
-			this.#report(`models failed: ${describeOmpError(error)}`, "error");
+			this.#report(`models failed: ${describeOmpError(error, false)}`, "error");
 		}
 	}
 

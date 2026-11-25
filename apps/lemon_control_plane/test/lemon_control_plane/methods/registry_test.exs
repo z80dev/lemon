@@ -63,6 +63,20 @@ defmodule LemonControlPlane.Methods.RegistryTest do
     def handle(_params, _ctx), do: raise("boom from registry test")
   end
 
+  defmodule WriteRaisingHandler do
+    @behaviour LemonControlPlane.Method
+    @method "registry.test.dispatch.write_raise"
+
+    @impl true
+    def name, do: @method
+
+    @impl true
+    def scopes, do: [:write]
+
+    @impl true
+    def handle(_params, _ctx), do: raise("boom after a possible write")
+  end
+
   setup do
     ensure_registry_started()
     cleanup_test_methods()
@@ -135,6 +149,16 @@ defmodule LemonControlPlane.Methods.RegistryTest do
 
     assert {:error, {:internal_error, "Method execution failed"}} =
              Registry.dispatch(method, %{}, ctx)
+  end
+
+  test "dispatch/3 marks a crashed write-scope method as not retry-safe" do
+    method = register_for_cleanup(WriteRaisingHandler)
+    read_only = register_for_cleanup(RaisingHandler)
+
+    assert {:error, {:internal_error, "Method execution failed", %{"retrySafe" => false}}} =
+             Registry.dispatch(method, %{}, ctx_with_scopes([:write]))
+
+    assert {:internal_error, "Method execution failed"} = Registry.execution_failure(read_only)
   end
 
   test "unknown method names are omitted from telemetry" do

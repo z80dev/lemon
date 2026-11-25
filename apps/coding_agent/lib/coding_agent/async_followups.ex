@@ -18,7 +18,7 @@ defmodule CodingAgent.AsyncFollowups do
   require Logger
 
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.Params
+  alias CodingAgent.Tools.Task.InvocationAuthority
   alias LemonAgent.Security.ExternalContent
   alias LemonCore.{Bus, RunRequest, SessionKey}
 
@@ -176,7 +176,7 @@ defmodule CodingAgent.AsyncFollowups do
   defp hold_completion(state, _context, _completion), do: {:ready, state}
 
   defp normalize_context(context) do
-    managed? = Params.managed_context?(context)
+    managed? = InvocationAuthority.managed_context?(context)
 
     queue_mode =
       case Map.get(context, :queue_mode, :followup) do
@@ -188,7 +188,7 @@ defmodule CodingAgent.AsyncFollowups do
     meta =
       context
       |> Map.get(:meta, %{})
-      |> Params.continuation_metadata(context)
+      |> InvocationAuthority.continuation_metadata(context)
       |> Map.drop(@completion_meta_keys)
 
     @context_keys
@@ -303,7 +303,7 @@ defmodule CodingAgent.AsyncFollowups do
   end
 
   defp submit(%{native_managed_context: true} = context, request) do
-    Params.submit_native_followup(context, %{
+    InvocationAuthority.submit_native_followup(context, %{
       request
       | meta: LemonCore.RunStore.execution_projection(request.meta)
     })

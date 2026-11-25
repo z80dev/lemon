@@ -9,17 +9,18 @@ defmodule LemonCore.Runtime.Profile do
 
   | Profile | Apps | Use case |
   |---|---|---|
-  | `:runtime_min` | gateway, router, channels, control_plane, coding_agent | CI, headless, embedded |
-  | `:runtime_full` | all of the above + automation, skills, web | Local development |
+  | `:runtime_min` | cli, coding_agent, gateway, router, channels, control_plane | Headless and packaged minimal runtime |
+  | `:runtime_full` | all of the above + automation, skills, web | Source launcher and full release |
 
   ## Usage
 
       profile = LemonCore.Runtime.Profile.get(:runtime_full)
       profile.apps
-      # => [:lemon_gateway, :lemon_router, ...]
+      # => [:lemon_cli, :coding_agent, :lemon_gateway, ...]
 
       LemonCore.Runtime.Profile.app_list(:runtime_min)
-      # => [:lemon_gateway, :lemon_router, :lemon_channels, :lemon_control_plane]
+      # => [:lemon_cli, :coding_agent, :lemon_gateway, :lemon_router, :lemon_channels,
+      #     :lemon_control_plane]
   """
 
   @enforce_keys [:name, :apps, :description]

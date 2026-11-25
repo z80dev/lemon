@@ -10,8 +10,6 @@ defmodule LemonChannels.Application do
 
   use Application
 
-  require Logger
-
   alias LemonChannels.Telegram.KnownTargetStore
 
   @doc false
@@ -41,22 +39,22 @@ defmodule LemonChannels.Application do
       LemonChannels.Pairing,
       # Volatile WhatsApp session overrides outlive command/transport callers
       LemonChannels.Adapters.WhatsApp.ModelPolicyAdapter,
-      # Adapter supervisor for channel adapters
-      {DynamicSupervisor, strategy: :one_for_one, name: LemonChannels.AdapterSupervisor},
       # Optional inbound HTTP listener; binds a port only when configured
-      LemonChannels.InboundHttp
+      LemonChannels.InboundHttp,
+      # AdapterSupervisor plus the starter that (re)starts configured adapters
+      # whenever the AdapterSupervisor restarts. Last: adapters start once the
+      # rest of the channels runtime is up.
+      LemonChannels.AdapterSupervision
     ]
 
     opts = [strategy: :one_for_one, name: LemonChannels.Supervisor]
 
+    # Channels own their store tables: the store does not know Telegram
+    # exists, so we ask it to mirror our hot index into its read cache.
+    LemonCore.Store.register_cached_table(KnownTargetStore.table())
+
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
-        # Channels own their store tables: the store does not know Telegram
-        # exists, so we ask it to mirror our hot index into its read cache.
-        LemonCore.Store.register_cached_table(KnownTargetStore.table())
-
-        # Register and start built-in adapters after startup
-        register_and_start_adapters()
         # After the router (50): the outbox flush must follow run suspension.
         :ok = LemonCore.Drain.register(:channels, LemonChannels.Drain, order: 90)
         {:ok, pid}
@@ -64,37 +62,6 @@ defmodule LemonChannels.Application do
       error ->
         error
     end
-  end
-
-  defp configured_adapters do
-    Application.get_env(:lemon_channels, :adapters, [])
-  end
-
-  defp register_and_start_adapters do
-    Enum.each(configured_adapters(), &register_and_start_configured_adapter/1)
-
-    :ok
-  end
-
-  defp register_and_start_configured_adapter({adapter_module, opts})
-       when is_atom(adapter_module) and is_list(opts) do
-    log_adapter_start(adapter_module, register_and_start_adapter(adapter_module, opts))
-  end
-
-  defp register_and_start_configured_adapter(adapter_module) when is_atom(adapter_module) do
-    log_adapter_start(adapter_module, register_and_start_adapter(adapter_module))
-  end
-
-  defp register_and_start_configured_adapter(other) do
-    Logger.warning("Ignoring invalid lemon_channels adapter config: #{inspect(other)}")
-  end
-
-  defp log_adapter_start(adapter_module, :ok) do
-    Logger.info("#{inspect(adapter_module)} adapter registered and started")
-  end
-
-  defp log_adapter_start(adapter_module, {:error, reason}) do
-    Logger.warning("Failed to start #{inspect(adapter_module)} adapter: #{inspect(reason)}")
   end
 
   @doc """
@@ -122,16 +89,22 @@ defmodule LemonChannels.Application do
 
   @doc """
   Start an adapter under the AdapterSupervisor.
+
+  The adapter runs behind a `LemonChannels.AdapterKeeper`, which restarts it
+  with backoff so its crash loop cannot exhaust the shared supervisor.
   """
   @spec start_adapter(module(), keyword()) :: :ok | {:error, term()}
   def start_adapter(adapter_module, opts \\ []) do
-    child_spec = adapter_module.child_spec(opts)
+    adapter_spec = Supervisor.child_spec(adapter_module.child_spec(opts), [])
 
     if adapter_module.id() in ["telegram", "xmtp", "whatsapp"] do
       LemonChannels.Registry.record_status(adapter_module.id(), :configured)
     end
 
-    case DynamicSupervisor.start_child(LemonChannels.AdapterSupervisor, child_spec) do
+    backoff = Application.get_env(:lemon_channels, :adapter_restart_backoff, [])
+    keeper_spec = LemonChannels.AdapterKeeper.child_spec({adapter_module, adapter_spec, backoff})
+
+    case DynamicSupervisor.start_child(LemonChannels.AdapterSupervisor, keeper_spec) do
       {:ok, _pid} ->
         :ok
 

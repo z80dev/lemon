@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,6 +6,11 @@ import path from 'node:path';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { startEgressProxy, type EgressPolicy, type EgressProxy } from './egress-proxy.js';
 import { validateManagedProfile } from './profile-safety.js';
+
+/** A side-effecting action whose completion cannot be confirmed. Never retried. */
+export class OutcomeUnknownError extends Error {
+  readonly code = 'outcome_unknown';
+}
 
 export type BrowserTab = {
   targetId: string;
@@ -25,7 +30,6 @@ export type ChromeConfig = {
   cdpEndpoint?: string;
   userDataDir: string;
   profileDirectory?: string;
-  userProvidedProfile?: boolean;
   executablePath?: string;
   headless: boolean;
   noSandbox: boolean;
@@ -41,7 +45,11 @@ export type ChromeConfig = {
 
 export class ChromeSession {
   private cfg: ChromeConfig;
-  private proc: ChildProcessWithoutNullStreams | null = null;
+  private proc: ChildProcess | null = null;
+  /** Resolves with the reason once the launched Chrome errors or exits. */
+  private procEnded: Promise<Error> | null = null;
+  /** CDP endpoint the launched Chrome reported through DevToolsActivePort. */
+  private managedEndpoint: string | null = null;
   private browser: Browser | null = null;
   private activeTargetId: string | null = null;
   private ownedBrowser = false;
@@ -55,27 +63,38 @@ export class ChromeSession {
     };
   }
 
+  /**
+   * Launches or attaches to the browser. A failed start releases whatever it
+   * acquired (a launched Chrome, the egress proxy), so a later start begins
+   * from a clean session.
+   */
   async start(): Promise<void> {
-    const endpoint = this.cfg.cdpEndpoint || `http://127.0.0.1:${this.cfg.cdpPort}`;
-
-    const reachable = await isCdpReachable(endpoint, 600);
-    if (reachable && (this.cfg.userProvidedProfile || this.cfg.profileDirectory !== undefined) && !this.cfg.attachOnly && !this.cfg.cdpEndpoint && !this.ownedBrowser) {
-      throw new Error('CDP port already in use; cannot verify the requested browser profile. Close that browser or attach explicitly via LEMON_BROWSER_CDP_ENDPOINT / relay.');
+    try {
+      await this.connect();
+    } catch (err) {
+      await this.stop();
+      throw err;
     }
-    if (!reachable) {
-      if (this.cfg.attachOnly || this.cfg.cdpEndpoint) {
+  }
+
+  private async connect(): Promise<void> {
+    let endpoint: string;
+    // Managed mode (no attach-only, no endpoint) only ever drives the Chrome
+    // it launched, on the free DevTools port read back from
+    // DevToolsActivePort; never whatever answers on the configured CDP port.
+    if (!this.cfg.attachOnly && !this.cfg.cdpEndpoint) {
+      endpoint = this.proc && this.managedEndpoint ? this.managedEndpoint : await this.launchManaged();
+    } else {
+      endpoint = this.cfg.cdpEndpoint || `http://127.0.0.1:${this.cfg.cdpPort}`;
+      if (!(await isCdpReachable(endpoint, 600))) {
         throw new Error(`CDP not reachable at ${describeEndpoint(endpoint)} (attachOnly=true)`);
       }
-      await this.launchChrome();
-      await waitForCdp(endpoint, 15_000);
-      this.ownedBrowser = true;
-    }
-
-    if (!this.ownedBrowser && !this.cfg.allowUnenforcedEgress) {
-      throw new Error(
-        `Refusing to attach to a browser Lemon did not launch at ${describeEndpoint(endpoint)}: its egress is not enforced. ` +
-          'Set LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS=1 (or --allow-unenforced-egress) to accept that risk.',
-      );
+      if (!this.cfg.allowUnenforcedEgress) {
+        throw new Error(
+          `Refusing to attach to a browser Lemon did not launch at ${describeEndpoint(endpoint)}: its egress is not enforced. ` +
+            'Set LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS=1 (or --allow-unenforced-egress) to accept that risk.',
+        );
+      }
     }
 
     try {
@@ -89,9 +108,46 @@ export class ChromeSession {
     this.activeTargetId = await targetIdForPage(page);
   }
 
+  private async launchManaged(): Promise<string> {
+    // A launched Chrome that lost its endpoint is not reused.
+    this.killChrome();
+    await this.launchChrome();
+    // Owned from launch, so a failed wait still closes it.
+    this.ownedBrowser = true;
+    const endpoint = await this.waitForDevTools(15_000);
+    this.managedEndpoint = endpoint;
+    return endpoint;
+  }
+
+  /** Waits for the launched Chrome to publish its DevTools port, or to fail. */
+  private async waitForDevTools(timeoutMs: number): Promise<string> {
+    const ended: { reason: Error | null } = { reason: null };
+    void this.procEnded?.then((reason) => {
+      ended.reason = reason;
+    });
+    const activePort = path.join(this.cfg.userDataDir, 'DevToolsActivePort');
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      if (ended.reason) throw ended.reason;
+      const port = readDevToolsPort(activePort);
+      if (port && (await isCdpReachable(`http://127.0.0.1:${port}`, 500))) {
+        return `http://127.0.0.1:${port}`;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error('Timed out waiting for the launched Chrome to report its DevTools port');
+  }
+
+  /**
+   * Runs one page operation. After a closed-target error the operation is
+   * reconnected and re-run only when `retryOnClosedTarget` says it is
+   * read-only; any other operation may already have taken effect, so it
+   * fails with an unknown outcome instead of running twice.
+   */
   async withPage<T>(
     operation: (page: Page) => Promise<T>,
     targetId?: string,
+    options: { retryOnClosedTarget?: boolean } = {},
   ): Promise<T> {
     const page = await this.getPage(targetId);
 
@@ -100,6 +156,11 @@ export class ChromeSession {
     } catch (err) {
       if (!isClosedTargetError(err)) {
         throw err;
+      }
+      if (options.retryOnClosedTarget !== true) {
+        throw new OutcomeUnknownError(
+          'the browser target closed while the action ran; it may have taken effect',
+        );
       }
 
       await this.reconnect();
@@ -111,29 +172,36 @@ export class ChromeSession {
   async stop(): Promise<void> {
     // `Browser.close()` terminates the real Chrome process for CDP connections.
     // Never send it to a browser we merely attached to (for example the user's
-    // everyday Chrome via the extension relay).
-    if (this.ownedBrowser) {
-      try {
-        await this.browser?.close();
-      } catch {
-        // ignore
-      }
+    // everyday Chrome via the extension relay). A wedged connection must not
+    // keep the launched process alive, so the close is bounded.
+    if (this.ownedBrowser && this.browser) {
+      await Promise.race([
+        this.browser.close().catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, 5_000)),
+      ]);
     }
     this.browser = null;
     this.activeTargetId = null;
-
-    if (this.proc) {
-      try {
-        this.proc.kill('SIGTERM');
-      } catch {
-        // ignore
-      }
-      this.proc = null;
-    }
+    this.killChrome();
 
     await this.egressProxy?.close().catch(() => undefined);
     this.egressProxy = null;
     this.ownedBrowser = false;
+  }
+
+  /** Synchronously signals the launched Chrome, for process-exit paths. */
+  killChrome(): void {
+    const proc = this.proc;
+    this.proc = null;
+    this.procEnded = null;
+    this.managedEndpoint = null;
+    if (proc && proc.exitCode == null && proc.signalCode == null) {
+      try {
+        proc.kill('SIGTERM');
+      } catch {
+        // already gone
+      }
+    }
   }
 
   async getPage(targetId?: string): Promise<Page> {
@@ -298,7 +366,9 @@ export class ChromeSession {
       `--proxy-server=http://127.0.0.1:${this.egressProxy.port}`,
       '--proxy-bypass-list=<-loopback>',
       '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
-      `--remote-debugging-port=${this.cfg.cdpPort}`,
+      // A free port, read back from DevToolsActivePort: never one another
+      // browser might already be listening on.
+      '--remote-debugging-port=0',
       '--remote-debugging-address=127.0.0.1',
       `--user-data-dir=${this.cfg.userDataDir}`,
       '--no-first-run',
@@ -329,22 +399,39 @@ export class ChromeSession {
 
     args.push('about:blank');
 
-    this.proc = spawn(exe, args, {
-      stdio: 'pipe',
+    // A stale port file from an earlier run must not be mistaken for this one.
+    fs.rmSync(path.join(this.cfg.userDataDir, 'DevToolsActivePort'), { force: true });
+
+    // Chrome's output is never read, so it is not piped (a full pipe blocks it).
+    const proc = spawn(exe, args, {
+      stdio: 'ignore',
       env: { ...browserChildEnv(process.env), HOME: os.homedir() },
+    });
+    this.proc = proc;
+    this.procEnded = new Promise<Error>((resolve) => {
+      // A spawn failure (missing or non-executable binary) is an `error`
+      // event; without a listener it would crash the driver.
+      proc.once('error', (err: NodeJS.ErrnoException) => {
+        resolve(new Error(`Chrome could not be started (${err.code ?? 'spawn failed'})`));
+      });
+      proc.once('exit', (code, signal) => {
+        resolve(new Error(`Chrome exited (${signal ?? `code ${code}`}); is another Chrome using this profile?`));
+      });
+    });
+    void this.procEnded.then(() => {
+      if (this.proc === proc) {
+        this.proc = null;
+        this.managedEndpoint = null;
+      }
     });
   }
 
   private async reconnect(): Promise<void> {
-    // If an owned Chrome process is still alive, preserve it while replacing a
-    // stale Playwright connection. `start()` will attach to its CDP port.
-    const proc = this.proc;
-    const ownedBrowser = this.ownedBrowser;
+    // A launched Chrome that is still running is reattached through its
+    // recorded DevTools endpoint; `start()` launches a new one otherwise.
     this.browser = null;
     this.activeTargetId = null;
     await this.start();
-    this.proc = this.proc ?? proc;
-    this.ownedBrowser = this.ownedBrowser || ownedBrowser;
   }
 }
 
@@ -483,13 +570,27 @@ function stripTrailingSlash(endpoint: string): string {
   return endpoint.replace(/\/+$/, '');
 }
 
-async function waitForCdp(endpoint: string, timeoutMs: number): Promise<void> {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    if (await isCdpReachable(endpoint, 500)) return;
-    await new Promise((r) => setTimeout(r, 100));
+/** The port on the first line of Chrome's DevToolsActivePort, once written. */
+function readDevToolsPort(file: string): number | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
   }
-  throw new Error(`Timed out waiting for CDP at ${describeEndpoint(endpoint)}`);
+  const port = Number.parseInt(text.split('\n')[0] ?? '', 10);
+  return Number.isInteger(port) && port > 0 && port < 65_536 ? port : null;
+}
+
+/**
+ * Lemon's own managed profile: `~/.lemon/browser/<profile>/user-data`. The
+ * profile name is one path segment.
+ */
+export function defaultUserDataDir(profile = 'default', home = os.homedir()): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(profile)) {
+    throw new Error('browser profile name must be letters, digits, ".", "_" or "-"');
+  }
+  return path.join(home, '.lemon', 'browser', profile, 'user-data');
 }
 
 /** Credential-free endpoint description: scheme and host only. Paths, query

@@ -19,7 +19,7 @@ defmodule LemonMedia.MixProject do
 
   def application do
     [
-      extra_applications: [:logger],
+      extra_applications: [:logger, :crypto, :public_key],
       mod: {LemonMedia.Application, []}
     ]
   end
@@ -28,7 +28,7 @@ defmodule LemonMedia.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       {:jason, "~> 1.4"},
-      {:phoenix_pubsub, "~> 2.1"}
+      {:req, "~> 0.6.0"}
     ]
   end
 end

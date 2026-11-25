@@ -5,7 +5,25 @@ defmodule CodingAgent.DurableTable do
   `use DurableTable` makes the domain server the ETS/DETS owner; there is no
   second process or write mailbox. `open/3` loads the original DETS tuples
   synchronously, applying the domain's restart callback before readiness.
-  A nil DETS table deliberately keeps a store transient.
+  A nil DETS table deliberately keeps a store transient: it gets no heir and
+  starts empty after every owner restart.
+
+  ## Restart semantics
+
+  `CodingAgent.RuntimeTables` is the mirror's ETS heir. When an owner crashes
+  (an exception, an exit or `:kill`), the heir keeps the live table and the
+  restarted owner reclaims it: the mirror stays authoritative, its expiry index
+  is rebuilt, DETS rows are loaded only for keys the mirror lacks, and the
+  domain's boot normalization is not applied. A domain may pass a `reclaim`
+  row callback for owner-local state that did not survive (for example join
+  reservations, or live-owner checks). In-flight work keeps its state, so a
+  live worker's later transition is still accepted. A row whose ETS write
+  landed just before the crash may be newer than its DETS copy until its next
+  write.
+
+  A clean stop (`:normal`, `:shutdown`, an application stop or VM boot) drops
+  the heir, so the next owner starts from DETS and applies restart
+  normalization to rows whose owners are gone.
 
   Every mutation must run in the owner and use `put/3`, `delete/2` or `clear/1`.
   The mirror has `read_concurrency`; two private ETS indexes hold only eligible
@@ -40,7 +58,7 @@ defmodule CodingAgent.DurableTable do
       end
 
       @impl true
-      def terminate(_reason, state), do: DurableTable.close(state)
+      def terminate(reason, state), do: DurableTable.close(state, reason)
     end
   end
 
@@ -49,8 +67,9 @@ defmodule CodingAgent.DurableTable do
     table = Keyword.get(opts, :table, Keyword.fetch!(config, :table))
     dets_table = Keyword.get(opts, :dets_table, Keyword.get(config, :dets_table))
     path = Keyword.get(opts, :dets_path) || Keyword.get(config, :path)
+    reclaimed? = not is_nil(dets_table) and reclaim_from_heir(table)
 
-    if :ets.whereis(table) == :undefined do
+    if not reclaimed? and :ets.whereis(table) == :undefined do
       :ets.new(table, [
         :named_table,
         Keyword.get(config, :access, :public),
@@ -70,7 +89,7 @@ defmodule CodingAgent.DurableTable do
       ttl_key: Keyword.fetch!(config, :ttl_key),
       interval_key: Keyword.fetch!(config, :interval_key),
       reload_empty: Keyword.get(config, :reload_empty, false),
-      required: Keyword.get(config, :required, false),
+      reclaim: Keyword.get(config, :reclaim, fn row, _state -> row end),
       dets_table: dets_table
     }
 
@@ -83,16 +102,57 @@ defmodule CodingAgent.DurableTable do
         dets_path: path,
         ets_initialized: true,
         dets_initialized: false,
-        loaded_from_dets: is_nil(dets_table)
+        loaded_from_dets: is_nil(dets_table),
+        reclaimed: reclaimed?
       })
 
-    state = ensure(state, false)
+    if reclaimed?, do: restore_reclaimed(state, storage)
+
+    state = ensure(state)
     schedule_cleanup(state)
     state
   end
 
-  def ensure(state, enforce_required \\ true) do
+  # The heir holds a crashed owner's live mirror; take it back before creating
+  # a fresh table. The transfer message is consumed here so domain owners need
+  # no handler for it.
+  defp reclaim_from_heir(table) do
+    case CodingAgent.RuntimeTables.reclaim(table) do
+      :ok ->
+        receive do
+          {:"ETS-TRANSFER", _tid, _from, _data} -> true
+        after
+          0 -> true
+        end
+
+      :none ->
+        false
+    end
+  end
+
+  # Reclaimed rows are already in the mirror; the private indexes are not.
+  defp restore_reclaimed(state, storage) do
+    :ets.foldl(
+      fn row, :ok ->
+        case storage.reclaim.(row, state) do
+          ^row -> index(state.table, row)
+          updated -> put(state.table, updated, :mirror)
+        end
+
+        :ok
+      end,
+      :ok,
+      state.table
+    )
+  end
+
+  @doc """
+  Prepare the table for an owner call: keep the heir current, open DETS late
+  when it was unavailable, and load rows the mirror does not hold yet.
+  """
+  def ensure(state) do
     storage = storage(state.table)
+    if state.dets_table, do: keep_heir(state.table)
     state = open_dets(state)
 
     reload? =
@@ -101,28 +161,35 @@ defmodule CodingAgent.DurableTable do
 
     state = if reload?, do: %{state | loaded_from_dets: false}, else: state
 
-    state =
-      if state.dets_initialized and not state.loaded_from_dets do
-        if is_function(storage.before_load, 0), do: storage.before_load.()
+    if state.dets_initialized and not state.loaded_from_dets do
+      if is_function(storage.before_load, 0), do: storage.before_load.()
 
-        :ok =
-          :dets.foldl(
-            fn row, :ok ->
-              put(state.table, storage.normalize.(row, state), :mirror)
-            end,
-            :ok,
-            state.dets_table
-          )
+      :ok =
+        :dets.foldl(
+          fn row, :ok ->
+            # A reclaimed mirror is newer than DETS; only absent keys load.
+            if state.reclaimed and :ets.member(state.table, elem(row, 0)),
+              do: :ok,
+              else: put(state.table, storage.normalize.(row, state), :mirror)
+          end,
+          :ok,
+          state.dets_table
+        )
 
-        storage.after_load.(%{state | loaded_from_dets: true})
-      else
-        state
-      end
+      storage.after_load.(%{state | loaded_from_dets: true})
+    else
+      state
+    end
+  end
 
-    if enforce_required and storage.required and not state.dets_initialized,
-      do: exit(:process_store_unavailable)
+  defp keep_heir(table) do
+    with pid when is_pid(pid) <- Process.whereis(CodingAgent.RuntimeTables),
+         true <- :ets.info(table, :owner) == self(),
+         false <- :ets.info(table, :heir) == pid do
+      :ets.setopts(table, {:heir, pid, :durable_table})
+    end
 
-    state
+    :ok
   end
 
   defp open_dets(%{dets_table: nil} = state), do: state
@@ -267,10 +334,20 @@ defmodule CodingAgent.DurableTable do
   def open?(nil), do: false
   def open?(table), do: :dets.info(table) != :undefined
 
-  def close(state) do
+  @doc """
+  Close DETS on owner termination. A clean stop also drops the heir so the
+  next owner boots from DETS; a crash leaves the mirror with the heir.
+  """
+  def close(state, reason) do
+    if clean_stop?(reason) and :ets.info(state.table, :owner) == self(),
+      do: :ets.setopts(state.table, {:heir, :none})
+
     if open?(state.dets_table), do: :dets.close(state.dets_table)
     :ok
   end
+
+  defp clean_stop?(reason),
+    do: reason in [:normal, :shutdown] or match?({:shutdown, _}, reason)
 
   def terminal_timestamp(record) do
     case record[:completed_at] || record[:updated_at] || record[:inserted_at] do

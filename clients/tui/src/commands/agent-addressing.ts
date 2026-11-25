@@ -5,7 +5,11 @@ import {
 	isAgentAddress,
 	parseAgentReceipt,
 } from "../protocol/agent-addressing.ts";
-import { ControlPlaneError, describeError, MethodUnavailableError } from "../protocol/errors.ts";
+import {
+	classifyMutationError,
+	describeError,
+	MethodUnavailableError,
+} from "../protocol/errors.ts";
 import { METHOD } from "../protocol/methods.ts";
 import type { AppStore } from "../store/app-store.ts";
 import type { CommandContext, SlashCommand } from "./registry.ts";
@@ -106,17 +110,7 @@ export const agentNameCommand: SlashCommand = {
 				`${agent.name ? `agent @${agent.name}` : "agent handle cleared"} · ${agent.id}`,
 			);
 		} catch (error) {
-			const details = ControlPlaneError.is(error)
-				? (error.details as { retrySafe?: boolean; reason?: string } | undefined)
-				: undefined;
-			if (
-				(ControlPlaneError.is(error) &&
-					details?.retrySafe !== false &&
-					details?.reason !== "outcome_unknown" &&
-					!["INTERNAL_ERROR", "TIMEOUT"].includes(error.code)) ||
-				error instanceof MethodUnavailableError
-			)
-				throw error;
+			if (classifyMutationError(error) !== "unknown") throw error;
 			ctx.ui.notice(
 				`agent rename outcome_unknown · ${id}; inspect /agents before retrying (${safeLine(describeError(error), 200)})`,
 				"warning",
@@ -234,17 +228,9 @@ export const tellCommand: SlashCommand = {
 			showReceipt(ctx, receipt);
 		} catch (error) {
 			// A transport loss, malformed receipt, or uncertain server mutation can
-			// already have delivered. Only explicit server refusals prove failure.
-			const details = ControlPlaneError.is(error)
-				? (error.details as { retrySafe?: boolean; reason?: string } | undefined)
-				: undefined;
-			if (
-				(ControlPlaneError.is(error) &&
-					details?.retrySafe !== false &&
-					details?.reason !== "outcome_unknown" &&
-					!["INTERNAL_ERROR", "TIMEOUT"].includes(error.code)) ||
-				error instanceof MethodUnavailableError
-			) {
+			// already have delivered. Only an unsent request or an explicit server
+			// refusal proves failure.
+			if (classifyMutationError(error) !== "unknown") {
 				intent.status = "failed";
 				ctx.ui.notice(
 					`failed · ${intent.messageId} · ${sourceId} → ${target}: ${safeLine(describeError(error), 500)}`,

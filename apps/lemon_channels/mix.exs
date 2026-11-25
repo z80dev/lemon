@@ -23,7 +23,12 @@ defmodule LemonChannels.MixProject do
 
   def application do
     [
-      extra_applications: [:logger],
+      # Nostrum is an *included* application: its supervision tree runs under
+      # LemonChannels.Adapters.Discord.Supervisor, so OTP only loads (never
+      # starts) Nostrum's own dependencies. Nostrum opens its gateway and REST
+      # connections with `:gun.open/3`, which needs gun's supervisor running,
+      # so lemon_channels starts :gun itself (#670).
+      extra_applications: [:logger, :gun],
       included_applications: [:nostrum],
       mod: {LemonChannels.Application, []}
     ]

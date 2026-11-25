@@ -15,7 +15,7 @@ import { accordionSettings } from "../../src/ui/components/accordion.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "../helpers/memory-terminal.ts";
-import { unfinalizedBlocks } from "../helpers/transcript.ts";
+import { runText, unfinalizedBlocks } from "../helpers/transcript.ts";
 import { waitFor } from "../helpers/wait.ts";
 
 const SESSION = "tui-ec";
@@ -73,7 +73,7 @@ describe("authoritative cancellation", () => {
 			if (partial) {
 				server.pushEvent("agent", { type: "started", runId: "cancelled", sessionKey: SESSION });
 				delta(server, "cancelled", 1, "Kept partial answer.");
-				await waitFor(() => app.store.focused.bufferFor("cancelled").length > 0);
+				await waitFor(() => runText(app.store.focused, "cancelled").length > 0);
 			}
 			server.pushEvent("agent", {
 				type: "completed",
@@ -122,14 +122,14 @@ describe("completed for another run", () => {
 		// Run A finished earlier; run B is streaming now.
 		server.pushEvent("agent", { type: "started", runId: "run-a", sessionKey: SESSION });
 		delta(server, "run-a", 1, "first answer");
-		await waitFor(() => session.bufferFor("run-a").length > 0, { what: "run A's delta" });
+		await waitFor(() => runText(session, "run-a").length > 0, { what: "run A's delta" });
 
 		// Long enough that the reveal is provably still mid-flight when run A's
 		// stale completion lands (a few hundred ms of frames at 30fps).
 		const longAnswer = `${"the second answer runs on and on and on, ".repeat(6)}still running`;
 		server.pushEvent("agent", { type: "started", runId: "run-b", sessionKey: SESSION });
 		delta(server, "run-b", 1, longAnswer);
-		await waitFor(() => session.bufferFor("run-b").length > 0, { what: "run B's delta" });
+		await waitFor(() => runText(session, "run-b").length > 0, { what: "run B's delta" });
 
 		// A stale completion for run A lands while run B streams.
 		server.pushEvent("agent", {
@@ -188,7 +188,7 @@ describe("rebuildFocused", () => {
 
 		server.pushEvent("agent", { type: "started", runId: "run-1", sessionKey: SESSION });
 		delta(server, "run-1", 1, "half a thou");
-		await waitFor(() => session.bufferFor("run-1").length > 0, { what: "the delta" });
+		await waitFor(() => runText(session, "run-1").length > 0, { what: "the delta" });
 		app.events.markInterrupted("run-1");
 
 		app.events.rebuildFocused();
@@ -208,7 +208,7 @@ describe("out-of-order run frames", () => {
 
 		server.pushEvent("agent", { type: "started", runId: "run-1", sessionKey: SESSION });
 		delta(server, "run-1", 1, "the answer is ");
-		await waitFor(() => session.bufferFor("run-1").length > 0, { what: "the first delta" });
+		await waitFor(() => runText(session, "run-1").length > 0, { what: "the first delta" });
 		server.pushEvent("agent", {
 			type: "completed",
 			runId: "run-1",

@@ -40,8 +40,10 @@ defmodule LemonBrowser.ProviderProbe do
 
   # Local failures are fixed atoms, never helper output, so BrowserProvider can
   # name the missing prerequisite without exposing paths or probe details.
+  # Attach-only configuration forbids launching, so `local` is unavailable then.
   def available?("local") do
-    with :ok <- node_available(),
+    with :ok <- launch_allowed(),
+         :ok <- node_available(),
          {:ok, config} <- local_configuration(),
          {:ok, %{"available" => true}} <- inspect_browser(config) do
       {:ok, "Managed local Chrome and its CDP driver are available."}
@@ -121,6 +123,10 @@ defmodule LemonBrowser.ProviderProbe do
     if System.find_executable("node"), do: :ok, else: {:error, :node_missing}
   end
 
+  defp launch_allowed do
+    if Env.get(:lemon_browser_attach_only) == true, do: {:error, :attach_only}, else: :ok
+  end
+
   # Node is checked first, so a configuration failure means the driver is absent.
   defp local_configuration do
     case LocalServer.configuration(driver_options("local")) do
@@ -129,8 +135,11 @@ defmodule LemonBrowser.ProviderProbe do
     end
   end
 
+  # `local` never uses a configured endpoint, and never overrides attach-only:
+  # with it set the probe reports `local` unavailable and the driver would
+  # refuse to launch.
   @doc false
-  def driver_options("local"), do: [cdp_endpoint: "", attach_only: false]
+  def driver_options("local"), do: [cdp_endpoint: ""]
 
   def driver_options("relay") do
     token = Env.get(:lemon_browser_relay_token) || ""

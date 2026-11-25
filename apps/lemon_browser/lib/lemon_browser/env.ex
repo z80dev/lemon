@@ -15,32 +15,7 @@ defmodule LemonBrowser.Env do
       aliases: [],
       type: :string,
       default: "local",
-      doc:
-        "Browser backend id: local, controller, hybrid, browserbase, browser_use, firecrawl, or camofox.",
-      secret?: false,
-      required?: false,
-      area: :browser,
-      apps: [:lemon_browser]
-    },
-    %{
-      name: :lemon_browser_hybrid_local_backend,
-      env_var: "LEMON_BROWSER_HYBRID_LOCAL_BACKEND",
-      aliases: [],
-      type: :string,
-      default: "local",
-      doc: "Local/private backend selected by the hybrid browser router.",
-      secret?: false,
-      required?: false,
-      area: :browser,
-      apps: [:lemon_browser]
-    },
-    %{
-      name: :lemon_browser_hybrid_public_backend,
-      env_var: "LEMON_BROWSER_HYBRID_PUBLIC_BACKEND",
-      aliases: [],
-      type: :string,
-      default: nil,
-      doc: "Explicit hosted backend selected by the hybrid router for public URLs.",
+      doc: "Browser backend id: local, tern, browserbase, browser_use, firecrawl, or camofox.",
       secret?: false,
       required?: false,
       area: :browser,
@@ -178,10 +153,11 @@ defmodule LemonBrowser.Env do
       type: :integer,
       default: 18_800,
       doc:
-        "Local CDP port used when launching a managed browser instance. Only positive " <>
-          "integers are accepted (0/negative/unparseable fall back to the default); " <>
-          "resolved with a bespoke parser in LemonBrowser.LocalServer, not the standard " <>
-          ":integer cast.",
+        "Local CDP port the driver attaches to in attach-only mode without an endpoint. " <>
+          "A managed (launched) browser always uses a free port it reports itself, never " <>
+          "this one. Only positive integers are accepted (0/negative/unparseable fall back " <>
+          "to the default); resolved with a bespoke parser in LemonBrowser.LocalServer, " <>
+          "not the standard :integer cast.",
       secret?: false,
       required?: false,
       area: :browser,

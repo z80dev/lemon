@@ -60,7 +60,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       refute :lemon_gateway in current.lemon_router
       refute :lemon_gateway in current.lemon_control_plane
 
-      assert current.lemon_gateway == [:lemon_agent, :lemon_core]
+      assert current.lemon_gateway == [:lemon_agent, :lemon_core, :lemon_media]
       assert exceptions.lemon_gateway == [:lemon_ai]
       refute :lemon_gateway in current.lemon_platform_test
 
@@ -168,7 +168,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
           def content(text), do: %TextContent{text: text}
         end
         """,
-        [:lemon_agent, :lemon_core]
+        [:lemon_agent, :lemon_core, :lemon_media]
       )
 
       try do
@@ -190,7 +190,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
             def content(text), do: %TextContent{text: text}
           end
           """,
-          [:lemon_agent, :lemon_ai, :lemon_core]
+          [:lemon_agent, :lemon_ai, :lemon_core, :lemon_media]
         )
 
         assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)

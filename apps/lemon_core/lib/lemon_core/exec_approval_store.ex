@@ -38,6 +38,10 @@ defmodule LemonCore.ExecApprovalStore do
   @spec list_global_policies() :: list()
   def list_global_policies, do: Store.list(@global_policy_table)
 
+  @doc "Read global tool/action approvals without interpreting store failure as none."
+  @spec fetch_global_policies() :: {:ok, list()} | {:error, :store_unavailable}
+  def fetch_global_policies, do: Store.fetch_all(@global_policy_table)
+
   @spec get_agent_policy(term(), term(), term()) :: map() | nil
   def get_agent_policy(agent_id, tool, action_hash),
     do: Store.get(@agent_policy_table, {agent_id, tool, action_hash})
@@ -71,8 +75,9 @@ defmodule LemonCore.ExecApprovalStore do
   @spec list_node_policies() :: list()
   def list_node_policies, do: Store.list(@node_policy_table)
 
-  @spec get_global_policy_map() :: map() | nil
-  def get_global_policy_map, do: Store.get(@global_policy_map_table, :global)
+  @doc "Read the global tool policy map; `{:ok, nil}` only when none is stored."
+  @spec fetch_global_policy_map() :: {:ok, map() | nil} | {:error, :store_unavailable}
+  def fetch_global_policy_map, do: Store.fetch(@global_policy_map_table, :global)
 
   @spec put_global_policy_map(map()) :: :ok
   def put_global_policy_map(value) when is_map(value),

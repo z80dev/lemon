@@ -55,6 +55,8 @@ defmodule LemonRouter.SessionCoordinator do
     end
   end
 
+  # Recovery reuses the crashed run's fixed ID: a call that exits may already
+  # have enqueued it, so the exit is an unknown outcome, never a rejection.
   @doc false
   def submit_recovered(conversation_key, %Submission{} = submission, opts \\ []) do
     with {:ok, pid} <- ensure_coordinator(conversation_key, opts) do
@@ -63,6 +65,8 @@ defmodule LemonRouter.SessionCoordinator do
         {:error, _} = error -> error
       end
     end
+  catch
+    :exit, _reason -> {:error, :outcome_unknown}
   end
 
   @doc """

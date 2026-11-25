@@ -16,7 +16,12 @@ errors and are not automatically restarted/retried.
 
 - Agent loops run under `LemonAgent.LoopTaskSupervisor`.
 - Tools run under `LemonAgent.ToolTaskSupervisor`; monitors connect crashes to
-  the corresponding tool result without crashing unrelated sessions.
+  the corresponding tool result without crashing unrelated sessions. A tool
+  never outlives its loop: a per-batch reaper owns the tasks and their per-tool
+  deadline, and when the loop exits for any reason (including a kill or a
+  stopped `Loop.stream/4` consumer) it aborts the run signal, gives cooperative
+  tools a short grace and terminates the rest. Runs started without a signal
+  get one, so cancellation always reaches pending tools.
 - Subagents are discoverable and supervised. Coordinators track their children
   and cancel outstanding work on timeout or parent termination.
 - Abort is cooperative and best-effort for external work. The loop checks the

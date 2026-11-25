@@ -2770,4 +2770,149 @@ defmodule LemonGateway.RunTest do
       assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2000
     end
   end
+
+  # ============================================================================
+  # Durable terminal outcome (#74): commit precedes publication
+  # ============================================================================
+
+  describe "durable terminal outcome" do
+    test "run_completed is published only after the terminal decision commits" do
+      scope = make_scope()
+
+      request =
+        make_request(scope,
+          scenario: "controllable",
+          meta: %{notify_pid: self(), controller_pid: self()}
+        )
+
+      run_id = request.run_id
+      parent = self()
+
+      # A finalize hook runs after the summary is written and before finalize
+      # returns, so holding it open freezes the run between commit and publish.
+      hook = fn
+        %{run_id: ^run_id, summary: summary} ->
+          send(parent, {:committed, self(), summary})
+
+          receive do
+            :release -> :ok
+          after
+            2_000 -> :ok
+          end
+
+        _other ->
+          :ok
+      end
+
+      :ok = LemonCore.Store.register_finalize_run_hook(hook)
+      on_exit(fn -> LemonCore.Store.unregister_finalize_run_hook(hook) end)
+      :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(run_id))
+
+      {:ok, pid} = start_run_direct(request)
+      assert_receive {:engine_started, run_ref}, 2_000
+
+      send(
+        pid,
+        {:engine_event, run_ref, Event.completed(%{engine: "lemon", ok: true, answer: "durable"})}
+      )
+
+      assert_receive {:committed, hook_pid, %{completed: %{ok: true, answer: "durable"}}}, 2_000
+      assert {:ok, %{summary: %{completed: %{ok: true}}}} = LemonCore.RunStore.fetch(run_id)
+      refute_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}, 200
+      refute_received {:lemon_gateway_run_completed, ^request, _}
+
+      send(hook_pid, :release)
+
+      assert %LemonCore.Event{payload: %{completed: %{ok: true, answer: "durable"}}} =
+               receive_bus_event(:run_completed)
+
+      assert_receive {:lemon_gateway_run_completed, ^request, %{ok: true}}, 2_000
+    end
+
+    test "a storage failure publishes nothing, releases capacity and never reruns the executor" do
+      scope = make_scope()
+
+      request =
+        make_request(scope,
+          scenario: "controllable",
+          meta: %{notify_pid: self(), controller_pid: self(), executor_observer: self()}
+        )
+
+      run_id = request.run_id
+      :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(run_id))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {:ok, pid} = LemonGateway.RunSupervisor.start_run(%{execution_request: request})
+          ref = Process.monitor(pid)
+          assert_receive {:executor_started, _request, _opts}, 2_000
+          assert_receive {:engine_started, run_ref}, 2_000
+
+          # Inject a deterministic persistence failure: the store now holds a run
+          # record that finalization rejects as invalid.
+          :ok = LemonCore.Store.put(:runs, run_id, %{events: [], started_at: 0})
+
+          send(
+            pid,
+            {:engine_event, run_ref,
+             Event.completed(%{engine: "lemon", ok: true, answer: "uncommitted"})}
+          )
+
+          assert_receive {:DOWN, ^ref, :process, ^pid, :terminal_persistence_failed}, 2_000
+        end)
+
+      assert log =~ "terminal_persistence_failed"
+      refute_received %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}
+      refute_received {:lemon_gateway_run_completed, ^request, _}
+      assert {:ok, record} = LemonCore.RunStore.fetch(run_id)
+      refute Map.has_key?(record, :summary)
+
+      LemonGateway.AsyncHelpers.assert_eventually(
+        fn -> match?({:ok, %{in_flight: 0, waitq: 0}}, LemonGateway.Slots.stats()) end,
+        message: "execution slot leaked after a persistence failure"
+      )
+
+      assert :ok = LemonGateway.EngineSessionClaim.claim({:session, scope})
+      LemonGateway.EngineSessionClaim.release({:session, scope})
+
+      # The temporary run is not restarted and the executor is not started again.
+      refute_receive {:executor_started, _request, _opts}, 300
+      assert Registry.lookup(LemonGateway.RunRegistry, run_id) == []
+    end
+
+    test "a run whose terminal decision already committed publishes no second completion" do
+      scope = make_scope()
+
+      request =
+        make_request(scope,
+          scenario: "controllable",
+          meta: %{notify_pid: self(), controller_pid: self()}
+        )
+
+      run_id = request.run_id
+      :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(run_id))
+
+      {:ok, pid} = start_run_direct(request)
+      ref = Process.monitor(pid)
+      assert_receive {:engine_started, run_ref}, 2_000
+
+      earlier = %{
+        run_id: run_id,
+        session_key: scope,
+        completed: %{run_id: run_id, session_key: scope, ok: false, error: :aborted, answer: ""}
+      }
+
+      assert :ok = LemonCore.RunStore.finalize(run_id, earlier)
+
+      send(
+        pid,
+        {:engine_event, run_ref, Event.completed(%{engine: "lemon", ok: true, answer: "late"})}
+      )
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2_000
+      refute_received %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}
+      refute_received {:lemon_gateway_run_completed, ^request, _}
+      assert {:ok, %{summary: ^earlier}} = LemonCore.RunStore.fetch(run_id)
+    end
+  end
 end

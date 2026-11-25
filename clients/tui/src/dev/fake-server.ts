@@ -10,11 +10,57 @@
 import type { ServerWebSocket } from "bun";
 import type { ProtocolErrorPayload, ReqFrame } from "../protocol/frames.ts";
 import { OMP_METHODS } from "../protocol/methods.ts";
+import type {
+	SessionEventCursor,
+	SessionSnapshotIdentity,
+	SessionsSnapshotResult,
+} from "../protocol/types.ts";
 import {
 	OMP_DISCOVERED_FIXTURES,
 	OMP_SESSION_FIXTURES,
 	type OmpWire,
 } from "./fixtures/omp-fixtures.ts";
+
+/**
+ * A `sessions.snapshot` success in the daemon's production layout: the live
+ * cursor lives only under `consistency.eventCursor` (pinned against the real
+ * method by the shared `session-events.json` fixture).
+ */
+export function sessionsSnapshotResult(options: {
+	identity: SessionSnapshotIdentity;
+	eventCursor: SessionEventCursor | null;
+	phase?: string;
+	answer?: string;
+}): Extract<SessionsSnapshotResult, { status: "ok" }> {
+	const items = { status: "ok" as const, items: [], truncated: false };
+	return {
+		status: "ok",
+		sessionKey: options.identity.sessionKey,
+		identity: options.identity,
+		contentWithheld: false,
+		continuation: false,
+		consistency: {
+			boundary: "stable_owner_reads",
+			atomic: false,
+			eventCursor: options.eventCursor,
+			runStatus: "ok",
+		},
+		snapshot: {
+			phase: options.phase ?? "idle",
+			terminal: false,
+			answer: { text: options.answer ?? "", canonical: false, truncated: false },
+			messages: [],
+			messagesTruncated: false,
+			actions: [],
+			actionsTruncated: false,
+			approvals: { ...items },
+			children: { ...items },
+			processes: { ...items },
+			todos: { ...items, revision: [0, null] },
+			plan: { status: "ok", value: { mode: "code", content: null, truncated: false } },
+		},
+	};
+}
 
 /** Return this from a handler to leave the request unanswered (timeout tests). */
 export const NO_RESPONSE = Symbol("fake-server:no-response");

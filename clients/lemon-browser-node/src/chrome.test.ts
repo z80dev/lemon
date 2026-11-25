@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import {
   ChromeSession,
+  OutcomeUnknownError,
   cdpDiscoveryUrl,
   defaultChromeExecutable,
   isCdpReachable,
@@ -20,7 +21,7 @@ const TEST_CONFIG = {
 };
 
 describe('ChromeSession.withPage', () => {
-  it('reconnects and retries once when playwright reports a closed target', async () => {
+  it('reconnects and retries a read-only operation once when playwright reports a closed target', async () => {
     const session = new ChromeSession(TEST_CONFIG);
     const firstPage = { id: 'first' } as any;
     const secondPage = { id: 'second' } as any;
@@ -39,12 +40,29 @@ describe('ChromeSession.withPage', () => {
       .mockRejectedValueOnce(new Error('Target page, context or browser has been closed'))
       .mockResolvedValueOnce({ ok: true });
 
-    const result = await session.withPage(operation);
+    const result = await session.withPage(operation, undefined, { retryOnClosedTarget: true });
 
     expect(result).toEqual({ ok: true });
     expect(reconnect).toHaveBeenCalledTimes(1);
     expect(operation).toHaveBeenNthCalledWith(1, firstPage);
     expect(operation).toHaveBeenNthCalledWith(2, secondPage);
+  });
+
+  it('never re-runs a side-effecting operation after a closed target: the outcome is unknown', async () => {
+    const session = new ChromeSession(TEST_CONFIG);
+    const getPage = vi.fn().mockResolvedValue({ id: 'page' });
+    const reconnect = vi.fn().mockResolvedValue(undefined);
+    // Test seam: replace the connection helpers on this instance.
+    Object.assign(session, { getPage, reconnect });
+
+    const click = vi.fn().mockRejectedValue(new Error('Target page, context or browser has been closed'));
+
+    const failure = await session.withPage(click).catch((err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(OutcomeUnknownError);
+    expect((failure as OutcomeUnknownError).code).toBe('outcome_unknown');
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(reconnect).not.toHaveBeenCalled();
   });
 
   it('does not retry when the error is unrelated to browser lifecycle', async () => {
@@ -62,6 +80,26 @@ describe('ChromeSession.withPage', () => {
     await expect(session.withPage(operation)).rejects.toThrow('selector not found');
     expect(reconnect).not.toHaveBeenCalled();
     expect(operation).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ChromeSession.start', () => {
+  it('releases what a failed start acquired so the next start begins clean', async () => {
+    const session = new ChromeSession(TEST_CONFIG);
+    const connect = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Timed out waiting for CDP'))
+      .mockResolvedValueOnce(undefined);
+    const stop = vi.fn().mockResolvedValue(undefined);
+    // Test seam: replace the connection steps on this instance.
+    Object.assign(session, { connect, stop });
+
+    await expect(session.start()).rejects.toThrow('Timed out waiting for CDP');
+    expect(stop).toHaveBeenCalledTimes(1);
+
+    await expect(session.start()).resolves.toBeUndefined();
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(stop).toHaveBeenCalledTimes(1);
   });
 });
 

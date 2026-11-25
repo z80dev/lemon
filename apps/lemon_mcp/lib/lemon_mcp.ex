@@ -13,7 +13,6 @@ defmodule LemonMCP do
   - `LemonMCP.Client` - GenServer client for stdio MCP servers
   - `LemonMCP.Client.HTTP` - Streamable HTTP client
   - `LemonMCP.Client.SSE` - Legacy HTTP+SSE client
-  - `LemonMCP.Sampling` - Policy-gated handling of server `sampling/createMessage` requests
 
   ## Quick Start
 

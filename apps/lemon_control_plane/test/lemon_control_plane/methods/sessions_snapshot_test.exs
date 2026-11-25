@@ -301,6 +301,34 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
     assert unavailable["snapshot"]["approvals"] == %{"status" => "unavailable"}
   end
 
+  test "approval projection shows command, path and arguments and flags a clipped plan", c do
+    plan = "## Plan\n" <> String.duplicate("step ", 1_000) <> "FINAL"
+
+    for {id, tool, action} <- [
+          {"a-bash", "bash", %{"command" => "rm -rf ./build", "cwd" => "/private/workspace"}},
+          {"b-edit", "edit", %{"path" => "lib/app.ex", "old_text" => "old", "new_text" => "new"}},
+          {"c-plan", "propose_plan", %{"title" => "Big", "plan" => plan}}
+        ] do
+      :ok = ExecApprovalStore.put_pending(id, %{approval(c, id) | tool: tool, action: action})
+    end
+
+    assert {:ok, result} = SessionsSnapshot.handle(params(c), ctx([:read, :approvals, :content]))
+    items = Map.new(result["snapshot"]["approvals"]["items"], &{&1["id"], &1})
+
+    assert items["a-bash"]["action"]["command"] == "rm -rf ./build"
+    assert items["a-bash"]["truncated"] == false
+    refute inspect(items["a-bash"]) =~ "/private/workspace"
+
+    assert items["b-edit"]["action"]["path"] == "lib/app.ex"
+    assert items["b-edit"]["argumentsPreview"] =~ ~s("new_text": "new")
+    assert items["b-edit"]["planTruncated"] == false
+
+    assert items["c-plan"]["planTruncated"] == true
+    assert items["c-plan"]["truncated"] == true
+    refute items["c-plan"]["action"]["plan"] =~ "FINAL"
+    assert result["snapshot"]["approvals"]["truncated"] == true
+  end
+
   test "only read-authorized operators can collect native owner recovery", c do
     assert {:error, _} =
              Registry.dispatch("sessions.snapshot", params(c), %{

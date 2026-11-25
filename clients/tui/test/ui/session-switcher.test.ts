@@ -3,6 +3,7 @@ import type { SessionRow } from "../../src/commands/session.ts";
 import { FakeControlPlane } from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
 import { ControlPlaneMethods } from "../../src/protocol/methods.ts";
+import { cwdSessionTag } from "../../src/session-key.ts";
 import { AppStore } from "../../src/store/app-store.ts";
 import type { PickerOverlay } from "../../src/ui/components/pickers.ts";
 import {
@@ -57,6 +58,7 @@ interface SwitcherHarness {
 	switched: string[];
 	created: Array<{ key: string | undefined; prompt: string | undefined }>;
 	closed: string[];
+	notices: string[];
 	presented: PickerOverlay[];
 }
 
@@ -66,6 +68,7 @@ async function bootSwitcher(
 		active?: Array<Record<string, unknown>>;
 		stored?: Array<Record<string, unknown>>;
 		now?: number;
+		onSwitch?: (key: string) => void;
 	} = {},
 ): Promise<SwitcherHarness> {
 	const server = await FakeControlPlane.start();
@@ -89,6 +92,7 @@ async function bootSwitcher(
 	const switched: string[] = [];
 	const created: Array<{ key: string | undefined; prompt: string | undefined }> = [];
 	const closed: string[] = [];
+	const notices: string[] = [];
 
 	const switcher = new SessionSwitcher({
 		store,
@@ -100,6 +104,7 @@ async function bootSwitcher(
 		repaint: () => {},
 		switchSession: (key) => {
 			switched.push(key);
+			options.onSwitch?.(key);
 		},
 		createSession: (key, prompt) => {
 			created.push({ key, prompt });
@@ -107,7 +112,8 @@ async function bootSwitcher(
 		closeSession: (key) => {
 			closed.push(key);
 		},
-		notice: () => {},
+		notice: (text) => notices.push(text),
+		cwd: "/repo",
 		now: () => options.now ?? Date.now(),
 	});
 	teardown.push(() => switcher.close());
@@ -120,6 +126,7 @@ async function bootSwitcher(
 		switched,
 		created,
 		closed,
+		notices,
 		overlay: () => {
 			const overlay = presented[presented.length - 1];
 			if (!overlay) throw new Error("no overlay was presented");
@@ -241,6 +248,44 @@ describe("SessionSwitcher", () => {
 
 		expect(harness.switched).toEqual(["tui-b"]);
 		expect(harness.switcher.isOpen).toBe(false);
+	});
+
+	test("a session from another directory is marked and refused without leaving a store", async () => {
+		const foreign = `agent:default:tui:local:dm:${cwdSessionTag("/elsewhere")}-x`;
+		const harness = await bootSwitcher({
+			sessionKey: "tui-a",
+			stored: [{ sessionKey: foreign, updatedAtMs: 99 }],
+		});
+		await harness.switcher.open();
+		harness.overlay().handleInput(foreign.slice(-20));
+		await waitFor(() => harness.overlay().selected?.value === foreign, { what: "the row" });
+		expect(harness.rendered()).toContain("other directory");
+
+		harness.overlay().handleInput("\r");
+		await waitFor(() => harness.notices.length > 0, { what: "the refusal notice" });
+
+		expect(harness.notices[0]).toContain("another directory");
+		expect(harness.switched).toEqual([]);
+		expect(harness.store.focusedKey).toBe("tui-a");
+		expect(harness.store.sessions.has(foreign)).toBe(false);
+	});
+
+	test("a failing switch is reported, never thrown out of the switcher", async () => {
+		const harness = await bootSwitcher({
+			sessionKey: "tui-a",
+			stored: [{ sessionKey: "tui-b", updatedAtMs: 99 }],
+			onSwitch: () => {
+				throw new Error("switch exploded");
+			},
+		});
+		await harness.switcher.open();
+		harness.overlay().handleInput("tui-b");
+		await waitFor(() => harness.overlay().selected?.value === "tui-b", { what: "the row" });
+		harness.overlay().handleInput("\r");
+		await waitFor(() => harness.notices.length > 0, { what: "the failure notice" });
+
+		expect(harness.notices[0]).toContain("could not switch session");
+		expect(harness.store.sessions.has("tui-b")).toBe(false);
 	});
 
 	test("ctrl+n opens an inline prompt, and enter creates the session with it", async () => {

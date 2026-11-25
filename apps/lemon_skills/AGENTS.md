@@ -9,7 +9,9 @@ Coding-session/file tools belong in `coding_agent`. Usage lives in the
 ## Registry and manifests
 
 - Skills are `SKILL.md` bundles, not compiled tools. Keep manifest keys strings;
-  YAML uses `YamlElixir`, TOML the existing supported subset. Normalize external
+  YAML frontmatter (skills, subagents, rules) goes through `LemonSkills.Frontmatter`,
+  never `YamlElixir.read_from_string` (it starts `:yamerl` and can deadlock
+  session init); TOML uses the existing supported subset. Normalize external
   platform/prerequisite aliases at the manifest boundary.
 - Name/description and metadata lists are bounded valid single-line UTF-8 with
   no control/bidi characters. Missing legacy fields may use registry defaults;
@@ -85,8 +87,8 @@ Coding-session/file tools belong in `coding_agent`. Usage lives in the
   Keep public artifacts/errors bounded and redacted.
 - `McpSource` consumes external stdio/HTTP/SSE MCP services through supervised
   clients. Model-facing names are namespaced; raw remote names stay inside the
-  client boundary. Preserve exact filters, capability gating, redacted sampling
-  review and credential isolation. Do not add a server surface here.
+  client boundary. Preserve exact filters, capability gating and credential
+  isolation. Do not add a server surface here.
 - Project MCP files, `.lemon/mcp.json` included, contribute only while the
   operator's agent-dir trust record matches the digest of those exact files
   (`McpDiscovery`); project content never grants trust, never expands host
