@@ -133,7 +133,6 @@ defmodule LemonChannels.KanbanStatusMessage do
          {:ok, policy} <-
            apply(module, :resolve_validated_for_run, [
              %{
-               agent_id: principal.agent_id,
                session_key: principal.session_key,
                channel_context: opts[:channel_context]
              }

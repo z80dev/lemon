@@ -1,10 +1,12 @@
 defmodule LemonCore.PolicyStore do
   @moduledoc """
-  Agent, channel, session, and runtime policy persistence.
+  The policy plane: per-session policy rows.
 
-  Each scope has its own durable table (`:agent_policies`,
-  `:channel_policies`, `:session_policies`); the operator's global runtime
-  override lives under the `:global` key of `:runtime_policy`.
+  A session row (`:session_policies`, keyed by session key) holds the
+  session's model and thinking overrides and its tool-policy override.
+  `sessions.patch` and the channel `/model` commands write it;
+  `LemonCore.SessionLifecycle` deletes it with the session. Configuration
+  supplies defaults; there is no agent, channel or global runtime policy row.
 
   Policy rows restrict execution, so reads fail closed: `{:ok, nil}` means the
   Store confirmed no row exists, and a backend error, call timeout or missing
@@ -14,30 +16,10 @@ defmodule LemonCore.PolicyStore do
 
   alias LemonCore.Store
 
-  @agent_table :agent_policies
-  @channel_table :channel_policies
   @session_table :session_policies
-  @runtime_table :runtime_policy
-  @runtime_key :global
   @max_update_attempts 8
 
   @type fetched :: {:ok, map() | nil} | {:error, :store_unavailable}
-
-  @doc "Fetches the policy for the given agent; `{:ok, nil}` only when none is stored."
-  @spec fetch_agent(binary()) :: fetched()
-  def fetch_agent(agent_id), do: Store.fetch(@agent_table, agent_id)
-
-  @doc "Stores a policy for the given agent."
-  @spec put_agent(binary(), map()) :: :ok | {:error, term()}
-  def put_agent(agent_id, policy), do: Store.put(@agent_table, agent_id, policy)
-
-  @doc "Fetches the policy for the given channel; `{:ok, nil}` only when none is stored."
-  @spec fetch_channel(binary()) :: fetched()
-  def fetch_channel(channel_id), do: Store.fetch(@channel_table, channel_id)
-
-  @doc "Stores a policy for the given channel."
-  @spec put_channel(binary(), map()) :: :ok | {:error, term()}
-  def put_channel(channel_id, policy), do: Store.put(@channel_table, channel_id, policy)
 
   @doc "Fetches the policy for the given session; `{:ok, nil}` only when none is stored."
   @spec fetch_session(binary()) :: fetched()
@@ -76,16 +58,4 @@ defmodule LemonCore.PolicyStore do
   @doc "Deletes the policy for the given session."
   @spec delete_session(binary()) :: :ok | {:error, term()}
   def delete_session(session_key), do: Store.delete(@session_table, session_key)
-
-  @doc "Fetches the runtime policy; `{:ok, nil}` only when none is stored."
-  @spec fetch_runtime() :: fetched()
-  def fetch_runtime, do: Store.fetch(@runtime_table, @runtime_key)
-
-  @doc "Stores the runtime policy."
-  @spec put_runtime(map()) :: :ok | {:error, term()}
-  def put_runtime(policy), do: Store.put(@runtime_table, @runtime_key, policy)
-
-  @doc "Deletes the runtime policy."
-  @spec delete_runtime() :: :ok | {:error, term()}
-  def delete_runtime, do: Store.delete(@runtime_table, @runtime_key)
 end

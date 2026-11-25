@@ -35,10 +35,7 @@ defmodule LemonAutomation.CronLauncherAuthorityTest do
     {:ok, _} = Application.ensure_all_started(:lemon_automation)
     clear_cron_data()
 
-    PolicyStore.put_channel("telegram", %{blocked_tools: ["browser"]})
-
     on_exit(fn ->
-      LemonCore.Store.delete(:channel_policies, "telegram")
       clear_cron_data()
 
       if is_nil(previous_paths),
@@ -325,7 +322,11 @@ defmodule LemonAutomation.CronLauncherAuthorityTest do
         peer_id: peer_id
       })
 
-    :ok = PolicyStore.put_session(session_key, %{tool_policy: %{"profile" => "no_external"}})
+    :ok =
+      PolicyStore.put_session(session_key, %{
+        tool_policy: %{"profile" => "no_external", "blocked_tools" => ["browser"]}
+      })
+
     on_exit(fn -> PolicyStore.delete_session(session_key) end)
 
     request =

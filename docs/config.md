@@ -2764,8 +2764,8 @@ is `exec`. `lsp_diagnostics` is `exec` and records a durable tool intent first.
 
 Config supplies only the default. A canonical tool policy can set
 `approval_mode = "ask"`, `"write"` or `"yolo"` in
-`[profiles.<id>.tool_policy]` or through the existing PolicyStore session/runtime
-policy. Explicit policy modes win over the config default. Policy intersections
+`[profiles.<id>.tool_policy]` or through the PolicyStore session policy
+(`sessions.patch`). Explicit policy modes win over the config default. Policy intersections
 retain the stricter mode, so delegated work cannot weaken parent approval gates.
 The existing `approvals` map (`always`/`never`) overrides tier defaults in every
 mode; `require_approval`, parent floors, and explicitly configured MCP approval

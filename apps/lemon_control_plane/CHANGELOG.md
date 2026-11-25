@@ -4,6 +4,12 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** `exec.approvals.get` no longer returns the never-written
+  `policy` map, `summary.policyCount` or `summary.cleanup.includesPolicy`; its
+  `approvals` list is the remembered `approve_global` grants (#709).
+
 ### Fixed
 
 - A method with any scope beyond `:read` that raises, throws or whose async task

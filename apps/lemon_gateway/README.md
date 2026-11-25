@@ -151,9 +151,9 @@ with `retry_safe: false` and never submit another run.
 
 Each authenticated webhook run carries `meta.channel_context` derived from the
 integration whose token matched (`channel_id: "webhook"`, the integration ID as
-account and peer), never from the payload. The router applies the
-`channel_policies["webhook"]` row from that provenance and refuses a `:webhook`
-request without it. A token authenticates the integration, not the content it
+account and peer), never from the payload. The router applies the group
+approval floor from that provenance and refuses a `:webhook` request without
+it. A token authenticates the integration, not the content it
 relays, so by default the provenance is classified `peer_kind: :automation` and
 every `bash`, `write`, `edit`, `patch` and `hashline_edit` call needs approval
 (the group approval floor). An operator opts one integration out in the global

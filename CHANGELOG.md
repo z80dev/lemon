@@ -663,6 +663,19 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** the unwritten policy scopes. `LemonCore.PolicyStore` keeps only
+  the session row (`fetch_session/1`, `put_session/2`, `update_session/2`,
+  `delete_session/1`); `put_agent/2`, `fetch_agent/1`, `put_channel/2`,
+  `fetch_channel/1`, `put_runtime/1`, `fetch_runtime/0` and `delete_runtime/0`
+  are gone, and the router no longer reads `:agent_policies`,
+  `:channel_policies` or `:runtime_policy` (nothing ever wrote them). Admission
+  reads the session row once per run for model, thinking level and tool policy.
+  The exec-approval node grants (`get_/put_node_policy`), the global and node
+  policy maps (`fetch_global_policy_map/0`, `get_/put_node_policy_map`) and the
+  `list_*_policies/0` helpers are removed; `exec.approvals.get` drops its
+  always-empty `policy` field, `summary.policyCount` and
+  `summary.cleanup.includesPolicy`. A guard test fails when a policy table is
+  read without a production writer (#709).
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.

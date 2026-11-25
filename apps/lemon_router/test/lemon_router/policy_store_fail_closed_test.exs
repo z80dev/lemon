@@ -31,6 +31,10 @@ defmodule LemonRouter.PolicyStoreFailClosedTest do
           Process.sleep(ms)
           EtsBackend.get(state, table, key)
 
+        {:count, pid} ->
+          send(pid, {:store_read, table, key})
+          EtsBackend.get(state, table, key)
+
         nil ->
           EtsBackend.get(state, table, key)
       end
@@ -100,17 +104,27 @@ defmodule LemonRouter.PolicyStoreFailClosedTest do
     refute LemonCore.ToolPolicy.allowed?(job.tool_policy, "bash")
   end
 
-  for table <- [:session_policies, :agent_policies, :runtime_policy, :channel_policies] do
-    test "a failed #{table} read rejects the submission instead of running with full access",
+  for origin <- [:control_plane, :channel] do
+    test "a failed session policy read rejects a #{origin} submission instead of running with full access",
          ctx do
-      FaultBackend.set(%{unquote(table) => :error})
-      origin = if unquote(table) == :channel_policies, do: :channel, else: :control_plane
+      FaultBackend.set(%{session_policies: :error})
 
-      assert RunOrchestrator.submit(ctx.orchestrator, request(ctx.session_key, origin)) ==
+      assert RunOrchestrator.submit(ctx.orchestrator, request(ctx.session_key, unquote(origin))) ==
                {:error, :policy_unavailable}
 
       refute_receive {:captured_job, _job}, 200
     end
+  end
+
+  test "admission reads the session policy row exactly once per run", ctx do
+    FaultBackend.set(%{session_policies: {:count, self()}})
+
+    assert {:ok, submission} = SubmissionBuilder.build(request(ctx.session_key, :channel), %{})
+    refute LemonCore.ToolPolicy.allowed?(submission.execution_request.tool_policy, "bash")
+
+    session_key = ctx.session_key
+    assert_received {:store_read, :session_policies, ^session_key}
+    refute_received {:store_read, :session_policies, _key}
   end
 
   @tag timeout: 30_000

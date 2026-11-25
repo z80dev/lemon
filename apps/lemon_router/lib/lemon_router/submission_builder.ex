@@ -103,12 +103,12 @@ defmodule LemonRouter.SubmissionBuilder do
     with {:ok, settings} <- settings(opts),
          :ok <- require_channel_provenance(origin, meta),
          :ok <- require_goal_binding(origin, meta, cwd_override),
-         {:ok, session_config} <- get_session_config(session_key),
+         {:ok, session_row} <- get_session_row(session_key),
          {:ok, agent_profile} <- get_execution_profile(agent_id, meta, settings),
          {:ok, tool_policy} <-
            resolve_tool_policy(agent_profile, tool_policy_override, %{
-             agent_id: agent_id,
              session_key: session_key,
+             session_policy: {:ok, session_row},
              channel_context: MapHelpers.get_key(meta, :channel_context)
            }),
          cwd <- resolve_effective_cwd(cwd_override, meta, origin),
@@ -152,6 +152,7 @@ defmodule LemonRouter.SubmissionBuilder do
           prompt
         end
 
+      session_config = session_row || %{}
       session_model = MapHelpers.get_key(session_config, :model)
       session_thinking_level = MapHelpers.get_key(session_config, :thinking_level)
       request_thinking_level = MapHelpers.get_key(meta, :thinking_level)
@@ -249,8 +250,8 @@ defmodule LemonRouter.SubmissionBuilder do
   defp settings(%{admission_settings: %{} = settings}), do: {:ok, settings}
   defp settings(_opts), do: admission_settings()
 
-  # Channel-origin runs carry the transport-derived context (channel policy and
-  # group approval floor) and sender identity (memory isolation, approvals) that
+  # Channel-origin runs carry the transport-derived context (group approval
+  # floor) and sender identity (memory isolation, approvals) that
   # `LemonChannels.RunRequestBuilder` attaches. A channel request without them,
   # such as work persisted before they existed and replayed after an upgrade, is
   # definitively refused rather than run with no channel restrictions.
@@ -312,7 +313,6 @@ defmodule LemonRouter.SubmissionBuilder do
     with {:ok, profile} <- get_managed_profile(profile_id),
          {:ok, policy} <-
            resolve_tool_policy(profile, nil, %{
-             agent_id: profile_id,
              session_key: session_key,
              channel_context: MapHelpers.get_key(meta || %{}, :channel_context)
            }) do
@@ -328,12 +328,13 @@ defmodule LemonRouter.SubmissionBuilder do
     end
   end
 
-  defp get_session_config(nil), do: {:ok, %{}}
+  # The session's one PolicyStore read per admission: model, thinking level and
+  # tool policy all come from this row.
+  defp get_session_row(nil), do: {:ok, nil}
 
-  defp get_session_config(session_key) do
+  defp get_session_row(session_key) do
     case LemonCore.PolicyStore.fetch_session(session_key) do
-      {:ok, nil} -> {:ok, %{}}
-      {:ok, config} when is_map(config) -> {:ok, config}
+      {:ok, row} when is_map(row) or is_nil(row) -> {:ok, row}
       {:ok, _invalid} -> {:error, :invalid_session_policy}
       {:error, _reason} -> {:error, :policy_unavailable}
     end

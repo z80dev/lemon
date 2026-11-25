@@ -8,6 +8,16 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Removed
 
+- **Breaking:** `LemonCore.PolicyStore` agent, channel and runtime scopes
+  (`fetch_agent/1`, `put_agent/2`, `fetch_channel/1`, `put_channel/2`,
+  `fetch_runtime/0`, `put_runtime/1`, `delete_runtime/0`): they had no writer.
+  `LemonCore.ExecApprovalStore` node grants (`get_node_policy/3`,
+  `put_node_policy/4`), the policy maps (`fetch_global_policy_map/0`,
+  `put_global_policy_map/1`, `get_node_policy_map/1`, `put_node_policy_map/2`)
+  and the `list_global_policies/0`, `list_agent_policies/0`,
+  `list_session_policies/0`, `list_node_policies/0` helpers; `ExecApprovals.request/1`
+  ignores `:node_id`. The remaining approval rows are documented as approval
+  memory, not policy (#709).
 - **Breaking:** the `controller` and `hybrid` ids from
   `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
 

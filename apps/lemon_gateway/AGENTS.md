@@ -37,8 +37,8 @@ Webhook mutation boundaries are deliberately conservative:
 
 - Derive `meta.channel_context` (`channel_id: "webhook"`) from the integration
   whose token authenticated the request, never from the payload; the router
-  applies the `webhook` channel policy from it and refuses `:webhook` requests
-  without it. Authentication is not content trust: classify the integration
+  applies the approval floor from it and refuses `:webhook` requests without
+  it. Authentication is not content trust: classify the integration
   `peer_kind: :automation` (group approval floor) unless the operator's global
   config sets a literal `trusted_automation = true` on that integration.
 - Reserve idempotency keys atomically before submission. Hash the caller's key

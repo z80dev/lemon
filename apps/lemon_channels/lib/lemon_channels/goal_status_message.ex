@@ -162,7 +162,6 @@ defmodule LemonChannels.GoalStatusMessage do
          {:ok, policy} <-
            apply(module, :resolve_validated_for_run, [
              %{
-               agent_id: opts[:agent_id],
                session_key: session_key,
                origin: :channel,
                channel_context: context

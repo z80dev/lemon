@@ -248,8 +248,8 @@ policy, group approval floor and session restrictions such as `no_external`),
 a later agent update narrows it to the updating session's policy, and a run the
 agent triggers also runs within the triggering session's policy. Every run
 of a job whose session is a Telegram or Discord chat (including `/remind`
-reminders) also gets that chat's current channel policy, group approval floor
-and session policy, so an approval-gated shell or file edit in a group still
+reminders) also gets that chat's group approval floor and current session
+policy, so an approval-gated shell or file edit in a group still
 needs an approval when it runs from a schedule. Scheduled runs cannot start
 goals, kanban work, or messages to other sessions and A2A peers, because that
 work would not carry the run's restrictions. A job whose recorded authority or
@@ -403,8 +403,8 @@ default.
 
 Goal work never runs with more authority than the session or chat that set
 it. `set` records that caller's tool policy and working directory; a chat's
-`/goal set` records the chat's channel policy (including the group-chat
-approval requirement for shell and file edits) and its bound project
+`/goal set` records the chat's policy (including the group-chat approval
+requirement for shell and file edits) and its bound project
 directory. Every later judge and continuation run, including automatic
 restarts, is limited to that recorded policy and directory. Starting a goal is
 limited to its own session and agent: a session can only start a goal whose

@@ -6,32 +6,6 @@ defmodule LemonCore.PolicyStoreTest do
   # Policies are durable: these pin the tables and keys existing stores hold
   # them under, so a user's persisted policies keep loading.
 
-  test "agent policies live in :agent_policies keyed by agent id" do
-    agent_id = "agent_#{System.unique_integer([:positive])}"
-    policy = %{approvals: %{"bash" => :always}}
-
-    :ok = PolicyStore.put_agent(agent_id, policy)
-
-    assert PolicyStore.fetch_agent(agent_id) == {:ok, policy}
-    assert Store.get(:agent_policies, agent_id) == policy
-
-    :ok = Store.delete(:agent_policies, agent_id)
-    assert PolicyStore.fetch_agent(agent_id) == {:ok, nil}
-  end
-
-  test "channel policies live in :channel_policies keyed by channel id" do
-    channel_id = "channel_#{System.unique_integer([:positive])}"
-    policy = %{blocked_tools: ["exec_raw"]}
-
-    :ok = PolicyStore.put_channel(channel_id, policy)
-
-    assert PolicyStore.fetch_channel(channel_id) == {:ok, policy}
-    assert Store.get(:channel_policies, channel_id) == policy
-
-    :ok = Store.delete(:channel_policies, channel_id)
-    assert PolicyStore.fetch_channel(channel_id) == {:ok, nil}
-  end
-
   test "session policies live in :session_policies keyed by session key" do
     session_key = "agent:test:main:#{System.unique_integer([:positive])}"
     policy = %{model: "gpt-test", thinking_level: :high}
@@ -62,21 +36,20 @@ defmodule LemonCore.PolicyStoreTest do
              {:ok, %{model: "m2", tool_policy: %{deny: ["bash"]}}}
   end
 
-  test "the runtime policy lives under :global in :runtime_policy" do
-    {:ok, previous} = PolicyStore.fetch_runtime()
+  test "only the session policy scope exists" do
+    Code.ensure_loaded!(PolicyStore)
 
-    on_exit(fn ->
-      if previous, do: PolicyStore.put_runtime(previous), else: PolicyStore.delete_runtime()
-    end)
-
-    policy = %{deny: ["bash"]}
-    :ok = PolicyStore.put_runtime(policy)
-
-    assert PolicyStore.fetch_runtime() == {:ok, policy}
-    assert Store.get(:runtime_policy, :global) == policy
-
-    :ok = PolicyStore.delete_runtime()
-    assert PolicyStore.fetch_runtime() == {:ok, nil}
-    assert Store.get(:runtime_policy, :global) == nil
+    for {fun, arity} <- [
+          fetch_agent: 1,
+          put_agent: 2,
+          fetch_channel: 1,
+          put_channel: 2,
+          fetch_runtime: 0,
+          put_runtime: 1,
+          delete_runtime: 0
+        ] do
+      refute function_exported?(PolicyStore, fun, arity),
+             "PolicyStore.#{fun}/#{arity} is an unwritten policy scope"
+    end
   end
 end
