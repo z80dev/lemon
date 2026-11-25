@@ -356,14 +356,10 @@ defmodule LemonGateway.RunTest do
     request = make_request(make_scope(), meta: %{executor_observer: self()})
     now = System.system_time(:millisecond)
 
-    # What retention leaves behind: no `:runs` record, only the tombstone.
-    :ok =
-      LemonCore.Store.put(:run_tombstones, request.run_id, %{
-        finalized_at_ms: now,
-        expires_at: now + 60_000
-      })
+    # What retention leaves behind: no `:runs` record, only the terminal marker.
+    :ok = LemonCore.Store.put(:run_terminals, request.run_id, %{finalized_at_ms: now})
 
-    on_exit(fn -> LemonCore.Store.delete(:run_tombstones, request.run_id) end)
+    on_exit(fn -> LemonCore.Store.delete(:run_terminals, request.run_id) end)
     assert {:error, :evicted} = LemonCore.RunStore.fetch(request.run_id)
 
     {:ok, pid} = start_run_direct(request)
