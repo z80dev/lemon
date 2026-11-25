@@ -731,8 +731,8 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
       "acct-ambient-chatgpt-trap"
     ])
 
-    assert {:assistant_error, message} = reason
-    assert message =~ "ChatGPT token is required"
+    assert reason ==
+             {:assistant_error, "A resolved credential is required for provider openai_codex."}
   end
 
   # Public Session wire through the real Anthropic backend. An OAuth payload
