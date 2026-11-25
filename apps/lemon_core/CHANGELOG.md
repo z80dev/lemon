@@ -6,6 +6,17 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Changed
+
+- Writable client stores (`defer_to_runtime: true`) write only while the
+  client's supervised `RuntimeOwner` (`client: true`) holds
+  `<db>.client.lock` and the runtime lock for the VM's lifetime; beside a
+  running runtime they refuse every mutation with `{:error, :runtime_owned}`,
+  and a runtime booting while a client holds them waits its lock deadline,
+  then refuses to start (`:store_held_by_client`) instead of writing.
+  `Store.write_access/1` reports it. `Secrets.list/1` on a client store hides
+  expired rows without pruning them (#667).
+
 ### Removed
 
 - **Breaking:** retired WASM tool support (#707): `LemonCore.Config.Tools`
@@ -19,6 +30,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - **Breaking:** the `feature_progress/1` agent-runtime provider callback and the
   `report_issue`, `todoread` and `todowrite` tool-catalogue entries (#706).
 
+- **Breaking:** the `mix lemon.secrets.*` tasks; `lemon secrets` is the only
+  secrets command-line interface (#717).
 - **Breaking:** the `controller` and `hybrid` ids from
   `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
 - **Breaking:** `LemonCore.Context`, `LemonCore.Context.Document` and

@@ -16,6 +16,11 @@ All notable changes to `lemon_control_plane` are documented here.
 - `sessions.active.list` harness snapshots no longer include `requirements`
   (feature-requirement progress had no writer); an unreadable stopped-session
   todo history still fails the request explicitly (#706).
+### Added
+
+- Admin `secrets.set` / `secrets.delete`: write-only secret store mutations for
+  one-shot CLI clients beside the runtime; refusals carry a bounded
+  `details.reason` and `mutationMayHaveApplied: false` (#667).
 
 ### Fixed
 

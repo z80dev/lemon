@@ -55,10 +55,16 @@ defmodule LemonCore.Store do
   ## Client options
 
   One-shot client VMs (see `LemonCore.Application` boot modes) start the store
-  with `sweep: false`, leaving sweeps to the runtime that owns the database, and
-  read-only commands add `read_only: true`: every mutation then returns
-  `{:error, :read_only}` without reaching the backend, and run/introspection
-  appends are dropped.
+  with `sweep: false`, leaving sweeps to the runtime that owns the database.
+  Writable clients add `defer_to_runtime: true`: a file-backed store starts
+  refusing every mutation with `{:error, :runtime_owned}` and accepts writes
+  only once the client's `LemonCore.RuntimeOwner` holds the database's
+  ownership locks for the VM's lifetime (`claim_writes/1`). Beside a running
+  runtime it never does, and the command must ask that runtime to write
+  instead, so the client is never a second writer beside it. Read-only
+  commands add `read_only: true`: every mutation returns
+  `{:error, :read_only}`. Refused mutations never reach the backend, and
+  run/introspection appends are dropped. `write_access/1` reports which applies.
 
   ## Run records and their retention
 
@@ -177,6 +183,20 @@ defmodule LemonCore.Store do
   def configured_backend do
     Keyword.get(resolve_config(__MODULE__, []), :backend, @default_backend)
   end
+
+  @doc """
+  Whether this store accepts mutations: `:ok`, `{:error, :read_only}` for a
+  read-only client, or `{:error, :runtime_owned}` for a client beside a running
+  runtime that owns the database (see "Client options").
+  """
+  @spec write_access(server()) :: :ok | {:error, :read_only | :runtime_owned}
+  def write_access(server \\ __MODULE__), do: GenServer.call(server, :write_access)
+
+  @doc false
+  # Called by a client `LemonCore.RuntimeOwner` once it holds the ownership
+  # locks; only a store started with `defer_to_runtime: true` starts writing.
+  @spec claim_writes(server()) :: :ok
+  def claim_writes(server \\ __MODULE__), do: GenServer.call(server, :claim_writes)
 
   # Run Events API
 
@@ -1034,6 +1054,7 @@ defmodule LemonCore.Store do
 
         # Client VMs leave periodic sweeps to the runtime owning the database.
         _ = if Keyword.get(config, :sweep, true), do: schedule_sweep()
+        write_refusal = write_refusal(config, backend_state)
 
         {:ok,
          %{
@@ -1047,11 +1068,29 @@ defmodule LemonCore.Store do
            run_events_expiry: run_events_expiry,
            runs_retention_ms: runs_retention_ms,
            introspection_retention_ms: @default_introspection_retention_ms,
-           read_only: Keyword.get(config, :read_only, false) == true
+           read_only: write_refusal != nil,
+           write_refusal: write_refusal,
+           defer_to_runtime: Keyword.get(config, :defer_to_runtime, false) == true
          }}
 
       {:error, reason} ->
         {:stop, {:backend_init_failed, reason}}
+    end
+  end
+
+  # A writable client's file-backed store waits for its RuntimeOwner to hold
+  # the database's ownership locks; an in-memory store cannot be shared.
+  defp write_refusal(config, backend_state) do
+    cond do
+      Keyword.get(config, :read_only, false) == true ->
+        :read_only
+
+      Keyword.get(config, :defer_to_runtime, false) == true and
+          match?(%{path: path} when is_binary(path), backend_state) ->
+        :runtime_owned
+
+      true ->
+        nil
     end
   end
 
@@ -1080,7 +1119,8 @@ defmodule LemonCore.Store do
       :finalize_run_hooks,
       :sweep,
       :read_only,
-      :runs_retention_ms
+      :runs_retention_ms,
+      :defer_to_runtime
     ])
     |> then(&Keyword.merge(env_config, &1))
   end
@@ -1128,8 +1168,9 @@ defmodule LemonCore.Store do
 
   defp merge_runtime_override(config, _override), do: config
 
-  # A read-only store (a one-shot client VM beside a running runtime) refuses
-  # every mutation before it reaches the backend, so it is never a second writer.
+  # A read-only store (a read-only one-shot client, or a writable one beside a
+  # running runtime) refuses every mutation before it reaches the backend, so it
+  # is never a second writer.
   @read_only_refused [
     :generic_put,
     :generic_put_new,
@@ -1145,7 +1186,24 @@ defmodule LemonCore.Store do
   @impl true
   def handle_call(request, _from, %{read_only: true} = state)
       when is_tuple(request) and elem(request, 0) in @read_only_refused,
-      do: {:reply, {:error, :read_only}, state}
+      do: {:reply, {:error, state.write_refusal}, state}
+
+  def handle_call(:write_access, _from, %{read_only: true} = state),
+    do: {:reply, {:error, state.write_refusal}, state}
+
+  def handle_call(:write_access, _from, state), do: {:reply, :ok, state}
+
+  # The claimer holds the ownership locks; when it exits the store stops writing.
+  def handle_call(
+        :claim_writes,
+        {claimer, _tag},
+        %{defer_to_runtime: true, write_refusal: :runtime_owned} = state
+      ) do
+    Process.monitor(claimer)
+    {:reply, :ok, %{state | read_only: false, write_refusal: nil}}
+  end
+
+  def handle_call(:claim_writes, _from, state), do: {:reply, :ok, state}
 
   def handle_call(:location, _from, state) do
     path =
@@ -2080,7 +2138,11 @@ defmodule LemonCore.Store do
   # 48 hours for idempotency entries
   @idempotency_retention_ms 48 * 60 * 60 * 1000
 
+  # A client's ownership process exited (and released its locks): stop writing.
   @impl true
+  def handle_info({:DOWN, _ref, :process, _claimer, _reason}, %{defer_to_runtime: true} = state),
+    do: {:noreply, %{state | read_only: true, write_refusal: :runtime_owned}}
+
   def handle_info(:sweep_expired, state) do
     now = System.system_time(:millisecond)
 

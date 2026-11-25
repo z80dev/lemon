@@ -29,9 +29,6 @@ defmodule LemonCli.CLI do
   alias LemonCore.Doctor.{Check, Report, SupportBundle}
   alias LemonCore.Doctor.RuntimeModules
   alias LemonCore.Runtime.{Env, Health}
-  alias LemonCore.Secrets
-  alias LemonCore.Secrets.EnvCatalog
-  alias LemonCore.Secrets.KeyRotation
   alias LemonCore.Secrets.MasterKey
   alias LemonCore.Setup.Readiness
   alias LemonCore.Update.ConfigMigrator
@@ -213,7 +210,7 @@ defmodule LemonCli.CLI do
   defp run_command("gateway", args), do: run_gateway(args)
   defp run_command("doctor", args), do: doctor(args)
   defp run_command("config", args), do: run_config(args)
-  defp run_command("secrets", args), do: run_secrets(args)
+  defp run_command("secrets", args), do: LemonCli.SecretsCommand.run(args)
   defp run_command("mcp", args), do: LemonCli.McpCommand.run(args)
   defp run_command("channels", args), do: run_channels(args)
   defp run_command("providers", args), do: LemonCli.ProvidersCommand.run(args)
@@ -769,498 +766,6 @@ defmodule LemonCli.CLI do
   end
 
   # ──────────────────────────────────────────────────────────────────────────
-  # secrets
-  # ──────────────────────────────────────────────────────────────────────────
-
-  defp run_secrets(["status" | _rest]), do: secrets_status()
-  defp run_secrets(["init" | rest]), do: secrets_init(rest)
-  defp run_secrets(["set" | rest]), do: secrets_set(rest)
-  defp run_secrets(["list" | _rest]), do: secrets_list()
-  defp run_secrets(["delete" | rest]), do: secrets_delete(rest)
-  defp run_secrets(["check" | _rest]), do: secrets_check()
-  defp run_secrets(["import-env" | rest]), do: secrets_import_env(rest)
-  defp run_secrets(["rotate-key" | rest]), do: secrets_rotate_key(rest)
-
-  defp run_secrets(["sources" | rest]) do
-    ensure_apps_started!([:lemon_core])
-    LemonCli.SecretSourcesCommand.run(rest)
-  end
-
-  defp run_secrets(_other) do
-    print_secrets_usage()
-    @exit_usage
-  end
-
-  defp secrets_status do
-    ensure_apps_started!([:lemon_core], store: :read_only)
-
-    status = Secrets.status()
-
-    IO.puts("configured: #{status.configured}")
-    IO.puts("source: #{status.source || "none"}")
-    IO.puts("keychain_available: #{status.keychain_available}")
-    IO.puts("env_fallback: #{status.env_fallback}")
-
-    if status.keychain_error do
-      IO.puts(
-        "Keychain access failed: #{format_reason(status.keychain_error)}. Run `lemon secrets status` for recovery guidance."
-      )
-    end
-
-    IO.puts("owner: #{status.owner}")
-    IO.puts("count: #{status.count}")
-
-    @exit_ok
-  end
-
-  defp secrets_init(args) do
-    ensure_apps_started!([:lemon_core])
-
-    {parsed, _rest, _invalid} =
-      OptionParser.parse(args, strict: [target: :string, force: :boolean])
-
-    case MasterKey.init(init_opts(parsed)) do
-      {:ok, %{source: :file, key_file: path}} ->
-        IO.puts("Secrets master key written to #{path} (0600)")
-        @exit_ok
-
-      {:ok, %{source: source}} ->
-        IO.puts("Secrets master key initialized in #{source}")
-        @exit_ok
-
-      {:error, :keychain_unavailable} ->
-        IO.puts(
-          :stderr,
-          "Keychain is unavailable on this system and no key file location could be " <>
-            "determined. Set #{MasterKey.env_var()}, or configure " <>
-            "`config :lemon_core, LemonCore.Secrets, key_file: ...`."
-        )
-
-        @exit_error
-
-      {:error, :master_key_exists} ->
-        IO.puts(
-          :stderr,
-          "A secrets master key already exists (see `lemon secrets status`). Re-run with --force " <>
-            "to replace it — every secret encrypted under the old key becomes unreadable. " <>
-            "To change the key and keep secrets, run `lemon secrets rotate-key`."
-        )
-
-        @exit_error
-
-      {:error, {:master_key_check_failed, reason}} ->
-        IO.puts(
-          :stderr,
-          "Could not check for an existing secrets master key: #{format_reason(reason)}. " <>
-            "Nothing was written. Run `lemon secrets status` for diagnostics and restore " <>
-            "access to the keychain or key file."
-        )
-
-        @exit_error
-
-      {:error, reason} ->
-        IO.puts(
-          :stderr,
-          "Could not initialize the secrets master key: #{format_reason(reason)}. Run `lemon secrets status` for diagnostics."
-        )
-
-        @exit_error
-    end
-  end
-
-  defp init_opts(parsed) do
-    opts = if parsed[:force], do: [force: true], else: []
-
-    case parsed[:target] do
-      nil -> opts
-      target -> [{:target, String.to_atom(target)} | opts]
-    end
-  end
-
-  defp secrets_set(args) do
-    ensure_apps_started!([:lemon_core])
-
-    {opts, positional, _invalid} =
-      OptionParser.parse(args,
-        switches: [name: :string, value: :string, provider: :string, expires_at: :integer],
-        aliases: [n: :name, v: :value]
-      )
-
-    case parse_name_and_value(opts, positional) do
-      {:ok, name, value} ->
-        secrets_opts =
-          []
-          |> maybe_put(:provider, opts[:provider])
-          |> maybe_put(:expires_at, opts[:expires_at])
-
-        case Secrets.set(name, value, secrets_opts) do
-          {:ok, metadata} ->
-            IO.puts("Stored secret #{metadata.name} (owner=#{metadata.owner})")
-            @exit_ok
-
-          {:error, :missing_master_key} ->
-            IO.puts(
-              :stderr,
-              "Missing secrets master key. Run `lemon secrets init` or set #{MasterKey.env_var()}."
-            )
-
-            @exit_error
-
-          {:error, :weak_master_key} ->
-            IO.puts(
-              :stderr,
-              "Secrets master key is not base64-encoded 32-byte key material. " <>
-                "Run `lemon secrets status` for diagnostics; to keep secrets encrypted under it, " <>
-                "allow legacy raw keys and run `lemon secrets rotate-key`."
-            )
-
-            @exit_error
-
-          {:error, {:keychain_failed, reason}} ->
-            IO.puts(
-              :stderr,
-              "Could not read the secrets master key from keychain: #{format_reason(reason)}. " <>
-                "Nothing was written. Run `lemon secrets status` for diagnostics and restore " <>
-                "keychain access; do not re-initialize the key."
-            )
-
-            @exit_error
-
-          {:error, :master_key_mismatch} ->
-            IO.puts(
-              :stderr,
-              "The resolved secrets master key does not open the stored secrets, so nothing was written. " <>
-                "Run `lemon secrets status` to see which key source is in use (a stale " <>
-                "#{MasterKey.env_var()} or a replaced keychain entry) and restore the original key."
-            )
-
-            @exit_error
-
-          {:error, reason} ->
-            IO.puts(
-              :stderr,
-              "Could not store the secret: #{format_reason(reason)}. Run `lemon secrets status` for diagnostics."
-            )
-
-            @exit_error
-        end
-
-      {:error, :usage} ->
-        IO.puts(:stderr, "Usage: lemon secrets set <name> <value>")
-        @exit_usage
-    end
-  end
-
-  defp parse_name_and_value(opts, positional) do
-    case {opts[:name], opts[:value], positional} do
-      {name, value, _} when is_binary(name) and is_binary(value) and name != "" and value != "" ->
-        {:ok, name, value}
-
-      {nil, nil, [name, value | _]} ->
-        {:ok, name, value}
-
-      _ ->
-        {:error, :usage}
-    end
-  end
-
-  defp secrets_list do
-    ensure_apps_started!([:lemon_core], store: :read_only)
-
-    {:ok, entries} = Secrets.list()
-
-    if entries == [] do
-      IO.puts("No secrets configured")
-    else
-      Enum.each(entries, fn entry ->
-        IO.puts(
-          "#{entry.name} provider=#{entry.provider} usage=#{entry.usage_count} expires_at=#{format_optional(entry.expires_at)}"
-        )
-      end)
-    end
-
-    @exit_ok
-  end
-
-  defp secrets_delete(args) do
-    ensure_apps_started!([:lemon_core])
-
-    {opts, positional, _invalid} =
-      OptionParser.parse(args, switches: [name: :string], aliases: [n: :name])
-
-    name = opts[:name] || List.first(positional)
-
-    if not is_binary(name) or String.trim(name) == "" do
-      IO.puts(:stderr, "Usage: lemon secrets delete <name>")
-      @exit_usage
-    else
-      case Secrets.delete(name) do
-        :ok ->
-          IO.puts("Deleted secret #{String.trim(name)}")
-          @exit_ok
-
-        {:error, reason} ->
-          IO.puts(
-            :stderr,
-            "Could not delete the secret: #{format_reason(reason)}. Run `lemon secrets status` to check store readiness."
-          )
-
-          @exit_error
-      end
-    end
-  end
-
-  defp secrets_check do
-    ensure_apps_started!([:lemon_core], store: :read_only)
-
-    max_name_len = EnvCatalog.names() |> Enum.map(&String.length/1) |> Enum.max()
-
-    IO.puts(String.pad_trailing("NAME", max_name_len) <> "  SOURCE   VALUE")
-    IO.puts(String.duplicate("-", max_name_len + 30))
-
-    results = Enum.map(EnvCatalog.names(), &check_secret(&1, max_name_len))
-
-    from_store = Enum.count(results, &(&1 == :store))
-    from_env = Enum.count(results, &(&1 == :env))
-    from_external = Enum.count(results, &external_source?/1)
-    missing = Enum.count(results, &(&1 == :missing))
-
-    IO.puts("")
-
-    IO.puts(
-      "#{from_store} from store, #{from_external} from external sources, " <>
-        "#{from_env} from env, #{missing} missing"
-    )
-
-    @exit_ok
-  end
-
-  defp check_secret(name, max_name_len) do
-    case Secrets.resolve(name) do
-      {:ok, _value, source} ->
-        padded_name = String.pad_trailing(name, max_name_len)
-        padded_source = String.pad_trailing(format_secret_source(source), 7)
-        IO.puts("#{padded_name}  #{padded_source}  present")
-        source
-
-      {:error, _reason} ->
-        padded_name = String.pad_trailing(name, max_name_len)
-        padded_source = String.pad_trailing("missing", 7)
-        IO.puts("#{padded_name}  #{padded_source}  ---")
-        :missing
-    end
-  end
-
-  defp format_secret_source(source) when is_binary(source), do: source
-  defp format_secret_source(source), do: to_string(source)
-
-  defp external_source?(source) when is_binary(source),
-    do: String.starts_with?(source, "external:")
-
-  defp external_source?(_source), do: false
-
-  defp secrets_import_env(args) do
-    ensure_apps_started!([:lemon_core])
-
-    {opts, _positional, _invalid} =
-      OptionParser.parse(args,
-        switches: [dry_run: :boolean, force: :boolean],
-        aliases: [d: :dry_run, f: :force]
-      )
-
-    dry_run = Keyword.get(opts, :dry_run, false)
-    force = Keyword.get(opts, :force, false)
-
-    if dry_run do
-      IO.puts("Dry run mode — no changes will be made")
-    end
-
-    results = Enum.map(EnvCatalog.names(), &process_secret(&1, dry_run, force))
-
-    imported = Enum.count(results, &(&1 == :imported))
-    already = Enum.count(results, &(&1 == :already_in_store))
-    not_set = Enum.count(results, &(&1 == :not_in_env))
-    errors = Enum.count(results, &match?({:error, _}, &1))
-
-    IO.puts("")
-
-    summary = "#{imported} imported, #{already} already in store, #{not_set} not in env"
-
-    summary =
-      if errors > 0,
-        do: summary <> ", #{errors} errors",
-        else: summary
-
-    IO.puts(summary)
-
-    if errors > 0, do: @exit_error, else: @exit_ok
-  end
-
-  defp process_secret(name, dry_run, force) do
-    env_value = System.get_env(name)
-
-    cond do
-      is_nil(env_value) or env_value == "" ->
-        IO.puts("#{name}: not set in env")
-        :not_in_env
-
-      not force and in_store?(name) ->
-        IO.puts("#{name}: already in store")
-        :already_in_store
-
-      dry_run ->
-        IO.puts("#{name}: would import")
-        :imported
-
-      true ->
-        import_secret(name, env_value)
-    end
-  end
-
-  defp in_store?(name), do: match?({:ok, _}, Secrets.get(name))
-
-  defp import_secret(name, value) do
-    case Secrets.set(name, value, provider: "import_env") do
-      {:ok, _metadata} ->
-        IO.puts("#{name}: imported")
-        :imported
-
-      {:error, reason} ->
-        IO.puts(
-          "#{name}: check failed: #{format_reason(reason)}. Run `lemon secrets status` for recovery guidance."
-        )
-
-        {:error, reason}
-    end
-  end
-
-  defp secrets_rotate_key(args) do
-    switches = [confirm: :string, resume: :boolean, abandon: :boolean, confirm_abandon: :boolean]
-
-    case OptionParser.parse(args, strict: switches) do
-      {parsed, [], []} ->
-        ensure_apps_started!([:lemon_core])
-        confirmed? = parsed[:confirm_abandon] == true
-
-        case {parsed[:confirm], parsed[:resume] == true, parsed[:abandon] == true, confirmed?} do
-          {nil, false, false, false} -> rotate_key_preview()
-          {token, false, false, false} -> rotate_key_apply(token)
-          {nil, true, false, false} -> rotate_key_recover(:resume, [])
-          {nil, false, true, _} -> rotate_key_abandon(confirmed?)
-          _conflicting -> rotate_key_usage()
-        end
-
-      _other ->
-        rotate_key_usage()
-    end
-  end
-
-  defp rotate_key_usage do
-    IO.puts(
-      :stderr,
-      "Usage: lemon secrets rotate-key [--confirm <token> | --resume | --abandon --confirm-abandon]"
-    )
-
-    @exit_usage
-  end
-
-  # Abandoning is an operator assertion that cannot be checked: always show
-  # the warning, and act only with the explicit confirmation flag.
-  defp rotate_key_abandon(confirmed?) do
-    IO.puts(:stderr, KeyRotation.abandon_warning())
-    rotate_key_recover(:abandon, confirm_abandon: confirmed?)
-  end
-
-  # Settles a rotation whose key switch is pending; KeyRotation.recover/2
-  # reads the provider itself before changing anything.
-  defp rotate_key_recover(action, opts) do
-    case KeyRotation.recover(action, opts) do
-      {:ok, %{action: :resumed} = result} ->
-        IO.puts(
-          "Resumed: #{format_key_source(result)} holds the new master key. " <>
-            "Run `lemon secrets rotate-key` to finish re-encrypting."
-        )
-
-        @exit_ok
-
-      {:ok, %{action: :abandoned} = result} ->
-        IO.puts(
-          "Abandoned the pending key switch; #{format_key_source(result)} keeps the current key."
-        )
-
-        @exit_ok
-
-      {:error, reason} ->
-        rotate_key_error(reason)
-    end
-  end
-
-  defp rotate_key_preview do
-    case KeyRotation.preview() do
-      {:ok, preview} ->
-        IO.puts("Secrets master key rotation preview (nothing changed)")
-        IO.puts("key source: #{format_key_source(preview)}")
-        IO.puts("secrets to re-encrypt: #{preview.count}")
-        IO.puts("expired secrets to delete: #{preview.expired}")
-        IO.puts("resumed from an interrupted rotation: #{preview.resumed}")
-        IO.puts("confirmation token: #{preview.confirmation_token}")
-        IO.puts("")
-
-        if preview.runtime_running do
-          IO.puts("A Lemon runtime is running; stop it (`lemon stop`) before rotating.")
-        end
-
-        IO.puts(
-          "Stored secrets in existing backups stay encrypted under the current key; " <>
-            "keep it if you may restore them."
-        )
-
-        IO.puts("Rotate with: lemon secrets rotate-key --confirm #{preview.confirmation_token}")
-        @exit_ok
-
-      {:error, reason} ->
-        rotate_key_error(reason)
-    end
-  end
-
-  # The runtime guard and the secrets lock live in KeyRotation.rotate/2, so the
-  # Mix task gets the same refusals.
-  defp rotate_key_apply(token) do
-    case KeyRotation.rotate(token) do
-      {:ok, result} ->
-        IO.puts(
-          "Rotated secrets master key in #{format_key_source(result)}: " <>
-            "#{result.rotated} secrets re-encrypted, #{result.pruned} expired deleted"
-        )
-
-        @exit_ok
-
-      {:error, reason} ->
-        rotate_key_error(reason)
-    end
-  end
-
-  defp rotate_key_error(reason) do
-    IO.puts(:stderr, "Secrets key rotation failed: " <> KeyRotation.describe_error(reason))
-    @exit_error
-  end
-
-  defp format_key_source(%{source: :file, key_file: path}) when is_binary(path),
-    do: "file (#{path})"
-
-  defp format_key_source(%{source: source}), do: to_string(source)
-
-  defp format_optional(nil), do: "never"
-  defp format_optional(value), do: to_string(value)
-
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
-
-  defp print_secrets_usage do
-    IO.write(CommandRegistry.help("secrets"))
-  end
-
-  # ──────────────────────────────────────────────────────────────────────────
   # channels
   # ──────────────────────────────────────────────────────────────────────────
 
@@ -1582,11 +1087,17 @@ defmodule LemonCli.CLI do
   # Shared helpers
   # ──────────────────────────────────────────────────────────────────────────
 
-  # One-shot commands boot :lemon_core in client mode (no approval recovery,
-  # sweeps, config reloader, run history or SIGTERM trap); `store: :read_only`
-  # also refuses Store writes. Only `node join`, which runs a worker runtime in
-  # this VM, passes `boot: :runtime`.
-  defp ensure_apps_started!(apps, opts \\ []) do
+  @doc """
+  Starts `apps` for a one-shot command, raising `Error` when one cannot start.
+
+  `:lemon_core` boots in client mode (no approval recovery, sweeps, config
+  reloader, run history or SIGTERM trap), whose store defers writes to a
+  running runtime that owns it; `store: :read_only` refuses Store writes
+  outright. Only `node join`, which runs a worker runtime in this VM, passes
+  `boot: :runtime`.
+  """
+  @spec ensure_apps_started!([atom()], keyword()) :: :ok
+  def ensure_apps_started!(apps, opts \\ []) do
     Enum.each(apps, fn app ->
       result =
         if Keyword.get(opts, :boot) == :runtime,
@@ -1608,14 +1119,19 @@ defmodule LemonCli.CLI do
     end)
   end
 
-  defp format_reason(:enoent), do: "a required file is missing"
-  defp format_reason(:eacces), do: "permission denied"
-  defp format_reason(:eperm), do: "operation not permitted"
-  defp format_reason(:enospc), do: "the disk is full"
-  defp format_reason(:timeout), do: "the operation timed out"
-  defp format_reason(:locked), do: "the secret store is locked"
-  defp format_reason(:not_found), do: "the requested item was not found"
-  defp format_reason(_reason), do: "the operation could not complete"
+  @doc "Operator-readable text for a store, file or keychain error reason."
+  @spec format_reason(term()) :: String.t()
+  def format_reason(:enoent), do: "a required file is missing"
+  def format_reason(:eacces), do: "permission denied"
+  def format_reason(:eperm), do: "operation not permitted"
+  def format_reason(:enospc), do: "the disk is full"
+  def format_reason(:timeout), do: "the operation timed out"
+  def format_reason(:locked), do: "the secret store is locked"
+  def format_reason(:not_found), do: "the requested item was not found"
+  def format_reason(_reason), do: "the operation could not complete"
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   # ──────────────────────────────────────────────────────────────────────────
   # Usage

@@ -294,15 +294,10 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | Task | Purpose |
 |------|---------|
 | `mix lemon.config` | Validate and show configuration |
-| `mix lemon.secrets.init` | Generate master key |
-| `mix lemon.secrets.status` | Show secrets status |
-| `mix lemon.secrets.list` | List secrets metadata |
-| `mix lemon.secrets.set` | Store a secret |
-| `mix lemon.secrets.delete` | Delete a secret |
-| `mix lemon.secrets.check` | Check secrets health |
-| `mix lemon.secrets.import_env` | Import env vars as secrets |
-| `mix lemon.secrets.rotate_key` | Preview, then (`--confirm TOKEN`) rotate the master key and re-encrypt secrets |
 | `mix lemon.onboard` | Top-level provider onboarding picker with interactive TUI selection |
+
+The encrypted secret store's command-line interface is `lemon secrets` (in
+`lemon_cli`); this app owns only the `LemonCore.Secrets` store API.
 
 Provider onboarding `preferred_models` should favor stable models that actually
 work on Lemon's live transport path. Do not keep known-broken variants in those
@@ -420,7 +415,7 @@ The order and the locations are configurable via `config :lemon_core, LemonCore.
 
 For local Linux/dev usage, treat `~/.lemon/secrets_master_key` as the canonical master key file. Every entry point (`./bin/lemon`, the release, CLI, Mix, runtime) resolves the same provider chain; launchers never export the key file, and a stale `LEMON_SECRETS_MASTER_KEY` holding a different key makes resolution fail with `{:conflicting_master_keys, sources}` instead of silently winning or losing. See [the secrets contract](../../docs/security/secrets-and-keychain.md).
 
-To change the master key without re-entering secrets, run `lemon secrets rotate-key` (or `mix lemon.secrets.rotate_key`): it previews, then with the preview's `--confirm` token re-encrypts every stored secret under a new key and writes that key to the Keychain entry or key file that supplied the old one. See `LemonCore.Secrets.KeyRotation` and [the secrets contract](../../docs/security/secrets-and-keychain.md#master-key-rotation).
+To change the master key without re-entering secrets, run `lemon secrets rotate-key`: it previews, then with the preview's `--confirm` token re-encrypts every stored secret under a new key and writes that key to the Keychain entry or key file that supplied the old one. See `LemonCore.Secrets.KeyRotation` and [the secrets contract](../../docs/security/secrets-and-keychain.md#master-key-rotation).
 
 ### API
 

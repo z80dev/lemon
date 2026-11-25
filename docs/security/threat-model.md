@@ -204,7 +204,7 @@ the next" with `{:error, :missing}` and "this backend does not exist on this
 host" with `{:error, :unavailable}`; any other error is a hard failure surfaced
 once the chain is exhausted. Key material must be base64-encoded 32 bytes; a
 raw passphrase-like string is rejected (`:weak_master_key`) because there is no
-password stretching. `mix lemon.secrets.init` is the bootstrap path. The full
+password stretching. `lemon secrets init` is the bootstrap path. The full
 resolution and error semantics are in
 [`secrets-and-keychain.md`](secrets-and-keychain.md).
 

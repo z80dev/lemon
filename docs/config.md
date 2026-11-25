@@ -2666,7 +2666,7 @@ API key flow:
 ```bash
 lemon model anthropic --auth api_key
 # or store the key directly:
-mix lemon.secrets.set llm_anthropic_api_key_raw <token>
+lemon secrets set llm_anthropic_api_key_raw <token>
 ```
 
 Subscription flow (browser sign-in, stored encrypted and refreshed automatically):

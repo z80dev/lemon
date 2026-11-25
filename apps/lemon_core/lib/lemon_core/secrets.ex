@@ -19,17 +19,17 @@ defmodule LemonCore.Secrets do
   ## Key rotation
 
   `LemonCore.Secrets.KeyRotation` replaces the master key and re-encrypts
-  every stored secret under it (`lemon secrets rotate-key`, or
-  `mix lemon.secrets.rotate_key`). It previews first and applies only with the
-  preview's confirmation token, refuses to touch anything when a stored secret
-  does not decrypt with the current key, refuses while a Lemon runtime is
-  running, and keeps every secret decryptable by whichever key is loaded next,
-  even if it is interrupted. `set/3`, `set_if_revision/4`, deletion, expiry
-  cleanup and rotation share `LemonCore.Secrets.Lock`, so a write never lands
-  under a key being retired. Only the encrypted store is rotated; external
-  sources and environment fallback are untouched.
+  every stored secret under it (`lemon secrets rotate-key`). It previews first
+  and applies only with the preview's confirmation token, refuses to touch
+  anything when a stored secret does not decrypt with the current key, refuses
+  while a Lemon runtime is running, and keeps every secret decryptable by
+  whichever key is loaded next, even if it is interrupted. `set/3`,
+  `set_if_revision/4`, deletion, expiry cleanup and rotation share
+  `LemonCore.Secrets.Lock`, so a write never lands under a key being retired.
+  Only the encrypted store is rotated; external sources and environment
+  fallback are untouched.
 
-  Replacing the key by other means (`mix lemon.secrets.init --force`, editing
+  Replacing the key by other means (`lemon secrets init --force`, editing
   the key file or Keychain entry) still makes every stored secret undecryptable.
   """
 
@@ -799,21 +799,28 @@ defmodule LemonCore.Secrets do
   end
 
   defp remove_expired(server, owner, name, entry) do
-    # Receipt-bearing rows retain their historical proof unchanged; expiry
-    # already invalidates the current binding and hides the value from reads.
-    if Receipts.entries(entry) != [] do
-      :ok
-    else
-      Lock.with_write_lock(
-        fn ->
-          case Store.compare_and_delete_many(server, [{@table, {owner, name}, entry}]) do
-            :ok -> :ok
-            {:error, :mismatch} -> :ok
-            {:error, _reason} = error -> error
-          end
-        end,
-        server
-      )
+    cond do
+      # Receipt-bearing rows retain their historical proof unchanged; expiry
+      # already invalidates the current binding and hides the value from reads.
+      Receipts.entries(entry) != [] ->
+        :ok
+
+      # A one-shot client's store refuses writes; the runtime owning the store
+      # prunes the row, and `list/1` still hides it.
+      Store.write_access(server) != :ok ->
+        :ok
+
+      true ->
+        Lock.with_write_lock(
+          fn ->
+            case Store.compare_and_delete_many(server, [{@table, {owner, name}, entry}]) do
+              :ok -> :ok
+              {:error, :mismatch} -> :ok
+              {:error, _reason} = error -> error
+            end
+          end,
+          server
+        )
     end
   end
 

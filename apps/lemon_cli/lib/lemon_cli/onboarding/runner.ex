@@ -232,15 +232,35 @@ defmodule LemonCli.Onboarding.Runner do
 
     io.info.("Saving provider credentials and configuration…")
 
-    persist!(config_path, [{secret_name, {:set, secret_value, secret_provider}}], fn content ->
-      content
-      |> update_provider_auth_config(spec, auth_mode, secret_name)
-      |> maybe_set_defaults(selected_model, spec)
-    end)
+    secret_label =
+      if runtime_owned_store?() do
+        save_through_runtime!(
+          cli_opts,
+          spec,
+          auth_mode,
+          config_path,
+          secret_value,
+          selected_model
+        )
+
+        "managed by the running Lemon runtime"
+      else
+        persist!(
+          config_path,
+          [{secret_name, {:set, secret_value, secret_provider}}],
+          fn content ->
+            content
+            |> update_provider_auth_config(spec, auth_mode, secret_name)
+            |> maybe_set_defaults(selected_model, spec)
+          end
+        )
+
+        secret_name
+      end
 
     io.info.("")
     io.info.("#{spec.display_name} onboarding complete.")
-    io.info.("Secret: #{secret_name}")
+    io.info.("Secret: #{secret_label}")
     io.info.("Config: #{config_path}")
     io.info.("Authentication: #{auth_mode_output_label(auth_mode)}")
 
@@ -250,6 +270,88 @@ defmodule LemonCli.Onboarding.Runner do
 
     :ok
   end
+
+  # While a running runtime owns the store this VM must not write it. The
+  # default API-key save has an admin runtime route: the runtime stores the key
+  # under its managed name (`providers.management.api_key.set`) and, only when a
+  # default model was chosen, sets it (`default.set`). Nothing is retried; an
+  # unconfirmed step is reported as such. Other forms refuse without writing.
+  @runtime_owned_refusal "A running Lemon runtime owns the credential store, so nothing was saved. " <>
+                           "Only the default API-key setup can be sent to it; stop it (`lemon stop`) " <>
+                           "to use other sign-in methods or a custom secret name or config path."
+
+  defp runtime_owned_store? do
+    LemonCore.Store.write_access() == {:error, :runtime_owned}
+  catch
+    :exit, _ -> false
+  end
+
+  defp save_through_runtime!(cli_opts, spec, auth_mode, config_path, value, model) do
+    supported? =
+      auth_mode == :api_key and is_nil(cli_opts[:secret_name]) and
+        Path.expand(config_path) == Path.expand(Config.global_path())
+
+    unless supported?, do: fail!(@runtime_owned_refusal)
+
+    target =
+      case LemonCore.ProviderManagement.target() do
+        {:ok, %{id: id}} -> id
+        _ -> fail!("Could not read this machine's provider target, so nothing was saved.")
+      end
+
+    base = %{"targetId" => target, "providerId" => spec.id}
+
+    runtime_step!(
+      "providers.management.api_key.set",
+      Map.put(base, "value", value),
+      "the API key"
+    )
+
+    if model,
+      do:
+        runtime_step!(
+          "providers.management.default.set",
+          Map.put(base, "modelId", model),
+          "the default model (the API key itself was saved)"
+        )
+  end
+
+  # Messages carry the method's error code only, never a value or raw detail.
+  defp runtime_step!(method, params, what) do
+    client = Application.get_env(:lemon_cli, :control_plane_client, LemonCli.ControlPlaneClient)
+
+    case client.request(method, params, timeout_ms: 30_000) do
+      {:ok, _result} ->
+        :ok
+
+      {:error, {:control_plane_unavailable, _}} ->
+        fail!(
+          "A running Lemon runtime owns the credential store, but its control plane did not " <>
+            "answer, so #{what} was not saved. Check it with `lemon doctor` and retry."
+        )
+
+      {:error, {:control_plane, %{"code" => code} = error}} when is_binary(code) ->
+        if definite_refusal?(error),
+          do:
+            fail!(
+              "The running Lemon runtime refused to save #{what} (#{code}); that step changed nothing."
+            ),
+          else: fail!(unconfirmed(what))
+
+      {:error, _unconfirmed} ->
+        fail!(unconfirmed(what))
+    end
+  end
+
+  @refused_before_write ~w(UNAUTHORIZED FORBIDDEN PERMISSION_DENIED INVALID_REQUEST METHOD_NOT_FOUND)
+
+  defp definite_refusal?(%{"details" => %{"mutationMayHaveApplied" => false}}), do: true
+  defp definite_refusal?(%{"code" => code}), do: code in @refused_before_write
+
+  defp unconfirmed(what),
+    do:
+      "The running Lemon runtime did not confirm saving #{what}; it may or may not have been " <>
+        "applied. Check `lemon providers` before retrying."
 
   @doc """
   Starts the apps onboarding depends on. Raises a user-readable error (a
@@ -948,8 +1050,14 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp persist!(config_path, changes, patch) do
     case LemonCli.Setup.ProviderManagement.persist(config_path, changes, patch) do
-      :ok -> :ok
-      {:error, _} -> fail!("Could not save provider credentials and config. Run `lemon doctor`.")
+      :ok ->
+        :ok
+
+      {:error, :runtime_owned} ->
+        fail!(@runtime_owned_refusal)
+
+      {:error, _} ->
+        fail!("Could not save provider credentials and config. Run `lemon doctor`.")
     end
   end
 

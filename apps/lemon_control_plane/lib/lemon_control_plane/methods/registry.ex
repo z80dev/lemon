@@ -250,6 +250,9 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.NodeNativeLineageFloor,
     LemonControlPlane.Methods.NodesList,
     LemonControlPlane.Methods.NodesRevoke,
+    # Secrets (write-only, for one-shot CLI clients beside the runtime)
+    LemonControlPlane.Methods.SecretsSet,
+    LemonControlPlane.Methods.SecretsDelete,
     # Connect challenge (node pairing handshake)
     LemonControlPlane.Methods.ConnectChallenge,
     # omp delegate sessions

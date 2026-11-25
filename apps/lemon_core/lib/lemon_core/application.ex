@@ -43,7 +43,10 @@ defmodule LemonCore.Application do
     `recover: false` and refuses resolution), Store sweeps, `RunHistoryStore`,
     `ConfigReloader`, `Watcher` or `Drain` (so no SIGTERM trap; `Drain.phase/0`
     reads `:serving`). A client VM therefore never expires, sweeps or reloads
-    state owned by a running daemon.
+    state owned by a running daemon. Its Store starts with `defer_to_runtime:
+    true`: while a live runtime owns the database it refuses every mutation
+    with `{:error, :runtime_owned}`; commands then ask that runtime to write
+    over the control plane, or refuse, rather than become a second writer.
   - `:read_only_client` - `:client` whose Store also refuses every mutation
     (`{:error, :read_only}`), for one-shot commands that only read.
 
@@ -209,7 +212,7 @@ defmodule LemonCore.Application do
     store =
       case mode do
         :runtime -> LemonCore.Store
-        :client -> {LemonCore.Store, sweep: false}
+        :client -> {LemonCore.Store, sweep: false, defer_to_runtime: true}
         :read_only_client -> {LemonCore.Store, sweep: false, read_only: true}
       end
 
@@ -226,7 +229,7 @@ defmodule LemonCore.Application do
         core: {LemonCore.ConfigCache, config_cache_opts},
         core: store
       ] ++
-      if(runtime?, do: [runtime_control: LemonCore.RuntimeOwner], else: []) ++
+      owner_children(mode) ++
       [
         runtime_control: LemonCore.SessionActivity,
         core: LemonCore.Secrets.Usage,
@@ -244,6 +247,12 @@ defmodule LemonCore.Application do
         else: []
       )
   end
+
+  # The ownership process starts before every other store writer. A writable
+  # client holds the locks too; a read-only client writes nothing.
+  defp owner_children(:runtime), do: [runtime_control: LemonCore.RuntimeOwner]
+  defp owner_children(:client), do: [core: {LemonCore.RuntimeOwner, client: true}]
+  defp owner_children(:read_only_client), do: []
 
   # RunHistoryStore needs the SQLite NIF. `:exqlite` is an optional dependency,
   # so without it the rest of lemon_core still boots and run history is

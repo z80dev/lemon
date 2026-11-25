@@ -50,7 +50,7 @@ steps.
       ```bash
       gh secret set LEMON_EVAL_API_KEY --repo z80dev/lemon
 
-      mix lemon.secrets.set release_eval_api_key <token>
+      ./bin/lemon secrets set release_eval_api_key <token>
       LEMON_EVAL_API_KEY_SECRET=release_eval_api_key scripts/test live-eval
 
       gh workflow run live-eval.yml \

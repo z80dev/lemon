@@ -70,21 +70,14 @@ Getting a fresh checkout or a fresh machine to a working agent.
 
 ## Secrets
 
-Encrypted secret store plus the voice-specific helper. When running the
-individual secrets tasks directly, `mix lemon.secrets.init` must run once to
-create the master key. The full `mix lemon.setup` / `lemon setup` journey
-initializes a missing master key itself and does not replace an existing one.
+The encrypted secret store has no Mix tasks: `lemon secrets
+init|set|list|status|check|delete|import-env|rotate-key|sources` (`./bin/lemon
+secrets ...` from a source checkout) is its only command-line interface. The
+full `mix lemon.setup` / `lemon setup` journey initializes a missing master key
+itself and does not replace an existing one.
 
 | Task | Purpose |
 | --- | --- |
-| `mix lemon.secrets.init` | Initialize the Lemon secrets master key. |
-| `mix lemon.secrets.set KEY VALUE` | Store an encrypted secret. |
-| `mix lemon.secrets.list` | List stored secret metadata (no values). |
-| `mix lemon.secrets.status` | Show encrypted secrets status. |
-| `mix lemon.secrets.check` | Check secret resolution sources (env vs. store). |
-| `mix lemon.secrets.delete KEY` | Delete a stored secret. |
-| `mix lemon.secrets.import_env` | Import env-based secrets into the encrypted store. |
-| `mix lemon.secrets.rotate_key` | Rotate the secrets master key and re-encrypt stored secrets. |
 | `mix lemon.voice.secrets` | Interactively set voice API secrets. |
 
 ## Diagnostics
