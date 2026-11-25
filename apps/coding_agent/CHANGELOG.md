@@ -120,6 +120,8 @@
   accepted during recovery waits for it. Agent events before the accepted
   prompt's `{:agent_start}` are fenced off, and `prompt/3` is busy while a
   prompt is pending dispatch.
+- A parent's redirect signal (Redirect or stream-rule injection) no longer
+  cancels its task children or ends their joins; only an abort does (#633).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller
