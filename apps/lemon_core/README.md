@@ -100,6 +100,23 @@ set by `LemonCore.CLI.start/2`): no `RuntimeOwner`, `RunHistoryStore`,
 `ConfigReloader`, `Watcher` or `Drain` (no SIGTERM trap), Store sweeps off, and
 `ExecApprovalExpiry` with `recover: false`; see `LemonCore.Application`.
 
+`config :lemon_core, :services` selects service groups: `:core` (always:
+`RuntimeCache`, `RuntimeLatch`, dedupe, the Bus, `ConfigCache`, `Store` and the
+secrets helpers), `:runtime_control` (`Drain`, `ACPClientBridge`,
+`NodeRegistry`, `RuntimeOwner`, `SessionActivity`, `UsageLedger`,
+`ExecApprovalExpiry`, the config reloader) and `:run_history`
+(`RunHistoryStore`). Unset starts every group. A library consumer that only uses
+the agent and store APIs can start just the core:
+
+```elixir
+config :lemon_core, :services, [:core]
+```
+
+A product that cannot run without durability or a group lists it in
+`config :lemon_core, :required_capabilities` (`:durable_store`, `:run_history`,
+`:runtime_control`); lemon_core then refuses to start, logging the fix, when one
+is unavailable. See `LemonCore.Capabilities`.
+
 Named-node sockets register themselves, so Registry removes dead connections
 without node-monitor bookkeeping. Each temporary `LemonCore.NodeInvocation` owns
 its timeout, recipient/socket monitors, sequence validation and controls.
@@ -244,6 +261,7 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 
 | Module | Purpose |
 |--------|---------|
+| `LemonCore.Capabilities` | Capabilities a product requires at boot (`:durable_store`, `:run_history`, `:runtime_control`); checked before the tree starts |
 | `LemonCore.Idempotency` | At-most-once execution backed by Store; done results expire after 24h, unresolved claims never expire |
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
 | `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events; interactive restores need a random single-use preview token held server-side (`:checkpoint_restore_confirmations`), bound to caller, checkpoint revision, roots and tree fingerprint, with a five-minute TTL |

@@ -155,6 +155,25 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- Service groups: `config :lemon_core, :services` selects `:core` (always),
+  `:runtime_control` and `:run_history` (`LemonCore.Application.service_groups/0`);
+  unset starts every group as before. A library consumer that selects
+  `[:core]` starts the Store, Bus, config and secrets services but none of the
+  assistant runtime's control processes (#92).
+- `config :lemon_core, :required_capabilities` (`LemonCore.Capabilities`:
+  `:durable_store`, `:run_history`, `:runtime_control`): in the `:runtime` boot
+  mode lemon_core refuses to start with `{:missing_capability, capability}` and
+  logs the fix when a required capability is unavailable. Optional
+  `LemonCore.Store.Backend.durable?/0` (true for `SqliteBackend` with exqlite)
+  and `LemonCore.Store.configured_backend/0` back the `:durable_store` check
+  (#92).
+- `LemonCore.Runtime.Profile` is compiled from `priv/runtime_profiles.exs`, the
+  file the umbrella builds its releases from; profiles carry per-application
+  start types (the `applications` field, `running_apps/1`, `release_name/1`,
+  `current/0`). `Runtime.Boot` starts `:permanent` applications permanently,
+  `Runtime.Health.check/2` and `runtime_status/1` report a runtime missing
+  expected applications, and the doctor's `runtime.apps` check names them
+  (#726).
 - `LemonCore.Service` supervises an `omp-broker` role: `omp auth-broker serve
   --bind 127.0.0.1:8765` with omp's config-root selectors forwarded and broker
   client settings never forwarded, ready when the broker's health probe answers
@@ -276,6 +295,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `SqliteBackend` no longer warns "struct Exqlite.Error is undefined" when
+  compiled without the optional `:exqlite` (#92).
+- The boot warning without `:exqlite` no longer claims run-history reads return
+  empty: `RunHistoryStore.fetch/2` returns `{:error, :unavailable}` (#92).
 - `config :lemon_core, :boot_mode` (`:runtime` default, `:client`,
   `:read_only_client`; `LemonCore.Application.boot_mode/0`) selects a client
   tree for one-shot commands without approval recovery, Store sweeps,

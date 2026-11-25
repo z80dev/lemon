@@ -10,7 +10,7 @@ running node, and the bootstrap context below is the same under both:
 | Setting | Values | Set by | Effect |
 | --- | --- | --- | --- |
 | Launcher | `:source`, `:release` | `bin/lemon` exports `LEMON_CLI_LAUNCHER=source`; the packaged launcher exports `release`. Read by `LemonCli.CommandRegistry.launcher/0`. | Which CLI commands are offered: for example `lemon reload` is source-only, while `lemon remote`, `eval` and `rpc` are release-only. |
-| Runtime profile | `:runtime_min`, `:runtime_full` | `LemonCore.Runtime.Profile`; `LemonCore.Runtime.Boot.start/2` starts the profile's applications in order. The source launcher boots `:runtime_full`; a release exports `LEMON_RUNTIME_PROFILE` from its release name (`lemon_runtime_min` or `lemon_runtime_full`). | Which OTP applications run: `:runtime_full` adds automation, skills and the web UI to the minimal set. |
+| Runtime profile | `:runtime_min`, `:runtime_full` | `LemonCore.Runtime.Profile`, compiled from `apps/lemon_core/priv/runtime_profiles.exs`, the same file the `lemon_runtime_min`/`lemon_runtime_full` releases are built from; `LemonCore.Runtime.Boot.start/2` starts the profile's applications in order as permanent applications. The source launcher boots `:runtime_full`; a release exports `LEMON_RUNTIME_PROFILE` from its release name. | Which OTP applications run: `:runtime_min` is the headless runtime (automation and skills included) and `:runtime_full` adds the web UI. `/healthz` is unhealthy while any of them is stopped. |
 
 Clients (the TUI, web UI, Lemon Bot and browser node) execute no agent logic;
 they attach to a running runtime through the control plane.

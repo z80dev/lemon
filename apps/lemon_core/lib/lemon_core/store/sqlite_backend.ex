@@ -130,6 +130,11 @@ defmodule LemonCore.Store.SqliteBackend do
 
   @list_tables_sql "SELECT DISTINCT table_name FROM lemon_store_kv"
 
+  # Durable once the optional :exqlite NIF is available; without it `init/1`
+  # refuses to start.
+  @impl true
+  def durable?, do: Code.ensure_loaded?(Sqlite3)
+
   @impl true
   def init(opts) do
     ensure_exqlite!()
@@ -948,11 +953,7 @@ defmodule LemonCore.Store.SqliteBackend do
         :ok
       end
     rescue
-      e in ExqliteError ->
-        {:error, classify_bind_error(e)}
-
-      e ->
-        {:error, {:sqlite_bind_failed, Exception.message(e)}}
+      e -> {:error, classify_bind_error(e)}
     end
   end
 
@@ -1091,10 +1092,10 @@ defmodule LemonCore.Store.SqliteBackend do
   defp normalize_transaction_error(:busy), do: :sqlite_busy
   defp normalize_transaction_error(other), do: {:sqlite_transaction_failed, other}
 
-  # Guarded rather than matched on `%ExqliteError{}`: expanding that struct
-  # needs the module at compile time, which breaks any consumer that doesn't
-  # pull in the optional :exqlite. The sole caller already rescued on it.
-  defp classify_bind_error(error) when is_exception(error) do
+  # Guarded with `is_struct/2` rather than rescued `in ExqliteError` or matched
+  # on `%ExqliteError{}`: both need the struct at compile time, which warns in
+  # any consumer that doesn't pull in the optional :exqlite.
+  defp classify_bind_error(error) when is_struct(error, ExqliteError) do
     message = Exception.message(error)
 
     if String.contains?(String.downcase(message), "too big") do
@@ -1103,6 +1104,8 @@ defmodule LemonCore.Store.SqliteBackend do
       {:sqlite_bind_failed, message}
     end
   end
+
+  defp classify_bind_error(error), do: {:sqlite_bind_failed, Exception.message(error)}
 
   defp encode(term), do: :erlang.term_to_binary(term)
 

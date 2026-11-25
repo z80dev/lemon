@@ -141,6 +141,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   A `learning_nudge` object left in `skills.json` is no longer read and
   `lemon doctor` warns about it. `skills.json` now holds only the `disabled`
   list (#655).
+- One app list per runtime: `apps/lemon_core/priv/runtime_profiles.exs` is the
+  single source for the `lemon_runtime_min`/`lemon_runtime_full` releases, the
+  source launcher, `/healthz`, `lemon doctor` and `lemon setup runtime`, and a
+  test fails when they or the deployment docs drift. The minimal runtime is now
+  documented as what it is, the full runtime without the web UI (#726).
+- The packaged runtime refuses to boot, naming the fix, when its store backend
+  is not durable, `exqlite` is unavailable or a required `lemon_core` service
+  group is deselected, instead of running with run history silently off (#92).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
@@ -273,6 +281,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- `bin/lemon start` now starts Honcho memory and computer-use tools when they
+  are configured: the source runtime previously never started
+  `lemon_honcho` or `lemon_computer_use` (#726).
+- Runtime applications start as permanent applications, and `/healthz` answers
+  `503` naming the stopped applications instead of a constant `200`; `lemon
+  doctor` reports an expected application that failed to start or stopped
+  (#726).
 - One-shot CLI commands (`lemon doctor`, `config`, `secrets`, `usage`, `context`,
   `learn`, `learning`, `mcp`, `update`, `migrate`, `providers`, `setup`, and the
   `mix lemon.secrets*`/`lemon.config`/`lemon.usage` tasks) boot the core in a

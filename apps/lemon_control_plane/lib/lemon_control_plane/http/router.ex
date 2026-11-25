@@ -7,7 +7,8 @@ defmodule LemonControlPlane.HTTP.Router do
   - `/healthz` - Health check endpoint (HTTP GET)
   """
 
-  use Plug.Router
+  # `call/2` options reach routes as `conn.assigns.router_opts`.
+  use Plug.Router, copy_opts_to_assign: :router_opts
 
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.ListenerPolicy
@@ -21,8 +22,22 @@ defmodule LemonControlPlane.HTTP.Router do
   plug(:match)
   plug(:dispatch)
 
+  # Liveness: healthy only while every application of the runtime profile is
+  # started (LemonCore.Runtime.Health.runtime_status/1). The router's `:health`
+  # option is passed to runtime_status/1.
   get "/healthz" do
-    send_resp(conn, 200, Jason.encode!(%{ok: true}))
+    health_opts = Keyword.get(conn.assigns.router_opts, :health, [])
+
+    case LemonCore.Runtime.Health.runtime_status(health_opts) do
+      %{ok: true} ->
+        send_resp(conn, 200, Jason.encode!(%{ok: true}))
+
+      %{error: :unknown_profile} ->
+        send_resp(conn, 503, Jason.encode!(%{ok: false, error: "unknown_runtime_profile"}))
+
+      %{profile: profile, missing: missing} ->
+        send_resp(conn, 503, Jason.encode!(%{ok: false, profile: profile, missing: missing}))
+    end
   end
 
   get "/v1/health" do

@@ -10,6 +10,10 @@ config :lemon_core, LemonCore.Store,
     ephemeral_tables: [:runs]
   ]
 
+# The assistant runtime cannot run without these: lemon_core refuses to start
+# in the runtime boot mode when one is unavailable (LemonCore.Capabilities).
+config :lemon_core, :required_capabilities, [:durable_store, :run_history, :runtime_control]
+
 config :lemon_automation,
   goal_judge_runner: LemonAutomation.GoalJudge.RouterRunner
 

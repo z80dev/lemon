@@ -170,6 +170,16 @@ defmodule LemonCore.Store do
   @spec location(server()) :: {module(), Path.t() | nil}
   def location(server \\ __MODULE__), do: GenServer.call(server, :location)
 
+  @doc """
+  The backend the default store is configured with (application env plus the
+  runtime override), whether or not the store is running. Boot uses it to
+  check the `:durable_store` capability before starting the store.
+  """
+  @spec configured_backend() :: module()
+  def configured_backend do
+    Keyword.get(resolve_config(__MODULE__, []), :backend, @default_backend)
+  end
+
   # Run Events API
 
   @doc """

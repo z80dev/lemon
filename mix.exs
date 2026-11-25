@@ -45,88 +45,34 @@ defmodule Lemon.MixProject do
 
   # Runtime release configuration
   #
-  # lemon_core carries :exqlite, :sentry and :finch as optional deps (see
-  # apps/lemon_core/mix.exs), so the runtime releases name them explicitly:
-  # prod configures the SQLite store backend, and the error sink is part of
-  # what "reference runtime" means here.
-  #
-  # The :lemon_honcho satellite must be named here too, for the opposite
-  # reason: it depends on the platform and nothing in the platform depends on
-  # it, so a release that does not list it simply never starts it — and every
-  # registration a satellite performs happens in its `start/2`. The omission is
-  # silent, which is why it is listed in both runtimes rather than only in
-  # the full one; an unconfigured satellite registers nothing and costs nothing.
-  #
-  # lemon_mcp is different again: it is a library with no application callback.
-  # Both runtimes load it explicitly so LemonSkills.McpSource can discover the
-  # client modules dynamically, while callers remain responsible for supervising
-  # every MCP client and transport process they start.
+  # Each release `lemon_<profile>` ships exactly the applications of one
+  # runtime profile in apps/lemon_core/priv/runtime_profiles.exs, the single
+  # source LemonCore.Runtime.Profile also compiles: the source launcher, the
+  # releases, /healthz and `lemon doctor` all start or expect the same list.
+  # That file documents why each application is named.
   defp releases do
-    [
-      lemon_runtime_min: [
-        applications: [
-          exqlite: :permanent,
-          sentry: :permanent,
-          finch: :permanent,
-          lemon_core: :permanent,
-          lemon_browser: :permanent,
-          lemon_media: :permanent,
-          lemon_lsp: :permanent,
-          lemon_omp: :permanent,
-          lemon_computer_use: :permanent,
-          lemon_mcp: :load,
-          coding_agent: :permanent,
-          lemon_gateway: :permanent,
-          lemon_cli: :permanent,
-          lemon_router: :permanent,
-          lemon_honcho: :permanent,
-          lemon_channels: :permanent,
-          lemon_control_plane: :permanent
-        ],
-        include_executables_for: [:unix],
-        steps: [
-          :assemble,
-          &Lemon.DistributionRelease.secure/1,
-          &bundle_python/1,
-          &bundle_browser_driver/1,
-          &stamp_build/1,
-          :tar
-        ]
-      ],
-      lemon_runtime_full: [
-        applications: [
-          exqlite: :permanent,
-          sentry: :permanent,
-          finch: :permanent,
-          lemon_core: :permanent,
-          lemon_browser: :permanent,
-          lemon_media: :permanent,
-          lemon_lsp: :permanent,
-          lemon_omp: :permanent,
-          lemon_computer_use: :permanent,
-          lemon_mcp: :load,
-          coding_agent: :permanent,
-          lemon_gateway: :permanent,
-          lemon_cli: :permanent,
-          lemon_router: :permanent,
-          lemon_honcho: :permanent,
-          lemon_channels: :permanent,
-          lemon_control_plane: :permanent,
-          lemon_automation: :permanent,
-          lemon_skills: :permanent,
-          lemon_web: :permanent
-        ],
-        include_executables_for: [:unix],
-        steps: [
-          :assemble,
-          &Lemon.DistributionRelease.secure/1,
-          &bundle_python/1,
-          &bundle_browser_driver/1,
-          &stamp_build/1,
-          :tar
-        ]
-      ]
-    ]
+    for {profile, spec} <- runtime_profiles() do
+      {:"lemon_#{profile}",
+       [
+         applications: Keyword.fetch!(spec, :applications),
+         include_executables_for: [:unix],
+         steps: [
+           :assemble,
+           &Lemon.DistributionRelease.secure/1,
+           &bundle_python/1,
+           &bundle_browser_driver/1,
+           &stamp_build/1,
+           :tar
+         ]
+       ]}
+    end
+  end
+
+  defp runtime_profiles do
+    {profiles, _binding} =
+      Code.eval_file("apps/lemon_core/priv/runtime_profiles.exs", __DIR__)
+
+    profiles
   end
 
   defp stamp_build(release) do
