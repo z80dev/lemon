@@ -1,7 +1,17 @@
 defmodule LemonCli.Setup.PortsTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonCli.Setup.Ports
+  alias LemonCore.Testing.HermeticEnv
+
+  setup do
+    previous =
+      HermeticEnv.snapshot_env(
+        ~w(LEMON_CONTROL_PLANE_PORT LEMON_CONTROL_PLANE_NODE_PORT LEMON_WEB_PORT)
+      )
+
+    on_exit(fn -> HermeticEnv.restore_env(previous) end)
+  end
 
   test "a listening port is not free; the same port is free once released" do
     {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
@@ -67,10 +77,7 @@ defmodule LemonCli.Setup.PortsTest do
   } do
     tmp = Path.join(System.tmp_dir!(), "ports_test_#{test}_override.env")
 
-    on_exit(fn ->
-      File.rm(tmp)
-      System.delete_env("LEMON_CONTROL_PLANE_NODE_PORT")
-    end)
+    on_exit(fn -> File.rm(tmp) end)
 
     assert {:ok, ^tmp} =
              Ports.save(%{control: 4040, node: 4045, web: 4080}, ports_path: tmp)
@@ -83,10 +90,7 @@ defmodule LemonCli.Setup.PortsTest do
   test "save persists an explicitly disabled node gateway as 0", %{test: test} do
     tmp = Path.join(System.tmp_dir!(), "ports_test_#{test}_disabled.env")
 
-    on_exit(fn ->
-      File.rm(tmp)
-      System.delete_env("LEMON_CONTROL_PLANE_NODE_PORT")
-    end)
+    on_exit(fn -> File.rm(tmp) end)
 
     assert {:ok, ^tmp} =
              Ports.save(%{control: 4040, node: 0, web: 4080}, ports_path: tmp)

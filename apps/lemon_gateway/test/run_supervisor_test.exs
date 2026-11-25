@@ -59,10 +59,7 @@ defmodule LemonGateway.RunSupervisorTest do
   end
 
   setup do
-    running = Enum.map(Application.started_applications(), &elem(&1, 0))
-    config = Application.fetch_env(:lemon_gateway, LemonGateway.Config)
-    executor = Application.fetch_env(:lemon_gateway, :executor)
-    :ok = stop_gateway()
+    LemonGateway.Test.AppIsolation.isolate_gateway([LemonGateway.Config, :executor])
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 10,
@@ -70,35 +67,10 @@ defmodule LemonGateway.RunSupervisorTest do
     })
 
     Application.put_env(:lemon_gateway, :executor, FixtureExecutor)
-    {:ok, started_apps} = Application.ensure_all_started(:lemon_gateway)
-
-    on_exit(fn ->
-      :ok = stop_gateway()
-      restore_env(LemonGateway.Config, config)
-      restore_env(:executor, executor)
-
-      # Stop only applications introduced by this setup, in reverse startup order.
-      for app <- Enum.reverse(started_apps), app not in running do
-        Application.stop(app)
-      end
-
-      if :lemon_gateway in running do
-        {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-      end
-    end)
+    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
     :ok
   end
-
-  defp stop_gateway do
-    case Application.stop(:lemon_gateway) do
-      :ok -> :ok
-      {:error, {:not_started, :lemon_gateway}} -> :ok
-    end
-  end
-
-  defp restore_env(key, {:ok, value}), do: Application.put_env(:lemon_gateway, key, value)
-  defp restore_env(key, :error), do: Application.delete_env(:lemon_gateway, key)
 
   defp request(opts \\ []) do
     id = Integer.to_string(System.unique_integer([:positive]))

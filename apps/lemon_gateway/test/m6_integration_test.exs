@@ -1,6 +1,8 @@
 defmodule LemonGateway.M6IntegrationTest do
   use ExUnit.Case, async: false
 
+  import LemonGateway.Test.AppIsolation
+
   alias LemonCore.{BindingResolver, ChatScope, ChatState, ChatStateStore, GatewayConfig}
 
   setup do
@@ -10,12 +12,10 @@ defmodule LemonGateway.M6IntegrationTest do
         "lemon-m6-integration-#{System.unique_integer([:positive, :monotonic])}"
       )
 
-    original_home = System.get_env("HOME")
-    # Stop the app to reset state
-    _ = Application.stop(:lemon_gateway)
+    on_exit(fn -> File.rm_rf!(test_toml_dir) end)
+    isolate_gateway([LemonGateway.Config, :config_path], system_env: ["HOME"])
 
     # Set up test directories
-    File.rm_rf!(test_toml_dir)
     File.mkdir_p!(test_toml_dir)
     System.put_env("HOME", test_toml_dir)
 
@@ -23,13 +23,7 @@ defmodule LemonGateway.M6IntegrationTest do
     Application.delete_env(:lemon_gateway, LemonGateway.Config)
     Application.delete_env(:lemon_gateway, :config_path)
 
-    on_exit(fn ->
-      LemonCore.ConfigCache.clear()
-      Application.delete_env(:lemon_gateway, LemonGateway.Config)
-      Application.delete_env(:lemon_gateway, :config_path)
-      File.rm_rf!(test_toml_dir)
-      if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
-    end)
+    on_exit(fn -> LemonCore.ConfigCache.clear() end)
 
     {:ok, %{test_toml_dir: test_toml_dir}}
   end

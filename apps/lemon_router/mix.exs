@@ -33,6 +33,7 @@ defmodule LemonRouter.MixProject do
       {:lemon_media, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},
       {:lemon_agent, in_umbrella: true},
+      {:lemon_platform_test, in_umbrella: true, only: :test, runtime: false},
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.16"},
       {:jason, "~> 1.4"},

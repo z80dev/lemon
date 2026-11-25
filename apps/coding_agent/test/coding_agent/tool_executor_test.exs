@@ -77,17 +77,10 @@ defmodule CodingAgent.ToolExecutorTest do
   end
 
   describe "execute_with_approval/4" do
-    setup do
-      # Keep the approvals policy table clean between tests.
-      CodingAgent.TestStore.reset()
-
-      :ok
-    end
-
     test "executes function when pre-approved globally" do
       session_key = "agent:test-global:main"
       executed = :erlang.make_ref()
-      action = %{command: "ls"}
+      action = %{command: "echo #{System.unique_integer([:positive, :monotonic])}"}
 
       # Hash the action the same way ApprovalsBridge does
       action_hash =
@@ -96,10 +89,15 @@ defmodule CodingAgent.ToolExecutorTest do
         |> String.slice(0, 16)
 
       # Pre-approve the tool globally (using hashed action key)
-      LemonCore.Store.put(:exec_approvals_policy, {"bash", action_hash}, %{
-        approved: true,
-        approved_at_ms: System.system_time(:millisecond)
-      })
+      key = {"bash", action_hash}
+
+      assert :ok =
+               LemonCore.Store.put_new(:exec_approvals_policy, key, %{
+                 approved: true,
+                 approved_at_ms: System.system_time(:millisecond)
+               })
+
+      on_exit(fn -> assert :ok = LemonCore.Store.delete(:exec_approvals_policy, key) end)
 
       context = %{
         run_id: "test-run",
@@ -122,16 +120,25 @@ defmodule CodingAgent.ToolExecutorTest do
       # The result should contain our expected text
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert String.contains?(text, inspect(executed))
-
-      # Cleanup
-      LemonCore.Store.delete(:exec_approvals_policy, {"bash", action_hash})
     end
 
     test "returns timeout result when approval times out" do
+      run_id = LemonCore.Id.run_id()
+      approval_id = LemonCore.Id.approval_id()
+
+      on_exit(fn ->
+        assert :ok = LemonCore.ExecApprovalStore.delete_pending(approval_id)
+        assert :ok = LemonCore.ExecApprovalStore.unindex_owner({:run, run_id}, [approval_id])
+      end)
+
       context = %{
-        run_id: "test-timeout",
+        run_id: run_id,
         session_key: "agent:timeout:main",
-        timeout_ms: 10
+        once_only: true,
+        timeout_ms: 10,
+        approval_request_fun: fn params ->
+          LemonCore.ExecApprovals.request(Map.put(params, :approval_id, approval_id))
+        end
       }
 
       result =

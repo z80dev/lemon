@@ -27,30 +27,10 @@ defmodule LemonGateway.RunTerminalFenceTest do
   end
 
   setup do
-    running? =
-      Enum.any?(Application.started_applications(), fn {app, _, _} ->
-        app == :lemon_gateway
-      end)
-
-    previous =
-      for key <- [LemonGateway.Config, :executor],
-          do: {key, Application.fetch_env(:lemon_gateway, key)}
-
-    Application.stop(:lemon_gateway)
+    LemonGateway.Test.AppIsolation.isolate_gateway([LemonGateway.Config, :executor])
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{max_concurrent_runs: 1})
     Application.put_env(:lemon_gateway, :executor, ObservedExecutor)
-    {:ok, started} = Application.ensure_all_started(:lemon_gateway)
-
-    on_exit(fn ->
-      Enum.each(Enum.reverse(started), &Application.stop/1)
-
-      Enum.each(previous, fn
-        {key, {:ok, value}} -> Application.put_env(:lemon_gateway, key, value)
-        {key, :error} -> Application.delete_env(:lemon_gateway, key)
-      end)
-
-      if running?, do: Application.ensure_all_started(:lemon_gateway)
-    end)
+    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
     :ok
   end

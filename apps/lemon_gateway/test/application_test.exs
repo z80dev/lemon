@@ -2,6 +2,7 @@ defmodule LemonGateway.ApplicationTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
   import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1, assert_eventually: 2]
+  import LemonGateway.Test.AppIsolation
 
   alias Elixir.LemonGateway.ExecutionRequest
 
@@ -9,13 +10,6 @@ defmodule LemonGateway.ApplicationTest do
   Comprehensive tests for Elixir.LemonGateway.Application startup, supervision tree,
   and configuration loading.
   """
-
-  # The `LemonCore.Store` key also carries the run-history/memory collaborator
-  # wiring (`:finalize_run_hooks`). Deleting or
-  # wholesale-replacing it leaks into every later test in the suite, which then
-  # silently stops recording run history. Snapshot the real config and restore.
-  @store_config Application.compile_env(:lemon_core, LemonCore.Store, [])
-  @executor_config Application.compile_env(:lemon_gateway, :executor)
 
   @gateway_ingress_children [
     Elixir.LemonGateway.TransportRegistry,
@@ -72,23 +66,6 @@ defmodule LemonGateway.ApplicationTest do
     Application.put_env(:lemon_gateway, :executor, ApplicationValidExecutor)
   end
 
-  defp cleanup_config do
-    Application.delete_env(:lemon_gateway, Elixir.LemonGateway.Config)
-    Application.delete_env(:lemon_gateway, :transports)
-    Application.delete_env(:lemon_gateway, :config_path)
-    restore_executor_config()
-
-    Application.put_env(:lemon_core, LemonCore.Store, @store_config)
-  end
-
-  defp restore_executor_config do
-    if is_nil(@executor_config) do
-      Application.delete_env(:lemon_gateway, :executor)
-    else
-      Application.put_env(:lemon_gateway, :executor, @executor_config)
-    end
-  end
-
   # Blocks until the supervisor has restarted `name` under a new pid and returns it.
   defp await_restart(name, old_pid) do
     assert_eventually(
@@ -106,16 +83,13 @@ defmodule LemonGateway.ApplicationTest do
   # Application Startup Sequence Tests
   # ---------------------------------------------------------------------
 
+  setup do
+    isolate_gateway([LemonGateway.Config, :executor, :transports])
+  end
+
   describe "Application startup sequence" do
     setup do
-      stop_application()
       configure_minimal_app()
-
-      on_exit(fn ->
-        stop_application()
-        cleanup_config()
-      end)
-
       :ok
     end
 
@@ -148,14 +122,7 @@ defmodule LemonGateway.ApplicationTest do
 
   describe "supervision tree structure" do
     setup do
-      stop_application()
       configure_minimal_app()
-
-      on_exit(fn ->
-        stop_application()
-        cleanup_config()
-      end)
-
       :ok
     end
 
@@ -255,14 +222,7 @@ defmodule LemonGateway.ApplicationTest do
 
   describe "child process initialization order" do
     setup do
-      stop_application()
       configure_minimal_app()
-
-      on_exit(fn ->
-        stop_application()
-        cleanup_config()
-      end)
-
       :ok
     end
 
@@ -295,17 +255,6 @@ defmodule LemonGateway.ApplicationTest do
   # ---------------------------------------------------------------------
 
   describe "configuration loading on startup" do
-    setup do
-      stop_application()
-
-      on_exit(fn ->
-        stop_application()
-        cleanup_config()
-      end)
-
-      :ok
-    end
-
     test "loads configuration from Application env" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
@@ -345,17 +294,6 @@ defmodule LemonGateway.ApplicationTest do
   # ---------------------------------------------------------------------
 
   describe "environment-based configuration" do
-    setup do
-      stop_application()
-
-      on_exit(fn ->
-        stop_application()
-        cleanup_config()
-      end)
-
-      :ok
-    end
-
     test "enable_telegram: false disables telegram transport in TransportRegistry" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
@@ -380,14 +318,7 @@ defmodule LemonGateway.ApplicationTest do
 
   describe "graceful shutdown" do
     setup do
-      stop_application()
       configure_minimal_app()
-
-      on_exit(fn ->
-        stop_application()
-        cleanup_config()
-      end)
-
       :ok
     end
 
@@ -462,14 +393,7 @@ defmodule LemonGateway.ApplicationTest do
 
   describe "error handling during startup" do
     setup do
-      stop_application()
       Application.put_env(:lemon_gateway, :executor, ApplicationValidExecutor)
-
-      on_exit(fn ->
-        stop_application()
-        cleanup_config()
-      end)
-
       :ok
     end
 
@@ -489,14 +413,7 @@ defmodule LemonGateway.ApplicationTest do
 
   describe "required children verification" do
     setup do
-      stop_application()
       configure_minimal_app()
-
-      on_exit(fn ->
-        stop_application()
-        cleanup_config()
-      end)
-
       :ok
     end
 
@@ -546,14 +463,7 @@ defmodule LemonGateway.ApplicationTest do
 
   describe "integration - full system functionality" do
     setup do
-      stop_application()
       configure_minimal_app()
-
-      on_exit(fn ->
-        stop_application()
-        cleanup_config()
-      end)
-
       :ok
     end
 
@@ -608,14 +518,7 @@ defmodule LemonGateway.ApplicationTest do
 
   describe "supervisor child restart behavior" do
     setup do
-      stop_application()
       configure_minimal_app()
-
-      on_exit(fn ->
-        stop_application()
-        cleanup_config()
-      end)
-
       :ok
     end
 

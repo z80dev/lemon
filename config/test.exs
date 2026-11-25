@@ -31,6 +31,14 @@ lemon_test_home =
     "lemon_home_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
   )
 
+# Rustup shims still need the installed toolchain after HOME is replaced.
+if original_home = System.get_env("HOME") do
+  for {key, dir} <- [{"RUSTUP_HOME", ".rustup"}, {"CARGO_HOME", ".cargo"}],
+      is_nil(System.get_env(key)) do
+    System.put_env(key, Path.join(original_home, dir))
+  end
+end
+
 File.mkdir_p!(lemon_test_home)
 System.put_env("HOME", lemon_test_home)
 
@@ -93,7 +101,6 @@ config :coding_agent,
        )
 
 # Avoid writing routing-feedback sqlite under ~/.lemon/store during tests.
-# (The router test_helper overrides this with a per-run unique path.)
 config :lemon_router, LemonRouter.RoutingFeedbackStore,
   path:
     Path.join(
@@ -121,6 +128,10 @@ config :lemon_skills, :http_client, LemonSkills.HttpClient.Mock
 # Never import MCP servers from the checkout's or developer's other-tool configs
 # (`.mcp.json`, `~/.claude.json`, ...); discovery tests enable it explicitly.
 config :lemon_skills, :mcp_external_discovery, false
+
+# Cron preflight probes real providers; tests that exercise it install probes.
+config :lemon_automation, :cron_preflight, enabled: false
+config :lemon_automation, :cron_drift_guard, enabled: false
 
 # Background skill curation is tested explicitly; keep the runtime scheduler
 # from submitting real agent runs during unrelated test suites.

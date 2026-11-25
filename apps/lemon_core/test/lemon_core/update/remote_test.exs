@@ -379,8 +379,9 @@ defmodule LemonCore.Update.RemoteTest do
     end
 
     test "LEMON_NO_TUI=1 opts out of the TUI artifact, as it does in the installer" do
+      env = LemonCore.Testing.HermeticEnv.snapshot_env(["LEMON_NO_TUI"])
+      on_exit(fn -> LemonCore.Testing.HermeticEnv.restore_env(env) end)
       System.put_env("LEMON_NO_TUI", "1")
-      on_exit(fn -> System.delete_env("LEMON_NO_TUI") end)
 
       artifacts = [
         artifact("lemon-a.tar.gz", "lemon_runtime_full", "linux-x86_64", "aa", 10),

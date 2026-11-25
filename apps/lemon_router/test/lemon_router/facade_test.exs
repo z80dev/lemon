@@ -157,9 +157,7 @@ defmodule LemonRouter.FacadeTest do
     setup do
       # Callers outside lemon_router may load before/after the router app; the
       # facade has to degrade rather than raise.
-      :ok = Application.stop(:lemon_router)
-      on_exit(fn -> {:ok, _} = Application.ensure_all_started(:lemon_router) end)
-      :ok
+      LemonPlatformTest.AppRestart.setup_app_restart([:lemon_router], [])
     end
 
     test "reports authoritative reads unavailable instead of idle" do

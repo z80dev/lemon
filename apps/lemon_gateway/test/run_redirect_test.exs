@@ -103,7 +103,7 @@ defmodule LemonGateway.RunRedirectTest do
   # ============================================================================
 
   setup do
-    _ = Application.stop(:lemon_gateway)
+    LemonGateway.Test.AppIsolation.isolate_gateway([LemonGateway.Config, :executor])
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 10,

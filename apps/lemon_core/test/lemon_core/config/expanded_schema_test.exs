@@ -62,9 +62,9 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
     end
 
     test "env var overrides budget_defaults" do
+      env = LemonCore.Testing.HermeticEnv.snapshot_env(["LEMON_BUDGET_MAX_CHILDREN"])
+      on_exit(fn -> LemonCore.Testing.HermeticEnv.restore_env(env) end)
       System.put_env("LEMON_BUDGET_MAX_CHILDREN", "20")
-
-      on_exit(fn -> System.delete_env("LEMON_BUDGET_MAX_CHILDREN") end)
 
       config = Agent.resolve(%{})
       assert config.budget_defaults.max_children == 20

@@ -114,6 +114,17 @@ transient retries, give the failed step `content: []`: text, thinking or tool-ca
 output commits the attempt and prevents automatic replay. A failed step with
 partial output instead surfaces that output and the original error.
 
+## Isolating application restarts in tests
+
+In an `async: false` case, use `LemonPlatformTest.AppRestart.with_app_restart/3`
+to stop the named apps, run a callback, and restore the original running set.
+The callback configures and starts the apps it needs. Declare the global state
+it changes with `app_env: [{app, key}]`, `system_env: ["VAR"]`, and, if
+applicable, `telemetry: [handler_id]` for fresh test-owned handlers. For
+fixtures that must outlive `setup`, `setup_app_restart/2` defers restoration
+until `on_exit`. Existing env settings, including configured `nil` values, are
+preserved; pre-existing dependencies and unrelated apps are not restarted.
+
 ## In this repo
 
 `test/compliance/` runs the kit against the platform's own implementations — two

@@ -1,5 +1,5 @@
 defmodule LemonAgent.ModelRuntime.ModelCatalogTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonAgent.ModelRuntime.ModelCatalog
 
@@ -98,8 +98,13 @@ defmodule LemonAgent.ModelRuntime.ModelCatalogTest do
   describe "provider_enabled_for_config?/2" do
     test "pool-only credentials enable a provider" do
       env_key = "POOL_CATALOG_ZAI_KEY"
+      original = System.get_env(env_key)
+
+      on_exit(fn ->
+        if original, do: System.put_env(env_key, original), else: System.delete_env(env_key)
+      end)
+
       System.put_env(env_key, "pool-zai-key-value")
-      on_exit(fn -> System.delete_env(env_key) end)
 
       cfg = %{
         providers: %{},
