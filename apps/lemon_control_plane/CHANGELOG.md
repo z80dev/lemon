@@ -56,6 +56,14 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Changed
 
+- **Breaking:** the `agent` method takes `sessionKey`, `agentId` and `queueMode`
+  (the advertised schema spelling) and an optional fixed `runId`; the old
+  `session_key`, `agent_id` and `queue_mode` are rejected instead of being
+  silently ignored. It submits through the `chat.send` receipt path and returns
+  `runId`, `sessionKey`, `state`, `effectiveMode`, `targetRunId` and
+  `retrySafe: false`. An `agentId` naming a managed profile runs as that
+  profile's chat in its workspace and rejects a caller `cwd`. Unknown queue
+  modes are rejected (#620).
 - **Breaking security change:** HTTP/WebSocket listeners default to loopback.
   LAN deployments must explicitly configure `LEMON_CONTROL_PLANE_BIND_IP` and
   authentication. The separate node gateway defaults to `127.0.0.1:4044`;

@@ -108,6 +108,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- **Breaking:** the control-plane `agent` method takes `sessionKey`, `agentId`,
+  `queueMode` and an optional fixed `runId`, rejects the old snake_case
+  spellings, returns the `chat.send` receipt (`runId`, `sessionKey`, `state`,
+  `effectiveMode`, `targetRunId`, `retrySafe`), and runs an `agentId` that names
+  a managed profile as that profile's chat in its own workspace (a caller `cwd`
+  is refused). A submit whose reply is lost keeps its fixed run ID, and a retry
+  with the same `idempotency_key` reconciles to that one run. `lemon print`
+  uses the new fields (#620).
+
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle

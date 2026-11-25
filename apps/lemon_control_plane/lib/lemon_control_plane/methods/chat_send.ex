@@ -66,10 +66,10 @@ defmodule LemonControlPlane.Methods.ChatSend do
       Map.has_key?(params, "cwd") and not is_nil(profile_id) ->
         {:error, {:invalid_request, "cwd cannot override a profile workspace", nil}}
 
-      Map.has_key?(params, "cwd") and not valid_cwd?(params["cwd"]) ->
+      Map.has_key?(params, "cwd") and not ChatSubmission.valid_cwd?(params["cwd"]) ->
         {:error, {:invalid_request, "cwd must be a nonempty absolute existing directory", nil}}
 
-      Map.has_key?(params, "cwd") and profile_session?(session_key) ->
+      Map.has_key?(params, "cwd") and ChatSubmission.profile_session?(session_key) ->
         {:error, {:invalid_request, "cwd cannot override a canonical profile session", nil}}
 
       true ->
@@ -177,28 +177,6 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
   defp attach_tern_pane(request, pane),
     do: Map.update(request, :meta, %{tern_pane: pane}, &Map.put(&1, :tern_pane, pane))
-
-  defp valid_cwd?(cwd) when is_binary(cwd) and cwd != "" do
-    Path.type(cwd) == :absolute and File.dir?(cwd)
-  end
-
-  defp valid_cwd?(_cwd), do: false
-
-  defp profile_session?(session_key) when is_binary(session_key) do
-    case LemonCore.SessionKey.parse(session_key) do
-      %{kind: :main, agent_id: id} ->
-        case LemonCore.ProfileStore.get(id) do
-          {:ok, profile} -> profile["canonicalSessionKey"] == session_key
-          {:error, :not_found} -> false
-          {:error, _} -> true
-        end
-
-      _ ->
-        false
-    end
-  end
-
-  defp profile_session?(_session_key), do: false
 
   defp parse_queue_mode(nil), do: :collect
   defp parse_queue_mode("collect"), do: :collect
