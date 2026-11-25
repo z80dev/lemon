@@ -136,12 +136,15 @@ config :lemon_core, :env_registries, [
   LemonWeb.Env
 ]
 
+# Every adapter listed here must be startable from canonical config: its
+# platform section is registered under `:gateway_channels` above (Email reads
+# the `[gateway.email]` block). WhatsApp was retired rather than kept with no
+# config path that could start it (#699).
 config :lemon_channels,
   adapters: [
     LemonChannels.Adapters.Telegram,
     LemonChannels.Adapters.Discord,
     LemonChannels.Adapters.Xmtp,
-    LemonChannels.Adapters.WhatsApp,
     LemonChannels.Adapters.Email
   ]
 

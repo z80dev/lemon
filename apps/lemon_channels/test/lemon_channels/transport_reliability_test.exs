@@ -2,8 +2,6 @@ defmodule LemonChannels.TransportReliabilityTest do
   use ExUnit.Case, async: true
 
   alias LemonChannels.Adapters.Telegram.Transport.Poller
-  alias LemonChannels.Adapters.WhatsApp.Transport, as: WhatsAppTransport
-  alias LemonChannels.PortBridge
 
   defmodule PollAPI do
     def get_updates(updates, offset, _timeout) do
@@ -94,72 +92,6 @@ defmodule LemonChannels.TransportReliabilityTest do
 
     assert_received {:handled, "21"}
     refute_received {:handled, "20"}
-  end
-
-  @tag :tmp_dir
-  @tag capture_log: true
-  test "a WhatsApp command timeout is outcome-unknown, never delivery success or safe retry", %{
-    tmp_dir: tmp_dir
-  } do
-    bridge = %{
-      label: "whatsapp",
-      event_tag: :whatsapp_bridge_event,
-      script_filename: "whatsapp_bridge.mjs"
-    }
-
-    # An unavailable bridge still owns the shutdown/reconnect lifecycle; this
-    # classification regression does not need Node or a connected account.
-    opts = [
-      config: %{bridge_script: Path.join(tmp_dir, "missing_bridge.mjs")},
-      notify_pid: self(),
-      restart: :manual
-    ]
-
-    port_server =
-      start_supervised!(%{id: PortBridge, start: {PortBridge, :start_link, [{bridge, opts}]}})
-
-    reply_ref = make_ref()
-    other_reply_ref = make_ref()
-    command_id = "pending-command"
-    timer = Process.send_after(self(), :unexpected_command_timeout, 60_000)
-    other_timer = Process.send_after(self(), :unexpected_command_timeout, 60_000)
-
-    state = %{
-      port_server: port_server,
-      connected?: true,
-      own_jid: "15550000000@s.whatsapp.net",
-      pending_commands: %{
-        command_id => {{self(), reply_ref}, timer},
-        "other-command" => {{self(), other_reply_ref}, other_timer}
-      },
-      reconnect_timer: nil,
-      reconnect_attempts: 0
-    }
-
-    assert {:noreply, %{pending_commands: %{}} = next} =
-             WhatsAppTransport.handle_info({:command_timeout, command_id}, state)
-
-    {reconnect_timer, _ref} = next.reconnect_timer
-    on_exit(fn -> Process.cancel_timer(reconnect_timer) end)
-
-    assert_receive {^reply_ref, {:error, :outcome_unknown}}
-    assert_receive {^other_reply_ref, {:error, :outcome_unknown}}
-    assert Process.read_timer(timer) == false
-    assert Process.read_timer(other_timer) == false
-    refute next.connected?
-    assert next.own_jid == nil
-    assert next.reconnect_attempts == 1
-
-    assert %{port: nil, os_pid: nil, connect_command: nil, unavailable_reason: :stopped} =
-             :sys.get_state(port_server)
-
-    assert {:noreply, ^next} = WhatsAppTransport.handle_info({:command_timeout, command_id}, next)
-
-    assert {:noreply, ^next} =
-             WhatsAppTransport.handle_info({:command_timeout, "other-command"}, next)
-
-    refute_receive {^reply_ref, _}, 0
-    refute_receive {^other_reply_ref, _}, 0
   end
 
   defp callback_update(id, chat_id) do

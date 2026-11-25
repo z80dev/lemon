@@ -289,10 +289,12 @@ daily totals are unknown because complete history cannot be established.
   `LemonCore.BuildInfo`; status reads environment/stamped commit metadata only,
   never launches git on each poll.
 - `channels.configured` and `channels.connected` retain their existing meanings
-  (registered adapters and running adapter processes). `channels.details` adds
-  one `{id,state,lastError}` per configured adapter. State is `connected`,
+  (registered adapters and running adapter processes). The built-in adapter
+  list registers only channels that canonical config can start, so
+  `configured` never names a channel without a config path. `channels.details`
+  adds one `{id,state,lastError}` per configured adapter. State is `connected`,
   `configured`, or `error`; Telegram polling, Discord READY/RESUMED events, and
-  XMTP/WhatsApp bridge transitions distinguish an observed live connection from
+  XMTP bridge transitions distinguish an observed live connection from
   merely starting a process. Startup failures are retained too. Errors contain
   only a fixed sanitized `message` (at most 256 characters, no tokens or paths)
   and the observed wall-clock `atMs`. A successful connection/poll clears the

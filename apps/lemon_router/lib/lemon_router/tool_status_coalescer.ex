@@ -704,7 +704,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp chat_visible_action?(_channel_id, _action), do: true
 
   defp chat_channel?(channel_id) when is_binary(channel_id) do
-    Enum.any?(["telegram", "discord", "whatsapp"], &String.starts_with?(channel_id, &1))
+    Enum.any?(["telegram", "discord"], &String.starts_with?(channel_id, &1))
   end
 
   defp chat_channel?(_channel_id), do: false
