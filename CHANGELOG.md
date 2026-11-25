@@ -298,7 +298,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   redacted and bounded), a non-text answer is `null`, and `lemon print` renders
   that object. `cron.run` allocates its cron run ID before calling the
   scheduler, which claims exactly that ID, so an unknown outcome names the
-  `runId` to reconcile (#620).
+  `runId` to reconcile; a trigger blocked by an earlier unresolved run reports
+  `PRIOR_RUN_OUTCOME_UNKNOWN` with that run's `priorRunId` instead (#620).
 - `bin/lemon start` now starts Honcho memory and computer-use tools when they
   are configured: the source runtime previously never started
   `lemon_honcho` or `lemon_computer_use` (#726).

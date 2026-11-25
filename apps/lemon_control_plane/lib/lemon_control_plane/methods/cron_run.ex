@@ -5,12 +5,18 @@ defmodule LemonControlPlane.Methods.CronRun do
   Triggers an immediate run of a cron job. The cron run ID is allocated here,
   before the scheduler is called, and the scheduler claims exactly that ID.
 
-  When the outcome is unknown (an earlier run of the job is still unresolved, or
-  the trigger call timed out or exited after reaching the scheduler) the method
-  fails with code `UNAVAILABLE` and details
-  `%{"code" => "RUN_OUTCOME_UNKNOWN", "jobId" => id, "runId" => run_id,
+  When the trigger call timed out, exited after reaching the scheduler, or its
+  claim write is unconfirmed, the method fails with code `UNAVAILABLE` and
+  details `%{"code" => "RUN_OUTCOME_UNKNOWN", "jobId" => id, "runId" => run_id,
   "retrySafe" => false}`: that run may exist, so reconcile it with `cron.runs`
   instead of triggering again.
+
+  When an earlier run of the job still has an unknown outcome, the scheduler
+  refuses before claiming the new ID. The details are
+  `%{"code" => "PRIOR_RUN_OUTCOME_UNKNOWN", "jobId" => id,
+  "priorRunId" => earlier_id, "retrySafe" => false}` (`priorRunId` is omitted
+  when the active runs cannot be read); no new run exists, but triggering stays
+  unsafe until the earlier run is reconciled.
   """
 
   @behaviour LemonControlPlane.Method
@@ -51,6 +57,20 @@ defmodule LemonControlPlane.Methods.CronRun do
               "runId" => run_id,
               "retrySafe" => false
             }}}
+
+        {:error, {:prior_run_unresolved, prior_run_id}} ->
+          details =
+            %{"code" => "PRIOR_RUN_OUTCOME_UNKNOWN", "jobId" => job_id, "retrySafe" => false}
+
+          details =
+            if is_binary(prior_run_id),
+              do: Map.put(details, "priorRunId", prior_run_id),
+              else: details
+
+          {:error,
+           {:unavailable,
+            "An earlier run of this cron job has an unknown outcome. Reconcile it with cron.runs before triggering again.",
+            details}}
 
         {:error, reason} ->
           Logger.warning("Could not start cron job reason=#{failure_label(reason)}")

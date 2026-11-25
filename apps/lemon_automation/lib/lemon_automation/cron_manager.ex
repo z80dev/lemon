@@ -320,10 +320,21 @@ defmodule LemonAutomation.CronManager do
   still names the run to reconcile with `cron.runs`. The ID is claimed with
   `CronStore.claim_run/1`: an ID that already exists is `{:error, :exists}` and
   never overwrites the earlier run.
+
+  An earlier run of the job whose outcome is unknown blocks the trigger before
+  the ID is claimed: that is `{:error, {:prior_run_unresolved, prior_run_id}}`
+  (`nil` when the active runs cannot be read), and `run_id` was never used.
+  `{:error, :outcome_unknown}` means the claim write of `run_id` itself is
+  unconfirmed.
   """
   @spec run_now_with_id(binary(), binary()) ::
           {:ok, CronRun.t()}
-          | {:error, :not_found | :exists | :outcome_unknown | :store_unavailable}
+          | {:error,
+             :not_found
+             | :exists
+             | :outcome_unknown
+             | :store_unavailable
+             | {:prior_run_unresolved, binary() | nil}}
   def run_now_with_id(job_id, run_id) when is_binary(run_id) and run_id != "" do
     GenServer.call(__MODULE__, {:run_now_with_id, job_id, run_id}, @call_timeout_ms)
   end
@@ -1544,12 +1555,19 @@ defmodule LemonAutomation.CronManager do
     |> schedule_next_run()
   end
 
-  defp unknown_run_locked?(job) do
-    Enum.any?(CronStore.active_runs(job.id), &meta_value(&1.meta, :outcome_unknown))
+  defp unknown_run_locked?(job), do: unknown_run_lock(job) != :none
+
+  # An active run of the job whose outcome is unknown blocks new triggers.
+  # Returns the blocking run, or `:unreadable` when the runs cannot be read.
+  defp unknown_run_lock(job) do
+    case Enum.find(CronStore.active_runs(job.id), &meta_value(&1.meta, :outcome_unknown)) do
+      %CronRun{} = run -> {:run, run.id}
+      nil -> :none
+    end
   rescue
-    _ -> true
+    _ -> :unreadable
   catch
-    _, _ -> true
+    _, _ -> :unreadable
   end
 
   defp job_active_run_locked?(%CronJob{} = job) do
@@ -2606,10 +2624,19 @@ defmodule LemonAutomation.CronManager do
       triggered_by: :manual
     })
 
-    if unknown_run_locked?(job) do
-      {:reply, {:error, :outcome_unknown}, state}
-    else
-      reply_execute(execute_job(job, :manual, opts, state))
+    case {unknown_run_lock(job), Keyword.has_key?(opts, :run_id)} do
+      {:none, _fixed?} ->
+        reply_execute(execute_job(job, :manual, opts, state))
+
+      # A caller-fixed ID was definitely never claimed: name the blocker, not it.
+      {{:run, prior_id}, true} ->
+        {:reply, {:error, {:prior_run_unresolved, prior_id}}, state}
+
+      {:unreadable, true} ->
+        {:reply, {:error, {:prior_run_unresolved, nil}}, state}
+
+      {_lock, false} ->
+        {:reply, {:error, :outcome_unknown}, state}
     end
   end
 

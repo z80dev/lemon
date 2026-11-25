@@ -40,8 +40,9 @@
 
 - `CronManager.run_now_with_id/2` runs a job under a caller-fixed cron run ID,
   claimed durably before it is announced; a reused ID is `{:error, :exists}`
-  and never overwrites the earlier run. `cron.run` uses it so a lost reply
-  still names the run (#620).
+  and never overwrites the earlier run; an earlier unresolved run refuses it
+  with `{:prior_run_unresolved, prior_run_id}` before the ID is claimed.
+  `cron.run` uses it so a lost reply still names the run (#620).
 - `KanbanDispatcher` `control_revision` ignores lease renewals and other
   heartbeat-only task metadata, so it stays stable between ticks and an
   operator stop bound to it succeeds (#658).
