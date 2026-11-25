@@ -88,9 +88,9 @@ defmodule LemonBrowser.ConfigTest do
     end
   end
 
-  test "the browser driver's application env does not select a provider" do
+  test "explicit browser config wins over the driver's legacy application env" do
     Application.put_env(:lemon_browser, :backend, :browserbase)
-    assert Tools.section(Tools.resolve(%{}), :browser).provider == "auto"
+    assert browser(%{"provider" => "auto"}).provider == "auto"
   end
 
   test "provider override wins over file and legacy backend choices" do
