@@ -176,8 +176,8 @@ export class PromptHistoryStore {
 		let db: Database | undefined;
 		try {
 			secureDirectory(path.dirname(this.path));
-			secureFile(this.path, true);
-			for (const suffix of SIDECARS) secureFile(`${this.path}${suffix}`, false);
+			secureFile(this.path, "database");
+			for (const suffix of SIDECARS) secureFile(`${this.path}${suffix}`, "sidecar");
 			// SQLite NOFOLLOW checks every component, including macOS's trusted
 			// /var alias. Resolve only AFTER rejecting user-controlled links above.
 			db = new Database(
@@ -290,7 +290,7 @@ export class PromptHistoryStore {
 			try {
 				// Validate first: never follow a source symlink or delete an unrelated
 				// directory. A failure is visible even though the import fence is set.
-				secureFile(file, false);
+				secureFile(file, "legacy");
 				unlinkSync(file);
 			} catch (error) {
 				if (!isAbsent(error)) failure ??= error;
@@ -388,7 +388,7 @@ function checkAncestors(directory: string): void {
 }
 
 /** NOFOLLOW plus owner/type/link-count checks before SQLite sees any pathname. */
-function secureFile(file: string, create: boolean): void {
+function secureFile(file: string, kind: "database" | "sidecar" | "legacy"): void {
 	let fd: number;
 	try {
 		fd = openSync(
@@ -396,16 +396,23 @@ function secureFile(file: string, create: boolean): void {
 			constants.O_RDWR |
 				constants.O_NONBLOCK |
 				constants.O_NOFOLLOW |
-				(create ? constants.O_CREAT : 0),
+				(kind === "database" ? constants.O_CREAT : 0),
 			PRIVATE_FILE,
 		);
 	} catch (error) {
-		if (!create && isAbsent(error)) return;
+		if (kind !== "database" && isAbsent(error)) return;
 		throw error;
 	}
 	try {
 		const stat = fstatSync(fd);
-		if (!stat.isFile() || stat.uid !== process.getuid?.() || stat.nlink !== 1) {
+		// SQLite may unlink a sidecar on another connection's commit after we open it.
+		// A zero link count is then expected; hard links and unsafe owners still fail.
+		const unlinkedSidecar = kind === "sidecar" && stat.nlink === 0;
+		if (
+			!stat.isFile() ||
+			stat.uid !== process.getuid?.() ||
+			(!unlinkedSidecar && stat.nlink !== 1)
+		) {
 			unsafe(
 				"history database, sidecars and legacy sources must be owned regular files with no hard links",
 			);
@@ -417,7 +424,7 @@ function secureFile(file: string, create: boolean): void {
 }
 
 function readLegacyTail(file: string, maxBytes: number): string[] {
-	secureFile(file, false);
+	secureFile(file, "legacy");
 	let fd: number;
 	try {
 		fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);

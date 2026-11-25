@@ -430,6 +430,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Concurrent TUIs no longer refuse to save prompt history when another
+  SQLite connection removes its transient journal just as a writer opens it.
 - Quote newly written profile IDs in TOML so numeric-looking IDs remain readable,
   while continuing to edit existing bare profile declarations in place (#728).
 - `agent.wait` returns `UNAVAILABLE` when the run store cannot be read instead
