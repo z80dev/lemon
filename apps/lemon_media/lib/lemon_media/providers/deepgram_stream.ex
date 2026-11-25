@@ -1,9 +1,8 @@
-defmodule LemonGateway.Voice.DeepgramClient do
+defmodule LemonMedia.Providers.DeepgramStream do
   @moduledoc """
   WebSocket client for Deepgram streaming speech-to-text.
 
-  Uses WebSockex to connect to Deepgram's real-time transcription API
-  and forward transcripts to the call session.
+  The caller owns supervision and receives connection and transcript callbacks.
   """
 
   # A Deepgram socket belongs to exactly one call: never restart it, so a
@@ -12,77 +11,39 @@ defmodule LemonGateway.Voice.DeepgramClient do
 
   require Logger
 
-  alias LemonGateway.Voice.{CallSession, Config}
-
   @deepgram_ws_url "wss://api.deepgram.com/v1/listen"
 
   # Client API
 
   @doc """
-  Starts a Deepgram WebSocket connection for a call session.
+  Starts a Deepgram WebSocket for 8 kHz mono μ-law audio.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
-    call_sid = Keyword.fetch!(opts, :call_sid)
-    session_pid = Keyword.fetch!(opts, :session_pid)
+    state = %{
+      on_connect: Keyword.fetch!(opts, :on_connect),
+      on_transcript: Keyword.fetch!(opts, :on_transcript)
+    }
 
-    with {:ok, url, ws_opts} <- connect_options(build_deepgram_url(), call_sid) do
+    with {:ok, url, ws_opts} <- connect_options(build_deepgram_url(), opts) do
       WebSockex.start_link(
         url,
         __MODULE__,
-        %{call_sid: call_sid, session_pid: session_pid},
+        state,
         ws_opts
       )
     end
   end
 
   @doc false
-  @spec connect_options(String.t(), String.t()) ::
+  @spec connect_options(String.t(), keyword()) ::
           {:ok, String.t(), keyword()} | {:error, term()}
-  def connect_options(url, call_sid) do
+  def connect_options(url, opts) do
     LemonCore.Net.web_socket_options(url,
-      extra_headers: [{"Authorization", "Token #{Config.deepgram_api_key()}"}],
-      name: via_tuple(call_sid)
+      extra_headers: [{"Authorization", "Token #{Keyword.fetch!(opts, :api_key)}"}],
+      name: Keyword.fetch!(opts, :name)
     )
   end
-
-  @doc """
-  Returns the via tuple for registry lookup.
-  """
-  @spec via_tuple(String.t()) :: {:via, Registry, {atom(), String.t()}}
-  def via_tuple(call_sid) do
-    {:via, Registry, {LemonGateway.Voice.DeepgramRegistry, call_sid}}
-  end
-
-  @doc """
-  Stops the call's current Deepgram socket, if any. Idempotent.
-  """
-  @spec stop_for_call(String.t()) :: :ok
-  def stop_for_call(call_sid) when is_binary(call_sid) do
-    if Process.whereis(LemonGateway.Voice.DeepgramRegistry) do
-      case Registry.lookup(LemonGateway.Voice.DeepgramRegistry, call_sid) do
-        [{pid, _}] -> stop(pid)
-        [] -> :ok
-      end
-    else
-      :ok
-    end
-  end
-
-  @doc """
-  Stops a Deepgram socket started under `LemonGateway.Voice.DeepgramSupervisor`.
-  """
-  @spec stop(pid() | nil) :: :ok
-  def stop(pid) when is_pid(pid) do
-    case Process.whereis(LemonGateway.Voice.DeepgramSupervisor) do
-      nil -> :ok
-      sup -> _ = DynamicSupervisor.terminate_child(sup, pid)
-    end
-
-    :ok
-  end
-
-  def stop(_), do: :ok
 
   @doc """
   Sends audio data to Deepgram for transcription.
@@ -94,17 +55,9 @@ defmodule LemonGateway.Voice.DeepgramClient do
 
   # WebSockex Callbacks
 
-  def init(state) do
-    Logger.debug("Deepgram client initialized for call #{state.call_sid}")
-    {:ok, state}
-  end
-
   @impl WebSockex
   def handle_connect(_conn, state) do
-    Logger.debug("Connected to Deepgram for call #{state.call_sid}")
-
-    # Register with call session
-    CallSession.register_deepgram_ws(state.session_pid, self())
+    state.on_connect.(self())
 
     {:ok, state}
   end
@@ -134,14 +87,9 @@ defmodule LemonGateway.Voice.DeepgramClient do
   end
 
   @impl WebSockex
-  def handle_disconnect(%{reason: reason}, state) do
-    Logger.warning("Deepgram disconnected for call #{state.call_sid}: #{inspect(reason)}")
+  def handle_disconnect(_status, state) do
+    Logger.debug("Deepgram stream disconnected")
     {:ok, state}
-  end
-
-  @impl WebSockex
-  def terminate(reason, state) do
-    Logger.debug("Deepgram client terminated for call #{state.call_sid}: #{inspect(reason)}")
   end
 
   # Private Functions
@@ -168,16 +116,15 @@ defmodule LemonGateway.Voice.DeepgramClient do
   end
 
   defp handle_deepgram_message(%{"type" => "Results"} = data, state) do
-    # Forward transcript to call session
-    CallSession.handle_transcript(state.session_pid, data)
+    state.on_transcript.(data)
   end
 
   defp handle_deepgram_message(%{"type" => "Metadata"} = data, _state) do
     Logger.debug("Deepgram metadata: #{inspect(data)}")
   end
 
-  defp handle_deepgram_message(%{"type" => "UtteranceEnd"}, state) do
-    Logger.debug("Utterance ended for call #{state.call_sid}")
+  defp handle_deepgram_message(%{"type" => "UtteranceEnd"}, _state) do
+    Logger.debug("Deepgram utterance ended")
   end
 
   defp handle_deepgram_message(%{"type" => "SpeechStarted"}, _state) do
@@ -185,8 +132,7 @@ defmodule LemonGateway.Voice.DeepgramClient do
   end
 
   defp handle_deepgram_message(%{"type" => "Final"} = data, state) do
-    # Alternative format for final results
-    CallSession.handle_transcript(state.session_pid, %{
+    state.on_transcript.(%{
       "is_final" => true,
       "channel" => %{"alternatives" => [Map.take(data, ["transcript", "confidence"])]}
     })

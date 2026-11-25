@@ -40,7 +40,7 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 | `quality` | `mix compile --warnings-as-errors`, `mix format --check-formatted`, `mix credo`, the skip-tag guard, `scripts/check_changelog`, `python3 scripts/test_changed_tests.py`, the docs source-reference check (`scripts/check_docs_source_refs.mjs` and its tests), `shellcheck` on the test/install/update/launcher scripts, `scripts/test_lemon_tui_auth.sh`, `scripts/test_lemon_launcher_reuse.sh`, `scripts/test_lemonup.sh`, `mix lemon.skill.lint`, `mix lemon.quality`, and the quality/eval-harness tests. |
 | `clients` | `clients/tui`: `bun install --frozen-lockfile`, `bun run check`, `bun run lint`, `bun test`. `clients/lemon-browser-node`: `npm ci`, `typecheck`, `lint`, `build`, `npm test`. |
 | `lemon_bot` | Frozen Bun installs in `products/lemon_bot/backend` and `web`; backend `bun test`, then web `bun run build` and `bun run test`. |
-| `coverage` | `mix compile --warnings-as-errors`, then `mix test --exclude integration --cover` with each app's `test_coverage` threshold. |
+| `coverage` | `mix compile --warnings-as-errors`, then `mix test --exclude integration --cover` in a separate VM per app (paths select apps; other arguments go to every run), each with its app's `test_coverage` threshold; the lane fails if any app fails. A shared VM would re-cover-compile apps under already-running processes and fail only under `--cover`. |
 | `eval-fast` | `mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}` (deterministic eval harness). |
 | `live-eval` | `mix lemon.eval --live-model`; needs a live credential (see below). |
 | `smoke` | Prints how to run `scripts/product_smoke_local` (`--release` for release-boot parity). |
@@ -219,13 +219,11 @@ does not inherit repository-local resources.
 The two approval-event broadcast cases remain in the small synchronous
 `SessionApprovalEventsTest` module because they publish to a shared Bus topic.
 
-Shared Elixir helpers live in `LemonCore.Testing.HermeticEnv`:
-
-- `credential_env_vars/0` returns the canonical scrub list.
-- `scrub_unit_credentials!/1` deletes those variables unless live credentials
-  are explicitly allowed.
-- `with_restored_env/2` snapshots and restores env vars around synchronous
-  tests that mutate process-wide env.
+Ambient provider/platform credentials are scrubbed before the BEAM starts, from
+the single `SCRUB_CREDENTIAL_ENV_VARS` list in `scripts/test`; no Elixir copy
+of that list exists. `LemonCore.Testing.HermeticEnv.with_restored_env/2`
+snapshots and restores env vars around synchronous tests that mutate
+process-wide env.
 
 Tests that call `System.put_env/2` or `System.delete_env/1` should be
 `async: false` and restore their changes.

@@ -146,8 +146,12 @@ defmodule CodingAgent.JoinAwait do
     timeout = max(0, deadline - System.monotonic_time(:millisecond))
 
     receive do
-      {:lemon_abort, ^signal, _kind} ->
+      {:lemon_abort, ^signal, :abort} ->
         {:error, :aborted}
+
+      # A redirect interrupts the model request, not this tool: keep waiting.
+      {:lemon_abort, ^signal, :redirect} ->
+        :changed
 
       {:run_graph, :state_changed, _id} ->
         :changed

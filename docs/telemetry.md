@@ -465,14 +465,11 @@ Aggregate snapshots do not provide per-run wait latency. See the
 | `[:lemon_agent, :loop, :end]` | `duration` (native, **may be `nil`**), `system_time` | `message_count`, `model`, `status` (`:completed` \| `:early_exit`) | [`emit_loop_end_telemetry/3`](../apps/lemon_agent/lib/lemon_agent/loop.ex) |
 | `[:lemon_agent, :loop, :state_transition]` | `system_time` | caller map plus `from`, `to` | [`transition_loop_state/3`](../apps/lemon_agent/lib/lemon_agent/loop.ex) |
 | `[:lemon_agent, :tool_schema_snapshot, :created]` | `system_time` | `snapshot_id`, `fingerprint`, `tool_count`, `tool_names` | [`emit_tool_schema_snapshot/2`](../apps/lemon_agent/lib/lemon_agent/loop.ex) |
-| `[:lemon_agent, :tool_task, :start]` | `system_time` | `tool_name`, `tool_call_id` | [`start_tool_tasks/10`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) in `LemonAgent.Loop.ToolCalls` |
+| `[:lemon_agent, :tool_task, :start]` | `system_time` | `tool_name`, `tool_call_id` | [`start_tool_tasks/9`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) in `LemonAgent.Loop.ToolCalls` |
 | `[:lemon_agent, :tool_task, :end]` | `system_time` | `tool_name`, `tool_call_id`, `is_error` | [`collect_parallel_tool_results/16`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex), including started tools stopped by an abort |
-| `[:lemon_agent, :tool_task, :error]` | `system_time` | `tool_name`, `tool_call_id`, `reason` | [`collect_parallel_tool_results/16`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) (task crash, `:timeout`), [`start_tool_tasks/10`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) (`{:start_failed, reason}`, prepare failure) and [`emit_tool_errors/6`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) (unstarted calls: `:aborted` after an abort, `:skipped` when steering arrives) |
+| `[:lemon_agent, :tool_task, :error]` | `system_time` | `tool_name`, `tool_call_id`, `reason` | [`collect_parallel_tool_results/16`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) (task crash, `:timeout`), [`start_tool_tasks/9`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) (`{:start_failed, reason}`, prepare failure) and [`emit_tool_errors/6`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) (unstarted calls: `:aborted` after an abort, `:skipped` when steering arrives) |
 | `[:lemon_agent, :tool_result, :emit]` | `system_time` | `tool_name`, `tool_call_id`, `is_error`, `trust` | [`emit_tool_result/7`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex). `trust` is normalized: only `:untrusted` stays untrusted, everything else becomes `:trusted` |
 | `[:lemon_agent, :tool_call, :name_normalized]` | `system_time` | `original_name`, `matched_tool_name` | [`find_tool/2`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex), when a model-supplied tool name needed fuzzy matching |
-| `[:lemon_agent, :context, :size]` | `char_count`, `message_count` | `has_system_prompt` | [`LemonAgent.Context.estimate_size/2`](../apps/lemon_agent/lib/lemon_agent/context.ex), on every call |
-| `[:lemon_agent, :context, :warning]` | `char_count`, `threshold` | `level` (`:warning` \| `:critical`) | [`LemonAgent.Context.check_size/3`](../apps/lemon_agent/lib/lemon_agent/context.ex) |
-| `[:lemon_agent, :context, :truncated]` | `dropped_count`, `remaining_count` | `strategy` | [`LemonAgent.Context.truncate/2`](../apps/lemon_agent/lib/lemon_agent/context.ex) |
 
 ### Providers — `[:lemon_ai, ...]`
 
@@ -719,7 +716,6 @@ defmodule MyApp.TelemetryLogger do
     [:lemon_ai, :dispatcher, :rejected],
     [:lemon_ai, :circuit_breaker, :opened],
     [:lemon_agent, :tool_task, :error],
-    [:lemon_agent, :context, :warning],
     [:lemon, :memory, :ingest, :failure]
   ]
 
@@ -754,10 +750,6 @@ defmodule MyApp.TelemetryLogger do
     Logger.error("tool failed tool=#{meta.tool_name} reason=#{inspect(meta.reason)}")
   end
 
-  def handle_event([:lemon_agent, :context, :warning], m, meta, _config) do
-    Logger.warning("context #{meta.level}: #{m.char_count} chars (threshold #{m.threshold})")
-  end
-
   def handle_event([:lemon, :memory, :ingest, :failure], m, meta, _config) do
     Logger.error("memory ingest failed run=#{meta.run_id} after #{m.duration_us}us: #{meta.error}")
   end
@@ -770,35 +762,25 @@ running.
 ### Verifying an attachment without a full runtime
 
 `mix run --no-start` does not start the `:telemetry` application, so `attach_many/4` will
-exit with `no process`. Start it explicitly and drive a real emit path:
+exit with `no process`. Start it explicitly, attach, and emit a synthetic event:
 
 ```elixir
 {:ok, _} = Application.ensure_all_started(:telemetry)
 
-:telemetry.attach_many(
+:telemetry.attach(
   "probe",
-  [[:lemon_agent, :context, :size], [:lemon_agent, :context, :warning]],
+  [:lemon_agent, :tool_call, :name_normalized],
   fn event, measurements, metadata, _ ->
     IO.inspect({event, measurements, metadata})
   end,
   %{}
 )
 
-messages = [%{role: :user, content: "hello world"}, %{role: :assistant, content: "hi"}]
-LemonAgent.Context.estimate_size(messages, "you are a test")
-LemonAgent.Context.check_size(messages, nil, warning_threshold: 1, critical_threshold: 2, log: false)
+:telemetry.execute([:lemon_agent, :tool_call, :name_normalized], %{system_time: 0}, %{
+  original_name: "Read",
+  matched_tool_name: "read"
+})
 ```
-
-Running that under `mix run --no-start` produces:
-
-```
-{[:lemon_agent, :context, :size], %{char_count: 27, message_count: 2}, %{has_system_prompt: true}}
-{[:lemon_agent, :context, :size], %{char_count: 13, message_count: 2}, %{has_system_prompt: false}}
-{[:lemon_agent, :context, :warning], %{threshold: 2, char_count: 13}, %{level: :critical}}
-```
-
-`LemonAgent.Context` is a good probe target because it emits from a pure function with no
-supervision tree, no store, and no network.
 
 ### Aggregating into metrics
 

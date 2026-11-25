@@ -3,7 +3,7 @@
 Gateway owns execution slots, launch isolation, native run lifecycle, cancellation
 and resume. Router owns collect/follow-up/steer/interrupt semantics. Channels owns
 messaging adapters; gateway-native SMS/voice/webhook ingress remains opt-in through
-`:gateway_ingress_enabled`. See [README](README.md).
+`[gateway.ingress]`. See [README](README.md).
 
 ## Executor and lifecycle
 

@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Gateway-native webhook, Twilio SMS and voice can now start from global
+  `[gateway.ingress]` TOML and per-surface settings, with
+  `LEMON_GATEWAY_INGRESS_ENABLED` as the startup override. The generic webhook
+  ships pre-registered; all three listeners remain opt-in (#698).
 - `lemon browser stop` (admin control-plane method `browser.stop`) stops the
   local browser driver and the Chrome it launched (#660).
 - `lemon setup omp` reuses the provider logins and API keys omp already holds:
@@ -107,6 +111,20 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- **Breaking:** `[features] routing_feedback` now defaults to `"off"`; set it to
+  `"on"` in the global config to record and use routing history. When enabled,
+  history no longer outranks `[defaults] model`: it is consulted only for
+  un-pinned runs, suggests only models with at least a 75% success rate, and
+  replaces the default only where the default itself was measured (5+ samples)
+  and did worse, so a changed default takes effect immediately. The router reads
+  the flag from the config cache instead of parsing TOML per submission, and
+  the history lookup is an index range scan (#647).
+- **Breaking (lemon_core package):** the `LemonCore.Testing*` harness is no
+  longer published with lemon_core; `use LemonCore.Testing.Case, with_store:
+  true` now actually starts the Store; the duplicate Elixir credential scrub
+  list (`HermeticEnv.credential_env_vars/0`, `scrub_unit_credentials!/1`,
+  `:test_credential_env_vars`) is removed in favour of the single list in
+  `scripts/test`; `LemonGateway.AsyncHelpers` is removed (#713).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
@@ -116,7 +134,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   behind `LemonMedia.Providers.run/1` with one shared retry helper; Google
   service-account tokens are cached until expiry instead of re-signed per job.
   Channel voice-note transcription and voice replies and the gateway voice
-  call's ElevenLabs synthesis now call the `lemon_media` clients;
+  call's ElevenLabs synthesis and Deepgram streaming now call the `lemon_media` clients;
   transcription errors shown in chat carry a redacted provider error label
   instead of the raw provider message (#722).
 - **Breaking:** media tools (`media_generate_image`, `media_generate_speech`,
@@ -134,6 +152,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   longer crash a live session's append. `CodingAgent.SessionIndex` and
   `SessionManager.list_sessions/1` (no callers) are removed; leftover
   `.index.sqlite3` files in session directories are unused (#695).
+- `scripts/test coverage` runs each app in its own VM, so failures that only
+  appeared when one VM re-cover-compiled apps under running processes are
+  gone; paths select apps and other arguments go to every app's run (#499).
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
@@ -265,6 +286,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   was never read and is now ignored with a warning. Binding transports from
   config no longer create atoms, and TOML project roots resolve for channel
   bindings (#697).
+- Two follow-ups merged inside the router's 500 ms debounce window (or two
+  steers falling back together) now run: the merged run keeps the newest
+  message's execution context instead of the earlier one's, which the native
+  executor rejected as a run-ID mismatch, and a restart replays the merged
+  prompt instead of only the first message (#642).
+- Cron never announces a job or run change that failed to persist: when a
+  store write fails, `CronManager` emits no event, leaves its in-memory state
+  unchanged and returns `{:error, :store_unavailable}` (or
+  `{:error, :outcome_unknown}` when the write may have landed) from add,
+  update, model refresh, remove, run-now, wake and abort. A run is never
+  submitted, and a terminal never delivered or reported as an abort, unless
+  its write was confirmed (#87).
 - Discord boots again: `lemon_channels` now starts `:gun`, which Nostrum needs
   for its gateway and REST connections; previously a configured bot token
   failed with `:noproc` and no Discord service started (#670).
@@ -490,6 +523,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   parser (`LemonSkills.Frontmatter`); a rule or skill manifest that repeats a
   frontmatter key, or a rule whose frontmatter exceeds 16 KiB (skills: 64 KiB),
   is rejected with a warning instead of resolving last-wins (#671).
+- The `lsp` tool refuses a non-UTF-8 file with a clear error instead of crashing
+  the language-server session it shares with other leases, restarting it and
+  telling the model to retry. `LemonLsp.ServerManager` returns
+  `{:error, :invalid_document_encoding}` for such documents,
+  `{:error, :invalid_message_encoding}` for unencodable messages, and
+  `{:error, {:session_crashed, class}}` (never the raw exit reason) for any other
+  session exit during a call (#663).
+- Session reset no longer exits its caller with a call timeout when aborting
+  the active run takes most of the session's 5-second abort wait (#499).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
@@ -618,6 +660,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   descendants no longer deadlocks the eight-slot pool; `/bg` sessions use their
   own `background_run_max_concurrency` pool; joins without a timeout yield after
   `task_join_timeout_ms` (default 30 minutes) instead of waiting forever (#631).
+- A Redirect or stream-rule injection no longer cancels the children launched in
+  that run or aborts its task joins; only an abort does (#633).
 - Control-plane reads fail closed: an unreadable store or runtime makes
   `exec.approvals.get`, `config.get`, `logs.tail`, `sessions.preview`,
   `chat.history`, `session.detail`, `cron.runs`, the task lists, ACP session
@@ -677,6 +721,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** the opt-in session advisor (#600) is retired: `CodingAgent.Advisor`,
+  its `AdvisorSupervisor` child and the `advisor:` session option are removed.
+  No shipped caller enabled it; `start_session(advisor: ...)` now fails with
+  `{:error, {:unsupported_option, :advisor}}` instead of starting a reviewer (#705).
+- **Breaking:** `LemonAgent.Proxy` (SSE proxy `stream_fn`) and `LemonAgent.Context`
+  (size estimates, truncation, `make_transform/1`) are deleted together with
+  `docs/context.md`, the `req` dependency of `lemon_agent` and the
+  `[:lemon_agent, :context, :size | :warning | :truncated]` telemetry events. The
+  agent loop no longer JSON-encodes the whole history before every request (#708).
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.

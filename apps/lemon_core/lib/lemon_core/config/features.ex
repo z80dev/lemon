@@ -9,19 +9,21 @@ defmodule LemonCore.Config.Features do
 
       [features]
       session_search             = "default-on" # disable with "off"
-      routing_feedback           = "default-on" # disable with "off"
+      routing_feedback           = "off"        # enable with "on"
       skill_synthesis_drafts     = "default-on" # disable with "off"
       crash_resume               = "off"        # explicit hard-crash continuation
 
-  The first three flags ship enabled by default; `crash_resume` defaults off:
+  `session_search` and `skill_synthesis_drafts` ship enabled by default;
+  `routing_feedback` and `crash_resume` default off:
 
-      export LEMON_FEATURE_ROUTING_FEEDBACK=off
+      export LEMON_FEATURE_ROUTING_FEEDBACK=on
       export LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off
 
-  (These two were previously `"opt-in"` behind a quantitative graduation gate,
-  `LemonRouter.RolloutGate`; the gate machinery was removed 2026-08-14 when
-  both features were promoted to `"default-on"` by decision rather than by
-  threshold.)
+  (`routing_feedback` and `skill_synthesis_drafts` were promoted from `"opt-in"`
+  to `"default-on"` on 2026-08-14. `routing_feedback` returned to off by
+  default in 2026-11 because history could silently override a changed
+  `[defaults] model`; it now only suggests a model that has outperformed the
+  configured default.)
 
   ## Rollout states
 
@@ -49,7 +51,6 @@ defmodule LemonCore.Config.Features do
   The default-on flags can be rolled back immediately:
 
       export LEMON_FEATURE_SESSION_SEARCH=off
-      export LEMON_FEATURE_ROUTING_FEEDBACK=off
       export LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off
 
   Code gated behind a flag must call `LemonCore.Config.Features.enabled?/2`
@@ -69,7 +70,7 @@ defmodule LemonCore.Config.Features do
   ]
 
   defstruct session_search: :"default-on",
-            routing_feedback: :"default-on",
+            routing_feedback: :off,
             skill_synthesis_drafts: :"default-on",
             crash_resume: :off
 
@@ -172,10 +173,9 @@ defmodule LemonCore.Config.Features do
     if raw == nil, do: default_state(name), else: parse_state(raw)
   end
 
-  # Crash continuation requires an explicit operator opt-in. Existing rollout
-  # flags retain their promoted defaults.
+  # Crash continuation and routing feedback require an explicit operator
+  # opt-in. The remaining rollout flags retain their promoted defaults.
   defp default_state("session_search"), do: :"default-on"
-  defp default_state("routing_feedback"), do: :"default-on"
   defp default_state("skill_synthesis_drafts"), do: :"default-on"
   defp default_state(_), do: :off
 

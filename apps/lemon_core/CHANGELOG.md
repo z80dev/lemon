@@ -19,6 +19,16 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   (exec-approval store writes, `Update.Remote` check results, archive
   preflight) now match the values returned. The crash-report stand-in
   exception is named `LemonCore.StatusRedaction.RedactedCrashError` (#499).
+- `LemonCore.Config.Features`: `routing_feedback` now defaults to `:off`
+  (`%Features{}` and `resolve/1` with no setting); enable it with `"on"` (#647).
+- **Breaking:** the test harness (`LemonCore.Testing`, `Testing.Case`,
+  `Testing.HermeticEnv`, `Testing.AsyncHelpers`, `Testing.FileServerTap`) is no
+  longer shipped in the Hex package; it serves the lemon repository's own
+  suites. `use LemonCore.Testing.Case, with_store: true` now starts
+  `LemonCore.Store` (the option was ignored), and
+  `HermeticEnv.credential_env_vars/0`, `scrub_unit_credentials!/1` and the
+  `:test_credential_env_vars` setting are removed: `scripts/test` holds the one
+  credential scrub list (#713).
 - `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
   fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
   instead of launching a browser (#660).

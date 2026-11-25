@@ -167,7 +167,6 @@ defmodule LemonAgent do
   - `LemonAgent.Loop` - Core agentic loop implementation
   - `LemonAgent.EventStream` - Async event producer/consumer
   - `LemonAgent.Types` - Type definitions and structs
-  - `LemonAgent.Proxy` - Stream proxy for event transformation
   """
 
   alias LemonAgent.Types.{AgentContext, AgentTool, AgentToolResult}

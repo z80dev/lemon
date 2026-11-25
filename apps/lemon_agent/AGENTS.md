@@ -40,9 +40,6 @@ See [README](README.md) for usage and [BEAM invariants](../../docs/beam_agents.m
   An empty final queue response atomically closes that run's input boundary;
   accepted input after it starts the next run. Journal restoration explicitly
   defers starting queued input until the caller resumes the session.
-- Context truncation preserves chronological order. Assistant tool calls and
-  contiguous results are one unit: keep or drop the whole unit. Bookends obeys
-  both message and character hard limits.
 - Tool invocation does not confer trust. Mark data-bearing output using
   `ToolResultTrust`; the coding-session pre-LLM transform applies the fence.
   Tool-returned metadata is not evidence that the transform has run.
