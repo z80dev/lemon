@@ -27,6 +27,10 @@ All notable changes to `lemon_control_plane` are documented here.
   provider call (`LemonCore.Events.Usage.context_tokens/1`) instead of the run's
   cumulative cache-inclusive input, and reads only canonical usage field names.
   `agent.wait` projects the typed run usage (#669).
+- `agent.wait` projects a non-text run error as `{"kind", "status",
+  "message"}` (redacted, bounded) instead of `inspect`ing it, and a non-text
+  answer as `null`. `cron.run` fixes the cron run ID before calling the
+  scheduler and returns it as `runId` on `RUN_OUTCOME_UNKNOWN` (#620).
 - A method with any scope beyond `:read` that raises, throws or whose async task
   dies now answers `INTERNAL_ERROR` with `details.retrySafe: false`, so clients
   never retry a mutation that may already have applied (#616).

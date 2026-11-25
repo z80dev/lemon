@@ -314,6 +314,21 @@ defmodule LemonAutomation.CronManager do
   end
 
   @doc """
+  Trigger a job immediately under the caller's fixed cron run ID.
+
+  The caller allocates `run_id` before the call, so a reply lost to a timeout
+  still names the run to reconcile with `cron.runs`. The ID is claimed with
+  `CronStore.claim_run/1`: an ID that already exists is `{:error, :exists}` and
+  never overwrites the earlier run.
+  """
+  @spec run_now_with_id(binary(), binary()) ::
+          {:ok, CronRun.t()}
+          | {:error, :not_found | :exists | :outcome_unknown | :store_unavailable}
+  def run_now_with_id(job_id, run_id) when is_binary(run_id) and run_id != "" do
+    GenServer.call(__MODULE__, {:run_now_with_id, job_id, run_id}, @call_timeout_ms)
+  end
+
+  @doc """
   Trigger a job on behalf of the agent session principal
   `session_opts[:session_key]`. Only a job that principal owns is reachable
   (others are `{:error, :not_found}`), and the run also executes within the
@@ -714,6 +729,13 @@ defmodule LemonAutomation.CronManager do
   def handle_call({:run_now, job_id}, _from, state) do
     case Map.fetch(state.jobs, job_id) do
       {:ok, job} -> run_now_job(job, [], state)
+      :error -> {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  def handle_call({:run_now_with_id, job_id, run_id}, _from, state) do
+    case Map.fetch(state.jobs, job_id) do
+      {:ok, job} -> run_now_job(job, [run_id: run_id], state)
       :error -> {:reply, {:error, :not_found}, state}
     end
   end
@@ -1652,9 +1674,10 @@ defmodule LemonAutomation.CronManager do
 
   # The started run is written once; it is neither announced nor submitted
   # unless that write is confirmed. A write whose outcome is unknown may leave
-  # an unsubmitted claim, which recovery releases like any orphaned claim.
+  # an unsubmitted claim, which recovery releases like any orphaned claim. A
+  # caller-fixed `:run_id` is claimed, never overwritten.
   defp execute_job(job, triggered_by, opts, state) do
-    run = CronRun.new(job.id, triggered_by)
+    run = fixed_run_id(CronRun.new(job.id, triggered_by), Keyword.get(opts, :run_id))
     router_run_id = router_run_id_for(job)
     retry_attempt = Keyword.get(opts, :retry_attempt, 0)
     retry_root_id = Keyword.get(opts, :retry_root_id, run.id)
@@ -1677,7 +1700,7 @@ defmodule LemonAutomation.CronManager do
 
     run = CronRun.start(run, router_run_id)
 
-    case CronStore.put_run(run) do
+    case persist_started_run(run, Keyword.has_key?(opts, :run_id)) do
       :ok ->
         CronStore.record_audit(:run_started, %{
           job_id: job.id,
@@ -1691,11 +1714,20 @@ defmodule LemonAutomation.CronManager do
         Events.emit_run_started(run, job)
         {:ok, run, submit_claimed_run(job, run, state)}
 
+      {:error, :exists} ->
+        {:error, :exists, state}
+
       {:error, _} = error ->
         Logger.warning("[CronManager] Failed to persist run start for job #{job.id}")
         {:error, store_error(error), state}
     end
   end
+
+  defp fixed_run_id(run, nil), do: run
+  defp fixed_run_id(run, run_id), do: %{run | id: run_id}
+
+  defp persist_started_run(run, true = _fixed_id?), do: CronStore.claim_run(run)
+  defp persist_started_run(run, false), do: CronStore.put_run(run)
 
   defp run_scheduled_job(_job, %{restoration_pending: true} = state, _now), do: state
 
