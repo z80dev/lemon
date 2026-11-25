@@ -85,7 +85,7 @@ this:
    names and atom timer contents are kept) and reduces exit reasons the same
    way. This also covers `:sys.get_status/1`. Processes covered:
    `CodingAgent.Session`, `CodingAgent.Executor.SessionRunner`,
-   `CodingAgent.Executor.RemoteSessionRunner`, `CodingAgent.Advisor`,
+   `CodingAgent.Executor.RemoteSessionRunner`,
    `CodingAgent.AsyncFollowups`, `CodingAgent.BackgroundRun.Worker`,
    `LemonAgent.Agent`, `LemonGateway.Run`, `LemonRouter.RunProcess`,
    `LemonRouter.StreamCoalescer`, `LemonRouter.SessionCoordinator`,
