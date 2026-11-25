@@ -205,10 +205,12 @@ rather than polling for global ingest to pick up changed feature flags.
 
 Session fixtures pass a per-test `workspace_dir` as well as a temporary working
 directory: the isolated test HOME is still shared by concurrent modules.
-`CodingAgent.SessionSupervisor` accepts a second scope-options argument with
-`:supervisor` and `:registry` targets for isolated session trees. Start those
-targets under the test supervisor, and query/stop only that tree rather than
-enumerating or clearing the application's global sessions.
+For an isolated session tree, start a `CodingAgent.SessionSupervisor` (with
+`name:`) and a unique `Registry` under the test supervisor, and pass them as
+`supervisor:` and `registry:` to `start_session/1` and to `stop_session/2`,
+`lookup/2` and `list_sessions/1`. Query and stop only that tree rather than
+enumerating or clearing the application's global sessions; test the real
+module this way, never an in-file copy of it.
 
 Session/branch/lifecycle fixtures inject `extension_inventory: {[], []}` and
 `mcp_tools: []` when discovery is not under test, avoiding shared extension

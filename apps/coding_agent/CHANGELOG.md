@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- `CodingAgent.SessionSupervisor.start_session/1` takes `:supervisor` (and the
+  session's `:registry`); `stop_session/2`, `lookup/2` and `list_sessions/1`
+  take the same targets, defaulting to the application's tree. The supervisor
+  suites now exercise the real module instead of an in-file copy (#733).
+
 ### Changed
 
 - Journal format: assistant entries' `system-prompt-digest` is now version 2, a
