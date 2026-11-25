@@ -9,8 +9,9 @@ defmodule LemonCli.BackupKeyRestoreTest do
   use ExUnit.Case, async: false
 
   alias LemonCli.Backup
+  alias LemonCli.Secrets.KeyRotation
   alias LemonCore.Secrets
-  alias LemonCore.Secrets.{KeyLock, KeyProvider, KeyRotation, MasterKey}
+  alias LemonCore.Secrets.{KeyLock, KeyProvider, MasterKey}
   alias LemonCore.Store
 
   @moduletag :tmp_dir
