@@ -731,11 +731,13 @@ export interface SessionSummary {
 }
 
 /**
- * The `session` block of a `session.detail` reply.
+ * The `session` block of a `session.detail` reply: routing plus the durable
+ * lifecycle row. Run history is not part of it (`chat.history`, `runs.timeline.get`).
  *
  * Unlike a listing row, `model` here is what the session's *next run* resolves to,
  * with `modelSource` naming the layer that supplied it and `modelOverride` carrying
- * the session's own pin (null when it inherits).
+ * the session's own pin (null when it inherits). Lifecycle fields are absent for a
+ * session with no durable row yet.
  */
 export interface SessionRouting {
 	sessionKey?: string;
@@ -749,13 +751,20 @@ export interface SessionRouting {
 	thinkingLevel?: Nullable<string>;
 	/** Read-only provenance for the runtime that will execute the next run. */
 	engine?: Nullable<string>;
+	title?: Nullable<string>;
+	pinned?: boolean;
+	archived?: boolean;
+	origin?: string;
+	runCount?: number;
+	createdAtMs?: Nullable<number>;
+	updatedAtMs?: Nullable<number>;
+	metadataUpdatedAtMs?: Nullable<number>;
 	[key: string]: unknown;
 }
 
 export interface SessionDetailResult {
 	sessionKey?: string;
 	session?: SessionRouting;
-	[key: string]: unknown;
 }
 
 export interface SessionsListResult {

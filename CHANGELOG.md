@@ -107,6 +107,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- **Breaking:** `session.detail` is now a routing projection only: `session`
+  carries the next run's model, provider, context window and thinking level
+  plus the durable agent, title/pin/archive state, run count and timestamps.
+  The `runs`, `runCount`, `summary`, `options` and `contentWithheld` blocks and
+  the `limit`/`historyLimit`/`eventLimit`/`toolCallLimit`/include parameters
+  are gone, and it no longer reads run history or scans the session directory,
+  so a TUI or web session switch costs point reads of that session's index,
+  metadata and policy rows. Run and event content come from `chat.history`,
+  `sessions.history` and `runs.timeline.get` (#700).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
