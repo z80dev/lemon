@@ -64,7 +64,7 @@ defmodule LemonControlPlane.UsageTokensTest do
                UsageTokens.normalize(usage)
     end
 
-    test "reads the session.detail spelling (:input/:output/:total_tokens/:cost)" do
+    test "reads the stored run usage spelling (:input/:output/:total_tokens/:cost)" do
       usage = %{input: 90, output: 10, total_tokens: 100, cost: %{total: 0.0042}}
 
       assert %{

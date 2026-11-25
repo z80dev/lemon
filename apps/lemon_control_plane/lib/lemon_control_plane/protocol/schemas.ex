@@ -567,15 +567,6 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "session.detail" => %{
       required: %{
         "sessionKey" => :string
-      },
-      optional: %{
-        "limit" => :integer,
-        "historyLimit" => :integer,
-        "eventLimit" => :integer,
-        "toolCallLimit" => :integer,
-        "includeFullText" => :boolean,
-        "includeRawEvents" => :boolean,
-        "includeRunRecord" => :boolean
       }
     },
 

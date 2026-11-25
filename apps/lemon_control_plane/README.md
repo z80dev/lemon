@@ -796,9 +796,14 @@ Unknown keys return `not_found`; these methods do not invent an empty session or
 read a separate client-local store. Keys are non-empty and bounded to 1,024 bytes.
 
 This management history is distinct from native branch messages returned by
-`chat.history` with `cwd`. `session.detail` remains the richer routing/run
-inspection surface and includes durable title/pin/archive metadata when present,
-so reopening a named session restores its display name.
+`chat.history` with `cwd`. `session.detail` is the routing projection: it
+answers what the session's next run resolves to (`model`, `provider`,
+`contextWindow`, `maxOutput`, `thinkingLevel`, `modelSource`, `modelOverride`)
+plus its durable `agentId`, title/pin/archive metadata, `runCount` and
+timestamps, so reopening a named session restores its display name. It reads
+no run history; unlike `sessions.get` it answers an unknown key with routing
+only. Run and event content come from `chat.history`, `sessions.history` and
+`runs.timeline.get`.
 
 ## Native session navigation
 

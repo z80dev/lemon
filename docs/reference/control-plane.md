@@ -109,7 +109,6 @@ sizes, token usage and timings), ignore include flags that would add content
 | Method | Read-only response |
 |---|---|
 | `tasks.active.list`, `tasks.recent.list` | No `description`, `result`, `error`, `latestReasoning`, `events` or `record`. |
-| `session.detail` | Runs keep `ok`, `hasError`, counts, `tokens`; tool calls keep `kind`/`ok`/`phase`; event digests have no `preview`; no prompt, answer, error, raw maps, events or run record. |
 | `cron.runs` | No `output`, `outputPreview`, `error`, `meta`, `runRecord` or `introspection`; byte counts remain. |
 | `cron.list` | No `prompt`, `command` or `meta`; byte counts remain. |
 | `chat.history` | Rows keep `id`, `role`, `timestampMs`, `ok`, `toolCallId`, `toolName`, `phase`, `cancelled`, `durationMs`. |
