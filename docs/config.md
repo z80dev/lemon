@@ -2680,8 +2680,11 @@ sends its tool parameters as Moonshot Flavored JSON Schema, the subset those
 hosts accept (omp's `normalizeSchemaForMoonshot`): `const` becomes a typed
 `enum`, `oneOf` becomes `anyOf`, `type` arrays and `nullable` collapse to one
 type, and validation keywords such as `format`, `pattern` or `minItems` are
-removed and summarized in the field's `description`. Other hosts, including
-proxies in front of Moonshot, receive the schema unchanged.
+removed and summarized in the field's `description`. Local `$ref`s into
+`$defs`/`definitions` are inlined first (a recursive reference becomes `{}`,
+and at most 1,000 references are inlined); remote references are left as they
+are and never fetched. Other hosts, including proxies in front of Moonshot,
+receive the schema unchanged.
 
 ### Kimi Code authentication through omp
 

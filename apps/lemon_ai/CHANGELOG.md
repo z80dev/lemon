@@ -74,8 +74,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - `LemonAi.Providers.KimiCodeRanking.rank/2` orders several Kimi Code logins
   by quota headroom, like omp's Kimi account ranking (#525).
 - `LemonAi.Providers.MoonshotToolSchema` normalizes tool parameters to Moonshot
-  Flavored JSON Schema; `OpenAICompletions` applies it for Moonshot-native
-  hosts (`compat.moonshot_tool_schema`) (#525).
+  Flavored JSON Schema, inlining local `$ref`s (cycle-safe, bounded) first;
+  `OpenAICompletions` applies it for Moonshot-native hosts
+  (`compat.moonshot_tool_schema`) (#525).
 - `LemonAi.Models.KimiCodeDiscovery` lists a Kimi Code account's models from
   `/v1/models` (efforts, context, image input, per-family output caps), cached
   per account; `Models.list_models/1` takes `:discover_kimi_code` and

@@ -20,8 +20,16 @@ defmodule LemonAi.Providers.MoonshotToolSchema do
       appended to the node's `description` as `{key: json, ...}`;
     * boolean subschemas become the permissive `{}`.
 
+  Local references (`#/$defs/Name`, `#/definitions/Name`) are inlined first,
+  as omp's `dereferenceJsonSchema` does: keywords beside a `$ref` override the
+  definition's, the `$defs`/`definitions` blocks are removed, a reference back
+  into a definition being inlined becomes `{}`, and other references (remote
+  URLs, other pointers, unknown names) stay as they are; nothing is fetched.
+  Inlining is bounded: after 1,000 inlined references, further references
+  become `{}` instead of growing the schema.
+
   `default`, `description`, `additionalProperties` and `type: "null"` are kept.
-  `$ref`, `allOf` and other keywords pass through unchanged.
+  `allOf` and other keywords pass through unchanged.
 
   Lemon's Kimi providers use the Anthropic Messages wire, which does not
   apply MFJS; this normalizer covers OpenAI Chat Completions models pointed at
@@ -44,6 +52,7 @@ defmodule LemonAi.Providers.MoonshotToolSchema do
   @schema_map_keys ~w(properties $defs definitions)
   @schema_value_keys ~w(items additionalItems)
   @schema_list_keys ~w(anyOf oneOf allOf)
+  @ref_budget 1_000
 
   @doc "Whether `base_url` is a Moonshot-native host that validates MFJS."
   @spec native_host?(String.t() | nil) :: boolean()
@@ -58,7 +67,70 @@ defmodule LemonAi.Providers.MoonshotToolSchema do
 
   @doc "Normalize a tool parameter schema to MFJS."
   @spec normalize(term()) :: term()
-  def normalize(schema), do: schema_node(schema)
+  def normalize(schema), do: schema |> dereference() |> schema_node()
+
+  # Inline local `$ref`s (omp `dereferenceJsonSchema`), only when the root
+  # carries a definitions block. `budget` bounds the number of inlined refs.
+  defp dereference(%{} = root)
+       when is_map_key(root, "$defs") or is_map_key(root, "definitions") do
+    {schema, _budget} = deref_node(root, root, MapSet.new(), @ref_budget)
+    schema
+  end
+
+  defp dereference(schema), do: schema
+
+  defp deref_node(list, root, visiting, budget) when is_list(list) do
+    Enum.map_reduce(list, budget, &deref_node(&1, root, visiting, &2))
+  end
+
+  defp deref_node(%{"$ref" => ref} = node, root, visiting, budget) when is_binary(ref) do
+    if MapSet.member?(visiting, ref) do
+      {%{}, budget}
+    else
+      case local_ref(ref, root) do
+        nil ->
+          {node, budget}
+
+        _definition when budget <= 0 ->
+          {%{}, 0}
+
+        definition ->
+          {inlined, budget} =
+            deref_node(definition, root, MapSet.put(visiting, ref), budget - 1)
+
+          # Keywords beside `$ref` (description, default, ...) win, unprocessed.
+          case Map.delete(node, "$ref") do
+            siblings when siblings == %{} -> {inlined, budget}
+            siblings -> {Map.merge(inlined, siblings), budget}
+          end
+      end
+    end
+  end
+
+  defp deref_node(%{} = node, root, visiting, budget) do
+    node
+    |> Map.drop(["$defs", "definitions"])
+    |> Enum.map_reduce(budget, fn {key, value}, budget ->
+      {value, budget} = deref_node(value, root, visiting, budget)
+      {{key, value}, budget}
+    end)
+    |> then(fn {pairs, budget} -> {Map.new(pairs), budget} end)
+  end
+
+  defp deref_node(value, _root, _visiting, budget), do: {value, budget}
+
+  defp local_ref("#/$defs/" <> name, root), do: definition(root["$defs"], name)
+  defp local_ref("#/definitions/" <> name, root), do: definition(root["definitions"], name)
+  defp local_ref(_ref, _root), do: nil
+
+  defp definition(%{} = defs, name) when name != "" do
+    case defs[name] do
+      %{} = schema -> schema
+      _ -> nil
+    end
+  end
+
+  defp definition(_defs, _name), do: nil
 
   defp schema_node(value) when is_boolean(value), do: %{}
   defp schema_node(value) when is_map(value), do: object_node(value)

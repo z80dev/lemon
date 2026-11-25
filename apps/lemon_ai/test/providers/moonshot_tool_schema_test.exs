@@ -72,6 +72,39 @@ defmodule LemonAi.Providers.MoonshotToolSchemaTest do
     assert properties["extra"]["additionalProperties"] == %{"enum" => ["y"], "type" => "string"}
   end
 
+  # Generated with omp's `normalizeSchemaForMoonshot` (packages/ai/src/utils/schema).
+  @omp_fixtures_path Path.expand("../fixtures/moonshot_tool_schema_omp.json", __DIR__)
+  @external_resource @omp_fixtures_path
+  @omp_fixtures @omp_fixtures_path |> File.read!() |> Jason.decode!()
+
+  for %{"name" => name} = fixture <- @omp_fixtures do
+    @fixture fixture
+    test "matches omp on local $ref inlining: #{name}" do
+      assert MoonshotToolSchema.normalize(@fixture["input"]) == @fixture["expected"]
+    end
+  end
+
+  test "inlining is bounded for exponentially shared definitions" do
+    defs =
+      Map.new(1..24, fn level ->
+        ref = %{"$ref" => "#/$defs/D#{level - 1}"}
+        {"D#{level}", %{"type" => "object", "properties" => %{"a" => ref, "b" => ref}}}
+      end)
+      |> Map.put("D0", %{"type" => "string"})
+
+    schema = %{
+      "$defs" => defs,
+      "type" => "object",
+      "properties" => %{"x" => %{"$ref" => "#/$defs/D24"}}
+    }
+
+    {micros, normalized} = :timer.tc(fn -> MoonshotToolSchema.normalize(schema) end)
+    assert micros < 5_000_000
+    refute Map.has_key?(normalized, "$defs")
+    assert normalized |> Jason.encode!() |> byte_size() < 1_000_000
+    refute Jason.encode!(normalized) =~ "$ref"
+  end
+
   test "detects Moonshot-native hosts only" do
     for url <- [
           "https://api.moonshot.ai/v1",
