@@ -91,19 +91,6 @@ defmodule LemonRouter.SessionCoordinatorTest do
     end
   end
 
-  defmodule SessionCoordinatorRuntime do
-    def submit_execution(_command), do: :ok
-    def cancel_by_run_id(_run_id, _reason), do: :ok
-    def available?, do: true
-
-    def run_pid(run_id) do
-      case Registry.lookup(LemonRouter.RunRegistry, run_id) do
-        [{pid, _}] -> pid
-        _ -> nil
-      end
-    end
-  end
-
   defmodule SessionCoordinatorRuntimeRunStub do
     use GenServer
 
@@ -137,7 +124,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     end
 
     @impl true
-    def handle_cast({_kind, _submission_run_id, _prompt, _worker_pid}, state),
+    def handle_cast({:steer, _kind, _submission_run_id, _prompt, _worker_pid}, state),
       do: {:noreply, state}
   end
 
@@ -189,7 +176,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     end
 
     @impl true
-    def handle_cast({kind, submission_run_id, prompt, worker_pid}, state) do
+    def handle_cast({:steer, kind, submission_run_id, prompt, worker_pid}, state) do
       send(state[:test_pid], {:run_cast, kind, submission_run_id, prompt, worker_pid})
       {:noreply, state}
     end
@@ -328,9 +315,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     original_bridge_impl = Application.get_env(:lemon_core, :event_bridge_impl)
     original_bridge_test_pid = Application.get_env(:lemon_router, :event_bridge_test_pid)
-    original_engine_runtime = Application.get_env(:lemon_router, :engine_runtime)
     Application.put_env(:lemon_router, :event_bridge_test_pid, self())
-    Application.put_env(:lemon_router, :engine_runtime, SessionCoordinatorRuntime)
     :ok = LemonCore.EventBridge.configure(SessionCoordinatorEventBridgeStub)
 
     Enum.each(~w(run1 run2 run3 run4 run-registry-repair), fn run_id ->
@@ -341,7 +326,6 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     on_exit(fn ->
       restore_event_bridge_impl(original_bridge_impl)
-      restore_engine_runtime(original_engine_runtime)
 
       Enum.each(~w(run1 run2 run3 run4 run-registry-repair), fn run_id ->
         LemonCore.Store.delete(:run_receipts, run_id)
@@ -908,23 +892,32 @@ defmodule LemonRouter.SessionCoordinatorTest do
     GenServer.stop(runtime_run)
   end
 
-  test "redirect dispatch casts the stable control tuple LemonGateway.Run consumes", %{
+  test "redirect dispatch reaches the active RunProcess executor", %{
     run_supervisor: run_supervisor
   } do
+    alias LemonRouter.{RunProcess, TestExecutor}
     key = {:session, unique_session_key()}
 
-    :ok = submit(key, "run1", "one", :collect, run_supervisor)
-    assert_receive {:started, "run1", _}
-    runtime_run = start_runtime_run("run1")
+    active =
+      submission(key, "run1", "one", :collect, run_supervisor,
+        run_process_module: RunProcess,
+        run_process_opts: %{executor: TestExecutor}
+      )
+
+    active = %{
+      active
+      | execution_request: %{active.execution_request | meta: %{test_pid: self()}}
+    }
+
+    :ok = SessionCoordinator.submit(key, active)
+    assert_receive {:test_executor_started, "run1", runner, owner}
+    assert RunProcess.whereis("run1") == owner
 
     :ok = submit(key, "run2", "two", :redirect, run_supervisor)
+    assert_receive {:test_executor_redirect, "run1", "two", ^owner}
 
-    assert_receive {:run_cast, :redirect, "run2", "two", coord_pid}
-
-    assert is_pid(coord_pid)
-    assert coord_pid == coordinator_pid(key)
-
-    GenServer.stop(runtime_run)
+    TestExecutor.complete(runner, %{answer: "redirected"})
+    assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
   end
 
   @tag :tmp_dir
@@ -2726,11 +2719,6 @@ defmodule LemonRouter.SessionCoordinatorTest do
   defp restore_event_bridge_impl(value) do
     Application.put_env(:lemon_core, :event_bridge_impl, value)
   end
-
-  defp restore_engine_runtime(nil), do: Application.delete_env(:lemon_router, :engine_runtime)
-
-  defp restore_engine_runtime(value),
-    do: Application.put_env(:lemon_router, :engine_runtime, value)
 
   defp with_stopped_run_registry(fun) when is_function(fun, 0) do
     # Deliberate child termination holds the registry unavailable without

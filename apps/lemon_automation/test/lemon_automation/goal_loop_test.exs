@@ -98,18 +98,21 @@ defmodule LemonAutomation.GoalLoopTest do
       send(pid, :cancel)
       :ok
     end
+
     def steer(_ctx, _prompt), do: {:error, :unsupported}
     def redirect(_ctx, _prompt), do: {:error, :unsupported}
 
     def start_run(%LemonCore.ExecutionCommand{} = command, _opts, sink) do
-      runner = spawn(fn ->
-        monitor = Process.monitor(sink)
+      runner =
+        spawn(fn ->
+          monitor = Process.monitor(sink)
 
-        receive do
-          :cancel -> :ok
-          {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
-        end
-      end)
+          receive do
+            :cancel -> :ok
+            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+          end
+        end)
+
       send(:persistent_term.get({__MODULE__, :test_pid}), {:blocking_goal_execution, command})
       {:ok, make_ref(), %{runner_pid: runner, run_id: command.run_id}}
     end
@@ -221,7 +224,13 @@ defmodule LemonAutomation.GoalLoopTest do
 
     @behaviour CodingAgent.Executor.Behaviour
 
-    def cancel(%{runner_pid: pid}), do: (send(pid, :cancel); :ok)
+    def cancel(%{runner_pid: pid}),
+      do:
+        (
+          send(pid, :cancel)
+          :ok
+        )
+
     def steer(_ctx, _prompt), do: {:error, :unsupported}
     def redirect(_ctx, _prompt), do: {:error, :unsupported}
 
@@ -230,16 +239,22 @@ defmodule LemonAutomation.GoalLoopTest do
       if is_pid(test_pid), do: send(test_pid, {:live_judge_execution, command})
       ref = make_ref()
 
-      runner = spawn(fn ->
-        monitor = Process.monitor(sink)
+      runner =
+        spawn(fn ->
+          monitor = Process.monitor(sink)
           output = ~s({"action":"done","reason":"live router proof"})
-          send(sink, {:engine_event, ref, CodingAgent.Executor.Event.completed(%{ok: true, answer: output})})
+
+          send(
+            sink,
+            {:engine_event, ref,
+             CodingAgent.Executor.Event.completed(%{engine: "lemon", ok: true, answer: output})}
+          )
 
           receive do
             :cancel -> :ok
             {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
           end
-      end)
+        end)
 
       {:ok, ref, %{runner_pid: runner}}
     end

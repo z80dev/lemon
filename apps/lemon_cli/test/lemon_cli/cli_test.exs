@@ -95,6 +95,7 @@ defmodule LemonCli.CLITest do
     false = LemonCli.CLI.setup_required?()
     true = is_pid(Process.whereis(LemonCore.Store))
     nil = Process.whereis(LemonGateway.Supervisor)
+    nil = Process.whereis(LemonRouter.Supervisor)
     IO.puts("cold readiness complete")
     """
 

@@ -8,7 +8,7 @@ defmodule LemonControlPlane.Methods.SmsInboxClearTest do
 
   setup do
     if Process.whereis(Registry) == nil, do: start_supervised!(Registry)
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    {:ok, _} = Application.ensure_all_started(:lemon_agent)
     clear_tables()
     start_supervised!(@inbox)
     on_exit(&clear_tables/0)

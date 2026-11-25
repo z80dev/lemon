@@ -108,13 +108,18 @@ defmodule LemonRouter.RunProcess do
     {:via, Registry, {LemonRouter.RunRegistry, run_id, %{session_key: session_key}}}
   end
 
-  @doc "The live owner of `run_id`, or nil."
+  @doc """
+  The live owner of `run_id`, or nil. A run registry that is restarting has no
+  owner to offer, so steering falls back to queueing.
+  """
   @spec whereis(binary()) :: pid() | nil
   def whereis(run_id) when is_binary(run_id) do
     case Registry.lookup(LemonRouter.RunRegistry, run_id) do
       [{pid, _}] when is_pid(pid) -> pid
       _ -> nil
     end
+  rescue
+    ArgumentError -> nil
   end
 
   @doc """
@@ -310,29 +315,27 @@ defmodule LemonRouter.RunProcess do
 
   def handle_event(type, :submit, :submitting, state)
       when type == :internal or type == {:timeout, :submission_retry} do
-    with :ok <- LemonRouter.NativeLineage.validate_activation(state.execution_request),
-         {:ok, state} <- claim_engine_session(state),
-         :open <- terminal_fence(state),
-         {:ok, state} <- request_permit(state) do
-      {:next_state, :awaiting_slot, %{state | submit_attempt: 0},
-       [{{:timeout, :submission_retry}, :cancel}]}
-    else
-      {:retry, :session_in_use} ->
-        # The previous run of this engine session may still be draining its
-        # cancellation; the claim frees when it terminalizes.
+    case admit(state) do
+      {:ok, state} ->
+        {:next_state, :awaiting_slot, %{state | submit_attempt: 0},
+         [{{:timeout, :submission_retry}, :cancel}]}
+
+      # The previous run of this engine session may still be draining its
+      # cancellation; the claim frees when it terminalizes.
+      {:retry, :session_in_use, state} ->
         retry_submission(state, :session_in_use, "Engine session busy")
 
-      {:retry, :runtime_unavailable} ->
+      {:retry, :runtime_unavailable, state} ->
         retry_submission(state, :runtime_unavailable, "Execution permits unavailable")
 
-      :terminal ->
+      {:terminal, state} ->
         adopt_terminal_record(state)
 
-      :unavailable ->
+      {:unavailable, state} ->
         terminalize_submission(%{state | submit_last_error: :run_state_unavailable})
 
-      {:error, reason} ->
-        # A failed pre-send fence cannot authorize a retry or a new run.
+      # A failed pre-send fence cannot authorize a retry or a new run.
+      {:error, reason, state} ->
         terminalize_submission(%{state | submit_last_error: reason})
     end
   end
@@ -479,6 +482,7 @@ defmodule LemonRouter.RunProcess do
   def handle_event(:info, %LemonCore.Event{type: :run_completed} = event, _phase, state) do
     if state.executor, do: _ = Execution.control(state.executor, :cancel, state.control_ctx)
     state = release_execution(state)
+    Bus.broadcast(Bus.session_topic(state.session_key), event)
     complete_run(event, state)
   end
 
@@ -578,6 +582,22 @@ defmodule LemonRouter.RunProcess do
   # Admission
   # ---------------------------------------------------------------------------
 
+  # Activation fence, engine-session claim, durable terminal fence, then a FIFO
+  # permit request. Every outcome carries the state as far as it got, so a
+  # claim taken here is retained (and later released) on every path.
+  defp admit(state) do
+    with :ok <- LemonRouter.NativeLineage.validate_activation(state.execution_request),
+         {:ok, state} <- claim_engine_session(state) do
+      case terminal_fence(state) do
+        :open -> request_permit(state)
+        other -> {other, state}
+      end
+    else
+      {:retry, reason} -> {:retry, reason, state}
+      {:error, reason} -> {:error, reason, state}
+    end
+  end
+
   # Claimed before requesting a permit, so contention never waits while
   # holding capacity.
   defp claim_engine_session(%{claim_key: key} = state) when not is_nil(key), do: {:ok, state}
@@ -610,7 +630,7 @@ defmodule LemonRouter.RunProcess do
         {:ok, %{state | slots_ref: ref}}
 
       nil ->
-        {:retry, :runtime_unavailable}
+        {:retry, :runtime_unavailable, state}
     end
   end
 
@@ -890,6 +910,8 @@ defmodule LemonRouter.RunProcess do
       |> Map.put(:run_id, state.run_id)
       |> Map.put(:session_key, state.session_key)
       |> Map.put(:answer, if(answer in [nil, ""], do: state.accumulated_text, else: answer))
+      # A completion without a resume token keeps the one the run started with.
+      |> Map.put(:resume, Map.get(completed, :resume) || state.last_resume)
 
     if Map.get(completed, :ok) != true,
       do: Execution.log_failure(state.run_id, state.session_key, completed)

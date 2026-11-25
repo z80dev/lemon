@@ -1,11 +1,11 @@
-defmodule LemonGateway.EngineSessionClaimTest do
+defmodule LemonRouter.EngineSessionClaimTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.EngineSessionClaim
-  import LemonGateway.AsyncHelpers, only: [assert_eventually: 1]
+  alias LemonRouter.EngineSessionClaim
+  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1]
 
   setup do
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    {:ok, _} = Application.ensure_all_started(:lemon_router)
     :ok
   end
 
@@ -14,7 +14,7 @@ defmodule LemonGateway.EngineSessionClaimTest do
     assert :ok = EngineSessionClaim.claim(key)
     task = Task.async(fn -> EngineSessionClaim.claim(key) end)
     assert Task.await(task, 500) == {:error, :session_in_use}
-    assert [{owner, _}] = Registry.lookup(LemonGateway.RunRegistry, {:engine_session, key})
+    assert [{owner, _}] = Registry.lookup(LemonRouter.EngineSessionRegistry, key)
     assert owner == self()
     assert :ok = EngineSessionClaim.release(key)
     assert :ok = EngineSessionClaim.release(key)
@@ -41,7 +41,7 @@ defmodule LemonGateway.EngineSessionClaimTest do
       assert_receive {:DOWN, ^monitor, :process, ^pid, unquote(reason)}
 
       assert_eventually(fn ->
-        Registry.lookup(LemonGateway.RunRegistry, {:engine_session, key}) == []
+        Registry.lookup(LemonRouter.EngineSessionRegistry, key) == []
       end)
 
       assert :ok = EngineSessionClaim.claim(key)

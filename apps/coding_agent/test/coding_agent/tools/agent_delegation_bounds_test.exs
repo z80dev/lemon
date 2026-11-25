@@ -17,7 +17,9 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
     @moduledoc false
     use GenServer
 
-    def start_link({max, test}), do: GenServer.start_link(__MODULE__, {max, test}, name: __MODULE__)
+    def start_link({max, test}),
+      do: GenServer.start_link(__MODULE__, {max, test}, name: __MODULE__)
+
     def acquire(run_id), do: GenServer.call(__MODULE__, {:acquire, run_id}, :infinity)
     def release(run_id), do: GenServer.call(__MODULE__, {:release, run_id})
     def lend(run_id), do: GenServer.call(__MODULE__, {:lend, run_id})
@@ -25,7 +27,8 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
     def stats, do: GenServer.call(__MODULE__, :stats)
 
     @impl true
-    def init({max, test}), do: {:ok, %{max: max, test: test, active: MapSet.new(), waiting: :queue.new()}}
+    def init({max, test}),
+      do: {:ok, %{max: max, test: test, active: MapSet.new(), waiting: :queue.new()}}
 
     @impl true
     def handle_call({:acquire, run_id}, from, state) do
@@ -34,7 +37,9 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
 
     def handle_call({:release, run_id}, _from, state) do
       waiting = :queue.filter(fn {id, _} -> id != run_id end, state.waiting)
-      {:reply, :ok, admit(%{state | active: MapSet.delete(state.active, run_id), waiting: waiting})}
+
+      {:reply, :ok,
+       admit(%{state | active: MapSet.delete(state.active, run_id), waiting: waiting})}
     end
 
     def handle_call({:lend, run_id}, _from, state) do
@@ -54,7 +59,10 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
     end
 
     def handle_call(:stats, _from, state) do
-      {:reply, {:ok, %{in_flight: MapSet.size(state.active), waitq: :queue.len(state.waiting), max: state.max}}, state}
+      {:reply,
+       {:ok,
+        %{in_flight: MapSet.size(state.active), waitq: :queue.len(state.waiting), max: state.max}},
+       state}
     end
 
     defp admit(state) do

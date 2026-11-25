@@ -49,7 +49,8 @@ defmodule LemonRouter.IntrospectionTest do
       run_id = "introspection_run_#{token}"
       session_key = "agent:introspection_test:#{token}:main"
 
-      execution_request = make_test_request(run_id, session_key, %{origin: :test, test_pid: self()})
+      execution_request =
+        make_test_request(run_id, session_key, %{origin: :test, test_pid: self()})
 
       {:ok, pid} =
         LemonRouter.RunProcess.start_link(
@@ -77,7 +78,8 @@ defmodule LemonRouter.IntrospectionTest do
       run_id = "introspection_complete_#{token}"
       session_key = "agent:introspection_complete:#{token}:main"
 
-      execution_request = make_test_request(run_id, session_key, %{origin: :test, test_pid: self()})
+      execution_request =
+        make_test_request(run_id, session_key, %{origin: :test, test_pid: self()})
 
       {:ok, pid} =
         LemonRouter.RunProcess.start_link(

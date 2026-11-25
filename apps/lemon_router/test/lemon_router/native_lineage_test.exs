@@ -27,16 +27,36 @@ defmodule LemonRouter.NativeLineageTest do
     end
   end
 
-  defmodule RuntimeObserver do
-    def available?, do: true
+  defmodule ExecutorObserver do
+    @behaviour CodingAgent.Executor.Behaviour
 
-    def submit_execution(command) do
+    def cancel(%{runner_pid: pid}),
+      do:
+        (
+          send(pid, :cancel)
+          :ok
+        )
+
+    def steer(_ctx, _prompt), do: {:error, :unsupported}
+    def redirect(_ctx, _prompt), do: {:error, :unsupported}
+
+    def start_run(%LemonCore.ExecutionCommand{} = command, _opts, sink) do
+      runner =
+        spawn(fn ->
+          monitor = Process.monitor(sink)
+
+          receive do
+            :cancel -> :ok
+            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+          end
+        end)
+
       send(
         Application.fetch_env!(:lemon_router, :native_lineage_test_pid),
         {:native_runtime_payload, command}
       )
 
-      :ok
+      {:ok, make_ref(), %{runner_pid: runner}}
     end
   end
 
@@ -613,7 +633,10 @@ defmodule LemonRouter.NativeLineageTest do
     Application.put_env(:lemon_router, :session_coordinator, LemonRouter.SessionCoordinator)
 
     :sys.replace_state(ctx.server, fn state ->
-      %{state | run_process_opts: Map.put(state.run_process_opts, :submit_to_gateway?, false)}
+      %{
+        state
+        | run_process_opts: Map.put(state.run_process_opts, :executor, LemonRouter.TestExecutor)
+      }
     end)
 
     fresh_ids = Enum.map(["dependent-active", "dependent-queued"], &(ctx.prefix <> "-" <> &1))
@@ -1304,7 +1327,10 @@ defmodule LemonRouter.NativeLineageTest do
     Application.put_env(:lemon_router, :session_coordinator, LemonRouter.SessionCoordinator)
 
     :sys.replace_state(ctx.server, fn state ->
-      %{state | run_process_opts: Map.put(state.run_process_opts, :submit_to_gateway?, false)}
+      %{
+        state
+        | run_process_opts: Map.put(state.run_process_opts, :executor, LemonRouter.TestExecutor)
+      }
     end)
 
     on_exit(fn ->
@@ -1438,8 +1464,7 @@ defmodule LemonRouter.NativeLineageTest do
                run_id: id,
                session_key: submission.session_key,
                execution_request: submission.execution_request,
-               submit_to_gateway?: true,
-               engine_runtime: RuntimeObserver
+               executor: ExecutorObserver
              })
 
     on_exit(fn ->

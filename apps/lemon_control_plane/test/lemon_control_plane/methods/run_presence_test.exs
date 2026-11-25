@@ -5,6 +5,34 @@ defmodule LemonControlPlane.Methods.RunPresenceTest do
   alias LemonCore.{ExecutionCommand, Store}
   alias LemonRouter.{RunOrchestrator, RunProcess, RunReceiptStore, SessionCoordinator, Submission}
 
+  defmodule HoldingExecutor do
+    @behaviour CodingAgent.Executor.Behaviour
+
+    def cancel(%{runner_pid: pid}),
+      do:
+        (
+          send(pid, :cancel)
+          :ok
+        )
+
+    def steer(_ctx, _prompt), do: {:error, :unsupported}
+    def redirect(_ctx, _prompt), do: {:error, :unsupported}
+
+    def start_run(%LemonCore.ExecutionCommand{}, _opts, sink) do
+      runner =
+        spawn(fn ->
+          monitor = Process.monitor(sink)
+
+          receive do
+            :cancel -> :ok
+            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+          end
+        end)
+
+      {:ok, make_ref(), %{runner_pid: runner}}
+    end
+  end
+
   defmodule MetadataBarrier do
     use GenServer
     def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
@@ -127,7 +155,7 @@ defmodule LemonControlPlane.Methods.RunPresenceTest do
          | session_key: key <> ":extra",
            conversation_key: {:session, key <> ":extra"}
        },
-       submit_to_gateway?: false}
+       executor: HoldingExecutor}
     )
 
     assert {:ok, %{"runs" => [_], "presence" => %{"active" => 2, "queued" => 2}}} =
@@ -175,7 +203,7 @@ defmodule LemonControlPlane.Methods.RunPresenceTest do
     run =
       start_supervised!(
         {RunProcess,
-         run_id: id, session_key: key, execution_request: command, submit_to_gateway?: false}
+         run_id: id, session_key: key, execution_request: command, executor: HoldingExecutor}
       )
 
     :ok = :sys.suspend(run)
@@ -193,13 +221,20 @@ defmodule LemonControlPlane.Methods.RunPresenceTest do
 
     stop_run!(id)
 
+    # Stopping the live owner leaves durable terminal evidence for its own ID.
+    # Use a distinct legacy admission with no terminal evidence yet.
+    legacy_id = "run_presence_legacy_#{suffix}"
+
     :ok =
-      Store.put(RunOrchestrator.admission_table(), id, %{state: "submitting", identity: "legacy"})
+      Store.put(RunOrchestrator.admission_table(), legacy_id, %{
+        state: "submitting",
+        identity: "legacy"
+      })
 
     assert {:ok, %{"runs" => [], "presence" => %{"unknown" => 1, "idle" => false}}} =
              RunsActiveList.handle(%{"profileId" => "unrelated-#{suffix}"}, %{})
 
-    :ok = Store.put(:runs, id, %{summary: %{session_key: key, completed: %{ok: true}}})
+    :ok = Store.put(:runs, legacy_id, %{summary: %{session_key: key, completed: %{ok: true}}})
 
     assert {:ok, %{"presence" => %{"unknown" => 0, "idle" => true}}} =
              RunsActiveList.handle(%{"profileId" => "unrelated-#{suffix}"}, %{})
@@ -360,7 +395,7 @@ defmodule LemonControlPlane.Methods.RunPresenceTest do
       execution_request: command,
       run_supervisor: LemonRouter.RunSupervisor,
       run_process_module: RunProcess,
-      run_process_opts: %{submit_to_gateway?: false},
+      run_process_opts: %{executor: HoldingExecutor},
       meta: command.meta
     })
   end

@@ -27,19 +27,27 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
   defmodule ControlledExecutor do
     @behaviour CodingAgent.Executor.Behaviour
 
-    def cancel(%{runner_pid: pid}), do: (send(pid, :cancel); :ok)
+    def cancel(%{runner_pid: pid}),
+      do:
+        (
+          send(pid, :cancel)
+          :ok
+        )
+
     def steer(_ctx, _prompt), do: {:error, :unsupported}
     def redirect(_ctx, _prompt), do: {:error, :unsupported}
 
     def start_run(%LemonCore.ExecutionCommand{} = command, _opts, sink) do
-      runner = spawn(fn ->
-        monitor = Process.monitor(sink)
+      runner =
+        spawn(fn ->
+          monitor = Process.monitor(sink)
 
-        receive do
-          :cancel -> :ok
-          {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
-        end
-      end)
+          receive do
+            :cancel -> :ok
+            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+          end
+        end)
+
       send(Application.fetch_env!(:lemon_router, :sessions_reset_test_pid), {:execution, command})
       {:ok, make_ref(), %{runner_pid: runner}}
     end
@@ -433,7 +441,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
       assert :ok = CodingAgent.Executor.cancel(remote.context)
       invoke_id = remote.invoke_id
       assert_receive {:node_event, "node.invoke.cancel", %{"invokeId" => ^invoke_id}}, 2_000
-      # A cancelled runner stops without a sink event; the gateway completes the run.
+      # A cancelled runner stops without a sink event; settle the router run.
       finish(command)
 
       assert_busy(key)
@@ -612,27 +620,6 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     await(fn -> LemonCore.LifecycleFenceStore.fetch(key) == {:ok, nil} end, 500)
     command = await_admitted(key, "after release")
     finish(command)
-  end
-
-  test "direct gateway submission is refused while the session is fenced", %{key: key} do
-    run_id = "gateway-direct-#{System.unique_integer([:positive])}"
-
-    command = %ExecutionCommand{
-      run_id: run_id,
-      session_key: key,
-      prompt: "direct gateway work",
-      conversation_key: {:session, key}
-    }
-
-    holder = hold_fence(key)
-
-    try do
-      assert {:error, :session_lifecycle_in_progress} = LemonGateway.submit(command)
-      assert LemonGateway.Runtime.run_pid(run_id) == nil
-    after
-      release_fence(holder)
-      LemonGateway.Runtime.cancel_by_run_id(run_id)
-    end
   end
 
   test "delete is refused while another client's run is active and changes nothing",
@@ -835,9 +822,8 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     end
   end
 
-  # The router dispatches to the controlled runtime; the test then executes
-  # that command on a live named node through the real remote executor, as the
-  # gateway would, with itself as the gateway sink.
+  # The router dispatches to the controlled executor. The test also runs the
+  # command through the real remote executor, with the test as its sink.
   defp start_remote_router_run(key, opts \\ %{}) do
     assert {:ok, run_id} = LemonRouter.submit(request(key, "remote work"))
     assert_receive {:execution, %ExecutionCommand{run_id: ^run_id} = command}, 2_000
@@ -883,8 +869,8 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
      }}
   end
 
-  # The runner reports a terminal outcome to its sink and the gateway completes
-  # the router run: client-visible completion, not proof the node stopped.
+  # Observe the remote executor's terminal outcome and settle the router run.
+  # This client-visible completion is not proof the node stopped.
   defp settle_router_run(command, %{run_ref: run_ref}) do
     assert_receive {:engine_event, ^run_ref, %{__event__: :completed, ok: false}}, 2_000
     finish(command)

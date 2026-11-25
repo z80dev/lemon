@@ -14,7 +14,13 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
   defmodule Executor do
     @behaviour CodingAgent.Executor.Behaviour
 
-    def cancel(%{runner_pid: pid}), do: (send(pid, :cancel); :ok)
+    def cancel(%{runner_pid: pid}),
+      do:
+        (
+          send(pid, :cancel)
+          :ok
+        )
+
     def steer(_ctx, _prompt), do: {:error, :unsupported}
     def redirect(_ctx, _prompt), do: {:error, :unsupported}
 
@@ -23,16 +29,22 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
       judge? = command.meta[:goal_judge] == true
       ref = make_ref()
 
-      runner = spawn(fn ->
-        monitor = Process.monitor(sink)
+      runner =
+        spawn(fn ->
+          monitor = Process.monitor(sink)
           output = if judge?, do: ~s({"action":"continue","reason":"work remains"}), else: "done"
-          send(sink, {:engine_event, ref, CodingAgent.Executor.Event.completed(%{ok: true, answer: output})})
+
+          send(
+            sink,
+            {:engine_event, ref,
+             CodingAgent.Executor.Event.completed(%{engine: "lemon", ok: true, answer: output})}
+          )
 
           receive do
             :cancel -> :ok
             {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
           end
-      end)
+        end)
 
       {:ok, ref, %{runner_pid: runner}}
     end

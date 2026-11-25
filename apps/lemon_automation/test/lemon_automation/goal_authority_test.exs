@@ -16,7 +16,13 @@ defmodule LemonAutomation.GoalAuthorityTest do
   defmodule Executor do
     @behaviour CodingAgent.Executor.Behaviour
 
-    def cancel(%{runner_pid: pid}), do: (send(pid, :cancel); :ok)
+    def cancel(%{runner_pid: pid}),
+      do:
+        (
+          send(pid, :cancel)
+          :ok
+        )
+
     def steer(_ctx, _prompt), do: {:error, :unsupported}
     def redirect(_ctx, _prompt), do: {:error, :unsupported}
 
@@ -26,23 +32,26 @@ defmodule LemonAutomation.GoalAuthorityTest do
       ref = make_ref()
       hold? = not judge? and :persistent_term.get({__MODULE__, :hold}, false)
 
-      runner = spawn(fn ->
-        monitor = Process.monitor(sink)
-        if hold? do
-          receive do
-            :cancel -> :ok
-            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+      runner =
+        spawn(fn ->
+          monitor = Process.monitor(sink)
+
+          unless hold? do
+            output =
+              if judge?, do: ~s({"action":"continue","reason":"work remains"}), else: "done"
+
+            send(
+              sink,
+              {:engine_event, ref,
+               CodingAgent.Executor.Event.completed(%{engine: "lemon", ok: true, answer: output})}
+            )
           end
-        else
-          output = if judge?, do: ~s({"action":"continue","reason":"work remains"}), else: "done"
-          send(sink, {:engine_event, ref, CodingAgent.Executor.Event.completed(%{ok: true, answer: output})})
 
           receive do
             :cancel -> :ok
             {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
           end
-        end
-      end)
+        end)
 
       {:ok, ref, %{runner_pid: runner}}
     end

@@ -101,7 +101,7 @@ defmodule LemonRouter.RunCompletionTest do
       session_key: nil,
       prompt: "test",
       conversation_key: {:session, "completion-test:#{run_id}"},
-      meta: %{}
+      meta: %{test_pid: self()}
     }
 
     # The earlier writer committed this decision but did not broadcast it.
@@ -113,6 +113,7 @@ defmodule LemonRouter.RunCompletionTest do
 
     assert :ok = RunStore.finalize(run_id, committed)
     :ok = Bus.subscribe(Bus.session_topic(session_key))
+    :ok = Bus.subscribe(Bus.run_topic(run_id))
 
     assert {:ok, pid} =
              LemonRouter.RunProcess.start_link(%{
@@ -130,8 +131,9 @@ defmodule LemonRouter.RunCompletionTest do
                    },
                    2_500
 
-    refute_receive %Event{type: :run_completed, payload: %{completed: %{ok: false}}}, 200
     assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2_000
+    refute_receive %Event{type: :run_completed}
+    refute_received {:test_executor_started, ^run_id, _, _}
     assert {:ok, %{summary: ^committed}} = RunStore.fetch(run_id)
   end
 
@@ -143,7 +145,8 @@ defmodule LemonRouter.RunCompletionTest do
       Event.new(
         :run_completed,
         RunCompleted.new(%{
-          completed: Completion.new(%{ok: false, error: %{type: :executor_down, reason: :killed}}),
+          completed:
+            Completion.new(%{ok: false, error: %{type: :executor_down, reason: :killed}}),
           duration_ms: nil
         }),
         %{run_id: run_id, synthetic: true}

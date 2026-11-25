@@ -5,7 +5,6 @@ defmodule LemonRouter.RunProcessTest do
   Tests for Elixir.LemonRouter.RunProcess.
 
   Note: These are lightweight tests for the public API.
-  Full integration testing with gateway should be done separately.
   """
   use ExUnit.Case, async: false
 
@@ -14,7 +13,7 @@ defmodule LemonRouter.RunProcessTest do
   alias LemonCore.RateLimiter
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
   alias LemonCore.{ChatStateStore, ResumeToken, RunRequest, SessionKey}
-  alias LemonRouter.PendingCompactionStore
+  alias LemonRouter.{EngineSessionClaim, PendingCompactionStore, TestExecutor}
 
   defmodule RunProcessTestOutboxAPI do
     @moduledoc false
@@ -85,67 +84,17 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
-  defmodule TestScheduler do
-    @moduledoc false
-    use GenServer
+  defmodule RejectingExecutor do
+    @behaviour CodingAgent.Executor.Behaviour
 
-    def start_link(opts) do
-      notify_pid = opts[:notify_pid]
-      GenServer.start_link(__MODULE__, %{notify_pid: notify_pid}, name: __MODULE__)
-    end
-
-    def submit_execution(%LemonCore.ExecutionCommand{} = request) do
-      GenServer.cast(__MODULE__, {:submit, request})
-    end
-
-    @impl true
-    def init(state), do: {:ok, state}
-
-    @impl true
-    def handle_cast({:submit, request}, state) do
-      if is_pid(state.notify_pid), do: send(state.notify_pid, {:test_scheduler_submit, request})
-      {:noreply, state}
-    end
-  end
-
-  defmodule RejectingScheduler do
-    @moduledoc false
-
-    def available?, do: true
-
-    def submit_execution(%LemonCore.ExecutionCommand{} = request) do
-      pid = :persistent_term.get({__MODULE__, :notify_pid}, nil)
-      if is_pid(pid), do: send(pid, {:rejecting_scheduler_submit, request})
+    def start_run(command, _opts, _sink) do
+      send(command.meta.test_pid, {:executor_rejected, command.run_id})
       {:error, :temporary_failure}
     end
-  end
 
-  defmodule UnavailableRuntime do
-    @moduledoc false
-
-    def available?, do: true
-    def submit_execution(%LemonCore.ExecutionCommand{}), do: {:error, :runtime_unavailable}
-  end
-
-  defmodule TupleAcceptingRuntime do
-    @moduledoc false
-    @behaviour LemonCore.EngineRuntime
-
-    @impl true
-    def available?, do: true
-
-    @impl true
-    def submit_execution(%LemonCore.ExecutionCommand{} = request) do
-      pid = :persistent_term.get({__MODULE__, :notify_pid}, nil)
-      if is_pid(pid), do: send(pid, {:tuple_accepting_runtime_submit, request})
-      {:ok, %{accepted: true}}
-    end
-
-    @impl true
-    def cancel_by_run_id(_run_id, _reason), do: :ok
-
-    @impl true
-    def run_pid(_run_id), do: nil
+    def cancel(_ctx), do: :ok
+    def steer(_ctx, _text), do: {:error, :unsupported}
+    def redirect(_ctx, _text), do: {:error, :unsupported}
   end
 
   defmodule TestRunOrchestrator do
@@ -185,6 +134,16 @@ defmodule LemonRouter.RunProcessTest do
   end
 
   setup do
+    previous = Application.fetch_env(:lemon_router, :test_executor)
+    Application.put_env(:lemon_router, :test_executor, TestExecutor)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, executor} -> Application.put_env(:lemon_router, :test_executor, executor)
+        :error -> Application.delete_env(:lemon_router, :test_executor)
+      end
+    end)
+
     # Ensure PubSub is running for LemonCore.Bus.
     if is_nil(Process.whereis(LemonCore.PubSub)) do
       case start_supervised({Phoenix.PubSub, name: LemonCore.PubSub}) do
@@ -241,7 +200,7 @@ defmodule LemonRouter.RunProcessTest do
         session_key: nil,
         prompt: "test",
         conversation_key: {:session, "test:#{run_id}"},
-        meta: meta
+        meta: Map.put(meta, :test_pid, self())
       },
       attrs
     )
@@ -250,7 +209,7 @@ defmodule LemonRouter.RunProcessTest do
   describe "start_link/1" do
     test "starts successfully with valid args" do
       run_id = "run_#{System.unique_integer()}"
-      session_key = SessionKey.main("test-agent")
+      session_key = SessionKey.main("test-agent-#{run_id}")
       job = make_test_request(run_id)
 
       result =
@@ -263,6 +222,8 @@ defmodule LemonRouter.RunProcessTest do
       # Process should start successfully (even if it completes quickly)
       assert {:ok, pid} = result
       assert is_pid(pid)
+      TestExecutor.complete(runner_for(run_id))
+      assert eventually(fn -> not Process.alive?(pid) end)
     end
 
     test "uses normalized execution request session_key as authoritative state" do
@@ -280,8 +241,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: init_session_key,
-                 execution_request: request,
-                 submit_to_gateway?: false
+                 execution_request: request
                })
 
       assert eventually(fn ->
@@ -291,11 +251,14 @@ defmodule LemonRouter.RunProcessTest do
                  state.execution_request.session_key == request_session_key and
                  state.conversation_key == {:session, request_session_key}
              end)
+
+      TestExecutor.complete(runner_for(run_id))
+      assert eventually(fn -> not Process.alive?(pid) end)
     end
 
     test "rejects legacy job-only initialization" do
       run_id = "run_#{System.unique_integer()}"
-      session_key = SessionKey.main("test-agent")
+      session_key = SessionKey.main("test-agent-#{run_id}")
       previous = Process.flag(:trap_exit, true)
 
       job = %{
@@ -333,13 +296,13 @@ defmodule LemonRouter.RunProcessTest do
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
-                 execution_request: request,
-                 submit_to_gateway?: false
+                 execution_request: request
                })
 
       assert [{^pid, %{run_id: ^run_id}}] =
                Registry.lookup(LemonRouter.SessionRegistry, session_key)
 
+      _ = runner_for(run_id)
       Process.unlink(pid)
       monitor = Process.monitor(pid)
       Process.exit(pid, :kill)
@@ -356,10 +319,10 @@ defmodule LemonRouter.RunProcessTest do
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
-                 execution_request: request,
-                 submit_to_gateway?: false
+                 execution_request: request
                })
 
+      _ = runner_for(run_id)
       previous = Process.flag(:trap_exit, true)
 
       try do
@@ -368,8 +331,7 @@ defmodule LemonRouter.RunProcessTest do
         assert {:error, :session_busy} =
                  RunProcess.start_link(%{
                    run_id: other_id,
-                   execution_request: %{request | run_id: other_id},
-                   submit_to_gateway?: false
+                   execution_request: %{request | run_id: other_id}
                  })
       after
         GenServer.stop(pid)
@@ -397,9 +359,9 @@ defmodule LemonRouter.RunProcessTest do
   end
 
   defp flush_answer_delta(run_pid, session_key, run_id, seq) do
-    # The local broadcast precedes this call from the same sender. Wait for
-    # RunProcess to finish admission before becoming another ingress producer.
-    assert {_, %{run_id: ^run_id, saw_delta: true}} = :sys.get_state(run_pid)
+    assert eventually(fn ->
+             match?({_, %{run_id: ^run_id, saw_delta: true}}, :sys.get_state(run_pid))
+           end)
 
     # Coalescers outlive runs, so a sequence number alone can match a previous
     # run and let the flush race the current run's delta.
@@ -425,10 +387,11 @@ defmodule LemonRouter.RunProcessTest do
       assert :ok = RunProcess.abort("non-existent-run", :test_abort)
     end
 
-    test "aborted run without a gateway pid synthesizes completion and exits" do
+    test "aborted run waiting for its engine session synthesizes completion and exits" do
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
+      session_key = SessionKey.main("test-agent-#{run_id}")
       job = make_test_request(run_id)
+      :ok = EngineSessionClaim.claim({:session, session_key})
 
       LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
 
@@ -436,8 +399,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
+                 execution_request: job
                })
 
       assert :ok = RunProcess.abort(pid, :test_abort)
@@ -453,99 +415,35 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
-  describe "run_started without gateway binding" do
-    test "late run_completed beats synthetic missing-gateway failure" do
-      run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
-      job = make_test_request(run_id)
+  test "adopts a completion from another writer and does not republish it" do
+    {run_id, session_key, pid} = start_started_run()
+    monitor = Process.monitor(pid)
+    :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(run_id))
 
-      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+    event =
+      LemonCore.Event.new(
+        :run_completed,
+        LemonCore.Events.RunCompleted.new(%{
+          completed: LemonCore.Events.Completion.new(%{ok: true, answer: "done"})
+        }),
+        %{run_id: run_id, session_key: session_key}
+      )
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+    command = make_test_request(run_id, %{}, %{session_key: session_key})
+    assert {:published, _} = LemonRouter.RunCompletion.finalize(command, event, [])
 
-      :ok =
-        LemonCore.Bus.broadcast(
-          LemonCore.Bus.run_topic(run_id),
-          LemonCore.Event.new(
-            :run_started,
-            %{run_id: run_id},
-            %{run_id: run_id, session_key: session_key}
-          )
-        )
+    assert_receive %LemonCore.Event{
+      type: :run_completed,
+      payload: %{completed: %{ok: true, answer: "done"}}
+    }
 
-      Process.sleep(300)
+    assert_receive %LemonCore.Event{
+      type: :run_completed,
+      payload: %{completed: %{ok: true, answer: "done"}}
+    }
 
-      :ok =
-        LemonCore.Bus.broadcast(
-          LemonCore.Bus.run_topic(run_id),
-          LemonCore.Event.new(
-            :run_completed,
-            %{
-              completed: %{ok: true, answer: "done"},
-              duration_ms: 123
-            },
-            %{run_id: run_id, session_key: session_key}
-          )
-        )
-
-      assert_receive %LemonCore.Event{
-                       type: :run_completed,
-                       payload: %{completed: %{ok: true, answer: "done"}},
-                       meta: %{run_id: ^run_id, session_key: ^session_key}
-                     },
-                     1_500
-
-      refute_receive %LemonCore.Event{
-                       type: :run_completed,
-                       payload: %{completed: %{error: :gateway_run_missing_after_start}}
-                     },
-                     1_700
-
-      assert eventually(fn -> not Process.alive?(pid) end)
-    end
-
-    test "started run without a gateway pid synthesizes completion and exits" do
-      run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
-      job = make_test_request(run_id)
-
-      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
-
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
-
-      :ok =
-        LemonCore.Bus.broadcast(
-          LemonCore.Bus.run_topic(run_id),
-          LemonCore.Event.new(
-            :run_started,
-            %{run_id: run_id},
-            %{run_id: run_id, session_key: session_key}
-          )
-        )
-
-      assert_receive %LemonCore.Event{
-                       type: :run_completed,
-                       payload: %{
-                         completed: %{ok: false, error: :gateway_run_missing_after_start}
-                       },
-                       meta: %{run_id: ^run_id, session_key: ^session_key, synthetic: true}
-                     },
-                     2_500
-
-      assert eventually(fn -> not Process.alive?(pid) end)
-    end
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
+    refute_receive %LemonCore.Event{type: :run_completed}
   end
 
   describe "suspend_for_restart/3" do
@@ -578,16 +476,15 @@ defmodule LemonRouter.RunProcessTest do
       assert_receive {:restart_suspended, ^run_id, :uncertain, ["bash: sleep 60"]}, 1_000
     end
 
-    test "a run the runtime never started reports :not_started" do
+    test "a run awaiting admission reports :not_started" do
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
+      session_key = SessionKey.main("test-agent-#{run_id}")
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 execution_request: make_test_request(run_id),
-                 submit_to_gateway?: false
+                 execution_request: make_test_request(run_id)
                })
 
       :ok = RunProcess.suspend_for_restart(pid, self())
@@ -597,253 +494,151 @@ defmodule LemonRouter.RunProcessTest do
 
   defp start_started_run do
     run_id = "run_#{System.unique_integer([:positive])}"
-    session_key = SessionKey.main("test-agent")
+    session_key = SessionKey.main("test-agent-#{run_id}")
     LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
 
     assert {:ok, pid} =
              RunProcess.start_link(%{
                run_id: run_id,
                session_key: session_key,
-               execution_request: make_test_request(run_id),
-               submit_to_gateway?: false
+               execution_request: make_test_request(run_id)
              })
 
-    :ok =
-      LemonCore.Bus.broadcast(
-        LemonCore.Bus.run_topic(run_id),
-        LemonCore.Event.new(:run_started, %{run_id: run_id}, %{
-          run_id: run_id,
-          session_key: session_key
-        })
-      )
-
+    _ = runner_for(run_id)
     assert_receive %LemonCore.Event{type: :run_started}, 1_000
     {run_id, session_key, pid}
   end
 
-  defp broadcast_action(run_id, session_key, id, phase, kind \\ :tool) do
-    payload =
-      LemonCore.Events.EngineAction.from_map(%{
-        action: %{id: id, kind: kind, title: "bash: sleep 60"},
-        phase: phase,
-        ok: if(phase == :completed, do: true)
-      })
+  defp broadcast_action(run_id, _session_key, id, phase, kind \\ :tool) do
+    TestExecutor.action(runner_for(run_id), %{
+      id: id,
+      kind: kind,
+      title: "bash: sleep 60",
+      phase: phase,
+      ok: if(phase == :completed, do: true)
+    })
 
-    :ok =
-      LemonCore.Bus.broadcast(
-        LemonCore.Bus.run_topic(run_id),
-        LemonCore.Event.new(:engine_action, payload, %{run_id: run_id, session_key: session_key})
-      )
-
-    # Session subscribers see the forwarded event once RunProcess handled it.
     assert_receive %LemonCore.Event{type: :engine_action, payload: %{phase: ^phase}}, 1_000
   end
 
-  describe ":submit_to_gateway retry/backoff" do
-    test "treats an {:ok, term} runtime response as an accepted submission" do
+  defp runner_for(run_id) do
+    Process.get({:runner, run_id}) ||
+      receive do
+        {:test_executor_started, ^run_id, runner, _owner} ->
+          Process.put({:runner, run_id}, runner)
+          on_exit(fn -> Process.exit(runner, :kill) end)
+          runner
+      after
+        2_000 -> flunk("executor did not start for #{run_id}")
+      end
+  end
+
+  defp execute_event(run_id, %LemonCore.Event{type: :delta, payload: payload}) do
+    TestExecutor.delta(runner_for(run_id), payload.text)
+    :ok
+  end
+
+  defp execute_event(run_id, %LemonCore.Event{type: :engine_action, payload: payload}) do
+    action =
+      %{id: "action-#{System.unique_integer([:positive])}", title: "Action"}
+      |> Map.merge(payload.action)
+      |> Map.merge(Map.take(payload, [:phase, :ok, :message, :level]))
+
+    TestExecutor.action(runner_for(run_id), action)
+    :ok
+  end
+
+  defp execute_event(run_id, %LemonCore.Event{type: :run_completed, payload: payload}) do
+    fields = Map.take(payload.completed, [:ok, :answer, :error, :resume, :meta, :usage])
+    TestExecutor.complete(runner_for(run_id), Map.put_new(fields, :ok, nil))
+    :ok
+  end
+
+  defp start_admission(run_id, session_key, opts \\ []) do
+    start_supervised!(
+      {RunProcess,
+       Map.merge(
+         %{
+           run_id: run_id,
+           session_key: session_key,
+           execution_request: make_test_request(run_id)
+         },
+         Map.new(opts)
+       )}
+    )
+  end
+
+  describe "admission and execution" do
+    test "a definite executor rejection terminalizes exactly once without retrying" do
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
-      job = make_test_request(run_id)
+      session_key = SessionKey.main(run_id)
+      :ok = LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+      start_admission(run_id, session_key, executor: RejectingExecutor)
 
-      :persistent_term.put({TupleAcceptingRuntime, :notify_pid}, self())
+      assert_receive {:executor_rejected, ^run_id}
 
-      on_exit(fn ->
-        :persistent_term.erase({TupleAcceptingRuntime, :notify_pid})
-      end)
+      assert_receive %LemonCore.Event{
+        type: :run_completed,
+        meta: %{run_id: ^run_id, synthetic: true},
+        payload: %{completed: %{ok: false, error: :temporary_failure}}
+      }
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 engine_runtime: TupleAcceptingRuntime
-               })
-
-      assert_receive {:tuple_accepting_runtime_submit,
-                      %LemonCore.ExecutionCommand{
-                        run_id: ^run_id,
-                        session_key: ^session_key
-                      }},
-                     500
-
-      assert {:awaiting_start, %{gateway_submit_attempt: 0}} = :sys.get_state(pid)
-
-      refute_receive {:tuple_accepting_runtime_submit, _request}, 150
-      GenServer.stop(pid)
+      refute_receive {:executor_rejected, ^run_id}
+      refute_received %LemonCore.Event{type: :run_completed}
     end
 
-    test "a definite rejection terminalizes exactly once without retrying" do
+    test "session contention retries only until the submission deadline" do
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
-      job = make_test_request(run_id)
+      session_key = SessionKey.main(run_id)
+      :ok = EngineSessionClaim.claim({:session, session_key})
+      :ok = LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+      pid = start_admission(run_id, session_key, submit_deadline_ms: 300)
 
-      :persistent_term.put({RejectingScheduler, :notify_pid}, self())
-      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+      assert {:submitting, %{submit_attempt: attempt, submit_last_error: :session_in_use}} =
+               :sys.get_state(pid)
 
-      on_exit(fn ->
-        :persistent_term.erase({RejectingScheduler, :notify_pid})
-      end)
-
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 engine_runtime: RejectingScheduler,
-                 gateway_submit_deadline_ms: 30_000
-               })
-
-      monitor = Process.monitor(pid)
-      assert_receive {:rejecting_scheduler_submit, %LemonCore.ExecutionCommand{run_id: ^run_id}}
+      assert attempt > 0
 
       assert_receive %LemonCore.Event{
                        type: :run_completed,
+                       meta: %{
+                         run_id: ^run_id,
+                         synthetic: true,
+                         failure_stage: :runtime_submission
+                       },
                        payload: %{
                          completed: %{
                            ok: false,
                            error: %{
                              type: :runtime_submission_failed,
-                             reason: :temporary_failure
+                             reason: :session_in_use,
+                             attempts: attempts,
+                             deadline_ms: 300
                            }
                          }
-                       },
-                       meta: %{
-                         run_id: ^run_id,
-                         session_key: ^session_key,
-                         synthetic: true,
-                         failure_stage: :runtime_submission
                        }
-                     },
-                     1_000
-
-      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}
-      refute_received {:rejecting_scheduler_submit, _request}
-      refute_received %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}
-    end
-
-    test "runtime unavailability retries only until the submission deadline" do
-      run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
-      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
-
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: make_test_request(run_id),
-                 engine_runtime: UnavailableRuntime,
-                 gateway_submit_deadline_ms: 30_000
-               })
-
-      # The initial internal submit event precedes this synchronous state barrier.
-      assert {:submitting, state} = :sys.get_state(pid)
-      assert state.gateway_submit_attempt >= 1
-      assert state.gateway_submit_last_error == :runtime_unavailable
-      monitor = Process.monitor(pid)
-
-      # Move the absolute deadline into the past; the pending named retry must
-      # terminalize instead of submitting again.
-      {:submitting, state} =
-        :sys.replace_state(pid, fn {:submitting, state} ->
-          {:submitting,
-           %{state | gateway_submit_deadline_at_ms: System.monotonic_time(:millisecond)}}
-        end)
-
-      attempts = state.gateway_submit_attempt + 1
-
-      assert_receive %LemonCore.Event{
-                       type: :run_completed,
-                       payload: %{
-                         completed: %{
-                           error: %{
-                             type: :runtime_submission_failed,
-                             reason: :runtime_unavailable,
-                             attempts: ^attempts
-                           }
-                         }
-                       },
-                       meta: %{run_id: ^run_id}
                      },
                      2_000
 
-      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}
-      refute_received %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}
+      assert attempts > 1
+      refute_receive {:test_executor_started, ^run_id, _, _}
+      refute_received %LemonCore.Event{type: :run_completed}
     end
 
-    test "retries until scheduler becomes available and submits the job once" do
+    test "retries a busy engine session and starts the executor once when released" do
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
-      job = make_test_request(run_id)
-      conversation_key = {:session, "test:#{run_id}"}
-
-      assert Process.whereis(TestScheduler) == nil
-
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 gateway_scheduler: TestScheduler
-               })
-
-      assert eventually(fn ->
-               {:submitting, state} = :sys.get_state(pid)
-               state.gateway_submit_attempt > 0
-             end)
-
-      refute_receive {:test_scheduler_submit, _job}, 20
-
-      {:ok, _scheduler_pid} = start_supervised({TestScheduler, [notify_pid: self()]})
-
-      assert_receive {:test_scheduler_submit,
-                      %LemonCore.ExecutionCommand{
-                        run_id: ^run_id,
-                        session_key: ^session_key,
-                        conversation_key: ^conversation_key
-                      }},
-                     1_500
-
-      refute_receive {:test_scheduler_submit, _job}, 300
-
-      GenServer.stop(pid)
-    end
-
-    test "does not submit after abort while waiting for scheduler" do
-      run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
-      job = make_test_request(run_id)
-
-      assert Process.whereis(TestScheduler) == nil
-
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 gateway_scheduler: TestScheduler
-               })
-
-      assert eventually(fn ->
-               {:submitting, state} = :sys.get_state(pid)
-               state.gateway_submit_attempt > 0
-             end)
-
-      assert :ok = RunProcess.abort(pid, :test_abort)
-
-      assert eventually(fn ->
-               if Process.alive?(pid) do
-                 match?({:aborting, _}, :sys.get_state(pid))
-               else
-                 true
-               end
-             end)
-
-      {:ok, _scheduler_pid} = start_supervised({TestScheduler, [notify_pid: self()]})
-
-      refute_receive {:test_scheduler_submit, %LemonCore.ExecutionCommand{run_id: ^run_id}},
-                     400
-
-      if Process.alive?(pid), do: GenServer.stop(pid)
+      session_key = SessionKey.main(run_id)
+      key = {:session, session_key}
+      :ok = EngineSessionClaim.claim(key)
+      pid = start_admission(run_id, session_key)
+      assert {:submitting, %{submit_attempt: attempt}} = :sys.get_state(pid)
+      assert attempt > 0
+      refute_receive {:test_executor_started, ^run_id, _, _}, 20
+      :ok = EngineSessionClaim.release(key)
+      runner = runner_for(run_id)
+      assert {:running, %{executor_pid: ^runner, submit_attempt: 0}} = :sys.get_state(pid)
+      refute_receive {:test_executor_started, ^run_id, _, _}
+      TestExecutor.complete(runner)
     end
 
     test "projected child task actions attach to the existing task surface" do
@@ -901,8 +696,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
+                 execution_request: job
                })
 
       task_surface = {:status_task, "task_root_projected"}
@@ -923,7 +717,14 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), task_started)
+      :ok = execute_event(run_id, task_started)
+
+      assert eventually(fn ->
+               Registry.lookup(
+                 LemonRouter.ToolStatusRegistry,
+                 {session_key, "telegram", task_surface}
+               ) != []
+             end)
 
       projected_child =
         LemonCore.Event.new(
@@ -1050,8 +851,7 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
+                 execution_request: job
                })
 
       action_event =
@@ -1075,7 +875,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
+      :ok = execute_event(run_id, action_event)
 
       assert_receive %LemonCore.Event{
                        type: :engine_action,
@@ -1117,7 +917,7 @@ defmodule LemonRouter.RunProcessTest do
       assert failure == %{
                id: "tool_timeout_1",
                title: "slow_tool",
-               kind: "tool",
+               kind: :tool,
                ok: false,
                error_type: :tool_task_timeout,
                tool_name: "slow_tool",
@@ -1130,38 +930,21 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
-  test "abort cancels both the submission retry and its absolute deadline" do
+  test "abort abandons session contention and prevents a later start" do
     run_id = "submission-#{System.unique_integer([:positive, :monotonic])}"
-    assert Process.whereis(TestScheduler) == nil
-
-    pid =
-      start_supervised!(
-        {RunProcess,
-         %{
-           run_id: run_id,
-           session_key: SessionKey.main(run_id),
-           execution_request: make_test_request(run_id),
-           gateway_scheduler: TestScheduler,
-           gateway_submit_deadline_ms: 60_000
-         }}
-      )
-
-    assert {:submitting, %{gateway_submit_attempt: attempt}} = :sys.get_state(pid)
+    session_key = SessionKey.main(run_id)
+    key = {:session, session_key}
+    :ok = EngineSessionClaim.claim(key)
+    pid = start_admission(run_id, session_key)
+    assert {:submitting, %{submit_attempt: attempt}} = :sys.get_state(pid)
     assert attempt > 0
     assert {:state_timeout, :submission_deadline} in active_timeouts(pid)
-    assert {{:timeout, :submission_retry}, :submit_to_gateway} in active_timeouts(pid)
-    RunProcess.keep_alive(pid, :continue)
-    assert {:submitting, _} = :sys.get_state(pid)
+    assert {{:timeout, :submission_retry}, :submit} in active_timeouts(pid)
+    ref = Process.monitor(pid)
     RunProcess.abort(pid, :test_abort)
-    :ok = :sys.suspend(pid)
-
-    try do
-      assert {:aborting, _} = :sys.get_state(pid)
-      refute {:state_timeout, :submission_deadline} in active_timeouts(pid)
-      refute {{:timeout, :submission_retry}, :submit_to_gateway} in active_timeouts(pid)
-    after
-      :ok = :sys.resume(pid)
-    end
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+    :ok = EngineSessionClaim.release(key)
+    refute_receive {:test_executor_started, ^run_id, _, _}, 400
   end
 
   describe "run watchdog state machine" do
@@ -1200,7 +983,7 @@ defmodule LemonRouter.RunProcessTest do
                            meta: %{cancelled: true, cancel_reason: :run_idle_watchdog_timeout}
                          }
                        },
-                       meta: %{run_id: ^run_id, synthetic: true}
+                       meta: %{run_id: ^run_id}
                      },
                      1_500
 
@@ -1238,16 +1021,10 @@ defmodule LemonRouter.RunProcessTest do
       assert {:running, _} = :sys.get_state(pid)
       assert_receive {:timeout_started, ^pid, {:state_timeout, 60_000, :idle, []}, :running}
 
-      send(
-        pid,
-        LemonCore.Event.new(:delta, %{seq: 1, text: "still working"}, %{
-          run_id: run_id,
-          session_key: session_key
-        })
-      )
+      TestExecutor.delta(runner_for(run_id), "still working")
 
-      assert {:running, %{saw_delta: true}} = :sys.get_state(pid)
       assert_receive {:timeout_started, ^pid, {:state_timeout, 60_000, :idle, []}, :running}
+      assert {:running, %{saw_delta: true}} = :sys.get_state(pid)
     end
 
     test "zero disables idle expiry without disabling cancellation" do
@@ -1350,7 +1127,8 @@ defmodule LemonRouter.RunProcessTest do
         watchdog_run(
           telegram?: true,
           run_watchdog_timeout_ms: 1,
-          run_watchdog_confirm_timeout_ms: 60_000
+          run_watchdog_confirm_timeout_ms: 60_000,
+          hold_cancel?: true
         )
 
       start_watchdog(pid, run_id, session_key)
@@ -1360,7 +1138,9 @@ defmodule LemonRouter.RunProcessTest do
 
       RunProcess.abort(pid, :test_abort)
       assert {:aborting, _} = :sys.get_state(pid)
-      refute Enum.any?(active_timeouts(pid), &match?({:state_timeout, _}, &1))
+      refute {:state_timeout, :confirmation} in active_timeouts(pid)
+      assert {:state_timeout, :cancel_drain} in active_timeouts(pid)
+      TestExecutor.complete(runner_for(run_id))
     end
   end
 
@@ -1388,22 +1168,18 @@ defmodule LemonRouter.RunProcessTest do
       |> Map.merge(%{
         run_id: run_id,
         session_key: session_key,
-        execution_request: make_test_request(run_id),
-        submit_to_gateway?: false
+        execution_request:
+          make_test_request(run_id, %{test_executor_hold_cancel: opts[:hold_cancel?]})
       })
 
+    :ok = EngineSessionClaim.claim({:session, session_key})
     pid = start_supervised!({RunProcess, options})
     {pid, run_id, session_key}
   end
 
-  defp start_watchdog(pid, run_id, session_key) do
-    send(
-      pid,
-      LemonCore.Event.new(:run_started, %{run_id: run_id}, %{
-        run_id: run_id,
-        session_key: session_key
-      })
-    )
+  defp start_watchdog(_pid, run_id, session_key) do
+    :ok = EngineSessionClaim.release({:session, session_key})
+    runner_for(run_id)
   end
 
   defp trace_timeouts(pid) do
@@ -1434,7 +1210,7 @@ defmodule LemonRouter.RunProcessTest do
       @retry_keys keys
       test "retains #{@retry_keys} model provenance #{@retry_explicit} across retry" do
         run_id = "run_#{System.unique_integer([:positive])}"
-        session_key = SessionKey.main("test-agent")
+        session_key = SessionKey.main("test-agent-#{run_id}")
         model_meta = %{model: "openai:gpt-4o", model_explicit: @retry_explicit}
 
         model_meta =
@@ -1450,7 +1226,6 @@ defmodule LemonRouter.RunProcessTest do
                    run_id: run_id,
                    session_key: session_key,
                    execution_request: job,
-                   submit_to_gateway?: false,
                    run_orchestrator: __MODULE__.TestRunOrchestrator
                  })
 
@@ -1461,7 +1236,7 @@ defmodule LemonRouter.RunProcessTest do
             %{run_id: run_id, session_key: session_key}
           )
 
-        :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), event)
+        :ok = execute_event(run_id, event)
         assert_receive {:test_run_orchestrator_submit, %RunRequest{} = retry, 1}, 1_000
         assert retry.model == "openai:gpt-4o"
         assert retry.model_explicit == @retry_explicit
@@ -1479,7 +1254,7 @@ defmodule LemonRouter.RunProcessTest do
 
     test "auto-retries once with retry context in prompt" do
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
+      session_key = SessionKey.main("test-agent-#{run_id}")
 
       job =
         %{
@@ -1495,7 +1270,6 @@ defmodule LemonRouter.RunProcessTest do
                  run_id: run_id,
                  session_key: session_key,
                  execution_request: job,
-                 submit_to_gateway?: false,
                  run_orchestrator: __MODULE__.TestRunOrchestrator
                })
 
@@ -1512,7 +1286,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert_receive {:test_run_orchestrator_submit, %RunRequest{} = retry_request, 1}, 1_000
       assert retry_request.session_key == session_key
@@ -1529,20 +1303,23 @@ defmodule LemonRouter.RunProcessTest do
 
     test "does not auto-retry when there is non-empty answer text" do
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
+      session_key = SessionKey.main("test-agent-#{run_id}")
       job = %{make_test_request(run_id, %{origin: :channel}) | prompt: "Do work"}
 
       {:ok, _} =
         start_supervised({__MODULE__.TestRunOrchestrator, [notify_pid: self()]})
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false,
-                 run_orchestrator: __MODULE__.TestRunOrchestrator
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job,
+             run_orchestrator: __MODULE__.TestRunOrchestrator
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -1557,7 +1334,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       refute_receive {:test_run_orchestrator_submit, %RunRequest{}, _}, 300
       assert eventually(fn -> not Process.alive?(pid) end)
@@ -1565,7 +1342,7 @@ defmodule LemonRouter.RunProcessTest do
 
     test "does not auto-retry when retry limit is already reached" do
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
+      session_key = SessionKey.main("test-agent-#{run_id}")
 
       job =
         %{
@@ -1576,14 +1353,17 @@ defmodule LemonRouter.RunProcessTest do
       {:ok, _} =
         start_supervised({__MODULE__.TestRunOrchestrator, [notify_pid: self()]})
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false,
-                 run_orchestrator: __MODULE__.TestRunOrchestrator
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job,
+             run_orchestrator: __MODULE__.TestRunOrchestrator
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -1598,7 +1378,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       refute_receive {:test_run_orchestrator_submit, %RunRequest{}, _}, 300
       assert eventually(fn -> not Process.alive?(pid) end)
@@ -1606,20 +1386,23 @@ defmodule LemonRouter.RunProcessTest do
 
     test "does not auto-retry when assistant error is context overflow" do
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
+      session_key = SessionKey.main("test-agent-#{run_id}")
       job = %{make_test_request(run_id, %{origin: :channel}) | prompt: "Do work"}
 
       {:ok, _} =
         start_supervised({__MODULE__.TestRunOrchestrator, [notify_pid: self()]})
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false,
-                 run_orchestrator: __MODULE__.TestRunOrchestrator
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job,
+             run_orchestrator: __MODULE__.TestRunOrchestrator
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -1636,7 +1419,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       refute_receive {:test_run_orchestrator_submit, %RunRequest{}, _}, 300
       assert eventually(fn -> not Process.alive?(pid) end)
@@ -1646,7 +1429,7 @@ defmodule LemonRouter.RunProcessTest do
   describe "context overflow recovery" do
     test "context_length_exceeded clears generic chat-state resume for non-telegram sessions" do
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
+      session_key = SessionKey.main("test-agent-#{run_id}")
 
       _ =
         ChatStateStore.put(session_key, %{
@@ -1657,13 +1440,16 @@ defmodule LemonRouter.RunProcessTest do
 
       job = make_test_request(run_id, %{origin: :channel})
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -1682,7 +1468,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
       assert eventually(fn -> ChatStateStore.get(session_key) == nil end)
@@ -1742,13 +1528,16 @@ defmodule LemonRouter.RunProcessTest do
           user_msg_id: 222
         })
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       prefix = "Found the key files. Let me read the markdown renderer and the formatter:"
       task_surface = {:status_task, "task_1"}
@@ -1760,7 +1549,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), delta_event_1)
+      :ok = execute_event(run_id, delta_event_1)
 
       flush_answer_delta(pid, session_key, run_id, 1)
 
@@ -1788,7 +1577,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), task_start_event)
+      :ok = execute_event(run_id, task_start_event)
 
       assert eventually(fn ->
                case Registry.lookup(
@@ -1822,7 +1611,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), delta_event_2)
+      :ok = execute_event(run_id, delta_event_2)
 
       flush_answer_delta(pid, session_key, run_id, 2)
 
@@ -1850,7 +1639,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), task_child_event)
+      :ok = execute_event(run_id, task_child_event)
 
       assert eventually(fn ->
                case Registry.lookup(
@@ -1956,20 +1745,23 @@ defmodule LemonRouter.RunProcessTest do
           user_msg_id: 222
         })
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       prefix = "Running external reviews"
       task_surface = {:status_task, "task_root"}
 
       :ok =
-        LemonCore.Bus.broadcast(
-          LemonCore.Bus.run_topic(run_id),
+        execute_event(
+          run_id,
           LemonCore.Event.new(:delta, %{seq: 1, text: prefix}, %{
             run_id: run_id,
             session_key: session_key
@@ -2023,8 +1815,8 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), task_started)
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), task_completed)
+      :ok = execute_event(run_id, task_started)
+      :ok = execute_event(run_id, task_completed)
 
       assert eventually(fn ->
                case Registry.lookup(
@@ -2038,14 +1830,7 @@ defmodule LemonRouter.RunProcessTest do
 
       followup_text = "Waiting on the review"
 
-      :ok =
-        LemonCore.Bus.broadcast(
-          LemonCore.Bus.run_topic(run_id),
-          LemonCore.Event.new(:delta, %{seq: 2, text: followup_text}, %{
-            run_id: run_id,
-            session_key: session_key
-          })
-        )
+      TestExecutor.delta(runner_for(run_id), followup_text)
 
       flush_answer_delta(pid, session_key, run_id, 2)
 
@@ -2083,7 +1868,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), poll_completed)
+      :ok = execute_event(run_id, poll_completed)
 
       assert eventually(fn ->
                case Registry.lookup(
@@ -2187,17 +1972,20 @@ defmodule LemonRouter.RunProcessTest do
           user_msg_id: 222
         })
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       :ok =
-        LemonCore.Bus.broadcast(
-          LemonCore.Bus.run_topic(run_id),
+        execute_event(
+          run_id,
           LemonCore.Event.new(
             :engine_action,
             %{
@@ -2215,8 +2003,8 @@ defmodule LemonRouter.RunProcessTest do
         )
 
       :ok =
-        LemonCore.Bus.broadcast(
-          LemonCore.Bus.run_topic(run_id),
+        execute_event(
+          run_id,
           LemonCore.Event.new(
             :run_completed,
             %{completed: %{ok: true, answer: "Final answer"}},
@@ -2271,7 +2059,7 @@ defmodule LemonRouter.RunProcessTest do
       end)
 
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
+      session_key = SessionKey.main("test-agent-#{run_id}")
 
       fanout_routes = [
         %{channel_id: "telegram", account_id: "default", peer_kind: :dm, peer_id: "111"},
@@ -2281,13 +2069,16 @@ defmodule LemonRouter.RunProcessTest do
 
       job = make_test_request(run_id, %{fanout_routes: fanout_routes})
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -2301,7 +2092,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
 
@@ -2394,13 +2185,16 @@ defmodule LemonRouter.RunProcessTest do
           %{session_key: session_key, conversation_key: {:session, session_key}}
         )
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       action_event =
         LemonCore.Event.new(
@@ -2425,8 +2219,8 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, action_event)
+      :ok = execute_event(run_id, completed_event)
 
       payloads = receive_run_payloads_until_idle(run_id, 3_000)
       intent_kinds = Enum.map(payloads, & &1.meta[:intent_kind])
@@ -2493,14 +2287,17 @@ defmodule LemonRouter.RunProcessTest do
           %{session_key: session_key, conversation_key: {:session, session_key}}
         )
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false,
-                 artifact_tracker: RaisingArtifactTracker
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job,
+             artifact_tracker: RaisingArtifactTracker
+           }},
+          id: run_id
+        )
 
       delta_event =
         LemonCore.Event.new(
@@ -2516,8 +2313,8 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), delta_event)
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, delta_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
@@ -2588,13 +2385,16 @@ defmodule LemonRouter.RunProcessTest do
           user_msg_id: 222
         })
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -2609,7 +2409,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       # RunProcess stops after completion; give it a moment to tear down.
       assert eventually(fn -> not Process.alive?(pid) end)
@@ -2660,13 +2460,16 @@ defmodule LemonRouter.RunProcessTest do
 
       job = make_test_request(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -2685,7 +2488,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
       assert eventually(fn -> ChatStateStore.get(session_key) == nil end)
@@ -2741,13 +2544,16 @@ defmodule LemonRouter.RunProcessTest do
 
       job = make_test_request(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -2761,7 +2567,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
       assert eventually(fn -> ChatStateStore.get(session_key) == nil end)
@@ -2815,13 +2621,16 @@ defmodule LemonRouter.RunProcessTest do
 
       job = make_test_request(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -2836,7 +2645,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
 
@@ -2892,13 +2701,16 @@ defmodule LemonRouter.RunProcessTest do
 
       job = make_test_request(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -2913,7 +2725,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
 
@@ -2969,13 +2781,16 @@ defmodule LemonRouter.RunProcessTest do
 
       job = make_test_request(run_id, %{progress_msg_id: 111, user_msg_id: 222})
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -2990,7 +2805,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
 
@@ -3056,13 +2871,16 @@ defmodule LemonRouter.RunProcessTest do
           prompt: long_prompt
         })
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       # Send completed event with NO usage data
       completed_event =
@@ -3078,7 +2896,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
 
@@ -3144,13 +2962,16 @@ defmodule LemonRouter.RunProcessTest do
           prompt: "short prompt"
         })
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -3164,7 +2985,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
 
@@ -3212,13 +3033,16 @@ defmodule LemonRouter.RunProcessTest do
           prompt: String.duplicate("a", 400)
         })
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -3231,7 +3055,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
       Process.sleep(100)
@@ -3273,16 +3097,19 @@ defmodule LemonRouter.RunProcessTest do
   describe "generated image tracking" do
     test "tracks image file_change paths from completed engine actions" do
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
+      session_key = SessionKey.main("test-agent-#{run_id}")
       job = make_test_request(run_id)
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       action_event =
         LemonCore.Event.new(
@@ -3304,7 +3131,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
+      :ok = execute_event(run_id, action_event)
 
       assert eventually(fn ->
                {_phase, state} = :sys.get_state(pid)
@@ -3316,16 +3143,19 @@ defmodule LemonRouter.RunProcessTest do
 
     test "tracks explicit auto_send_files from tool result metadata" do
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
+      session_key = SessionKey.main("test-agent-#{run_id}")
       job = %{make_test_request(run_id) | cwd: "/tmp/project"}
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       action_event =
         LemonCore.Event.new(
@@ -3347,7 +3177,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
+      :ok = execute_event(run_id, action_event)
 
       assert eventually(fn ->
                {_phase, state} = :sys.get_state(pid)
@@ -3421,13 +3251,16 @@ defmodule LemonRouter.RunProcessTest do
           %{cwd: cwd, session_key: session_key, conversation_key: {:session, session_key}}
         )
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       action_event =
         LemonCore.Event.new(
@@ -3456,7 +3289,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
+      :ok = execute_event(run_id, action_event)
 
       assert eventually(fn ->
                {_phase, state} = :sys.get_state(pid)
@@ -3466,14 +3299,15 @@ defmodule LemonRouter.RunProcessTest do
                ]
              end)
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
                         kind: text_kind,
                         content: text_content,
-                        meta: %{run_id: ^run_id}
-                      }},
+                        meta: %{run_id: ^run_id, intent_kind: kind}
+                      }}
+                     when kind in [:stream_finalize, :final_text],
                      3_000
 
       assert_receive {:delivered,
@@ -3566,13 +3400,16 @@ defmodule LemonRouter.RunProcessTest do
           %{cwd: cwd, session_key: session_key, conversation_key: {:session, session_key}}
         )
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       completed_event =
         LemonCore.Event.new(
@@ -3581,7 +3418,7 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert_receive {:delivered,
                       %LemonChannels.OutboundPayload{
@@ -3620,7 +3457,7 @@ defmodule LemonRouter.RunProcessTest do
 
     test "records generated auto-send files into media job metadata on finalization" do
       run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
+      session_key = SessionKey.main("test-agent-#{run_id}")
 
       cwd =
         Path.join(
@@ -3640,13 +3477,16 @@ defmodule LemonRouter.RunProcessTest do
           conversation_key: {:session, session_key}
         })
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false
-               })
+      pid =
+        start_supervised!(
+          {RunProcess,
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             execution_request: job
+           }},
+          id: run_id
+        )
 
       action_event =
         LemonCore.Event.new(
@@ -3669,8 +3509,8 @@ defmodule LemonRouter.RunProcessTest do
           %{run_id: run_id, session_key: session_key}
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+      :ok = execute_event(run_id, action_event)
+      :ok = execute_event(run_id, completed_event)
 
       assert eventually(fn -> length(LemonMedia.MediaJobs.recent(project_dir: cwd)) == 1 end)
 

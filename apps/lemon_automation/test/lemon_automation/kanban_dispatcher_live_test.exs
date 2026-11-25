@@ -24,7 +24,6 @@ defmodule LemonAutomation.KanbanDispatcherLiveTest do
         end)
 
         {:ok, _apps} = Application.ensure_all_started(:lemon_router)
-        {:ok, _apps} = Application.ensure_all_started(:lemon_gateway)
 
         {:ok, authority} =
           LemonAgent.Workspace.KanbanAuthority.new(

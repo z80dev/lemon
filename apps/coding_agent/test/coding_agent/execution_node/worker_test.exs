@@ -1437,7 +1437,13 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
         CodingAgent.Executor.Event.action_event(%{
           engine: "lemon",
           phase: :started,
-          action: CodingAgent.Executor.Event.action(%{id: "a#{i}", kind: "tool", title: "t", detail: %{}})
+          action:
+            CodingAgent.Executor.Event.action(%{
+              id: "a#{i}",
+              kind: "tool",
+              title: "t",
+              detail: %{}
+            })
         })
       })
     end

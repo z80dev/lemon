@@ -29,7 +29,6 @@ defmodule LemonRouter.ProjectConfigTrustTest do
     SettingsManager.load(ctx.project)
   end
 
-
   @routing_keys """
   [providers.openai]
   api_key = "operator-openai-key"
@@ -220,5 +219,4 @@ defmodule LemonRouter.ProjectConfigTrustTest do
       true -> Process.sleep(20) && eventually(fun, attempts - 1)
     end
   end
-
 end

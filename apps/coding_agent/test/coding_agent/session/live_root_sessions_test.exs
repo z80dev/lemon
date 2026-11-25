@@ -68,7 +68,9 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
   end
 
   test "a second turn reuses the live owner without journal loads or environment captures", ctx do
-    {first, session, id} = start_turn(Map.put(ctx, :run_opts, %{slot_lender: SlotLender}), "first")
+    {first, session, id} =
+      start_turn(Map.put(ctx, :run_opts, %{slot_lender: SlotLender}), "first")
+
     assert_receive {:provider, provider, _context, _options}, 5_000
     assert Session.get_state(session).tool_opts[:slot_lender] == SlotLender
     send(provider, {:respond, "complete prior answer"})

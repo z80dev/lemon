@@ -212,9 +212,6 @@ defmodule LemonNamedAgentsSmoke do
     )
 
     Application.put_env(:lemon_router, :health_enabled, false)
-    Application.put_env(:lemon_router, :engine_runtime, LemonGateway.Runtime)
-    Application.put_env(:lemon_gateway, :health_enabled, false)
-    Application.put_env(:lemon_gateway, :gateway_ingress_enabled, false)
 
     Application.put_env(:lemon_gateway, LemonGateway.Config,
       enable_telegram: false,
@@ -226,7 +223,7 @@ defmodule LemonNamedAgentsSmoke do
     Application.put_env(:lemon_channels, :adapters, [])
     Application.put_env(:lemon_honcho, :enabled, false)
 
-    for app <- [:crypto, :ssl, :bandit, :coding_agent, :lemon_gateway, :lemon_router] do
+    for app <- [:crypto, :ssl, :bandit, :coding_agent, :lemon_router] do
       {:ok, _} = Application.ensure_all_started(app)
     end
 

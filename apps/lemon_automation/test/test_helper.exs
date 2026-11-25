@@ -6,8 +6,7 @@ Application.put_env(:lemon_gateway, LemonGateway.Config, %{
 Application.delete_env(:lemon_gateway, :telegram)
 
 # Ensure runtime dependencies are started for automation tests.
-_ = Application.stop(:lemon_gateway)
-{:ok, _} = Application.ensure_all_started(:lemon_gateway)
+{:ok, _} = Application.ensure_all_started(:lemon_router)
 
 # Cron dispatch preflight probes real provider credentials; unit suites inject
 # their own preflight/stubs explicitly.
@@ -22,8 +21,6 @@ end
 
 ExUnit.after_suite(fn _ ->
   _ = Application.stop(:lemon_channels)
-  _ = Application.stop(:lemon_gateway)
 
   {:ok, _} = Application.ensure_all_started(:lemon_channels)
-  {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 end)

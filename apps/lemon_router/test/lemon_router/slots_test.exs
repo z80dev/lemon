@@ -1,7 +1,7 @@
-defmodule LemonGateway.SlotsTest do
+defmodule LemonRouter.SlotsTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Slots
+  alias LemonRouter.Slots
 
   setup do
     server = start_supervised!({Slots, name: __MODULE__, max: 2})
@@ -108,7 +108,7 @@ defmodule LemonGateway.SlotsTest do
       :sys.resume(server)
     end
 
-    assert {:error, :not_running} = Slots.stats(LemonGateway.SlotsTest.NotRunning)
+    assert {:error, :not_running} = Slots.stats(LemonRouter.SlotsTest.NotRunning)
   end
 
   test "invalid concurrency fails startup rather than falling back" do
@@ -116,20 +116,20 @@ defmodule LemonGateway.SlotsTest do
 
     try do
       assert {:error, {:invalid_max_concurrent_runs, 0}} =
-               Slots.start_link(name: LemonGateway.SlotsTest.Invalid, max: 0)
+               Slots.start_link(name: LemonRouter.SlotsTest.Invalid, max: 0)
     after
       Process.flag(:trap_exit, previous)
     end
   end
 
-  # #617/#697: a running gateway follows `max_concurrent_runs` across reloads.
-  test "a config reload changes the limit of a running gateway" do
+  # #617/#697: a running router slot pool follows `max_concurrent_runs` across reloads.
+  test "a config reload changes the limit of a running router slot pool" do
     key = :"Elixir.LemonGateway.Config"
     previous = Application.get_env(:lemon_gateway, key)
     on_exit(fn -> Application.put_env(:lemon_gateway, key, previous) end)
 
     Application.put_env(:lemon_gateway, key, %{max_concurrent_runs: 1})
-    name = LemonGateway.SlotsTest.Reloading
+    name = LemonRouter.SlotsTest.Reloading
     server = start_supervised!({Slots, name: name}, id: name)
     assert {:ok, %{max: 1}} = Slots.stats(name)
 
@@ -176,13 +176,13 @@ defmodule LemonGateway.SlotsTest do
     end
 
     test "depth-2 delegation does not deadlock, even under cap 1" do
-      start_supervised!({Slots, name: LemonGateway.SlotsTest.One, max: 1}, id: :one)
-      run_tree(LemonGateway.SlotsTest.One, "root", 2, self())
+      start_supervised!({Slots, name: LemonRouter.SlotsTest.One, max: 1}, id: :one)
+      run_tree(LemonRouter.SlotsTest.One, "root", 2, self())
 
       assert_receive {:done, "root"}, 2_000
 
       assert eventually(fn ->
-               match?({:ok, %{in_flight: 0, waitq: 0}}, Slots.stats(LemonGateway.SlotsTest.One))
+               match?({:ok, %{in_flight: 0, waitq: 0}}, Slots.stats(LemonRouter.SlotsTest.One))
              end)
     end
 

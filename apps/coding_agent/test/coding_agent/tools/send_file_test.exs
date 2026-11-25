@@ -294,7 +294,12 @@ defmodule CodingAgent.Tools.SendFileTest do
     end
 
     test "invalid limits fall back to the channel default", %{root: root} do
-      put_config(root, :telegram, ~s(max_upload_bytes = -1\nfiles = {max_download_bytes = "zero"}))
+      put_config(
+        root,
+        :telegram,
+        ~s(max_upload_bytes = -1\nfiles = {max_download_bytes = "zero"})
+      )
+
       assert %{auto_send_files: [_]} = send("telegram", root, %{"path" => "big.png"}).details
     end
   end

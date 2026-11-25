@@ -41,9 +41,7 @@ Application.put_env(:lemon_channels, :engines, [
 Application.put_env(:lemon_channels, :adapters, [])
 
 _ = Application.stop(:lemon_channels)
-_ = Application.stop(:lemon_gateway)
 
-{:ok, _} = Application.ensure_all_started(:lemon_gateway)
 {:ok, _} = Application.ensure_all_started(:lemon_channels)
 
 # Tests that shell out to Node are excluded (not skipped) on hosts without it.
@@ -68,12 +66,10 @@ ExUnit.start(capture_log: true, exclude: exclude_tags)
 # later suites see a stopped lemon_channels.
 ExUnit.after_suite(fn _ ->
   _ = Application.stop(:lemon_channels)
-  _ = Application.stop(:lemon_gateway)
 
   Application.delete_env(:lemon_gateway, gateway_config_key)
   Application.delete_env(:lemon_channels, :engines)
   Application.delete_env(:lemon_channels, :adapters)
 
-  {:ok, _} = Application.ensure_all_started(:lemon_gateway)
   {:ok, _} = Application.ensure_all_started(:lemon_channels)
 end)

@@ -36,6 +36,7 @@ defmodule LemonGateway.GatewayConfigBootTest do
           :error -> Application.delete_env(:lemon_gateway, key)
         end
       end
+
       if previous_home, do: System.put_env("HOME", previous_home), else: System.delete_env("HOME")
       LemonCore.ConfigCache.clear()
       File.rm_rf!(home)

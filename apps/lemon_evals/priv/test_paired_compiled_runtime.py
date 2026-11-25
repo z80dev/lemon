@@ -96,7 +96,6 @@ class CompiledRuntimeTests(unittest.TestCase):
             configuration = paired.paired_configuration('[providers.zai]\napi_key = "offline-fixture-not-a-real-credential"\n', variant)
             expression = (
                 f'Code.require_file({json.dumps(str(FIXTURE))}); '
-                f'Application.put_env(:lemon_gateway, :health_port, {occupied_port}); '
                 f'Application.put_env(:lemon_router, :health_port, {occupied_port}); '
                 + paired.RUNTIME_EXPRESSION.replace(
                     'File.write!(System.fetch_env!("LEMON_EVAL_METADATA"), ',
@@ -126,7 +125,8 @@ class CompiledRuntimeTests(unittest.TestCase):
             # parent turn; every one must reach the installed offline transport.
             self.assertTrue(proof['offline_requests'], diagnostic)
             self.assertEqual(set(proof['offline_requests']), {'fixture'}, diagnostic)
-            for name in ('control', 'gateway', 'router', 'web', 'sim'):
+            self.assertEqual(proof['listeners']['gateway'], [], diagnostic)
+            for name in ('control', 'router', 'web', 'sim'):
                 self.assertEqual(len(proof['listeners'][name]), 1, (name, proof, diagnostic))
                 listener = proof['listeners'][name][0]
                 self.assertEqual(listener['ip'], '127.0.0.1', (name, listener))

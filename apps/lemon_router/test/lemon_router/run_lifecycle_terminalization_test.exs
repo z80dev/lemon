@@ -1,7 +1,7 @@
 defmodule LemonRouter.RunLifecycleTerminalizationTest do
   @moduledoc """
   Terminalization between runtime acceptance and the first run event: the real
-  `RunProcess` state machine, coordinator and gateway runtime, with only the
+  `RunProcess` state machine, coordinator and router permits, with only the
   native executor replaced by a fixture.
   """
 
@@ -15,13 +15,22 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
 
   defmodule GatedExecutor do
     @moduledoc false
+    @behaviour CodingAgent.Executor.Behaviour
+
     # Each run waits for the test to complete it. Cancellation is a request the
     # runner honours by exiting.
 
     def start_run(request, _opts, sink) do
-      test_pid = :persistent_term.get({__MODULE__, :test_pid})
+      test_pid = request.meta.test_pid
+      hold_cancel? = request.meta[:hold_cancel?]
       run_ref = make_ref()
-      runner = spawn(fn -> await_finish(sink, run_ref) end)
+
+      runner =
+        spawn(fn ->
+          monitor = Process.monitor(sink)
+          await_finish(sink, run_ref, monitor, test_pid, hold_cancel?)
+        end)
+
       send(test_pid, {:executor_started, request.run_id, runner})
       {:ok, run_ref, %{runner_pid: runner}}
     end
@@ -34,57 +43,29 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
     def steer(_ctx, _text), do: {:error, :unsupported}
     def redirect(_ctx, _text), do: {:error, :unsupported}
 
-    defp await_finish(sink, run_ref) do
+    defp await_finish(sink, run_ref, monitor, test_pid, hold_cancel?) do
       receive do
         {:complete, answer} ->
-          completed = LemonGateway.Event.completed(%{engine: "lemon", ok: true, answer: answer})
+          completed =
+            CodingAgent.Executor.Event.completed(%{engine: "lemon", ok: true, answer: answer})
+
           send(sink, {:engine_event, run_ref, completed})
 
+        :cancel when hold_cancel? == true ->
+          send(test_pid, {:executor_draining, self()})
+
+          receive do
+            :finish_drain -> :ok
+            {:DOWN, ^monitor, :process, ^sink, _} -> :ok
+          end
+
         :cancel ->
-          # A slow drain: tool results still arriving after the cancel request.
-          Process.sleep(:persistent_term.get({__MODULE__, :drain_ms}, 0))
+          :ok
+
+        {:DOWN, ^monitor, :process, ^sink, _} ->
+          :ok
       end
     end
-  end
-
-  defmodule AmbiguousRuntime do
-    @moduledoc false
-    # Starts the run, then fails to acknowledge it.
-
-    def available?, do: true
-
-    def submit_execution(%ExecutionCommand{run_id: run_id, session_key: session_key}) do
-      run = spawn(fn -> run(run_id, session_key) end)
-      :persistent_term.put({__MODULE__, run_id}, run)
-      {:error, :outcome_unknown}
-    end
-
-    def run_pid(run_id), do: :persistent_term.get({__MODULE__, run_id}, nil)
-    def cancel_by_run_id(_run_id, _reason), do: :ok
-
-    defp run(run_id, session_key) do
-      receive do
-        {:complete, answer} ->
-          completed = Completion.new(%{ok: true, answer: answer})
-
-          Bus.broadcast(
-            Bus.run_topic(run_id),
-            Event.new(
-              :run_completed,
-              RunCompleted.new(%{completed: completed, duration_ms: 1}),
-              %{run_id: run_id, session_key: session_key}
-            )
-          )
-      end
-    end
-  end
-
-  defmodule NeverStartedRuntime do
-    @moduledoc false
-    def available?, do: true
-    def submit_execution(_command), do: exit(:timeout)
-    def run_pid(_run_id), do: nil
-    def cancel_by_run_id(_run_id, _reason), do: :ok
   end
 
   defmodule OutcomeUnknownCoordinator do
@@ -157,35 +138,35 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
     def init(opts), do: {:ok, opts}
   end
 
-  describe "gateway run monitored from submission" do
-    setup :gateway_fixture
+  describe "admitted run lifecycle" do
+    setup :executor_fixture
 
-    test "killing the gateway run before run_started terminalizes once and the queue advances",
+    test "killing the executor terminalizes once and the queue advances",
          %{run_supervisor: run_supervisor} do
-      blockers = occupy_capacity()
       key = conversation()
       [first, second, third] = ids = Enum.map(1..3, fn _ -> run_id() end)
       Enum.each(ids, &Bus.subscribe(Bus.run_topic(&1)))
       Enum.each(ids, &(:ok = SessionCoordinator.submit(key, submission(key, &1, run_supervisor))))
 
-      {router, gateway} = await_monitored_gateway_run(first)
+      assert_receive {:executor_started, ^first, runner}, 2_000
+      router = await_router_run(first)
       router_monitor = Process.monitor(router)
-      refute_received %Event{type: :run_started, meta: %{run_id: ^first}}
+      assert_receive %Event{type: :run_started, meta: %{run_id: ^first}}
 
-      Process.exit(gateway, :kill)
+      Process.exit(runner, :kill)
 
       assert_receive %Event{
                        type: :run_completed,
-                       meta: %{run_id: ^first, synthetic: true},
-                       payload: %{completed: %{ok: false, error: {:gateway_run_down, :killed}}}
+                       meta: %{run_id: ^first},
+                       payload: %{
+                         completed: %{ok: false, error: %{type: :executor_down, reason: :killed}}
+                       }
                      },
                      2_000
 
       assert_receive {:DOWN, ^router_monitor, :process, ^router, :normal}, 2_000
 
       # The queued messages were neither dropped nor failed: each runs in order.
-      _ = await_gateway_run(second)
-      release(blockers)
       complete(second, "second done")
       assert_completed_ok(second, "second done")
       complete(third, "third done")
@@ -195,7 +176,7 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
       assert SessionCoordinator.active_run(key) == :none
     end
 
-    test "killed queued gateway runs leak no run process or busy conversation",
+    test "cancelled permit waiters leak no run process or busy conversation",
          %{run_supervisor: run_supervisor} do
       blockers = occupy_capacity()
 
@@ -208,14 +189,17 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
           {key, id}
         end
 
-      gateways = Enum.map(runs, fn {_key, id} -> elem(await_monitored_gateway_run(id), 1) end)
-      Enum.each(gateways, &Process.exit(&1, :kill))
+      for {_key, id} <- runs do
+        assert {:awaiting_slot, _} = :sys.get_state(await_router_run(id))
+        :ok = RunProcess.abort(id, :test_cancel)
+        refute_received %Event{type: :run_started, meta: %{run_id: ^id}}
+      end
 
       for {_key, id} <- runs do
         assert_receive %Event{
                          type: :run_completed,
                          meta: %{run_id: ^id},
-                         payload: %{completed: %{error: {:gateway_run_down, :killed}}}
+                         payload: %{completed: %{error: :test_cancel, ok: false}}
                        },
                        2_000
       end
@@ -229,11 +213,11 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
                  end)
              end)
 
-      assert eventually(fn -> match?({:ok, %{waitq: 0}}, LemonGateway.Slots.stats()) end)
+      assert eventually(fn -> match?({:ok, %{waitq: 0}}, LemonRouter.Slots.stats()) end)
       release(blockers)
     end
 
-    test "a normal run binds and monitors its gateway run exactly once",
+    test "a normal run monitors its executor exactly once",
          %{run_supervisor: run_supervisor} do
       key = conversation()
       id = run_id()
@@ -241,13 +225,12 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
       :ok = SessionCoordinator.submit(key, submission(key, id, run_supervisor))
 
       assert_receive {:executor_started, ^id, runner}, 2_000
-      gateway = LemonGateway.Runtime.run_pid(id)
       router = await_router_run(id)
       router_monitor = Process.monitor(router)
 
       assert eventually(fn -> match?({:running, _}, :sys.get_state(router)) end)
-      assert {:running, %{gateway_run_pid: ^gateway}} = :sys.get_state(router)
-      {:monitored_by, monitors} = Process.info(gateway, :monitored_by)
+      assert {:running, %{executor_pid: ^runner}} = :sys.get_state(router)
+      {:monitored_by, monitors} = Process.info(runner, :monitored_by)
       assert Enum.count(monitors, &(&1 == router)) == 1
 
       send(runner, {:complete, "done"})
@@ -258,8 +241,6 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
 
     test "a watchdog stop waits for a slow-draining executor, then the next queued message runs",
          %{run_supervisor: run_supervisor} do
-      :persistent_term.put({GatedExecutor, :drain_ms}, 300)
-      on_exit(fn -> :persistent_term.erase({GatedExecutor, :drain_ms}) end)
       key = conversation()
       [idle, next] = ids = Enum.map(1..2, fn _ -> run_id() end)
       Enum.each(ids, &Bus.subscribe(Bus.run_topic(&1)))
@@ -268,12 +249,20 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
 
       watched = %{
         watched
-        | run_process_opts: Map.put(watched.run_process_opts, :run_watchdog_timeout_ms, 50)
+        | run_process_opts: Map.put(watched.run_process_opts, :run_watchdog_timeout_ms, 50),
+          execution_request: %{
+            watched.execution_request
+            | meta: Map.put(watched.execution_request.meta, :hold_cancel?, true)
+          }
       }
 
       :ok = SessionCoordinator.submit(key, watched)
       :ok = SessionCoordinator.submit(key, submission(key, next, run_supervisor))
-      assert_receive {:executor_started, ^idle, _runner}, 2_000
+      assert_receive {:executor_started, ^idle, runner}, 2_000
+      assert_receive {:executor_draining, ^runner}, 2_000
+      refute_received {:executor_started, ^next, _}
+      refute_received %Event{type: :run_completed, meta: %{run_id: ^idle}}
+      send(runner, :finish_drain)
 
       # The idle run is cancelled with its real reason once its executor has drained.
       assert_receive %Event{
@@ -335,46 +324,6 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
 
       assert payload.completed.answer == "late answer"
     end
-
-    test "an unknown runtime outcome adopts the started run and receives its completion" do
-      id = run_id()
-      session_key = "agent:test:main:#{id}"
-      on_exit(fn -> :persistent_term.erase({AmbiguousRuntime, id}) end)
-
-      pid = start_run_process(id, session_key, engine_runtime: AmbiguousRuntime)
-      monitor = Process.monitor(pid)
-      run = await(fn -> AmbiguousRuntime.run_pid(id) end)
-
-      assert eventually(fn ->
-               match?({:awaiting_start, %{gateway_run_pid: ^run}}, :sys.get_state(pid))
-             end)
-
-      send(run, {:complete, "adopted answer"})
-
-      assert_receive %Event{type: :run_completed, meta: meta, payload: payload}, 2_000
-      refute Map.get(meta, :synthetic)
-      assert %{ok: true, answer: "adopted answer"} = payload.completed
-      assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 2_000
-      refute_received %Event{type: :run_completed}
-    end
-
-    test "an unknown runtime outcome without a live run terminalizes once after the bind grace" do
-      id = run_id()
-      on_exit(fn -> Store.delete(:runs, id) end)
-
-      pid = start_run_process(id, "agent:test:main:#{id}", engine_runtime: NeverStartedRuntime)
-      monitor = Process.monitor(pid)
-
-      assert_receive %Event{
-                       type: :run_completed,
-                       meta: %{synthetic: true},
-                       payload: %{completed: %{error: :gateway_run_missing_after_start}}
-                     },
-                     3_000
-
-      assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 2_000
-      refute_received %Event{type: :run_completed}
-    end
   end
 
   test "a store error while retaining terminal evidence still delivers the answer" do
@@ -400,12 +349,13 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
 
     pid =
       start_run_process(id, session_key,
-        submit_to_gateway?: false,
+        executor: LemonRouter.TestExecutor,
         receipt_store: :"#{__MODULE__}.UnavailableStore"
       )
 
     monitor = Process.monitor(pid)
-    :ok = Bus.broadcast(Bus.run_topic(id), completed_event(id, "the answer"))
+    assert_receive {:test_executor_started, ^id, runner, ^pid}
+    LemonRouter.TestExecutor.complete(runner, %{answer: "the answer"})
 
     assert_receive {:final_answer, ^id, "the answer"}, 2_000
     assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 2_000
@@ -492,48 +442,21 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
 
   # -- helpers ---------------------------------------------------------------
 
-  defp gateway_fixture(_context) do
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-    previous = Application.fetch_env(:lemon_gateway, :executor)
-    Application.put_env(:lemon_gateway, :executor, GatedExecutor)
-    :persistent_term.put({GatedExecutor, :test_pid}, self())
-
-    on_exit(fn ->
-      # A failed test must not leave a fixture run holding an execution permit.
-      for {_, run, _, _} <- DynamicSupervisor.which_children(LemonGateway.RunSupervisor),
-          Enum.any?(Registry.keys(LemonGateway.RunRegistry, run), &lifecycle_run_id?/1),
-          do: Process.exit(run, :kill)
-
-      case previous do
-        {:ok, executor} -> Application.put_env(:lemon_gateway, :executor, executor)
-        :error -> Application.delete_env(:lemon_gateway, :executor)
-      end
-
-      :persistent_term.erase({GatedExecutor, :test_pid})
-    end)
-
+  defp executor_fixture(_context) do
     %{run_supervisor: start_supervised!({DynamicSupervisor, strategy: :one_for_one})}
   end
 
-  # Fill every execution permit, so later runs wait in the gateway FIFO before
+  # Fill every execution permit, so later runs wait in the router FIFO before
   # they emit run_started.
   defp occupy_capacity do
-    {:ok, %{max: max}} = LemonGateway.Slots.stats()
+    {:ok, %{max: max}} = LemonRouter.Slots.stats()
 
     for _ <- 1..max do
       id = run_id()
       session_key = "agent:test:main:blocker-#{id}"
-
-      :ok =
-        LemonGateway.Runtime.submit_execution(%ExecutionCommand{
-          run_id: id,
-          session_key: session_key,
-          prompt: "hold a permit",
-          conversation_key: {:session, session_key}
-        })
-
+      owner = start_run_process(id, session_key, executor: GatedExecutor)
       assert_receive {:executor_started, ^id, runner}, 2_000
-      on_exit(fn -> Process.exit(runner, :kill) end)
+      on_exit(fn -> RunProcess.abort(owner, :test_cleanup) end)
       runner
     end
   end
@@ -554,21 +477,6 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
                    2_000
   end
 
-  defp await_gateway_run(id), do: await(fn -> LemonGateway.Runtime.run_pid(id) end)
-
-  # The router run monitors its gateway run before run_started: the gateway run
-  # is still waiting for an execution permit.
-  defp await_monitored_gateway_run(id) do
-    gateway = await_gateway_run(id)
-    router = await_router_run(id)
-
-    await(fn ->
-      match?({:awaiting_start, %{gateway_run_pid: ^gateway}}, :sys.get_state(router)) || nil
-    end)
-
-    {router, gateway}
-  end
-
   defp await_router_run(id) do
     await(fn ->
       case Registry.lookup(LemonRouter.RunRegistry, id) do
@@ -585,6 +493,7 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
       run_id: id,
       session_key: session_key,
       prompt: "work",
+      meta: %{test_pid: self()},
       conversation_key: {:session, session_key}
     }
 
@@ -606,6 +515,7 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
       run_id: id,
       session_key: session_key,
       prompt: "work #{id}",
+      meta: %{test_pid: self()},
       conversation_key: key
     }
 
@@ -618,7 +528,7 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
       run_supervisor:
         run_supervisor || start_supervised!({DynamicSupervisor, strategy: :one_for_one}),
       run_process_module: run_process_module,
-      run_process_opts: %{engine_runtime: LemonGateway.Runtime}
+      run_process_opts: %{executor: GatedExecutor}
     })
   end
 
@@ -636,7 +546,6 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
     do: {:session, "agent:test:main:lifecycle-#{System.unique_integer([:positive])}"}
 
   defp run_id, do: "run_lifecycle_#{System.unique_integer([:positive])}"
-  defp lifecycle_run_id?(key), do: is_binary(key) and String.starts_with?(key, "run_lifecycle_")
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)

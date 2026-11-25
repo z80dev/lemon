@@ -58,6 +58,10 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
 
       refute :lemon_gateway in target.lemon_router
       refute :lemon_gateway in current.lemon_router
+      assert :coding_agent in target.lemon_router
+      assert :coding_agent in current.lemon_router
+      refute :lemon_gateway in target.coding_agent
+      refute :lemon_gateway in current.coding_agent
       refute :lemon_gateway in current.lemon_control_plane
 
       assert current.lemon_gateway == [:lemon_agent, :lemon_core, :lemon_media]

@@ -16,6 +16,7 @@ defmodule LemonGateway.M6IntegrationTest do
         {:ok, config} -> Application.put_env(:lemon_gateway, LemonGateway.Config, config)
         :error -> Application.delete_env(:lemon_gateway, LemonGateway.Config)
       end
+
       if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
       LemonCore.ConfigCache.clear()
     end)

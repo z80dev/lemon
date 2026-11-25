@@ -22,19 +22,27 @@ defmodule LemonRouter.AgentMessagingTest do
   defmodule ControlledExecutor do
     @behaviour CodingAgent.Executor.Behaviour
 
-    def cancel(%{runner_pid: pid}), do: (send(pid, :cancel); :ok)
+    def cancel(%{runner_pid: pid}),
+      do:
+        (
+          send(pid, :cancel)
+          :ok
+        )
+
     def steer(_ctx, _prompt), do: {:error, :unsupported}
     def redirect(_ctx, _prompt), do: {:error, :unsupported}
 
     def start_run(%LemonCore.ExecutionCommand{} = command, _opts, sink) do
-      runner = spawn(fn ->
-        monitor = Process.monitor(sink)
+      runner =
+        spawn(fn ->
+          monitor = Process.monitor(sink)
 
-        receive do
-          :cancel -> :ok
-          {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
-        end
-      end)
+          receive do
+            :cancel -> :ok
+            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+          end
+        end)
+
       send(Application.fetch_env!(:lemon_router, :named_agent_test_pid), {:execution, command})
       {:ok, make_ref(), %{runner_pid: runner}}
     end

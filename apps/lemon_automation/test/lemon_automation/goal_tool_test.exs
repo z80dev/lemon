@@ -14,6 +14,7 @@ defmodule LemonAutomation.GoalToolTest do
       send(pid, :cancel)
       :ok
     end
+
     def steer(_ctx, _prompt), do: {:error, :unsupported}
     def redirect(_ctx, _prompt), do: {:error, :unsupported}
 
@@ -23,23 +24,28 @@ defmodule LemonAutomation.GoalToolTest do
       ref = make_ref()
       hold? = not judge? and not :persistent_term.get({__MODULE__, :complete}, true)
 
-      runner = spawn(fn ->
-        monitor = Process.monitor(sink)
-        if hold? do
-          receive do
-            :cancel -> :ok
-            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+      runner =
+        spawn(fn ->
+          monitor = Process.monitor(sink)
+
+          unless hold? do
+            output =
+              if judge?,
+                do: ~s({"action":"continue","reason":"work remains"}),
+                else: "coding result"
+
+            send(
+              sink,
+              {:engine_event, ref,
+               CodingAgent.Executor.Event.completed(%{engine: "lemon", ok: true, answer: output})}
+            )
           end
-        else
-          output = if judge?, do: ~s({"action":"continue","reason":"work remains"}), else: "coding result"
-          send(sink, {:engine_event, ref, CodingAgent.Executor.Event.completed(%{ok: true, answer: output})})
 
           receive do
             :cancel -> :ok
             {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
           end
-        end
-      end)
+        end)
 
       {:ok, ref, %{runner_pid: runner, run_id: command.run_id}}
     end

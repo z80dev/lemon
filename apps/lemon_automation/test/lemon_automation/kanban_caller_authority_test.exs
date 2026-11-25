@@ -293,7 +293,7 @@ defmodule LemonAutomation.KanbanCallerAuthorityTest do
     File.rename!(params.cwd, moved)
     File.mkdir_p!(params.cwd)
 
-    request = %LemonGateway.ExecutionRequest{
+    request = %LemonCore.ExecutionCommand{
       run_id: params.run_id,
       session_key: params.session_key,
       prompt: params.prompt,

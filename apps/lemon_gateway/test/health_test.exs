@@ -61,6 +61,7 @@ defmodule LemonGateway.HealthTest do
 
     body = Jason.decode!(conn.resp_body)
     assert body["ok"] == true
+
     assert Enum.map(body["checks"], &{&1["name"], &1["ok"]}) ==
              [{"supervisor", true}, {"ingress", true}]
   end
