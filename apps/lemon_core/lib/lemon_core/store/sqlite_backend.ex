@@ -395,23 +395,25 @@ defmodule LemonCore.Store.SqliteBackend do
   def atomic(state, operation) do
     reset_statements(state)
 
-    with :ok <- Sqlite3.execute(state.conn, "BEGIN IMMEDIATE") do
-      try do
-        with {:ok, next_state} <- operation.(),
-             :ok <- Sqlite3.execute(state.conn, "COMMIT") do
-          {:ok, next_state}
-        else
+    case Sqlite3.execute(state.conn, "BEGIN IMMEDIATE") do
+      :ok ->
+        try do
+          with {:ok, next_state} <- operation.(),
+               :ok <- Sqlite3.execute(state.conn, "COMMIT") do
+            {:ok, next_state}
+          else
+            error ->
+              _ = Sqlite3.execute(state.conn, "ROLLBACK")
+              atomic_error(error)
+          end
+        rescue
           error ->
             _ = Sqlite3.execute(state.conn, "ROLLBACK")
-            atomic_error(error)
+            reraise error, __STACKTRACE__
         end
-      rescue
-        error ->
-          _ = Sqlite3.execute(state.conn, "ROLLBACK")
-          reraise error, __STACKTRACE__
-      end
-    else
-      error -> atomic_error(error)
+
+      error ->
+        atomic_error(error)
     end
   end
 

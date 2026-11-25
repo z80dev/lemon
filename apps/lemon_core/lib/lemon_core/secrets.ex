@@ -669,14 +669,16 @@ defmodule LemonCore.Secrets do
   """
   @spec presence(name(), keyword()) :: :present | :missing | {:unusable, atom()}
   def presence(name, opts \\ []) do
-    with {:ok, name} <- normalize_name(name) do
-      if Keyword.get(opts, :prefer_env, false) and fetch_env(name, opts) != :error do
-        :present
-      else
-        store_presence(name, opts)
-      end
-    else
-      _ -> :missing
+    case normalize_name(name) do
+      {:ok, name} ->
+        if Keyword.get(opts, :prefer_env, false) and fetch_env(name, opts) != :error do
+          :present
+        else
+          store_presence(name, opts)
+        end
+
+      _ ->
+        :missing
     end
   end
 

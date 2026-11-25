@@ -144,30 +144,35 @@ defmodule LemonCore.TerminalOutbox do
   defp update(_server, _run_id, _effect, _status, 0), do: {:error, :concurrent_update}
 
   defp update(server, run_id, effect, status, remaining) do
-    with {:ok, row} when is_map(row) <- pending(server, run_id) do
-      replacement =
-        case {Map.fetch!(row, effect), status} do
-          {:done, _} -> row
-          {_, :failed} -> row |> Map.put(effect, :failed) |> count_failure(effect)
-          {_, :done} -> Map.put(row, effect, :done)
+    case pending(server, run_id) do
+      {:ok, row} when is_map(row) ->
+        replacement =
+          case {Map.fetch!(row, effect), status} do
+            {:done, _} -> row
+            {_, :failed} -> row |> Map.put(effect, :failed) |> count_failure(effect)
+            {_, :done} -> Map.put(row, effect, :done)
+          end
+
+        result =
+          if Enum.all?([:notification, :projections, :presentation], &(replacement[&1] == :done)) do
+            Store.compare_and_delete(server, @table, run_id, row)
+          else
+            if replacement == row,
+              do: :ok,
+              else:
+                Store.compare_and_swap(server, @table, run_id, row, replacement, durable: true)
+          end
+
+        case result do
+          {:error, :mismatch} -> update(server, run_id, effect, status, remaining - 1)
+          other -> other
         end
 
-      result =
-        if Enum.all?([:notification, :projections, :presentation], &(replacement[&1] == :done)) do
-          Store.compare_and_delete(server, @table, run_id, row)
-        else
-          if replacement == row,
-            do: :ok,
-            else: Store.compare_and_swap(server, @table, run_id, row, replacement, durable: true)
-        end
+      {:ok, nil} ->
+        :ok
 
-      case result do
-        {:error, :mismatch} -> update(server, run_id, effect, status, remaining - 1)
-        other -> other
-      end
-    else
-      {:ok, nil} -> :ok
-      error -> error
+      error ->
+        error
     end
   end
 

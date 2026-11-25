@@ -288,5 +288,55 @@ defmodule CodingAgent.SessionSupervisorTest do
       assert {:ok, journal} = CodingAgent.SessionManager.load_from_file(state.session_file)
       assert journal.header.id == session_id
     end
+
+    test "concurrent starts and stops leave exactly the kept sessions", %{target: target} do
+      parent = self()
+      # Warm the cwd's config so the wave contends on the supervisor, not first config load.
+      {:ok, first} = start_isolated(target)
+
+      tasks =
+        for i <- 1..10 do
+          Task.async(fn ->
+            session_id = "concurrent-#{i}-#{System.unique_integer([:positive])}"
+            {:ok, pid} = start_isolated(target, session_id: session_id)
+            send(parent, {:started, self()})
+            receive do: (:contend -> :ok)
+
+            if rem(i, 2) == 0 do
+              :ok = SessionSupervisor.stop_session(session_id, target)
+              {:stopped, session_id, pid}
+            else
+              {:kept, session_id, pid}
+            end
+          end)
+        end
+
+      for _ <- tasks, do: assert_receive({:started, _}, 30_000)
+      Enum.each(tasks, &send(&1.pid, :contend))
+      results = Task.await_many(tasks, 30_000)
+
+      kept = [first | for({:kept, _id, pid} <- results, do: pid)]
+      stopped = for {:stopped, id, pid} <- results, do: {id, pid}
+
+      assert Enum.sort(SessionSupervisor.list_sessions(target)) == Enum.sort(kept)
+
+      for {session_id, pid} <- stopped do
+        refute Process.alive?(pid)
+
+        assert_eventually(fn -> SessionSupervisor.lookup(session_id, target) == :error end,
+          message: "stopped session id still registered"
+        )
+      end
+    end
+
+    test "stopping a session also stops its agent", %{target: target} do
+      {:ok, pid} = start_isolated(target)
+      agent = CodingAgent.Session.get_state(pid).agent
+      agent_ref = Process.monitor(agent)
+
+      assert :ok = SessionSupervisor.stop_session(pid, target)
+      assert_receive {:DOWN, ^agent_ref, :process, ^agent, _}, 5_000
+      assert SessionSupervisor.list_sessions(target) == []
+    end
   end
 end

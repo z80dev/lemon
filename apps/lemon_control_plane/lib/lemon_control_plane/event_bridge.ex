@@ -438,9 +438,8 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   def project(%{"type" => _} = event) do
-    with {:ok, canonical} <- LemonCore.Event.decode_run_lifecycle(event) do
-      project(canonical)
-    else
+    case LemonCore.Event.decode_run_lifecycle(event) do
+      {:ok, canonical} -> project(canonical)
       {:error, _} -> nil
     end
   end
