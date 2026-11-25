@@ -695,10 +695,10 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
 
   # Public Session wire: no stream_fn, so ProviderFallback drives the real
   # OpenAICodexResponses backend against a loopback listener. Without an
-  # auth_source, Credentials refuses the provider; the backend's own ambient
+  # auth_source, Credentials refuses the provider; LemonAi's library-level
   # fallback (OPENAI_CODEX_API_KEY, then CHATGPT_TOKEN) must not replace that
-  # refusal. Every planted value is a well-formed ChatGPT JWT, so a leak would
-  # reach the listener instead of failing token parsing first.
+  # refusal. Every planted value is a ChatGPT JWT-shaped token, so a leak
+  # would reach the listener instead of failing token parsing first.
   test "openai-codex requires auth_source on the public session wire" do
     base_url = wire_endpoint(:openai_codex)
     plain_key = codex_jwt("acct-configured-plain-key", "codex-from-plain")
@@ -730,6 +730,9 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
       "chatgpt-token-trap-signature",
       "acct-ambient-chatgpt-trap"
     ])
+
+    assert {:assistant_error, message} = reason
+    assert message =~ "ChatGPT token is required"
   end
 
   # Public Session wire through the real Anthropic backend. An OAuth payload
