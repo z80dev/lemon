@@ -615,8 +615,8 @@ callers must pass `StreamOptions.session_id`; the library does not invent one.
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :memory, :ingest, :ok]` | `duration_us` | `run_id`, `session_key`, `agent_id` | [`LemonMemory.Ingest.handle_cast/2`](../apps/lemon_memory/lib/lemon_memory/ingest.ex) |
-| `[:lemon, :memory, :ingest, :failure]` | `count: 1`, `duration_us` | `run_id`, `error` (message string) | [`LemonMemory.Ingest.handle_cast/2`](../apps/lemon_memory/lib/lemon_memory/ingest.ex) |
+| `[:lemon, :memory, :ingest, :ok]` | `duration_us` | `run_id`, `session_key`, `agent_id` | [`LemonMemory.Ingest.persist_run/4`](../apps/lemon_memory/lib/lemon_memory/ingest.ex) |
+| `[:lemon, :memory, :ingest, :failure]` | `count: 1`, `duration_us` | `run_id`, `error` (message string) | [`LemonMemory.Ingest.persist_run/4`](../apps/lemon_memory/lib/lemon_memory/ingest.ex) |
 
 ### Approvals — `[:lemon, :approvals, ...]`
 
