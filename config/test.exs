@@ -85,7 +85,7 @@ config :lemon_honcho, client: LemonHoncho.Client.Tripwire
 config :lemon_core, LemonCore.ConfigCache, mtime_check_interval_ms: 0
 
 # Avoid writing dets / sessions / global config under ~/.lemon/agent during tests.
-config :coding_agent,
+config :lemon_core,
        :agent_dir,
        Path.join(
          System.tmp_dir!(),
