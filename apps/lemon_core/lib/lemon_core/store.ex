@@ -62,13 +62,11 @@ defmodule LemonCore.Store do
 
   ## Run records and their retention
 
-  `:runs` holds one record per run: `%{summary: ..., started_at: ...}` plus its
-  events. While a run is live, `append_run_event/3` writes each event into a
-  bounded per-run buffer (constant work per event; the first 200 and the latest
-  events, 2,000 in all, with `:events_dropped` counting the rest) instead of
-  rewriting the record, and `get_run/2`/`fetch_run/2` attach the buffer as
-  `:events` (newest first). `finalize_run/3` moves the buffer into the record;
-  events arriving after finalization are dropped.
+  `:runs` holds summary and lifecycle metadata only. `append_run_event/3`
+  writes to a bounded per-run buffer (the first 200 and the latest events,
+  2,000 in all). Finalization freezes the buffer until the run expires and
+  passes its events to the durable history hook; late events are dropped.
+  Only `get_run_with_events/2` attaches the buffer to a run read.
 
   Finalized runs are evicted by the periodic sweep `:runs_retention_ms`
   (default 24 hours) after finalization. Finalization also writes a small
@@ -748,25 +746,22 @@ defmodule LemonCore.Store do
 
   @doc """
   Get a specific run by ID, for display: `nil` when it is absent, evicted or
-  the Store cannot answer. A live run carries its buffered `:events`.
+  the Store cannot answer. Does not attach buffered events.
   """
   @spec get_run(server(), term()) :: map() | nil
   def get_run(server \\ __MODULE__, run_id) do
     # Fast path: direct ETS cache lookup
-    record =
-      case ReadCache.get(server, :runs, run_id) do
-        nil ->
-          safe_store_call(server, {:get_run, run_id}, nil,
-            op: :get_run,
-            table: :runs,
-            key: run_id
-          )
+    case ReadCache.get(server, :runs, run_id) do
+      nil ->
+        safe_store_call(server, {:get_run, run_id}, nil,
+          op: :get_run,
+          table: :runs,
+          key: run_id
+        )
 
-        value ->
-          value
-      end
-
-    with_live_events(server, run_id, record)
+      value ->
+        value
+    end
   end
 
   @doc """
@@ -776,53 +771,51 @@ defmodule LemonCore.Store do
   `{:ok, nil}` means there is no run record or terminal fence,
   `{:error, :evicted}` means it was finalized and its record has since been
   evicted (treat it as finished), and `{:error, :store_unavailable}` preserves
-  an unknown outcome when the backend cannot answer. A live run carries its
-  buffered `:events`.
+  an unknown outcome when the backend cannot answer. Does not attach buffered events.
   """
   @spec fetch_run(server(), term()) ::
           {:ok, map() | nil} | {:error, :evicted | :store_unavailable}
   def fetch_run(server \\ __MODULE__, run_id) do
     case ReadCache.fetch(server, :runs, run_id) do
       {:ok, value} ->
-        {:ok, with_live_events(server, run_id, value)}
+        {:ok, value}
 
       _miss_or_uncached ->
-        case safe_store_call(
-               server,
-               {:fetch_run, run_id},
-               {:error, :store_unavailable},
-               op: :fetch_run,
-               table: :runs,
-               key: run_id
-             ) do
-          {:ok, value} -> {:ok, with_live_events(server, run_id, value)}
-          error -> error
-        end
+        safe_store_call(server, {:fetch_run, run_id}, {:error, :store_unavailable},
+          op: :fetch_run,
+          table: :runs,
+          key: run_id
+        )
     end
   end
 
-  # A live record's events sit in the store's per-run buffer, published as an
-  # ETS table so readers need no store call.
-  defp with_live_events(server, run_id, %{summary: nil} = record) when is_atom(server) do
+  @doc "Display read including retained events (newest first), or nil when absent."
+  @spec get_run_with_events(server(), term()) :: map() | nil
+  def get_run_with_events(server \\ __MODULE__, run_id),
+    do: with_run_events(server, run_id, get_run(server, run_id))
+
+  defp with_run_events(server, run_id, record) when is_map(record) and is_atom(server) do
     case Hooks.published(server, :run_events, nil) do
       nil -> record
       buffer -> put_buffered_events(record, buffer, run_id)
     end
   end
 
-  defp with_live_events(server, run_id, %{summary: nil} = record) when is_pid(server) do
+  defp with_run_events(server, run_id, record) when is_map(record) and is_pid(server) do
     case Process.info(server, :registered_name) do
-      {:registered_name, name} -> with_live_events(name, run_id, record)
+      {:registered_name, name} -> with_run_events(name, run_id, record)
       _ -> record
     end
   end
 
-  defp with_live_events(_server, _run_id, record), do: record
+  defp with_run_events(_server, _run_id, record), do: record
 
   defp put_buffered_events(record, buffer, run_id) do
-    {events, dropped} = buffered_run_events(buffer, run_id)
-    record = Map.put(record, :events, events)
-    if dropped > 0, do: Map.put(record, :events_dropped, dropped), else: record
+    case buffered_run_events(buffer, run_id) do
+      {[], 0} -> Map.put_new(record, :events, [])
+      {events, 0} -> Map.put(record, :events, events)
+      {events, dropped} -> Map.merge(record, %{events: events, events_dropped: dropped})
+    end
   rescue
     # The buffer died with a previous store process.
     ArgumentError -> record
@@ -830,7 +823,7 @@ defmodule LemonCore.Store do
 
   # Newest first, like the record's historical `:events` list.
   defp buffered_run_events(buffer, run_id) do
-    count = :ets.lookup_element(buffer, {run_id, :seq}, 2, 0)
+    count = abs(:ets.lookup_element(buffer, {run_id, :seq}, 2, 0))
 
     events =
       reduce_buffer_seqs(count, [], fn seq, acc ->
@@ -1034,6 +1027,7 @@ defmodule LemonCore.Store do
         # `{{run_id, :seq}, count}` counter per live run. Written only here;
         # readers resolve it from the published reference.
         run_events = :ets.new(:lemon_store_run_events, [:set, :protected, read_concurrency: true])
+        run_events_expiry = :ets.new(:lemon_store_run_events_expiry, [:ordered_set, :private])
         Hooks.publish(name, :run_events, run_events)
 
         runs_retention_ms = positive_ms!(config, :runs_retention_ms, @default_runs_retention_ms)
@@ -1050,6 +1044,7 @@ defmodule LemonCore.Store do
            backend: backend,
            backend_state: backend_state,
            run_events: run_events,
+           run_events_expiry: run_events_expiry,
            runs_retention_ms: runs_retention_ms,
            introspection_retention_ms: @default_introspection_retention_ms,
            read_only: Keyword.get(config, :read_only, false) == true
@@ -1594,23 +1589,27 @@ defmodule LemonCore.Store do
   # the record itself is written once, when the run's first event arrives.
   def handle_cast({:append_run_event, run_id, event}, state) do
     buffer = state.run_events
-    seq = :ets.update_counter(buffer, {run_id, :seq}, {2, 1}, {{run_id, :seq}, 0})
 
-    if seq == 1 do
-      case open_run_record(state, run_id) do
-        {:open, state} ->
-          buffer_run_event(buffer, run_id, seq, event)
-          {:noreply, state}
+    case :ets.lookup_element(buffer, {run_id, :seq}, 2, 0) do
+      0 ->
+        case open_run_record(state, run_id) do
+          {:open, state} ->
+            true = :ets.insert(buffer, {{run_id, :seq}, 1})
+            buffer_run_event(buffer, run_id, 1, event)
+            {:noreply, state}
 
-        {:closed, state} ->
-          # Finalized, evicted or unreadable: the event is dropped, and the
-          # next one checks again.
-          :ets.delete(buffer, {run_id, :seq})
-          {:noreply, state}
-      end
-    else
-      buffer_run_event(buffer, run_id, seq, event)
-      {:noreply, state}
+          {:closed, state} ->
+            {:noreply, state}
+        end
+
+      count when count > 0 ->
+        seq = count + 1
+        true = :ets.insert(buffer, {{run_id, :seq}, seq})
+        buffer_run_event(buffer, run_id, seq, event)
+        {:noreply, state}
+
+      _frozen ->
+        {:noreply, state}
     end
   end
 
@@ -1618,7 +1617,7 @@ defmodule LemonCore.Store do
     with {:ok, nil, backend_state} <- backend_get(state, state.backend_state, :runs, run_id),
          {:ok, nil, backend_state} <-
            backend_get(state, backend_state, @run_terminals, run_id) do
-      record = %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
+      record = %{summary: nil, started_at: System.system_time(:millisecond)}
 
       case state.backend.put(backend_state, :runs, run_id, record) do
         {:ok, backend_state} ->
@@ -1655,7 +1654,7 @@ defmodule LemonCore.Store do
   defp drop_run_events(state, run_id) do
     case :ets.take(state.run_events, {run_id, :seq}) do
       [{_key, count}] ->
-        reduce_buffer_seqs(count, :ok, fn seq, _acc ->
+        reduce_buffer_seqs(abs(count), :ok, fn seq, _acc ->
           :ets.delete(state.run_events, {run_id, seq})
         end)
 
@@ -1664,6 +1663,23 @@ defmodule LemonCore.Store do
     end
 
     :ok
+  end
+
+  defp freeze_run_events(buffer, run_id) do
+    count = :ets.lookup_element(buffer, {run_id, :seq}, 2, 0)
+    if count > 0, do: :ets.insert(buffer, {{run_id, :seq}, -count})
+  end
+
+  defp expire_run_events(state, cutoff) do
+    case :ets.first(state.run_events_expiry) do
+      {expires_at, _ref} = key when expires_at < cutoff ->
+        [{^key, run_id}] = :ets.take(state.run_events_expiry, key)
+        drop_run_events(state, run_id)
+        expire_run_events(state, cutoff)
+
+      _ ->
+        :ok
+    end
   end
 
   defp backend_get(state, backend_state, table, key) do
@@ -1688,7 +1704,7 @@ defmodule LemonCore.Store do
       payload = %{
         store: state.name,
         run_id: run_id,
-        record: record,
+        record: put_buffered_events(record, state.run_events, run_id),
         summary: summary,
         session_key: Map.get(summary, :session_key),
         started_at: record.started_at
@@ -1709,13 +1725,13 @@ defmodule LemonCore.Store do
          {:ok, backend_state} <- refuse_evicted(state, backend_state, run_id, existing) do
       case final_record(existing, run_id, summary) do
         {:persist, record} ->
-          record = with_final_events(state, run_id, record)
+          record = Map.put(record, :finalized_at_ms, System.system_time(:millisecond))
 
           with {:ok, record, backend_state} <-
                  persist_final_record(state, backend_state, run_id, record) do
             # The first write has no expiry: a failed fence write must not make
             # the sweep remove the only evidence that this run finished.
-            drop_run_events(state, run_id)
+            freeze_run_events(state.run_events, run_id)
             fence_final_record(state, backend_state, run_id, record)
           end
 
@@ -1740,7 +1756,7 @@ defmodule LemonCore.Store do
   defp refuse_evicted(_state, backend_state, _run_id, _existing), do: {:ok, backend_state}
 
   defp final_record(nil, _run_id, summary) do
-    {:persist, %{events: [], summary: summary, started_at: System.system_time(:millisecond)}}
+    {:persist, %{summary: summary, started_at: System.system_time(:millisecond)}}
   end
 
   defp final_record(%{summary: nil} = record, _run_id, summary) do
@@ -1758,18 +1774,6 @@ defmodule LemonCore.Store do
   defp final_record(_invalid_record, run_id, _summary),
     do: {:error, {:invalid_run_record, run_id}}
 
-  # The buffered events move into the record, which the sweep evicts
-  # `runs_retention_ms` after finalization.
-  defp with_final_events(state, run_id, record) do
-    now = System.system_time(:millisecond)
-    {events, dropped} = buffered_run_events(state.run_events, run_id)
-
-    record =
-      Map.merge(record, %{events: events, finalized_at_ms: now})
-
-    if dropped > 0, do: Map.put(record, :events_dropped, dropped), else: record
-  end
-
   defp fence_final_record(_state, backend_state, _run_id, %{expires_at: _} = record),
     do: {:ok, record, backend_state}
 
@@ -1779,8 +1783,17 @@ defmodule LemonCore.Store do
 
     case state.backend.put_new(backend_state, @run_terminals, run_id, marker) do
       {status, backend_state} when status in [:ok, :exists] ->
-        record = Map.put(record, :expires_at, finalized_at_ms + state.runs_retention_ms)
-        persist_final_record(state, backend_state, run_id, record)
+        expires_at = finalized_at_ms + state.runs_retention_ms
+        record = Map.put(record, :expires_at, expires_at)
+
+        with {:ok, record, backend_state} <-
+               persist_final_record(state, backend_state, run_id, record) do
+          if :ets.member(state.run_events, {run_id, :seq}) do
+            true = :ets.insert(state.run_events_expiry, {{expires_at, make_ref()}, run_id})
+          end
+
+          {:ok, record, backend_state}
+        end
 
       {:error, reason} ->
         log_backend_error(:put_new, @run_terminals, run_id, reason)
@@ -1793,6 +1806,8 @@ defmodule LemonCore.Store do
   end
 
   defp persist_final_record(state, backend_state, run_id, record) do
+    record = Map.drop(record, [:events, :events_dropped])
+
     case state.backend.put(backend_state, :runs, run_id, record) do
       {:ok, backend_state} ->
         ReadCache.put(state.read_cache, :runs, run_id, record)
@@ -2089,6 +2104,7 @@ defmodule LemonCore.Store do
           case state.backend.sweep(acc, table, {field, cutoff}) do
             {:ok, _count, next} ->
               ReadCache.sweep(state.read_cache, table, field, cutoff)
+              if table == :runs, do: expire_run_events(state, cutoff)
               next
 
             {:error, reason} ->

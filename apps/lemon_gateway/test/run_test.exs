@@ -819,7 +819,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:lemon_gateway_run_completed, ^request, %{ok: false, error: :interrupted}},
                      2_000
 
-      stored = LemonCore.RunStore.get(request.run_id)
+      stored = LemonCore.RunStore.get_with_events(request.run_id)
       assert stored.summary.completed.error == :interrupted
       assert stored.summary.completed.meta.cancelled == true
 
@@ -1888,13 +1888,16 @@ defmodule LemonGateway.RunTest do
       # Wait for store operations to complete
       LemonCore.Testing.AsyncHelpers.assert_eventually(
         fn ->
-          match?(%{events: events} when length(events) >= 2, LemonCore.Store.get_run(run_id))
+          match?(
+            %{events: events} when length(events) >= 2,
+            LemonCore.Store.get_run_with_events(run_id)
+          )
         end,
         message: "run data was not stored"
       )
 
       # Events should be stored
-      run_data = LemonCore.Store.get_run(run_id)
+      run_data = LemonCore.Store.get_run_with_events(run_id)
       assert run_data != nil
       assert LemonCore.Store.get_run(run_ref) == nil
       assert length(run_data.events) >= 2

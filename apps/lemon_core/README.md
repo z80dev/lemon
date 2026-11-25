@@ -612,12 +612,12 @@ expires; hooks are not automatically retried. Successful persistence still
 returns `:ok` even when a hook fails or times out. Explicit finalization retries
 can redeliver hooks, so implementations must be idempotent by run id.
 
-Run records are bounded. `RunStore.append_event/2` writes each event into a per-run
-buffer (the first 200 and the latest events, 2,000 in all; `:events_dropped`
-counts the rest) instead of rewriting the record; `get/1`/`fetch/1` attach it as
-`:events`, and finalization moves it into the record. The Store sweep evicts a
-finalized run `:runs_retention_ms` (Store config, default 24 hours) after
-finalization. A durable terminal marker in `:run_terminals`
+The `:runs` table contains summaries and lifecycle metadata only. Events stay in
+the bounded per-run buffer (first 200 plus latest, 2,000 in all). For event detail,
+call `RunStore.get_with_events/1`; ordinary `get/1` and `fetch/1` do not copy
+the buffer. The Store sweeps both the summary and frozen buffer
+`:runs_retention_ms` (default 24 hours) after finalization. A durable terminal
+marker in `:run_terminals`
 makes `RunStore.fetch/1` answer `{:error, :evicted}` for a
 finished run whose record is gone, including after a restart drops the
 ephemeral `:runs` table; treat it as finished. Durable per-session history is

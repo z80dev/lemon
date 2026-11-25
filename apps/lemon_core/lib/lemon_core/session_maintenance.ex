@@ -4,6 +4,8 @@ defmodule LemonCore.SessionMaintenance do
   alias LemonCore.{AgentRuntime, Store}
 
   @table :session_maintenance_previews
+  @index_table :session_maintenance_preview_index
+  @index_key :retained
   # Operator-surface policy: ten-minute, single-use previews; at most 32 private
   # plans of 8 MiB each. Display bounds never truncate the authorized plan.
   @ttl_ms 600_000
@@ -45,8 +47,8 @@ defmodule LemonCore.SessionMaintenance do
       now = System.system_time(:millisecond)
 
       with true <- is_pid(owner),
-           {:ok, entries} <- Store.fetch_all(@table),
-           :ok <- evict(entries, owner, now) do
+           {:ok, index} <- fetch_index(owner),
+           {:ok, kept} <- trim_index(index, owner, now) do
         token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
         entry = %{
@@ -58,7 +60,11 @@ defmodule LemonCore.SessionMaintenance do
           sequence: System.unique_integer([:positive, :monotonic])
         }
 
-        with :ok <- Store.put(Store, @table, token, entry, durable: true),
+        # Index first: even an ambiguous write cannot leave an unindexed plan.
+        metadata = Map.take(entry, [:store_owner, :expires_at_ms, :sequence])
+
+        with :ok <- write_index(owner, Map.put(kept, token, metadata)),
+             :ok <- Store.put(owner, @table, token, entry, durable: true),
              true <- Process.whereis(Store) == owner do
           {:ok, token}
         else
@@ -70,20 +76,45 @@ defmodule LemonCore.SessionMaintenance do
     end)
   end
 
-  defp evict(entries, owner, now) do
-    {live, expired} =
-      Enum.split_with(entries, fn {_, entry} ->
-        is_map(entry) and entry[:store_owner] == owner and
-          is_integer(entry[:expires_at_ms]) and entry.expires_at_ms > now
-      end)
+  defp fetch_index(owner) do
+    case Store.fetch(owner, @index_table, @index_key) do
+      {:ok, index} when is_map(index) ->
+        {:ok, index}
 
-    evicted =
-      live
-      |> Enum.sort_by(fn {_, entry} -> entry.sequence end, :desc)
-      |> Enum.drop(@max_previews - 1)
+      {:ok, nil} ->
+        # Legacy previews share this table but lack index entries. They are
+        # invalid across a Store restart; clear only their keys at first use.
+        with {:ok, keys} <- Store.fetch_keys(owner, @table),
+             :ok <- evict(keys, owner),
+             :ok <- write_index(owner, %{}),
+             do: {:ok, %{}}
 
-    Enum.reduce_while(expired ++ evicted, :ok, fn {token, entry}, :ok ->
-      case Store.compare_and_delete(Store, @table, token, entry, durable: true) do
+      _ ->
+        {:error, :maintenance_unavailable}
+    end
+  end
+
+  defp write_index(owner, index),
+    do: Store.put(owner, @index_table, @index_key, index, durable: true)
+
+  defp trim_index(index, owner, now) do
+    newest =
+      for {token, %{store_owner: ^owner, expires_at_ms: expiry, sequence: seq}} <- index,
+          expiry > now,
+          do: {seq, token}
+
+    kept =
+      newest
+      |> Enum.sort(:desc)
+      |> Enum.take(@max_previews - 1)
+      |> Map.new(fn {_seq, token} -> {token, Map.fetch!(index, token)} end)
+
+    with :ok <- evict(Map.keys(index) -- Map.keys(kept), owner), do: {:ok, kept}
+  end
+
+  defp evict(tokens, owner) do
+    Enum.reduce_while(tokens, :ok, fn token, :ok ->
+      case Store.delete(owner, @table, token, durable: true) do
         :ok -> {:cont, :ok}
         _ -> {:halt, {:error, :maintenance_unavailable}}
       end
@@ -111,34 +142,27 @@ defmodule LemonCore.SessionMaintenance do
 
   defp consume(cutoff, token) do
     locked(fn ->
-      case Store.fetch(@table, token) do
-        {:ok, entry} when is_map(entry) ->
-          # Consume durably BEFORE dispatch: a killed caller, failed owner, or
-          # unknown mutation outcome can never authorize a second execution.
-          case Store.compare_and_delete(Store, @table, token, entry, durable: true) do
-            :ok ->
-              if entry[:older_than_ms] == cutoff and
-                   entry[:provider] == AgentRuntime.provider() and
-                   entry[:store_owner] == Process.whereis(Store) and
-                   is_integer(entry[:expires_at_ms]) and
-                   entry.expires_at_ms > System.system_time(:millisecond) do
-                {:ok, entry}
-              else
-                {:error, :confirmation_mismatch}
-              end
-
-            {:error, :mismatch} ->
-              {:error, :confirmation_mismatch}
-
-            _ ->
-              {:error, :maintenance_unavailable}
-          end
-
-        {:ok, nil} ->
+      with owner when is_pid(owner) <- Process.whereis(Store),
+           {:ok, index} <- fetch_index(owner),
+           true <- Map.has_key?(index, token),
+           {:ok, entry} when is_map(entry) <- Store.fetch(owner, @table, token),
+           # Consume durably before dispatch; never execute after an unknown write.
+           :ok <- Store.compare_and_delete(owner, @table, token, entry, durable: true),
+           :ok <- write_index(owner, Map.delete(index, token)) do
+        if entry[:older_than_ms] == cutoff and
+             entry[:provider] == AgentRuntime.provider() and
+             entry[:store_owner] == Process.whereis(Store) and
+             is_integer(entry[:expires_at_ms]) and
+             entry.expires_at_ms > System.system_time(:millisecond) do
+          {:ok, entry}
+        else
           {:error, :confirmation_mismatch}
-
-        _ ->
-          {:error, :maintenance_unavailable}
+        end
+      else
+        false -> {:error, :confirmation_mismatch}
+        {:ok, nil} -> {:error, :confirmation_mismatch}
+        {:error, :mismatch} -> {:error, :confirmation_mismatch}
+        _ -> {:error, :maintenance_unavailable}
       end
     end)
   end
