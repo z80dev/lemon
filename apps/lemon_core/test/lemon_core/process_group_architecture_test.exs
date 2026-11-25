@@ -3,6 +3,7 @@ defmodule LemonCore.ProcessGroupArchitectureTest do
 
   @root Path.expand("../../../..", __DIR__)
   @signal_owner "apps/lemon_core/lib/lemon_core/process_group.ex"
+  @launchd_owner "apps/lemon_cli/lib/lemon_cli/service/launchd.ex"
   @retired [
     :kill_process_tree,
     :terminate_process_tree,
@@ -74,22 +75,30 @@ defmodule LemonCore.ProcessGroupArchitectureTest do
     assert [] = signal_calls(~s|ProcessManager.kill(id, :sigterm)|)
   end
 
-  test "non-termination exceptions cannot authorize a kill in the same module" do
+  test "signal exceptions only authorize their specific call and owner" do
     kernel = "apps/coding_agent/lib/coding_agent/eval/kernel.ex"
     probe = "apps/lemon_core/lib/lemon_core/secrets/lock.ex"
-    launchd = "apps/lemon_core/lib/lemon_core/service/launchd.ex"
 
     assert allowed_source?(kernel, ~s|System.cmd("/bin/kill", ["-INT", "--", target], [])|)
     refute allowed_source?(kernel, ~s|System.cmd("/bin/kill", ["-KILL", "--", target], [])|)
     assert allowed_source?(probe, ~s|System.cmd("kill", ["-0", pid], [])|)
     refute allowed_source?(probe, ~s|System.cmd("kill", ["-TERM", pid], [])|)
 
-    assert allowed_source?(
-             launchd,
-             ~s|Command.ok("launchctl", ["kill", "SIGTERM", target], opts)|
+    managed_stop = ~s|Command.ok("launchctl", ["kill", "SIGTERM", target(spec, opts)], opts)|
+    assert allowed_source?(@launchd_owner, managed_stop)
+    refute allowed_source?("apps/lemon_cli/lib/lemon_cli/service.ex", managed_stop)
+
+    refute allowed_source?(@launchd_owner, ~s|Command.ok("kill", ["-TERM", pid], opts)|)
+
+    refute allowed_source?(
+             @launchd_owner,
+             ~s|Command.ok("launchctl", ["kill", "SIGTERM", arbitrary_target], opts)|
            )
 
-    refute allowed_source?(launchd, ~s|Command.ok("kill", ["-TERM", pid], opts)|)
+    refute allowed_source?(
+             @launchd_owner,
+             ~s|Command.ok("launchctl", ["kill", "SIGKILL", target(spec, opts)], opts)|
+           )
   end
 
   defp signal_calls(source) do
@@ -150,9 +159,13 @@ defmodule LemonCore.ProcessGroupArchitectureTest do
   # launchd owns this service identity and its lifecycle; this is an OS service
   # manager request, not another workload PID/group termination implementation.
   defp allowed_call?(
-         "apps/lemon_core/lib/lemon_core/service/launchd.ex",
+         @launchd_owner,
          {{:., _, [{:__aliases__, _, [:Command]}, :ok]}, _,
-          ["launchctl", ["kill", "SIGTERM", _target], _opts]}
+          [
+            "launchctl",
+            ["kill", "SIGTERM", {:target, _, [{:spec, _, nil}, {:opts, _, nil}]}],
+            {:opts, _, nil}
+          ]}
        ),
        do: true
 
