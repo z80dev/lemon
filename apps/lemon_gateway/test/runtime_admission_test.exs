@@ -136,11 +136,11 @@ defmodule LemonGateway.RuntimeAdmissionTest do
     :sys.suspend(slots)
 
     try do
-      assert :ok = submit(refused)
-
-      assert_receive {:lemon_gateway_run_completed, ^refused,
-                      %{ok: false, error: :session_in_use, engine: "lemon"}},
-                     1_000
+      # Refused synchronously, before the (suspended) permit authority is asked.
+      assert {:error, :session_in_use} = submit(refused)
+      assert Runtime.run_pid(refused.run_id) == nil
+      assert {:ok, nil} = LemonCore.RunStore.fetch(refused.run_id)
+      refute_received {:lemon_gateway_run_completed, ^refused, _}
 
       assert {:ok, %{in_flight: 1, waitq: 0}} = Slots.stats()
       id = refused.run_id

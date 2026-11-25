@@ -264,8 +264,12 @@ on reconnect and when opening or changing models. Older daemons without
   across stored sessions, new-with-prompt, Ctrl+W delete preview — deleting
   still takes `/session delete <key> --confirm <key>` and a verified daemon
   deletion), per-session drafts, unread
-  badges, history hydration. Search results are not restricted to the initially
-  loaded recent sessions; failed searches never leave stale rows selectable.
+  badges, history hydration. Only sessions this client opened (focused, switched
+  to, sent to or acted on) keep a store; broadcast events for other sessions are
+  ignored and do not count toward unread/busy totals (their approvals still reach
+  the panel). Each transcript keeps its newest 400 blocks. Search results are not
+  restricted to the initially loaded recent sessions; failed searches never leave
+  stale rows selectable.
   Reconnect and overflow first page `sessions.events` from the last applied cursor.
   Canonical `session.event` batches apply exactly once in contiguous sequence order;
   empty projections advance the cursor too. Live batches are buffered during replay,
@@ -278,8 +282,14 @@ on reconnect and when opening or changing models. Older daemons without
   Cold sessions, expired cursors, incompatible versions and changed streams use the
   bounded [`sessions.snapshot`](../../apps/lemon_control_plane/README.md#session-snapshot-and-reconciliation)
   authority to replace history, approvals, child/process state and todo/plan projection,
-  and install its `eventCursor`. Replay errors remain visible failures, not successful
-  snapshot recovery. Rewind explicitly refreshes the snapshot; older daemons without
+  and install its `consistency.eventCursor` (a validated result; an unreadable cursor
+  keeps the session waiting for a snapshot rather than rebuilding without one). Live
+  batches that arrive while the snapshot is read are buffered and applied past its
+  cursor; snapshot reads of one session are spaced at least 250 ms apart. Replay errors
+  remain visible failures, not successful snapshot recovery. Each session has one sync
+  state (`live`, `replaying`, `snapshotting`, `failed`): a failed attempt keeps its
+  cursor and buffered tail, retries after 500 ms (doubling to 30 s, at most six times),
+  and the next live batch re-arms it at once. Rewind explicitly refreshes the snapshot; older daemons without
   cursors retain snapshot-only recovery. Recovery rejects stale/raced reads and never
   replays an offline mutation. Unknown owner state and omitted previews stay explicit.
   Replay requests page at 100 batches; the client buffers at most 1024 live batches

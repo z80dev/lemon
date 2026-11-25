@@ -85,7 +85,7 @@ defmodule LemonCore.SessionMetadataStoreTest do
     refute Map.has_key?(acp, :native_resume)
 
     assert {:ok, ^acp} = SessionMetadataStore.fetch_acp_by_id("acp_123")
-    assert [{"acp_123", ^acp}] = SessionMetadataStore.list_acp()
+    assert {:ok, [{"acp_123", ^acp}]} = SessionMetadataStore.list_acp()
 
     assert {:ok, patched} =
              SessionMetadataStore.patch(session_key, %{title: "ACP work", pinned: true})

@@ -501,7 +501,7 @@ defmodule CodingAgent.Tools.OperatorStateProtectionTest do
       File.ln_s!(config, Path.join(out, "soft.png"))
 
       for name <- ["hard.png", "soft.png"] do
-        assert :ok = MediaCommon.write_artifact(Path.join(out, name), "png")
+        assert :ok = LemonMedia.Artifact.write(Path.join(out, name), "png")
         assert File.read!(Path.join(out, name)) == "png"
       end
 

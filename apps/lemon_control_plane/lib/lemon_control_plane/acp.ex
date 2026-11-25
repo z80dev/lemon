@@ -249,12 +249,13 @@ defmodule LemonControlPlane.ACP do
   def list_sessions(params, opts \\ [])
 
   def list_sessions(params, opts) when is_map(params) do
-    with {:ok, offset} <- parse_cursor(Map.get(params, "cursor")) do
+    with {:ok, offset} <- parse_cursor(Map.get(params, "cursor")),
+         {:ok, all} <- fetch_all_sessions() do
       cwd = Map.get(params, "cwd")
       restricted = restricted_principal(opts)
 
       sessions =
-        all_sessions()
+        all
         |> Enum.filter(fn {_id, session} ->
           is_nil(restricted) or Map.get(session, :owner) == restricted
         end)
@@ -564,11 +565,11 @@ defmodule LemonControlPlane.ACP do
           do: dispatch(method, params, opts),
           else: {:error, -32_602, "session not found"}
 
-      {:ok, _} ->
+      {:ok, _session_or_absent} ->
         dispatch(method, params, opts)
 
-      {:error, _} ->
-        {:error, -32_000, "session store is unavailable"}
+      {:error, _, _} = unavailable ->
+        unavailable
     end
   end
 
@@ -1934,8 +1935,8 @@ defmodule LemonControlPlane.ACP do
       {:ok, session} ->
         {:ok, Map.delete(session, :mode)}
 
-      {:error, _reason} ->
-        {:error, -32_000, "session store is unavailable"}
+      {:error, _, _} = unavailable ->
+        unavailable
     end
   end
 
@@ -1964,12 +1965,21 @@ defmodule LemonControlPlane.ACP do
 
   defp prompt_usage(_), do: nil
 
-  defp fetch_session(session_id), do: SessionMetadataStore.fetch_acp_by_id(session_id)
+  # Admission and listing read strictly: an unreadable session store is an
+  # error, never an unknown session or an empty list.
+  defp fetch_session(session_id) do
+    case SessionMetadataStore.fetch_acp_by_id(session_id) do
+      {:ok, session} -> {:ok, session}
+      {:error, _reason} -> session_store_unavailable()
+    end
+  end
 
+  # Best-effort read of a session already admitted by `existing_session/1`, for
+  # projections while its run streams.
   defp get_session(session_id) do
     case fetch_session(session_id) do
-      {:ok, %{} = session} -> session
-      _ -> nil
+      {:ok, session} -> session
+      {:error, _, _} -> nil
     end
   end
 
@@ -1977,10 +1987,14 @@ defmodule LemonControlPlane.ACP do
     SessionMetadataStore.put_acp(session_key, Map.put(session, :session_id, session_id))
   end
 
-  defp all_sessions do
-    SessionMetadataStore.list_acp()
-    |> Map.new()
+  defp fetch_all_sessions do
+    case SessionMetadataStore.list_acp() do
+      {:ok, entries} -> {:ok, Map.new(entries)}
+      {:error, _reason} -> session_store_unavailable()
+    end
   end
+
+  defp session_store_unavailable, do: {:error, -32_603, "session store unavailable"}
 
   defp session_info(session_id, session) do
     client_capabilities = session_client_capabilities(session)

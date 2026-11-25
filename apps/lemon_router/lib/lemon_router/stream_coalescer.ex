@@ -24,11 +24,21 @@ defmodule LemonRouter.StreamCoalescer do
   full ingress queue fences transient output: `current_text/3` returns `nil`
   while resync is required. Recovery requires authoritative `:final_text`
   from the owner via `finalize_run/4`.
-  Admitted deltas retain a valid UTF-8 answer tail of at most 100,000 bytes;
-  this transient cap does not truncate the owner's final answer.
+  Admitted deltas retain a valid UTF-8 answer tail no larger than the
+  coalescer's per-message ingress budget (65,536 encoded bytes by default, see
+  `LemonRouter.CoalescerIngress`); this transient cap does not truncate the
+  owner's final answer.
+
+  ## Lifetime
+
+  One coalescer exists per `{session_key, channel_id}` only while it has work.
+  Finalizing a run drops its accumulated text, and a run that never streamed
+  is finalized without starting a coalescer. An idle coalescer whose run is
+  finalized, never started or no longer has a live `RunProcess` stops
+  normally after the retirement grace (`LemonRouter.CoalescerIngress`).
   """
 
-  use GenServer
+  use GenServer, restart: :transient
 
   @impl true
   def format_status(status) do
@@ -46,6 +56,7 @@ defmodule LemonRouter.StreamCoalescer do
   alias LemonChannels.Dispatcher
   alias LemonCore.DeliveryIntent
   alias LemonRouter.ChannelContext
+  alias LemonRouter.CoalescerIngress
   alias LemonRouter.DeliveryRouteResolver
 
   @default_min_chars 200
@@ -64,10 +75,11 @@ defmodule LemonRouter.StreamCoalescer do
     :flush_timer,
     :config,
     :meta,
-    :last_sent_text,
     :finalized,
     :pending_clear,
     :delivery,
+    :retire_after_ms,
+    :last_activity_ms,
     overflowed: false
   ]
 
@@ -100,17 +112,15 @@ defmodule LemonRouter.StreamCoalescer do
   def ingest_delta(session_key, channel_id, run_id, seq, text, opts \\ []) do
     meta = Keyword.get(opts, :meta, %{})
 
-    case get_or_start_coalescer(session_key, channel_id, meta) do
-      {:ok, _pid} ->
-        LemonRouter.CoalescerIngress.push(
-          LemonRouter.CoalescerRegistry,
-          {session_key, channel_id},
-          run_id,
-          {:delta, run_id, seq, text, meta}
-        )
-
-      {:error, reason} ->
-        Logger.warning("Failed to start coalescer: #{inspect(reason)}")
+    case CoalescerIngress.push(
+           LemonRouter.CoalescerRegistry,
+           {session_key, channel_id},
+           run_id,
+           {:delta, run_id, seq, text, meta},
+           fn -> start_coalescer(session_key, channel_id, meta) end
+         ) do
+      {:error, reason} -> Logger.warning("Failed to start coalescer: #{inspect(reason)}")
+      :ok -> :ok
     end
 
     :ok
@@ -119,7 +129,11 @@ defmodule LemonRouter.StreamCoalescer do
   @doc """
   Finalize a run for a session/channel.
 
-  Delegates semantic finalization to the channels dispatcher.
+  The final `:stream_finalize` intent is dispatched inside the coalescer's
+  serialized loop, after every delta it already admitted, so it is the last
+  write to the answer surface. A run that never streamed has no coalescer and
+  is finalized directly, without starting one. Returns `{:error, reason}` when
+  the final intent could not be built or the dispatcher rejected it.
   """
   @spec finalize_run(
           session_key :: binary(),
@@ -131,44 +145,32 @@ defmodule LemonRouter.StreamCoalescer do
       when is_binary(session_key) and is_binary(channel_id) and is_binary(run_id) do
     meta = Keyword.get(opts, :meta, %{})
     final_text = Keyword.get(opts, :final_text)
-    dispatch? = Keyword.get(opts, :dispatch?, true)
 
-    case get_or_start_coalescer(session_key, channel_id, meta) do
-      {:ok, pid} ->
-        try do
-          GenServer.call(pid, {:finalize, run_id, meta, final_text, dispatch?}, 5_000)
-        catch
-          :exit, reason ->
-            Logger.warning(
-              "StreamCoalescer.finalize_run failed for session=#{inspect(session_key)} run_id=#{inspect(run_id)} reason=#{inspect(reason)}"
-            )
+    case call(session_key, channel_id, {:finalize, run_id, meta, final_text}) do
+      {:ok, reply} ->
+        reply
 
-            {:error, {:finalize_call_failed, reason}}
-        end
-
-      {:error, reason} ->
-        Logger.warning(
-          "StreamCoalescer.finalize_run could not start coalescer for session=#{inspect(session_key)} run_id=#{inspect(run_id)} reason=#{inspect(reason)}"
-        )
-
-        {:error, reason}
+      :none ->
+        finalize_unstreamed(session_key, channel_id, run_id, meta, final_text)
     end
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "StreamCoalescer.finalize_run failed for session=#{inspect(session_key)} run_id=#{inspect(run_id)} reason=#{inspect(reason)}"
+      )
+
+      {:error, {:finalize_call_failed, reason}}
   end
 
   @spec current_text(binary(), binary(), binary()) :: binary() | nil
   def current_text(session_key, channel_id, run_id)
       when is_binary(session_key) and is_binary(channel_id) and is_binary(run_id) do
-    case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id}) do
-      [{pid, _}] ->
-        try do
-          GenServer.call(pid, {:current_text, run_id}, 5_000)
-        catch
-          :exit, _ -> nil
-        end
-
-      _ ->
-        nil
+    case call(session_key, channel_id, {:current_text, run_id}) do
+      {:ok, text} -> text
+      :none -> nil
     end
+  catch
+    :exit, _ -> nil
   end
 
   @doc """
@@ -184,17 +186,10 @@ defmodule LemonRouter.StreamCoalescer do
   @spec commit_turn(session_key :: binary(), channel_id :: binary(), run_id :: binary()) :: :ok
   def commit_turn(session_key, channel_id, run_id)
       when is_binary(session_key) and is_binary(channel_id) and is_binary(run_id) do
-    case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id}) do
-      [{pid, _}] ->
-        try do
-          GenServer.call(pid, {:commit_turn, run_id}, 5_000)
-        catch
-          :exit, _ -> :ok
-        end
-
-      _ ->
-        :ok
-    end
+    _ = call(session_key, channel_id, {:commit_turn, run_id})
+    :ok
+  catch
+    :exit, _ -> :ok
   end
 
   @doc """
@@ -210,17 +205,12 @@ defmodule LemonRouter.StreamCoalescer do
   def handoff_turn(session_key, channel_id, run_id, target_surface)
       when is_binary(session_key) and is_binary(channel_id) and is_binary(run_id) and
              not is_nil(target_surface) do
-    case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id}) do
-      [{pid, _}] ->
-        try do
-          GenServer.call(pid, {:handoff_turn, run_id, target_surface}, 5_000)
-        catch
-          :exit, _ -> :noop
-        end
-
-      _ ->
-        :noop
+    case call(session_key, channel_id, {:handoff_turn, run_id, target_surface}) do
+      {:ok, reply} -> reply
+      :none -> :noop
     end
+  catch
+    :exit, _ -> :noop
   end
 
   @doc """
@@ -228,33 +218,45 @@ defmodule LemonRouter.StreamCoalescer do
   """
   @spec flush(session_key :: binary(), channel_id :: binary()) :: :ok
   def flush(session_key, channel_id) do
-    case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id}) do
-      [{_pid, _}] ->
-        LemonRouter.CoalescerIngress.push(
-          LemonRouter.CoalescerRegistry,
-          {session_key, channel_id},
-          nil,
-          :flush
-        )
+    CoalescerIngress.push(LemonRouter.CoalescerRegistry, {session_key, channel_id}, nil, :flush)
+  end
 
-      _ ->
-        :ok
+  defp call(session_key, channel_id, request) do
+    CoalescerIngress.call(
+      LemonRouter.CoalescerRegistry,
+      {session_key, channel_id},
+      request,
+      5_000
+    )
+  end
+
+  defp start_coalescer(session_key, channel_id, meta) do
+    spec = {__MODULE__, session_key: session_key, channel_id: channel_id, meta: meta}
+
+    case DynamicSupervisor.start_child(LemonRouter.CoalescerSupervisor, spec) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp get_or_start_coalescer(session_key, channel_id, meta) do
-    case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id}) do
-      [{pid, _}] ->
-        {:ok, pid}
+  # Nothing streamed, so no coalescer holds state for this run: build the same
+  # final intent a fresh coalescer would, in the caller.
+  defp finalize_unstreamed(session_key, channel_id, run_id, meta, final_text) do
+    state = %__MODULE__{
+      session_key: session_key,
+      channel_id: channel_id,
+      run_id: run_id,
+      buffer: "",
+      full_text: "",
+      last_seq: 0,
+      meta: ChannelContext.compact_meta(meta),
+      finalized: false
+    }
 
-      [] ->
-        spec = {__MODULE__, session_key: session_key, channel_id: channel_id, meta: meta}
-
-        case DynamicSupervisor.start_child(LemonRouter.CoalescerSupervisor, spec) do
-          {:ok, pid} -> {:ok, pid}
-          {:error, {:already_started, pid}} -> {:ok, pid}
-          error -> error
-        end
+    case do_finalize_with_result(state, final_text, true) do
+      {:ok, _state} -> :ok
+      {:error, reason, _state} -> {:error, reason}
     end
   end
 
@@ -276,6 +278,9 @@ defmodule LemonRouter.StreamCoalescer do
         opts
       )
 
+    retire_after_ms = CoalescerIngress.retire_after_ms(opts)
+    CoalescerIngress.schedule_retire_check(retire_after_ms)
+
     state = %__MODULE__{
       session_key: session_key,
       channel_id: channel_id,
@@ -288,19 +293,22 @@ defmodule LemonRouter.StreamCoalescer do
       flush_timer: nil,
       config: config,
       meta: Keyword.get(opts, :meta, %{}),
-      last_sent_text: nil,
       finalized: false,
       delivery: delivery,
-      pending_clear: false
+      pending_clear: false,
+      retire_after_ms: retire_after_ms,
+      last_activity_ms: now_ms()
     }
 
     {:ok, state}
   end
 
   @impl true
-  def handle_cast({:delta, _, _, _, _}, %{overflowed: true} = state), do: {:noreply, state}
+  def handle_cast(message, state), do: cast(message, touch(state))
 
-  def handle_cast({:delta, run_id, seq, text, meta}, state) do
+  defp cast({:delta, _, _, _, _}, %{overflowed: true} = state), do: {:noreply, state}
+
+  defp cast({:delta, run_id, seq, text, meta}, state) do
     now = System.system_time(:millisecond)
 
     # If a commit_turn deferred PresentationState clearing, do it now.
@@ -328,7 +336,6 @@ defmodule LemonRouter.StreamCoalescer do
             first_delta_ts: nil,
             flush_timer: nil,
             meta: ChannelContext.compact_meta(meta),
-            last_sent_text: nil,
             finalized: false,
             pending_clear: false
         }
@@ -344,7 +351,7 @@ defmodule LemonRouter.StreamCoalescer do
       if seq <= state.last_seq do
         {:noreply, state}
       else
-        new_full = cap_full_text(state.full_text <> text)
+        new_full = cap_full_text(state.full_text <> text, state.delivery.max_bytes)
 
         state = %{
           state
@@ -361,17 +368,19 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   # Handle legacy delta messages without meta
-  def handle_cast({:delta, run_id, seq, text}, state) do
-    handle_cast({:delta, run_id, seq, text, %{}}, state)
+  defp cast({:delta, run_id, seq, text}, state) do
+    cast({:delta, run_id, seq, text, %{}}, state)
   end
 
-  def handle_cast(:flush, state) do
+  defp cast(:flush, state) do
     state = do_flush(state)
     {:noreply, state}
   end
 
   @impl true
-  def handle_call({:finalize, run_id, meta, final_text, dispatch?}, _from, state) do
+  def handle_call(request, from, state), do: handle_request(request, from, touch(state))
+
+  defp handle_request({:finalize, run_id, meta, final_text}, _from, state) do
     if LemonRouter.CoalescerIngress.completed?(
          LemonRouter.CoalescerRegistry,
          {state.session_key, state.channel_id},
@@ -379,11 +388,11 @@ defmodule LemonRouter.StreamCoalescer do
        ) do
       {:reply, :ok, state}
     else
-      finalize_run_state(run_id, meta, final_text, dispatch?, state)
+      finalize_run_state(run_id, meta, final_text, state)
     end
   end
 
-  def handle_call({:current_text, run_id}, _from, state) do
+  defp handle_request({:current_text, run_id}, _from, state) do
     state = LemonRouter.CoalescerIngress.observe_overflow(state)
 
     reply =
@@ -395,7 +404,7 @@ defmodule LemonRouter.StreamCoalescer do
     {:reply, reply, state}
   end
 
-  def handle_call({:commit_turn, run_id}, _from, state) do
+  defp handle_request({:commit_turn, run_id}, _from, state) do
     state = LemonRouter.CoalescerIngress.observe_overflow(state)
 
     state =
@@ -415,7 +424,6 @@ defmodule LemonRouter.StreamCoalescer do
           state
           | buffer: "",
             full_text: "",
-            last_sent_text: nil,
             flush_timer: nil,
             first_delta_ts: nil,
             finalized: false,
@@ -428,7 +436,7 @@ defmodule LemonRouter.StreamCoalescer do
     {:reply, :ok, state}
   end
 
-  def handle_call({:handoff_turn, run_id, target_surface}, _from, state) do
+  defp handle_request({:handoff_turn, run_id, target_surface}, _from, state) do
     state = LemonRouter.CoalescerIngress.observe_overflow(state)
 
     {reply, state} =
@@ -443,7 +451,6 @@ defmodule LemonRouter.StreamCoalescer do
           state
           | buffer: "",
             full_text: "",
-            last_sent_text: nil,
             flush_timer: nil,
             first_delta_ts: nil,
             finalized: false,
@@ -458,7 +465,7 @@ defmodule LemonRouter.StreamCoalescer do
     {:reply, reply, state}
   end
 
-  defp finalize_run_state(run_id, meta, final_text, dispatch?, state) do
+  defp finalize_run_state(run_id, meta, final_text, state) do
     state =
       cond do
         state.run_id == nil ->
@@ -481,7 +488,6 @@ defmodule LemonRouter.StreamCoalescer do
               first_delta_ts: nil,
               flush_timer: nil,
               meta: ChannelContext.compact_meta(meta),
-              last_sent_text: nil,
               finalized: false
           }
 
@@ -494,7 +500,7 @@ defmodule LemonRouter.StreamCoalescer do
     if state.overflowed and not is_binary(final_text) do
       {:reply, {:error, :resync_required}, state}
     else
-      case do_finalize_with_result(state, final_text, dispatch?, true) do
+      case do_finalize_with_result(state, final_text, true) do
         {:ok, state} ->
           delivery =
             LemonRouter.CoalescerIngress.complete(
@@ -504,7 +510,9 @@ defmodule LemonRouter.StreamCoalescer do
               run_id
             )
 
-          {:reply, :ok, %{state | delivery: delivery, overflowed: false}}
+          # The run's transient text is no longer needed once its final is out.
+          {:reply, :ok,
+           %{state | delivery: delivery, overflowed: false, full_text: "", meta: %{}}}
 
         {:error, reason, state} ->
           {:reply, {:error, reason}, state}
@@ -532,11 +540,41 @@ defmodule LemonRouter.StreamCoalescer do
     {:noreply, state}
   end
 
+  def handle_info(:retire_check, state) do
+    case CoalescerIngress.retire_check(
+           state,
+           LemonRouter.CoalescerRegistry,
+           {state.session_key, state.channel_id},
+           &retirable?/1
+         ) do
+      {:stop, state} -> {:stop, :normal, state}
+      {:keep, state, admitted} -> {:noreply, Enum.reduce(admitted, state, &cast_admitted/2)}
+    end
+  end
+
   def handle_info(_msg, state) do
     {:noreply, state}
   end
 
+  defp cast_admitted(message, state) do
+    {:noreply, state} = handle_cast(message, state)
+    state
+  end
+
   # ---- Internal ----
+
+  defp touch(state), do: %{state | last_activity_ms: now_ms()}
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
+
+  # Nothing a live producer still needs: the run is finalized (its fence lives
+  # in the registry only for the retirement grace), never started, or its
+  # RunProcess is gone.
+  defp retirable?(%__MODULE__{run_id: nil}), do: true
+  defp retirable?(%__MODULE__{finalized: true}), do: true
+
+  defp retirable?(%__MODULE__{run_id: run_id}),
+    do: not CoalescerIngress.producer_alive?(run_id, :answer)
 
   defp maybe_flush(state, now) do
     buffer_len = String.length(state.buffer)
@@ -555,6 +593,10 @@ defmodule LemonRouter.StreamCoalescer do
         %{state | flush_timer: timer}
     end
   end
+
+  # A finalized stream never flushes again: a late snapshot would overwrite the
+  # final multi-chunk answer with an older, single-message truncation.
+  defp do_flush(%{finalized: true} = state), do: state
 
   defp do_flush(%{overflowed: true} = state), do: state
 
@@ -592,10 +634,8 @@ defmodule LemonRouter.StreamCoalescer do
 
     case build_intent(state, :stream_snapshot, state.full_text) do
       {:ok, intent} ->
-        case dispatcher().dispatch(intent) do
-          :ok -> %{state | last_sent_text: state.full_text}
-          {:error, _} -> state
-        end
+        _ = dispatcher().dispatch(intent)
+        state
 
       :error ->
         state
@@ -603,84 +643,62 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   defp do_finalize(state, final_text) do
-    case do_finalize_with_result(state, final_text, true, false) do
+    case do_finalize_with_result(state, final_text, false) do
       {:ok, state} -> state
       {:error, _reason, state} -> state
     end
   end
 
-  defp do_finalize_with_result(state, final_text, dispatch?, terminal_answer?) do
+  defp do_finalize_with_result(state, final_text, terminal_answer?) do
     text =
       cond do
         is_binary(final_text) and final_text != "" -> final_text
         is_binary(state.full_text) and state.full_text != "" -> state.full_text
         is_binary(state.buffer) and state.buffer != "" -> state.buffer
-        true -> nil
-      end
-
-    result =
-      case text do
-        nil ->
-          Logger.warning(
-            "StreamCoalescer finalizing #{state.session_key} with empty text " <>
-              "(run_id=#{state.run_id}, last_seq=#{state.last_seq})"
-          )
-
-          dispatch_or_mark_finalized(
-            state,
-            "⚠️ Empty response from model — no output was generated.",
-            nil,
-            dispatch?,
-            terminal_answer?
-          )
-
-        _ ->
-          dispatch_or_mark_finalized(state, text, text, dispatch?, terminal_answer?)
+        true -> empty_response_text(state)
       end
 
     cancel_timer(state.flush_timer)
 
-    case result do
-      {:ok, next_state} ->
-        {:ok,
-         %{
-           next_state
-           | buffer: "",
-             first_delta_ts: nil,
-             flush_timer: nil
-         }}
+    # Pending transient text is superseded by the final text whether or not the
+    # dispatcher accepts it; a later flush must never deliver it after the final.
+    state = %{state | buffer: "", first_delta_ts: nil, flush_timer: nil}
 
-      {:error, reason, next_state} ->
-        {:error, reason, %{next_state | flush_timer: nil}}
+    case dispatch_final(state, text, terminal_answer?) do
+      :ok -> {:ok, %{state | finalized: true}}
+      {:error, reason} -> {:error, reason, %{state | finalized: false}}
     end
   end
 
-  defp dispatch_or_mark_finalized(state, intent_text, last_sent_text, false, _terminal_answer?)
-       when is_binary(intent_text) do
-    {:ok, %{state | last_sent_text: last_sent_text, finalized: true}}
-  end
-
-  defp dispatch_or_mark_finalized(state, intent_text, last_sent_text, true, terminal_answer?)
-       when is_binary(intent_text) do
-    case build_intent(state, :stream_finalize, intent_text) do
+  defp dispatch_final(state, text, terminal_answer?) do
+    case build_intent(state, :stream_finalize, text) do
       {:ok, intent} ->
         intent = %{intent | meta: Map.put(intent.meta, :terminal_answer, terminal_answer?)}
 
         case dispatcher().dispatch(intent) do
           :ok ->
-            {:ok, %{state | last_sent_text: last_sent_text, finalized: true}}
+            :ok
 
           {:error, reason} ->
             Logger.warning(
               "StreamCoalescer finalize dispatch failed session=#{inspect(state.session_key)} run_id=#{inspect(state.run_id)} reason=#{inspect(reason)}"
             )
 
-            {:error, {:dispatch_failed, reason}, %{state | finalized: false}}
+            {:error, {:dispatch_failed, reason}}
         end
 
       :error ->
-        {:error, :build_intent_failed, %{state | finalized: false}}
+        {:error, :build_intent_failed}
     end
+  end
+
+  defp empty_response_text(state) do
+    Logger.warning(
+      "StreamCoalescer finalizing #{state.session_key} with empty text " <>
+        "(run_id=#{state.run_id}, last_seq=#{state.last_seq})"
+    )
+
+    "⚠️ Empty response from model — no output was generated."
   end
 
   defp build_intent(state, kind, text) when is_binary(text) do
@@ -730,8 +748,10 @@ defmodule LemonRouter.StreamCoalescer do
     Application.get_env(:lemon_router, :dispatcher, Dispatcher)
   end
 
-  @max_full_text 100_000
-
+  # The retained tail is capped at the coalescer's per-message ingress budget
+  # (`delivery.max_bytes`, 65,536 encoded bytes by default): no single admitted
+  # delivery can carry more, and the owner's final text is authoritative.
+  #
   # Trim on bytes rather than graphemes. `String.length/1` and `String.slice/3`
   # both walk the binary one grapheme at a time, which cost milliseconds per
   # delta once an answer crossed the cap. Worse, for multi-byte text
@@ -739,14 +759,14 @@ defmodule LemonRouter.StreamCoalescer do
   # negative start as an offset from the end — so it returned the whole string
   # and the cap never applied at all. The guard is byte-based, so bytes are the
   # consistent unit. See docs/benchmarks/platform-microbenchmarks.md.
-  defp cap_full_text(text) when is_binary(text) and byte_size(text) > @max_full_text do
+  defp cap_full_text(text, max_bytes) when is_binary(text) and byte_size(text) > max_bytes do
     text
-    |> binary_part(byte_size(text) - @max_full_text, @max_full_text)
+    |> binary_part(byte_size(text) - max_bytes, max_bytes)
     |> drop_partial_codepoint()
     |> :binary.copy()
   end
 
-  defp cap_full_text(text), do: text
+  defp cap_full_text(text, _max_bytes), do: text
 
   # Cutting on a byte boundary can land inside a multi-byte codepoint, leaving
   # an invalid binary that would fail JSON encoding on the way to a channel.

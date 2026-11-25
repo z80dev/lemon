@@ -1,4 +1,4 @@
-import { ControlPlaneError, NotConnectedError } from "../protocol/errors.ts";
+import { ControlPlaneError, classifyMutationError, failureCode } from "../protocol/errors.ts";
 import { METHOD } from "../protocol/methods.ts";
 import type { SessionsPlanParams, SessionsPlanResult } from "../protocol/types.ts";
 import type { CommandContext, SlashCommand } from "./registry.ts";
@@ -160,12 +160,11 @@ function failure(ctx: CommandContext, error: unknown): void {
 		ctx.ui.notice(BUSY_NOTICE, "warning");
 		return;
 	}
-	const code =
-		error instanceof ControlPlaneError || error instanceof NotConnectedError
-			? error.code
-			: "OUTCOME_UNKNOWN";
+	const code = failureCode(error, "OUTCOME_UNKNOWN");
 	ctx.ui.notice(
-		`plan mode change did not complete (${code}); run /plan to check the current mode. No prompt was sent.`,
+		classifyMutationError(error) === "unknown"
+			? `plan mode change outcome unknown (${code}); run /plan to check the current mode before retrying. No prompt was sent.`
+			: `plan mode change did not complete (${code}); run /plan to check the current mode. No prompt was sent.`,
 		"error",
 	);
 }

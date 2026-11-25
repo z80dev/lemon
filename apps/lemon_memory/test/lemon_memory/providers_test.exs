@@ -14,29 +14,6 @@ defmodule LemonMemory.ProvidersTest do
       send(opts[:owner], {:fake_put, opts[:provider_id], doc.doc_id})
       :ok
     end
-
-    @impl true
-    def search(query, opts) do
-      send(
-        opts[:owner],
-        {:fake_search, opts[:provider_id], query, opts[:scope], opts[:scope_key]}
-      )
-
-      [
-        %Document{
-          doc_id: "external-doc",
-          run_id: "run-external",
-          session_key: "session-1",
-          agent_id: "agent-1",
-          workspace_key: "workspace-1",
-          scope: :session,
-          started_at_ms: 1,
-          ingested_at_ms: 20,
-          prompt_summary: "external prompt",
-          answer_summary: "external answer"
-        }
-      ]
-    end
   end
 
   defmodule BrokenProvider do
@@ -44,9 +21,6 @@ defmodule LemonMemory.ProvidersTest do
 
     @impl true
     def put(_doc, _opts), do: raise("private-provider-secret")
-
-    @impl true
-    def search(_query, _opts), do: raise("private-provider-secret")
   end
 
   # Blocks far longer than any deadline under test, so the only thing that can
@@ -54,249 +28,103 @@ defmodule LemonMemory.ProvidersTest do
   defmodule HangingProvider do
     @behaviour LemonMemory.Provider
 
-    @hang_ms :timer.seconds(30)
-
     @impl true
     def put(_doc, _opts) do
-      Process.sleep(@hang_ms)
+      Process.sleep(:timer.seconds(30))
       :ok
-    end
-
-    @impl true
-    def search(_query, _opts) do
-      Process.sleep(@hang_ms)
-      []
     end
   end
 
   # Has an unrelated process kill the one it is running in. `:kill` is
   # untrappable and cannot be rescued or caught by the registry's call wrapper,
-  # so this is the failure mode a link would propagate to whoever ran the
-  # fan-out: the agent turn on the search path, the registry on the put path.
+  # so this is the failure mode a link would propagate to the registry.
   # The blocking sleep means the kill always lands first.
   defmodule KilledProvider do
     @behaviour LemonMemory.Provider
 
     @impl true
     def put(_doc, _opts) do
-      kill_self()
-      :ok
-    end
-
-    @impl true
-    def search(_query, _opts) do
-      kill_self()
-      []
-    end
-
-    defp kill_self do
       target = self()
       spawn(fn -> Process.exit(target, :kill) end)
       Process.sleep(:timer.seconds(30))
+      :ok
     end
   end
 
-  test "search fans out to enabled providers and deduplicates results" do
-    local_doc = doc("local-doc", 10)
-    duplicate_external_doc = doc("local-doc", 30)
+  # A module that still exports `search/2` is never asked to search: providers
+  # are write targets only.
+  defmodule SearchingProvider do
+    @behaviour LemonMemory.Provider
 
-    specs = [
-      %{id: "left", module: __MODULE__.StaticProvider, enabled: true, scopes: [:session]},
-      %{id: "fake", module: FakeProvider, enabled: true, scopes: [:session]},
-      %{id: "disabled", module: FakeProvider, enabled: false, scopes: [:session]}
-    ]
+    @impl true
+    def put(_doc, _opts), do: :ok
 
-    :persistent_term.put({__MODULE__.StaticProvider, :docs}, [
-      local_doc,
-      duplicate_external_doc
-    ])
-
-    on_exit(fn -> :persistent_term.erase({__MODULE__.StaticProvider, :docs}) end)
-
-    results =
-      Providers.search("deploy",
-        provider_specs: specs,
-        owner: self(),
-        scope: :session,
-        scope_key: "session-1",
-        limit: 10
-      )
-
-    assert_receive {:fake_search, "fake", "deploy", :session, "session-1"}
-    refute_received {:fake_search, "disabled", _, _, _}
-    assert Enum.map(results, & &1.doc_id) == ["local-doc", "external-doc"]
-  end
-
-  test "search keeps each provider's relevance order instead of re-sorting by recency" do
-    # The provider ranks an old document above a new one, as BM25 does when the
-    # old one is the better match. The merge must not undo that.
-    best_but_old = doc("best-but-old", 10)
-    worse_but_new = doc("worse-but-new", 90)
-
-    :persistent_term.put({__MODULE__.StaticProvider, :docs}, [best_but_old, worse_but_new])
-    on_exit(fn -> :persistent_term.erase({__MODULE__.StaticProvider, :docs}) end)
-
-    results =
-      Providers.search("deploy",
-        provider_specs: [
-          %{id: "static", module: __MODULE__.StaticProvider, enabled: true, scopes: [:session]},
-          %{id: "fake", module: FakeProvider, enabled: true, scopes: [:session]}
-        ],
-        owner: self(),
-        scope: :session,
-        scope_key: "session-1",
-        limit: 2
-      )
-
-    # Round-robin: each provider's best document first, so a small limit is not
-    # monopolised by whichever provider answered with the newest rows.
-    assert Enum.map(results, & &1.doc_id) == ["best-but-old", "external-doc"]
-  end
-
-  test "provider failures do not fail search" do
-    results =
-      Providers.search("deploy",
-        provider_specs: [
-          %{id: "broken", module: BrokenProvider, enabled: true, scopes: [:session]},
-          %{id: "fake", module: FakeProvider, enabled: true, scopes: [:session]}
-        ],
-        owner: self(),
-        scope: :session,
-        scope_key: "session-1",
-        limit: 5
-      )
-
-    assert_receive {:fake_search, "fake", "deploy", :session, "session-1"}
-    assert Enum.map(results, & &1.doc_id) == ["external-doc"]
+    def search(_query, opts) do
+      send(opts[:owner], :provider_searched)
+      []
+    end
   end
 
   test "put fans out through isolated registry" do
-    name = :"memory_providers_test_#{System.unique_integer([:positive])}"
-    {:ok, pid} = start_supervised({Providers, name: name})
+    pid = start_registry()
+    register(pid, "fake", FakeProvider)
 
-    assert :ok =
-             Providers.register_provider(pid,
-               id: "fake",
-               module: FakeProvider,
-               scopes: [:workspace],
-               source: "test"
-             )
-
-    doc = doc("put-doc", 10, scope: :workspace)
-    assert :ok = Providers.put(doc, server: pid, owner: self())
+    assert :ok = Providers.put(doc("put-doc"), server: pid, owner: self())
 
     :sys.get_state(pid)
     assert_receive {:fake_put, "fake", "put-doc"}
   end
 
-  test "each provider is dropped at its own :timeout_ms, not the slowest provider's" do
-    specs = [
-      # A generous budget on one provider must not become the budget of the
-      # provider next to it: this is the local SQLite provider's 2s bound versus
-      # a registered extension that asked for more.
-      %{
-        id: "generous",
-        module: FakeProvider,
-        enabled: true,
-        scopes: [:session],
-        timeout_ms: 5_000
-      },
-      %{id: "hangs", module: HangingProvider, enabled: true, scopes: [:session], timeout_ms: 200}
-    ]
+  test "the registry exposes no search fan-out" do
+    Code.ensure_loaded!(Providers)
+    refute function_exported?(Providers, :search, 2)
+    refute function_exported?(Providers, :search, 1)
+  end
 
-    {elapsed_us, results} =
-      capture_search(fn ->
-        Providers.search("deploy",
-          provider_specs: specs,
-          owner: self(),
-          scope: :session,
-          scope_key: "session-1",
-          limit: 5
-        )
+  test "a raising provider is logged and the registry survives" do
+    pid = start_registry()
+    register(pid, "fake", FakeProvider)
+    register(pid, "broken", BrokenProvider)
+
+    log =
+      capture_log(fn ->
+        assert :ok = Providers.put(doc("broken-doc"), server: pid, owner: self())
+        :sys.get_state(pid)
+      end)
+
+    assert Process.alive?(pid)
+    assert_received {:fake_put, "fake", "broken-doc"}
+    assert log =~ "provider broken put failed"
+  end
+
+  test "each provider is dropped at its own :timeout_ms, not the slowest provider's" do
+    pid = start_registry()
+    register(pid, "generous", FakeProvider, timeout_ms: 5_000)
+    register(pid, "hangs", HangingProvider, timeout_ms: 200)
+
+    {elapsed_us, _log} =
+      :timer.tc(fn ->
+        capture_log(fn ->
+          :ok = Providers.put(doc("timed-doc"), server: pid, owner: self())
+          :sys.get_state(pid, 10_000)
+        end)
       end)
 
     elapsed_ms = div(elapsed_us, 1_000)
-
-    assert Enum.map(results, & &1.doc_id) == ["external-doc"]
+    assert_received {:fake_put, "generous", "timed-doc"}
     assert elapsed_ms >= 150, "the 200ms provider was dropped early (#{elapsed_ms}ms)"
     assert elapsed_ms < 4_000, "the 200ms provider waited on the 5s provider (#{elapsed_ms}ms)"
   end
 
-  test "a fast provider still returns while a slow one is being dropped" do
-    specs = [
-      %{id: "hangs", module: HangingProvider, enabled: true, scopes: [:session], timeout_ms: 200},
-      %{id: "fake", module: FakeProvider, enabled: true, scopes: [:session], timeout_ms: 5_000}
-    ]
-
-    {_elapsed_us, results} =
-      capture_search(fn ->
-        Providers.search("deploy",
-          provider_specs: specs,
-          owner: self(),
-          scope: :session,
-          scope_key: "session-1",
-          limit: 5
-        )
-      end)
-
-    assert_received {:fake_search, "fake", "deploy", :session, "session-1"}
-    assert Enum.map(results, & &1.doc_id) == ["external-doc"]
-  end
-
-  test "a provider killed mid-search is logged and the caller survives" do
-    caller = self()
-
-    specs = [
-      %{
-        id: "killed",
-        module: KilledProvider,
-        enabled: true,
-        scopes: [:session],
-        timeout_ms: 5_000
-      },
-      %{id: "fake", module: FakeProvider, enabled: true, scopes: [:session], timeout_ms: 5_000}
-    ]
-
-    log =
-      capture_log(fn ->
-        results =
-          Providers.search("deploy",
-            provider_specs: specs,
-            owner: self(),
-            scope: :session,
-            scope_key: "session-1",
-            limit: 5
-          )
-
-        send(self(), {:results, results})
-      end)
-
-    assert Process.alive?(caller)
-    assert self() == caller
-    assert_received {:results, results}
-    assert Enum.map(results, & &1.doc_id) == ["external-doc"]
-    assert log =~ "provider killed task failed"
-  end
-
   test "a provider killed mid-put leaves the registry and its registrations intact" do
-    name = :"memory_providers_kill_test_#{System.unique_integer([:positive])}"
-    {:ok, pid} = start_supervised({Providers, name: name})
+    pid = start_registry()
 
-    for {id, module} <- [{"fake", FakeProvider}, {"killed", KilledProvider}] do
-      assert :ok =
-               Providers.register_provider(pid,
-                 id: id,
-                 module: module,
-                 scopes: [:workspace],
-                 source: "test",
-                 timeout_ms: 5_000
-               )
-    end
+    for {id, module} <- [{"fake", FakeProvider}, {"killed", KilledProvider}],
+        do: register(pid, id, module, timeout_ms: 5_000)
 
     log =
       capture_log(fn ->
-        assert :ok =
-                 Providers.put(doc("kill-doc", 10, scope: :workspace), server: pid, owner: self())
+        assert :ok = Providers.put(doc("kill-doc"), server: pid, owner: self())
 
         # Synchronising on the registry is itself the assertion: a call only
         # returns if the GenServer outlived the provider process that died.
@@ -309,6 +137,15 @@ defmodule LemonMemory.ProvidersTest do
 
     status = Providers.status(provider_specs: GenServer.call(pid, :provider_specs))
     assert Enum.sort(Enum.map(status.providers, & &1.id)) == ["fake", "killed", "local"]
+  end
+
+  test "a registered provider that exports search/2 is only written to" do
+    pid = start_registry()
+    register(pid, "searching", SearchingProvider)
+
+    assert :ok = Providers.put(doc("write-only"), server: pid, owner: self())
+    :sys.get_state(pid)
+    refute_received :provider_searched
   end
 
   test "status redacts provider implementation details" do
@@ -337,37 +174,30 @@ defmodule LemonMemory.ProvidersTest do
     refute inspect(status) =~ "private-provider-secret"
   end
 
-  defmodule StaticProvider do
-    @behaviour LemonMemory.Provider
-
-    @impl true
-    def put(_doc, _opts), do: :ok
-
-    @impl true
-    def search(_query, _opts) do
-      :persistent_term.get({__MODULE__, :docs}, [])
-    end
+  defp start_registry do
+    name = :"memory_providers_test_#{System.unique_integer([:positive])}"
+    {:ok, pid} = start_supervised({Providers, name: name})
+    pid
   end
 
-  # Times the fan-out while swallowing the warnings a dropped provider logs, so
-  # the wall-clock assertions read against a quiet suite.
-  defp capture_search(fun) do
-    ref = make_ref()
-    capture_log(fn -> send(self(), {ref, :timer.tc(fun)}) end)
-    assert_received {^ref, timed}
-    timed
+  defp register(pid, id, module, opts \\ []) do
+    assert :ok =
+             Providers.register_provider(
+               pid,
+               [id: id, module: module, scopes: [:workspace], source: "test"] ++ opts
+             )
   end
 
-  defp doc(id, ingested_at_ms, opts \\ []) do
+  defp doc(id) do
     %Document{
       doc_id: id,
       run_id: "run-#{id}",
       session_key: "session-1",
       agent_id: "agent-1",
       workspace_key: "workspace-1",
-      scope: Keyword.get(opts, :scope, :session),
-      started_at_ms: ingested_at_ms - 1,
-      ingested_at_ms: ingested_at_ms,
+      scope: :workspace,
+      started_at_ms: 9,
+      ingested_at_ms: 10,
       prompt_summary: "prompt",
       answer_summary: "answer"
     }

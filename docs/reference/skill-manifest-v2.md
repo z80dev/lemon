@@ -1,7 +1,9 @@
 # Skill Manifest v2 Reference
 
 Canonical schema for `SKILL.md` frontmatter. Both YAML (`---` delimiters)
-and TOML (`+++` delimiters) are accepted.
+and TOML (`+++` delimiters) are accepted. YAML frontmatter must be a mapping
+of at most 64 KiB without repeated top-level keys; otherwise the manifest is
+rejected.
 
 > **Compatibility:** v1 skills (only the legacy fields) continue to parse
 > without changes. v2 fields are optional; the platform supplies defaults

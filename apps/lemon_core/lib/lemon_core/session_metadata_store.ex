@@ -78,34 +78,37 @@ defmodule LemonCore.SessionMetadataStore do
   @doc "Fetch stored ACP session metadata by ACP `session_id`, failing closed on store error."
   @spec fetch_acp_by_id(String.t()) :: {:ok, map() | nil} | {:error, :store_unavailable}
   def fetch_acp_by_id(session_id) when is_binary(session_id) do
-    with {:ok, entries} <- Store.fetch_all(@table) do
-      match =
-        Enum.find_value(entries, fn
-          {session_key, value} when is_binary(session_key) ->
-            case normalize(value, session_key) do
-              %{acp: %{session_id: ^session_id} = acp} -> acp
-              _ -> nil
-            end
-
-          _other ->
-            nil
-        end)
-
-      {:ok, match}
+    with {:ok, entries} <- list_acp() do
+      {:ok, Enum.find_value(entries, fn {id, acp} -> if id == session_id, do: acp end)}
     end
   end
 
-  @doc "List stored ACP session metadata records as `[{session_id, acp}]`."
-  @spec list_acp() :: [{String.t(), map()}]
+  @doc """
+  List stored ACP session metadata records as `[{session_id, acp}]`, failing
+  closed: an unreadable store is `{:error, :store_unavailable}`, never `[]`.
+  """
+  @spec list_acp() :: {:ok, [{String.t(), map()}]} | {:error, :store_unavailable}
   def list_acp do
-    list()
-    |> Enum.flat_map(fn
-      {_session_key, %{acp: %{session_id: session_id} = acp}} when is_binary(session_id) ->
-        [{session_id, acp}]
+    case Store.fetch_all(@table) do
+      {:ok, entries} ->
+        {:ok,
+         Enum.flat_map(entries, fn
+           {session_key, value} when is_binary(session_key) ->
+             case normalize(value, session_key) do
+               %{acp: %{session_id: session_id} = acp} when is_binary(session_id) ->
+                 [{session_id, acp}]
 
-      _other ->
-        []
-    end)
+               _ ->
+                 []
+             end
+
+           _other ->
+             []
+         end)}
+
+      {:error, _reason} ->
+        {:error, :store_unavailable}
+    end
   end
 
   @doc "Atomically store ACP session metadata on the canonical `session_key` record."

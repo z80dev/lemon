@@ -646,7 +646,8 @@ defmodule LemonRouter.RunOrchestratorTest do
             prompt: "never enqueue twice"
           })
 
-        assert catch_exit(RunOrchestrator.submit(orchestrator, replay))
+        # The crash reaches supervision; the caller sees an unknown outcome.
+        assert RunOrchestrator.submit(orchestrator, replay) == {:error, :outcome_unknown}
         assert_receive {:DOWN, ^monitor, :process, ^orchestrator, reason}
 
         case outcome do
@@ -1016,7 +1017,7 @@ defmodule LemonRouter.RunOrchestratorTest do
       refute_receive {:captured_job, _command}, 100
     end
 
-    test "receipt cleanup evicts only safe expired claims" do
+    test "receipt compaction evicts only safe expired claims off the admission mailbox" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       suffix = System.unique_integer([:positive])
       expired_admission = "run_cleanup_accepted_#{suffix}"
@@ -1024,15 +1025,13 @@ defmodule LemonRouter.RunOrchestratorTest do
       legacy_expired_claim = "run_cleanup_legacy_claimed_#{suffix}"
       ambiguous_admission = "run_cleanup_submitting_#{suffix}"
       expired_abort = "run_cleanup_abort_#{suffix}"
-      probe_run = "run_cleanup_probe_#{suffix}"
 
       on_exit(fn ->
         for run_id <- [
               expired_admission,
               expired_claim,
               legacy_expired_claim,
-              ambiguous_admission,
-              probe_run
+              ambiguous_admission
             ] do
           LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id)
         end
@@ -1075,27 +1074,21 @@ defmodule LemonRouter.RunOrchestratorTest do
                  expires_at_ms: 0
                })
 
-      {:ok, orchestrator} =
+      {:ok, _orchestrator} =
         GenServer.start_link(
           RunOrchestrator,
           run_supervisor: run_supervisor,
           run_process_module: CapturingRunProcess,
           run_process_opts: %{notify_pid: self()},
-          receipt_cleanup_interval_ms: 0
+          receipt_cleanup_interval_ms: 20
         )
 
-      assert {:ok, ^probe_run} =
-               RunOrchestrator.submit(
-                 orchestrator,
-                 request(%{
-                   run_id: probe_run,
-                   session_key: "agent:cleanup:test",
-                   agent_id: "test",
-                   prompt: "trigger cleanup"
-                 })
-               )
-
-      assert_receive {:captured_job, _command}
+      # Compaction runs on its own timer in a task; no submission triggers it.
+      assert eventually(fn ->
+               LemonCore.Store.get(RunOrchestrator.admission_table(), expired_claim) == nil and
+                 LemonCore.Store.get(RunOrchestrator.abort_tombstone_table(), expired_abort) ==
+                   %{state: "aborted", reason_code: :aborted}
+             end)
 
       assert LemonCore.Store.get(RunOrchestrator.admission_table(), expired_admission) == %{
                state: "accepted",

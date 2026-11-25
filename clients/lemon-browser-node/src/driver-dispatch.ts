@@ -23,6 +23,27 @@ const ALLOWED_CDP_METHODS: Record<string, true> = {
   'Target.getTargets': true,
 };
 
+// Methods that only read browser state. Every other method (navigation,
+// input, uploads, downloads, cookie writes, script evaluation, tab
+// lifecycle, ...) may change the page or the outside world, so it is never
+// re-run and an unfinished one is reported as an unknown outcome.
+const READ_ONLY_METHODS: Record<string, true> = {
+  'browser.tabs': true,
+  'browser.screenshot': true,
+  'browser.waitForSelector': true,
+  'browser.getContent': true,
+  'browser.snapshot': true,
+  'browser.getCookies': true,
+  'browser.cdp': true,
+};
+
+/** Whether a request only reads state, so re-running it cannot repeat an effect. */
+export function isReadOnlyBrowserMethod(method: string, args?: unknown): boolean {
+  const normalized = method.startsWith('browser.') ? method : `browser.${method}`;
+  if (normalized === 'browser.events') return asArgs(args).clear !== true;
+  return Object.hasOwn(READ_ONLY_METHODS, normalized);
+}
+
 /**
  * Route one Lemon browser protocol request. Tab lifecycle methods operate on
  * the Chrome session; page methods resolve the explicit target when supplied
@@ -61,9 +82,13 @@ export async function dispatchBrowserRequest(
       const targetId = optionalString(input.targetId);
       const pageArgs = { ...input };
       delete pageArgs.targetId;
+      // A closed target is reconnected and retried only for reads: without a
+      // targetId the retry lands on a different tab, and a write may already
+      // have taken effect before the target closed.
       return chrome.withPage(
         (page) => handleBrowserMethod(page, normalizedMethod, pageArgs),
         targetId ?? undefined,
+        { retryOnClosedTarget: isReadOnlyBrowserMethod(normalizedMethod, input) },
       );
     }
   }

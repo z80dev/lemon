@@ -860,4 +860,144 @@ defmodule LemonAi.Providers.GoogleTest do
       EventStream.result(stream, 5_000)
     end
   end
+
+  # ============================================================================
+  # SSE framing across transport frames (#637)
+  # ============================================================================
+
+  describe "events split across transport frames" do
+    setup do
+      previous_defaults = Req.default_options()
+      on_exit(fn -> Req.default_options(previous_defaults) end)
+      :ok
+    end
+
+    @split_event %{
+      "candidates" => [
+        %{
+          "content" => %{
+            "parts" => [
+              %{"text" => "Héllo"},
+              %{
+                "functionCall" => %{"id" => "call-1", "name" => "lookup", "args" => %{"q" => "ü"}}
+              }
+            ]
+          },
+          "finishReason" => "STOP"
+        }
+      ],
+      "usageMetadata" => %{
+        "promptTokenCount" => 12,
+        "candidatesTokenCount" => 5,
+        "cachedContentTokenCount" => 2,
+        "totalTokenCount" => 17
+      }
+    }
+
+    for provider <- [:google, :google_vertex, :google_gemini_cli] do
+      test "#{provider} decodes one event split at every byte offset like the unsplit event" do
+        provider = unquote(provider)
+        frame = split_frame(provider, @split_event)
+        {expected, expected_events} = run_frames(provider, [frame])
+
+        assert %AssistantMessage{stop_reason: :tool_use} = expected
+
+        assert [%{text: "Héllo"}, %ToolCall{id: "call-1", arguments: %{"q" => "ü"}}] =
+                 expected.content
+
+        assert expected.usage.total_tokens == 17
+
+        for offset <- 1..(byte_size(frame) - 1) do
+          <<first::binary-size(^offset), rest::binary>> = frame
+          {message, events} = run_frames(provider, [first, rest])
+
+          assert {message.content, message.usage, message.stop_reason} ==
+                   {expected.content, expected.usage, expected.stop_reason},
+                 "split at byte #{offset}"
+
+          assert events == expected_events, "split at byte #{offset}"
+        end
+      end
+
+      test "#{provider} keeps a finishReason and usageMetadata block split across frames" do
+        provider = unquote(provider)
+
+        text =
+          split_frame(provider, %{
+            "candidates" => [%{"content" => %{"parts" => [%{"text" => "Hi"}]}}]
+          })
+
+        terminal =
+          split_frame(provider, %{
+            "candidates" => [%{"finishReason" => "MAX_TOKENS"}],
+            "usageMetadata" => %{
+              "promptTokenCount" => 9,
+              "candidatesTokenCount" => 4,
+              "totalTokenCount" => 13
+            }
+          })
+
+        {position, _} = :binary.match(terminal, "TokenCount")
+        <<head::binary-size(^position), tail::binary>> = terminal
+        {message, _events} = run_frames(provider, [text <> head, tail])
+
+        assert message.stop_reason == :length
+        assert LemonAi.get_text(message) == "Hi"
+        assert %{input: 9, output: 4, total_tokens: 13} = message.usage
+      end
+    end
+
+    defp split_frame(:google_gemini_cli, event),
+      do: "data: " <> Jason.encode!(%{"response" => event}) <> "\r\n\r\n"
+
+    defp split_frame(_provider, event), do: "data: " <> Jason.encode!(event) <> "\r\n\r\n"
+
+    # Delivers each frame as its own Req async body message.
+    defp run_frames(provider, frames) do
+      Req.default_options(
+        adapter: fn request ->
+          ref = make_ref()
+          Enum.each(frames, &send(self(), {ref, {:data, &1}}))
+          send(self(), {ref, :done})
+
+          async = %Req.Response.Async{
+            pid: self(),
+            ref: ref,
+            stream_fun: fn
+              ^ref, {^ref, {:data, data}} -> {:ok, [data: data]}
+              ^ref, {^ref, :done} -> {:ok, [:done]}
+              _ref, _message -> :unknown
+            end,
+            cancel_fun: fn _ref -> :ok end
+          }
+
+          {request, Req.Response.new(status: 200, body: async)}
+        end
+      )
+
+      {module, model, opts} = split_request(provider)
+      {:ok, stream} = module.stream(model, build_context(), opts)
+      events = stream |> EventStream.events() |> Enum.reject(&match?({:done, _, _}, &1))
+      {:ok, message} = EventStream.result(stream, 5_000)
+      {message, Enum.map(events, &without_timestamps/1)}
+    end
+
+    defp without_timestamps({:start, message}), do: {:start, %{message | timestamp: 0}}
+    defp without_timestamps(event), do: event
+
+    defp split_request(:google), do: {Google, build_model(), build_opts()}
+
+    defp split_request(:google_vertex) do
+      model = build_model(%{api: :google_vertex, provider: :google_vertex})
+
+      {LemonAi.Providers.GoogleVertex, model,
+       build_opts(%{project: "p", location: "us-central1", access_token: "token"})}
+    end
+
+    defp split_request(:google_gemini_cli) do
+      model = build_model(%{api: :google_gemini_cli, provider: :google_gemini_cli})
+      key = Jason.encode!(%{"token" => "token", "projectId" => "project"})
+      {LemonAi.Providers.GoogleGeminiCli, model, build_opts(%{api_key: key})}
+    end
+  end
 end

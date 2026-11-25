@@ -50,9 +50,9 @@ counter. Unrelated messages in the same mailbox conservatively consume capacity.
 | Native session → direct subscribers | Defaults to 256 queued entries and 1 MiB per event; overflow fences that subscription and explicitly signals recovery. At most one compact terminal notification is reserved in addition to the overflow marker, preserving a separate reconstructable completion path. |
 | Native session → executor runner | Uses the bounded direct subscription rather than an unused duplicate stream; terminal recovery rereads the native owner instead of relying on every delta. Session subscription streams also bound mailbox ingress and the existing internal EventStream queue. |
 | Bus → control-plane EventBridge → operator WebSocket | Defaults to 256 queued entries and 1 MiB per event at bridge ingress and each recipient; no task is created for every broadcast. Overflow sends `stream.resync` or disconnects the lagging socket; reconnect reauthenticates before reading snapshots. |
-| Bus → browser chat pane | One shared 256-entry handle across session/approval/system topics, 65,536 bytes per message, and one overflow marker. Live answer segments cap at 65,536 bytes; transcript/tool caches cap at 400 items and terminal tombstones at 128 runs. |
+| Bus → browser chat pane | One shared 256-entry handle across the session, `session_events`, approval and system topics, 1 MiB per message, and one overflow marker. Text, tools and completion come only from `chat.history` plus sequenced `session.event` batches continuing the pane's cursor (first from `sessions.snapshot` `consistency.eventCursor`); unsequenced deltas are ignored. A cursor gap or overflow replays `sessions.events` from the cursor without touching rendered text; only an expired cursor or changed stream reloads history. The snapshot supplies state only, read at mount and at most once per run, at its end. Live answer segments cap at 65,536 bytes (the full text is reloaded from history when the run ends); transcript/tool caches cap at 400 items and terminal tombstones at 128 runs. |
 | Router answer/status coalescers | Tagged pre-mailbox admission defaults to 256 entries / 65,536 bytes per event. Overflow fences transient rendering and signals session resync; answer finalization requires canonical `final_text` after overflow. Status finalization records an interruption hint instead of claiming a complete action stream. Finalized gates reject delayed old envelopes; 128 recent terminal run IDs fence late API calls. The existing distinct-action history is not a fixed-count buffer; the ingress bound is not a claim that a run with arbitrarily many distinct actions retains constant memory. |
-| TUI / browser after dropped progress | Both consume `sessions.snapshot`; active recovered text is replaced from authority, never appended to an uncertain token prefix. No offline mutation is replayed. |
+| TUI after dropped progress | Consumes `sessions.snapshot`; active recovered text is replaced from authority, never appended to an uncertain token prefix. No offline mutation is replayed. |
 
 ### Reliable truth and consistency
 
@@ -76,6 +76,63 @@ an unrecognized run request reconciliation rather than acquiring branch
 authority. Recovered active answers remain replacement-only until canonical
 completion, avoiding duplication from delayed pre-snapshot deltas. See
 [the control-plane contract](https://github.com/z80dev/lemon/blob/main/apps/lemon_control_plane/README.md#session-snapshot-and-reconciliation).
+
+### Delivery class by event type
+
+Every type in `LemonCore.Events.registry/0` has exactly one delivery class. The
+class says what a consumer may conclude when it did not see the event.
+
+- **durable**: the owner commits the state change before it publishes the event.
+  `LemonRouter.RunCompletion` and `LemonGateway.Run` finalize the `:runs` summary
+  before broadcasting `:run_completed`; `ExecApprovals` writes the approval
+  record before `:approval_requested` and `:approval_resolved`; `CronStore` and
+  `GoalStore` write before emitting. The event only announces the change. A
+  consumer that missed it (overflow, reconnect, a late subscriber) re-reads the
+  authority below, so losing the event never loses the decision.
+- **transient**: bounded progress. Overflow fences the subscriber with an
+  explicit resync. Clients recover with `sessions.events` from their cursor and
+  fall back to `sessions.snapshot` on `cursor_expired`. The canonical answer is
+  the durable completion, never the concatenated deltas.
+- **best_effort**: notifications and telemetry. A lost event changes no
+  execution outcome and is not replayed.
+
+Admission and cancellation decisions are not Bus events. `submit` returns the
+admission synchronously and the router records it in `LemonRouter.RunReceiptStore`;
+an abort is a serialized `RunOrchestrator` call that persists an abort tombstone
+and ends in a durable terminal completion. A caller whose admission or abort
+reply is lost gets `{:error, :outcome_unknown}` and is never retried
+automatically.
+
+| Event type | Class | Authority / recovery |
+| --- | --- | --- |
+| `run_completed` | durable | `LemonCore.RunStore.fetch/1` |
+| `run_failed` | durable | `LemonCore.RunStore.fetch/1`. `run_failed` is a synthetic notice that the router run owner died; the terminal truth is the run's finalized summary |
+| `approval_requested` | durable | `LemonCore.ExecApprovalStore.fetch_pending/1` |
+| `approval_resolved` | durable | `LemonCore.ExecApprovalStore.fetch_record/1` |
+| `cron_job_created`, `cron_job_updated`, `cron_job_deleted` | durable | `LemonAutomation.CronStore.get_job/1` |
+| `cron_run_started`, `cron_run_completed` | durable | `LemonAutomation.CronStore.get_run/1` |
+| `cron_lifecycle_action` | durable | `LemonAutomation.CronStore.list_audit_events/1` |
+| `goal_set`, `goal_paused`, `goal_resumed`, `goal_completed`, `goal_cleared`, `goal_continuation_submitted`, `goal_loop_verdict`, `goal_loop_status` | durable | `LemonAgent.Workspace.GoalStore.get/1` |
+| `run_started` | transient | `sessions.events`, then `sessions.snapshot` (current run identity) |
+| `delta` | transient | `sessions.events`, then `sessions.snapshot` (answer state); final text from the run's completion |
+| `engine_action` | transient | `sessions.events`, then `sessions.snapshot` (actions and process receipts) |
+| `run_phase_changed` | best_effort | none; it has no consumer |
+| `cron_tick` | best_effort | none |
+| `heartbeat_alert`, `heartbeat_suppressed` | best_effort | the cron run record |
+| `config_reloaded`, `config_reload_failed` | best_effort | the configuration itself |
+| `secret_changed` | best_effort | the secrets store; the event never carries the value |
+| `talk_mode_changed` | best_effort | none; it has no publisher |
+| `routing_feedback` | best_effort | none; a lost sample is not replayed |
+| `channel_delivery` | best_effort | none; emitted after the send, and publish failures are rescued and logged |
+
+`apps/lemon_control_plane/test/lemon_control_plane/event_delivery_class_test.exs`
+fails when a registered type has no row, a class is unknown, a durable row's
+authority read is not exported, or a transient row names a recovery method that
+is not registered.
+
+Known gap: several `LemonAutomation.CronManager` paths ignore the result of
+`CronStore.put_job/1` or `CronStore.put_run/1` and still emit the cron event, so
+a failed write can be announced as committed.
 
 ### Remaining best-effort paths
 
@@ -188,7 +245,7 @@ The busiest topic and the only one whose subscribers span the umbrella.
 | `:run_completed` (typed) | `LemonGateway.Run` (including admission failures); synthetic completions from `LemonRouter.RunProcess`, `RunProcess.Watchdog`, and `SessionCoordinator` | `Events.RunCompleted` wrapping `Events.Completion`; synthetic ones carry `meta.synthetic == true` |
 | `:run_failed` (typed) | `LemonRouter.RunProcess` (abnormal termination) | `Events.RunFailed` (`run_id`, `session_key`, `reason`) |
 | `:run_phase_changed` (typed) | `LemonRouter.PhasePublisher` (the only publisher; the gateway tracks phases but does not broadcast them) | `Events.RunPhaseChanged`, built with `RunPhaseChanged.build/1` |
-| `:engine_action` (typed) | `LemonGateway.Run`; `CodingAgent.Tools.Task.LiveBridge` and `Task.Async` for projected child actions; `LemonCore.Event.engine_reasoning/1` | `Events.EngineAction` wrapping `Events.Action` |
+| `:engine_action` (typed) | `LemonGateway.Run`; `CodingAgent.TaskRuntime.Child` (a task's owner) and `Task.Async` for projected child actions; `LemonCore.Event.engine_reasoning/1` | `Events.EngineAction` wrapping `Events.Action` |
 | `:engine_started`, `:engine_completed`, `:engine_event` | `LemonGateway.Run` (native executor events) | plain maps; `:engine_event` is the escape hatch for unrecognised native events (not registered) |
 | `:checkpoint_created` / `_restored` / `_deleted` | `LemonCore.Checkpoint`; remote ones relayed by `LemonGateway.Run` | map (checkpoint id/kind, tool, action, path counts) — also on `session:<key>` (not registered) |
 | `:task_started` / `_completed` / `_error` / `_timeout` / `_aborted` | `CodingAgent.Tools.Task.Async` | map (`task_id`, `run_id`, `parent_run_id`, `session_key`, `agent_id`, …); published to the child run and the parent run |
@@ -200,7 +257,7 @@ requests as direct request/reply calls, not bus events (`:no_client`, `:client_d
 `:timeout`).
 
 Subscribers include `LemonRouter.RunProcess` (also forwards run events to the session
-topic), `LemonRouter.AsyncTaskSurfaceSubscriber`, `CodingAgent.Tools.Task.LiveBridge`,
+topic), `LemonRouter.AsyncTaskSurfaceSubscriber`, `CodingAgent.TaskRuntime.Child`,
 `CodingAgent.Tools.Agent` (completion waits), the execution-node worker
 (`CodingAgent.ExecutionNode.Worker`), `LemonChannels.TypingIndicator`,
 `LemonChannels.UserPromptSurface`, the Discord/Telegram transports,
@@ -335,9 +392,11 @@ topic subscriptions.
 | `profiles:changed` | `LemonCore.ProfileStore` (every create/clone/update/rename/delete) → `LemonRouter.AgentProfiles` | bare atom `:profiles_changed` — a doorbell; the router re-reads the profile config so no writer leaves its cache stale |
 | `a2a:task:<id>` | `LemonControlPlane.A2A.Runner` → A2A runner/router | tuple `{:a2a_task_terminal, task_id}` |
 | `lemon_web:runs` | `LemonWeb.ShellLive.RunEvents` → `ShellLive` | tuple `{:lemon_web_run, phase, info}` |
+| `kanban` | `LemonAgent.Workspace.KanbanStore` (every operator-visible board/task write, not lease renewals) and `LemonAutomation.KanbanDispatcher` (start/stop) → `LemonWeb.WorkManagementLive` | tuple `{:kanban_changed, board_id}` — a doorbell; the page re-reads the store (`KanbanStore.changed_topic/0`, `ring_changed/1`) |
 
-The `kanban*` broadcasts were deleted (zero subscribers; durable record is the
-`Introspection.record/3` call), and `logs` has never had a publisher.
+The typed `kanban*` broadcasts were deleted (the durable record is the
+`Introspection.record/3` call); the content-free `kanban` doorbell above replaced
+them (#687). `logs` has never had a publisher.
 
 ## 3. Contract vs app-internal
 

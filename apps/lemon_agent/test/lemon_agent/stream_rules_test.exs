@@ -110,7 +110,7 @@ defmodule LemonAgent.StreamRulesTest do
     assert {_state, ^rule} = StreamRules.feed(state, {:text_delta, 1, "forbidden"})
   end
 
-  test "scans the beginning, middle, and end of maximum-sized accepted deltas" do
+  test "scans the beginning, middle, and end of 16 KiB deltas" do
     rule = rule("forbidden")
 
     for offset <- [0, 1020, 4093, 8190, 16_384 - byte_size("forbidden")] do
@@ -175,18 +175,22 @@ defmodule LemonAgent.StreamRulesTest do
     assert :binary.referenced_byte_size(state.buffers[{:text_delta, 0}]) == 512
   end
 
-  test "rejects oversized input before matching even a violation at its beginning" do
-    state = StreamRules.new([rule("forbidden")])
+  test "scans oversized single deltas in bounded chunks instead of rejecting them" do
+    rule = rule("forbidden")
+    state = StreamRules.new([rule])
 
-    for kind <- [:text_delta, :tool_call_delta], bytes <- [16_385, 1_000_000] do
-      delta = "forbidden" <> :binary.copy("x", bytes - byte_size("forbidden"))
+    for kind <- [:text_delta, :tool_call_delta],
+        bytes <- [16_385, 65_536, 1_000_000],
+        offset <- [0, div(bytes, 2), bytes - byte_size("forbidden")] do
+      delta =
+        :binary.copy("x", offset) <>
+          "forbidden" <> :binary.copy("x", bytes - offset - byte_size("forbidden"))
 
-      assert_error(:delta_too_large, fn ->
-        StreamRules.feed(state, {kind, 0, delta})
-      end)
+      assert {_state, ^rule} = StreamRules.feed(state, {kind, 0, delta})
     end
 
-    assert state.buffers == %{}
+    {state, nil} = StreamRules.feed(state, {:tool_call_delta, 0, :binary.copy("x", 65_536)})
+    assert byte_size(state.buffers[{:tool_call_delta, 0}]) == 4096
   end
 
   test "pathological regexes fail explicitly at the engine budget" do

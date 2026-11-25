@@ -507,7 +507,7 @@ defmodule LemonSkills.ProfileMemoryTransferTest do
              Transfer.snapshot(@profile, "mutation-2", "local", "node-target", ctx.source_opts)
   end
 
-  test "post-dispatch collisions leave exact old state and pending operation, never replay",
+  test "post-dispatch collisions leave exact old state, report the conflict and free the operation",
        ctx do
     source = doc(ctx.source_home, "collision", "Incoming fact.")
     selected = doc(ctx.target_home, "old", "Old selected fact.")
@@ -530,17 +530,18 @@ defmodule LemonSkills.ProfileMemoryTransferTest do
     assert {:ok, envelope} = prepare(ctx)
     assert {:ok, preview} = Transfer.preview(envelope, ctx.target_opts)
 
-    assert {:error, :transfer_pending} =
+    assert {:error, :destination_conflict} =
              Transfer.apply_transfer(confirm(envelope, preview), ctx.target_opts)
 
     assert {:ok, ^selected} = Store.get_document(ctx.target, selected.doc_id)
     assert {:ok, ^foreign} = Store.get_document(ctx.target, foreign.doc_id)
     assert File.read!(Path.join(ctx.target_home, "USER.md")) == "Old preference.\n"
+    assert staging_dirs(ctx.target_home) == []
 
-    assert {:error, :transfer_pending} =
-             Transfer.status(@profile, "mutation-1", "local", "node-target", ctx.target_opts)
+    assert {:ok, %{"status" => "unknown"}} =
+             Transfer.inspect_status(@profile, "mutation-1", "node-target", ctx.target_opts)
 
-    assert {:error, :transfer_pending} =
+    assert {:error, :destination_conflict} =
              Transfer.apply_transfer(confirm(envelope, preview), ctx.target_opts)
   end
 
@@ -626,7 +627,136 @@ defmodule LemonSkills.ProfileMemoryTransferTest do
     Preferences.transfer_cleanup(stage)
     assert {:ok, ^old} = Store.get_document(ctx.target, old.doc_id)
     assert {:error, :not_found} = Store.get_document(ctx.target, new.doc_id)
-    assert {:ok, ^intent} = Store.transfer_get(ctx.target, "filesystem-rollback")
+    # A verified rollback is a definite failure: the intent is freed for a retry.
+    assert {:error, :not_found} = Store.transfer_get(ctx.target, "filesystem-rollback")
+  end
+
+  test "a destination changed before commit is :stale_destination, removes staging and frees the mutation",
+       ctx do
+    File.write!(Path.join(ctx.source_home, "USER.md"), "Incoming preference.\n")
+    :ok = Store.put_sync(ctx.source, doc(ctx.source_home, "stale", "Incoming fact."))
+    assert {:ok, envelope} = prepare(ctx)
+    target_user = Path.join(ctx.target_home, "USER.md")
+
+    proxy =
+      proxy_store(ctx.target, fn -> File.write!(target_user, "Written meanwhile.\n") end)
+
+    opts = Keyword.put(ctx.target_opts, :store, proxy)
+    assert {:error, :stale_destination} = Transfer.apply_transfer(envelope, opts)
+    assert File.read!(target_user) == "Written meanwhile.\n"
+    assert staging_dirs(ctx.target_home) == []
+    assert {:ok, []} = Store.list_agent_recent(ctx.target, @profile, limit: 500)
+
+    assert {:ok, %{"status" => "unknown"}} =
+             Transfer.inspect_status(@profile, "mutation-1", "node-target", ctx.target_opts)
+
+    # The same mutation id is not wedged: it can be previewed and confirmed.
+    assert {:ok, preview} = Transfer.preview(envelope, ctx.target_opts)
+    assert {:ok, _receipt} = Transfer.apply_transfer(confirm(envelope, preview), ctx.target_opts)
+    assert File.read!(target_user) == "Incoming preference.\n"
+  end
+
+  test "a preference lock abort at commit is definite and the same mutation id then succeeds",
+       ctx do
+    :ok = Store.put_sync(ctx.source, doc(ctx.source_home, "locked", "Incoming fact."))
+    assert {:ok, envelope} = prepare(ctx)
+    lock = {LemonSkills.WorkspacePreferences, Path.expand(ctx.target_home)}
+
+    proxy =
+      proxy_store(
+        ctx.target,
+        fn -> true = :global.set_lock({lock, self()}, [node()], 0) end,
+        fn -> :global.del_lock({lock, self()}, [node()]) end
+      )
+
+    opts = Keyword.put(ctx.target_opts, :store, proxy)
+    assert {:error, :memory_unavailable} = Transfer.apply_transfer(envelope, opts)
+    assert staging_dirs(ctx.target_home) == []
+    assert {:ok, []} = Store.list_agent_recent(ctx.target, @profile, limit: 500)
+
+    assert {:ok, receipt} = Transfer.apply_transfer(envelope, ctx.target_opts)
+    assert receipt["copied"] == true
+    assert {:ok, [_imported]} = Store.list_agent_recent(ctx.target, @profile, limit: 500)
+  end
+
+  test "after a receipt neither journal keeps the transferred memory or previews", ctx do
+    secret = "Receipted saffron fact."
+    :ok = Store.put_sync(ctx.source, doc(ctx.source_home, "receipted", secret))
+    File.write!(Path.join(ctx.source_home, "MEMORY.md"), "Saffron memory file.\n")
+    File.write!(Path.join(ctx.target_home, "USER.md"), "Old preference.\n")
+    assert {:ok, envelope} = prepare(ctx)
+    assert journal_bytes(ctx.root, "source") =~ secret
+    assert {:ok, preview} = Transfer.preview(envelope, ctx.target_opts)
+    assert journal_bytes(ctx.root, "target") =~ preview["confirmationToken"]
+    assert {:ok, receipt} = Transfer.apply_transfer(confirm(envelope, preview), ctx.target_opts)
+
+    assert :ok =
+             Transfer.release(@profile, "mutation-1", "local", "node-target", ctx.source_opts)
+
+    for role <- ["source", "target"] do
+      bytes = journal_bytes(ctx.root, role)
+      refute bytes =~ "saffron"
+      refute bytes =~ "Saffron"
+      refute bytes =~ preview["confirmationToken"]
+    end
+
+    assert {:ok, ^receipt} =
+             Transfer.status(@profile, "mutation-1", "local", "node-target", ctx.target_opts)
+  end
+
+  test "deleting private memory removes it from every journal payload", ctx do
+    context = %{
+      agent_id: @profile,
+      cwd: ctx.source_home,
+      workspace_dir: ctx.source_home,
+      session_scope: :main,
+      session_key: "agent:lb-alice:main",
+      invocation_context_key: "epoch-1",
+      memory_context_key: "actor-a",
+      memory_context_verified: true
+    }
+
+    assert {:ok, _} =
+             LemonMemory.Preferences.remember(context, "user", "Private amber preference.", nil,
+               store: ctx.source
+             )
+
+    :ok = Store.put_sync(ctx.source, doc(ctx.source_home, "kept", "Kept fact."))
+    assert {:ok, envelope} = prepare(ctx)
+    assert journal_bytes(ctx.root, "source") =~ "amber"
+
+    [private] =
+      Enum.filter(envelope["snapshot"]["documents"], &(Jason.encode!(&1) =~ "amber"))
+
+    assert {:ok, %{confirmation_digest: digest}} =
+             LemonMemory.Lifecycle.preview_delete(private["id"], server: ctx.source)
+
+    assert {:ok, %{status: :deleted}} =
+             LemonMemory.Lifecycle.delete(private["id"], digest, server: ctx.source)
+
+    refute journal_bytes(ctx.root, "source") =~ "amber"
+
+    assert {:error, :not_found} =
+             Transfer.snapshot(@profile, "mutation-1", "local", "node-target", ctx.source_opts)
+  end
+
+  test "scope erasure and retention remove the frozen snapshot of the erased memory", ctx do
+    :ok = Store.put_sync(ctx.source, doc(ctx.source_home, "erased", "Erased teal fact."))
+    assert {:ok, _} = prepare(ctx)
+    assert journal_bytes(ctx.root, "source") =~ "teal"
+    Store.delete_by_session(ctx.source, "agent:lb-alice:main")
+    _ = Store.stats(ctx.source)
+    refute journal_bytes(ctx.root, "source") =~ "teal"
+
+    old = %{doc(ctx.source_home, "aged", "Aged plum fact.") | ingested_at_ms: 1}
+    :ok = Store.put_sync(ctx.source, old)
+
+    assert {:ok, _} =
+             Transfer.prepare(@profile, "mutation-2", "local", "node-target", ctx.source_opts)
+
+    assert journal_bytes(ctx.root, "source") =~ "plum"
+    assert {:ok, %{swept: 1}} = Store.prune(ctx.source)
+    refute journal_bytes(ctx.root, "source") =~ "plum"
   end
 
   test "runtime namespaces and stored atom provenance transfer faithfully as safe JSON", ctx do
@@ -1049,7 +1179,9 @@ defmodule LemonSkills.ProfileMemoryTransferTest do
                destination_a,
                "user",
                "Private amber corrected preference.",
-               "Private amber preference.", store: ctx.target)
+               "Private amber preference.",
+               store: ctx.target
+             )
 
     assert {:ok, ^b_notes} = LemonMemory.Preferences.read(destination_b, store: ctx.target)
   end
@@ -1107,6 +1239,52 @@ defmodule LemonSkills.ProfileMemoryTransferTest do
              )
 
     assert {:ok, ^stored} = Store.get_document(source, retained.doc_id)
+  end
+
+  # A Store stand-in that forwards every call to `store`, running `before` and
+  # `after` around the import call. This is how a test changes the destination,
+  # or holds its preference lock, after the target was captured but before the
+  # commit — deterministically, without racing the transfer.
+  defmodule StoreProxy do
+    @moduledoc false
+    use GenServer
+
+    def init(state), do: {:ok, state}
+
+    def handle_call(message, _from, %{store: store, before: before, after: after_fun} = state)
+        when elem(message, 0) == :transfer_import do
+      before.()
+      reply = GenServer.call(store, message, 10_000)
+      after_fun.()
+      {:reply, reply, state}
+    end
+
+    def handle_call(message, _from, state),
+      do: {:reply, GenServer.call(state.store, message, 10_000), state}
+  end
+
+  defp proxy_store(store, before, after_fun \\ fn -> :ok end) do
+    state = %{store: store, before: before, after: after_fun}
+    start_supervised!(%{id: make_ref(), start: {GenServer, :start_link, [StoreProxy, state]}})
+  end
+
+  defp staging_dirs(home),
+    do: Path.wildcard(Path.join(home, ".memory-transfer-*"), match_dot: true)
+
+  # Every journal payload of one test Store, read through its own connection.
+  defp journal_bytes(root, role) do
+    alias Exqlite.Sqlite3
+    {:ok, conn} = Sqlite3.open(Path.join([root, role <> "-store", "memory.sqlite3"]))
+
+    try do
+      :ok = Sqlite3.execute(conn, "PRAGMA busy_timeout=5000")
+      {:ok, stmt} = Sqlite3.prepare(conn, "SELECT payload FROM memory_transfer_journal")
+      {:ok, rows} = Sqlite3.fetch_all(conn, stmt)
+      :ok = Sqlite3.release(conn, stmt)
+      rows |> List.flatten() |> Enum.join("\n")
+    after
+      Sqlite3.close(conn)
+    end
   end
 
   defp legacy_store(root, doc) do

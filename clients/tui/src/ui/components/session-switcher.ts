@@ -30,7 +30,9 @@ import { span, text } from "@oh-my-pi/pi-tui/native/describe";
 import { CLOSE_ACTION, pickerAction, pickerAge, pickerDate } from "@oh-my-pi/pi-tui/native/picker";
 import { collectSessions, type SessionRow } from "../../commands/session.ts";
 import { safeLine } from "../../formatters/base.ts";
+import { describeError } from "../../protocol/errors.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
+import { isForeignDirectorySession } from "../../session-key.ts";
 import type { AppStore } from "../../store/app-store.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
 import { getTheme } from "../theme/theme.ts";
@@ -61,6 +63,8 @@ export interface SessionSwitcherHost {
 	repaint(): void;
 	switchSession(sessionKey: string): void | Promise<void>;
 	createSession(sessionKey: string | undefined, prompt: string | undefined): void | Promise<void>;
+	/** The TUI's directory: sessions tagged for another one are listed, never switched to. */
+	cwd: string;
 	/** Show `/session delete`'s preview for the key; never deletes. */
 	closeSession(sessionKey: string): void | Promise<void>;
 	notice(text: string, level?: NoticeLevel): void;
@@ -200,7 +204,10 @@ export class SessionSwitcher {
 	#items(): PickerItem[] {
 		const now = this.#host.now?.() ?? Date.now();
 		const focusedKey = this.#host.store.focusedKey;
-		return this.#rows.map((row) => describeSessionRow(row, focusedKey, now));
+		const cwd = this.#host.cwd;
+		return this.#rows.map((row) =>
+			describeSessionRow(row, focusedKey, now, isForeignDirectorySession(row.key, cwd)),
+		);
 	}
 
 	#footer(): string {
@@ -295,10 +302,24 @@ export class SessionSwitcher {
 
 	async #onSelect(item: PickerItem): Promise<void> {
 		this.close();
-		this.#host.store.session(item.value).title = this.#rows.find(
-			(row) => row.key === item.value,
-		)?.title;
-		await this.#host.switchSession(item.value);
+		// Refuse before anything is created: the focused session stays as it was.
+		if (isForeignDirectorySession(item.value, this.#host.cwd)) {
+			this.#host.notice(
+				"that session belongs to another directory — reopen it from there; focus unchanged",
+				"warning",
+			);
+			return;
+		}
+		const store = this.#host.store;
+		const existed = store.sessions.has(item.value);
+		store.session(item.value).title = this.#rows.find((row) => row.key === item.value)?.title;
+		try {
+			await this.#host.switchSession(item.value);
+		} catch (error) {
+			// No ghost store: what this selection created goes with its failure.
+			if (!existed && store.focusedKey !== item.value) store.forgetSession(item.value);
+			this.#host.notice(`could not switch session: ${describeError(error)}`, "error");
+		}
 	}
 
 	#onCancel(): void {
@@ -375,7 +396,12 @@ export function relativeAge(at: number | undefined, now: number): string | undef
  * model it runs, whether it is working, what arrived since it was last on
  * screen, and how long ago that was.
  */
-export function describeSessionRow(row: SessionRow, focusedKey: string, now: number): PickerItem {
+export function describeSessionRow(
+	row: SessionRow,
+	focusedKey: string,
+	now: number,
+	foreign = false,
+): PickerItem {
 	const theme = getTheme();
 	const marks = [
 		row.key === focusedKey ? "current" : undefined,
@@ -388,6 +414,7 @@ export function describeSessionRow(row: SessionRow, focusedKey: string, now: num
 		row.pinned ? "pinned" : undefined,
 		row.archived ? "archived" : undefined,
 		row.local ? undefined : "not loaded",
+		foreign ? "other directory" : undefined,
 		relativeAge(row.updatedAtMs, now),
 	].filter((mark): mark is string => Boolean(mark));
 	const badges: PickerBadge[] = [];
@@ -400,6 +427,13 @@ export function describeSessionRow(row: SessionRow, focusedKey: string, now: num
 			text: "not loaded",
 			tone: "muted",
 			title: "Stored by the daemon; not loaded here",
+		});
+	}
+	if (foreign) {
+		badges.push({
+			text: "other directory",
+			tone: "muted",
+			title: "Started from another directory; open it from there",
 		});
 	}
 	const facts: Record<string, string> = {};

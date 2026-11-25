@@ -329,14 +329,16 @@ defmodule CodingAgent.ProcessAdmissionTest do
     on_exit(fn ->
       :sys.remove(ProcessStoreServer, trigger)
 
-      ProcessStoreServer.transaction(ProcessStoreServer, fn ->
+      :sys.replace_state(ProcessStoreServer, fn state ->
         :dets.close(:coding_agent_processes_dets)
 
-        assert {:ok, :coding_agent_processes_dets} =
-                 :dets.open_file(:coding_agent_processes_dets,
-                   file: String.to_charlist(path),
-                   type: :set
-                 )
+        {:ok, :coding_agent_processes_dets} =
+          :dets.open_file(:coding_agent_processes_dets,
+            file: String.to_charlist(path),
+            type: :set
+          )
+
+        state
       end)
     end)
 
@@ -359,10 +361,9 @@ defmodule CodingAgent.ProcessAdmissionTest do
     assert {:error, :not_found} = ProcessManager.check_owner(id, "admission-test")
     assert {:error, :not_found} = ProcessManager.receipt(id, "foreign-owner")
 
-    [{^id, tombstone, []}] =
-      ProcessStoreServer.transaction(ProcessStoreServer, fn ->
-        :ets.lookup(:coding_agent_processes, id)
-      end)
+    # Serialize behind the owner's mailbox before reading the public mirror.
+    assert :ok = ProcessStoreServer.ensure_table(ProcessStoreServer)
+    [{^id, tombstone, []}] = :ets.lookup(:coding_agent_processes, id)
 
     assert %{status: :cleared, capacity_held: false, termination_confirmed: true} = tombstone
     fingerprint = tombstone.launch_fingerprint
@@ -417,15 +418,9 @@ defmodule CodingAgent.ProcessAdmissionTest do
     refute File.exists?(marker)
     refute_receive {:before_start, ^id}, 0
 
-    assert [{^id, ^tombstone, []}] =
-             ProcessStoreServer.transaction(ProcessStoreServer, fn ->
-               :ets.lookup(:coding_agent_processes, id)
-             end)
-
-    assert [{^id, ^tombstone, []}] =
-             ProcessStoreServer.transaction(ProcessStoreServer, fn ->
-               :dets.lookup(:coding_agent_processes_dets, id)
-             end)
+    assert :ok = ProcessStoreServer.ensure_table(ProcessStoreServer)
+    assert [{^id, ^tombstone, []}] = :ets.lookup(:coding_agent_processes, id)
+    assert [{^id, ^tombstone, []}] = :dets.lookup(:coding_agent_processes_dets, id)
   end
 
   test "managed attachments validate identity and preserve live capture and workload state",
@@ -473,10 +468,10 @@ defmodule CodingAgent.ProcessAdmissionTest do
     assert Map.delete(after_attachment, :updated_at) == Map.delete(before, :updated_at)
     assert {:ok, %{logs: ["retained"]}} = ProcessSession.poll(id)
 
+    assert :ok = ProcessStoreServer.ensure_table(ProcessStoreServer)
+
     assert [{^id, ^after_attachment, ["retained"]}] =
-             ProcessStoreServer.transaction(ProcessStoreServer, fn ->
-               :dets.lookup(:coding_agent_processes_dets, id)
-             end)
+             :dets.lookup(:coding_agent_processes_dets, id)
 
     terminate(id)
   end

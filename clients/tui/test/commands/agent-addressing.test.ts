@@ -401,7 +401,11 @@ test("an offline bot target is a visible failure, never a native fallback", asyn
 			},
 		],
 	});
-	h.server.failWith("agent.message.send", "UNAVAILABLE", "target offline");
+	h.server.failWith("agent.message.send", "UNAVAILABLE", "target offline", {
+		reason: "offline",
+		retrySafe: true,
+		mutationMayHaveApplied: false,
+	});
 	await h.run("/tell @worker hello");
 	expect(sent()[0].params.target).toBe("bot://instance/worker");
 	expect(h.host.last?.text).toContain("failed");

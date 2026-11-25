@@ -15,7 +15,12 @@ defmodule LemonSkills.Tools.MediaGenerateVideoTest do
              result =
              tool.execute.(
                "call-1",
-               %{"prompt" => prompt, "filename" => "preview-video", "sendToChannel" => true},
+               %{
+                 "provider" => "local_mp4",
+                 "prompt" => prompt,
+                 "filename" => "preview-video",
+                 "sendToChannel" => true
+               },
                nil,
                nil
              )

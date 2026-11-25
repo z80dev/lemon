@@ -22,6 +22,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImageTest do
              tool.execute.(
                "call-1",
                %{
+                 "provider" => "local_vision",
                  "imagePath" => "sample.svg",
                  "prompt" => prompt,
                  "filename" => "sample-analysis",

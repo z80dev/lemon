@@ -414,8 +414,9 @@ The schema follows JSON Schema conventions with optional extensions:
 
 Extensions can register custom providers that integrate with the core system.
 Model providers add AI model backends. Memory providers implement
-`LemonMemory.Provider` and can participate in safety-screened memory ingest
-and scoped `recall` search through `LemonMemory.Providers`. Search providers
+`LemonMemory.Provider` and receive safety-screened memory ingest through
+`LemonMemory.Providers`; they are write targets only (`recall` reads the owned
+local index, which filters ownership before its result limit). Search providers
 implement `CodingAgent.Search.Provider` (web search and/or `extract` capabilities)
 and register in `CodingAgent.Search.Registry`.
 
@@ -527,12 +528,6 @@ defmodule MyExtension.TeamMemoryProvider do
     # Store a safety-screened memory document in your backend.
     :ok
   end
-
-  @impl true
-  def search(query, opts) do
-    # Return a list of LemonMemory.Document structs.
-    []
-  end
 end
 ```
 
@@ -542,11 +537,11 @@ Memory provider `config` supports:
 |-------|-------------|
 | `enabled` | Set to `false` to register but keep the provider disabled |
 | `scopes` | Optional list of `session`, `agent`, `workspace`, and `all` scopes |
-| `timeout_ms` | Per-provider search/ingest timeout |
+| `timeout_ms` | Per-provider ingest timeout |
 | `label` | Human-readable provider label for local diagnostics only |
 
 `LemonMemory.Providers` always keeps local SQLite as the built-in provider,
-isolates provider failures, deduplicates search results by document id, and
+isolates provider failures, and
 reports only redacted provider shape in
 support bundles.
 

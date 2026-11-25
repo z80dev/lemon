@@ -55,10 +55,8 @@ explicit tools and a memory provider through platform registries. See
 
 ## Privacy and remote failures
 
-- Remote outages cost the turn its memory block, not its ability to run. Provider
-  failures return `[]`. Searches never widen: an unmapped session is "not mapped"
-  (tool) or `[]` (provider); provider scopes without a person (`:agent`,
-  `:workspace`, `:all`) return `[]`. Every search requires an `Owner` in the client,
+- Remote outages cost the turn its memory block, not its ability to run. Searches
+  never widen: an unmapped session is "not mapped" (tool). Every search requires an `Owner` in the client,
   which filters server-side and drops non-matching hits client-side.
 - Uploaded messages carry the owner tag. Conclusion queries are also filtered
   client-side by observer/observed, and `Client.delete_conclusion/3` reads the
@@ -73,7 +71,8 @@ explicit tools and a memory provider through platform registries. See
 - `save_messages?: false` is read-only: block uploads, profile writes and conclusion
   create/delete, while retaining reads. New remote mutations inherit this gate.
 - `recall_mode: :tools` disables injection; `:context` gates explicit Honcho tools.
-  Provider search is a separate registry seam. Subagent injection defaults off.
+  The memory provider is write-only (`put/2`); recall never searches Honcho.
+  Subagent injection defaults off.
 - Uploads ride memory ingest and carry bounded prompt/answer summaries, not raw
   transcripts. Ingest remains gated by `session_search`; read success alone does
   not prove anything is being uploaded.

@@ -43,7 +43,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
     conn: conn,
     state: state
   } do
-    {:ok, view, html} = live(conn, "/automation")
+    {:ok, view, html} = open(conn, "/automation")
     assert html =~ "Safe board"
     assert has_element?(view, "#work-card-task_demo")
     assert has_element?(view, "a[href='/chat/#{URI.encode_www_form("agent:default:main")}']")
@@ -51,7 +51,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
     refute_private(inspect(:sys.get_state(view.pid), limit: :infinity))
 
     Agent.update(state, &put_in(&1.card.title, "Updated card"))
-    send(view.pid, :work_tick)
+    reload(view)
     assert render(view) =~ "Updated card"
     render_click(view, "tab", %{"tab" => "goals"})
     assert_patch(view, "/automation?tab=goals")
@@ -66,13 +66,48 @@ defmodule LemonWeb.WorkManagementLiveTest do
   end
 
   test "cron and goal bus events trigger a debounced refresh", %{conn: conn, state: state} do
-    {:ok, view, _} = live(conn, "/automation?tab=cron")
+    {:ok, view, _} = open(conn, "/automation?tab=cron")
     assert has_element?(view, "#work-cron-cron_demo", "Safe cron")
     Agent.update(state, &put_in(&1.job.name, "Renamed cron"))
 
     LemonAutomation.Events.emit_job_updated(Agent.get(state, & &1.job))
-    Process.sleep(350)
+    Process.sleep(300)
+    render_async(view)
     assert has_element?(view, "#work-cron-cron_demo", "Renamed cron")
+  end
+
+  test "dead render and idle page read no services; reads run off the LiveView", %{
+    conn: conn,
+    state: state
+  } do
+    test_pid = self()
+
+    Application.put_env(:lemon_web, :work_service_fun, fn module, function, args ->
+      send(test_pid, {:service_call, self(), module, function})
+      service(state, module, function, args)
+    end)
+
+    dead = conn |> get("/automation") |> html_response(200)
+    assert dead =~ "Loading current state"
+    refute dead =~ "Safe board"
+    refute_received {:service_call, _, _, _}
+
+    {:ok, view, html} = open(conn, "/automation")
+    assert html =~ "Safe board"
+    assert_received {:service_call, reader, KanbanStore, :list_boards}
+    refute reader == view.pid
+    flush_service_calls()
+
+    # No timer: an idle page performs no service calls (the old poll ran every 3 s).
+    refute_receive {:service_call, _, _, _}, 3_500
+
+    # A kanban doorbell reloads promptly, again off the LiveView process.
+    Agent.update(state, &put_in(&1.card.title, "Doorbell card"))
+    LemonAgent.Workspace.KanbanStore.ring_changed("board_demo")
+    assert_receive {:service_call, reader, KanbanStore, :list_boards}, 1_000
+    refute reader == view.pid
+    render_async(view)
+    assert render(view) =~ "Doorbell card"
   end
 
   test "legacy TUI goal remains visible without unsafe controls or a false transcript", %{
@@ -85,7 +120,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
       |> put_in([:goal, :status], "paused")
     end)
 
-    {:ok, view, _} = live(conn, "/automation")
+    {:ok, view, _} = open(conn, "/automation")
     render_click(view, "tab", %{"tab" => "goals"})
     assert has_element?(view, "#work-goal-goal_demo")
     assert render(view) =~ "paused"
@@ -111,7 +146,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
       )
     end)
 
-    {:ok, view, _} = live(conn, "/automation?tab=goals")
+    {:ok, view, _} = open(conn, "/automation?tab=goals")
     assert has_element?(view, "#work-goal-goal_demo", "2 / 8 continuations")
     assert has_element?(view, "#work-goal-goal_demo [role=meter][aria-valuenow='25']")
     assert has_element?(view, "#work-goal-goal_demo", "last verdict: blocked")
@@ -128,7 +163,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
       |> put_in([:card, :status], "shipping")
     end)
 
-    {:ok, view, _} = live(conn, "/automation")
+    {:ok, view, _} = open(conn, "/automation")
 
     columns =
       view
@@ -163,7 +198,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
       &Map.update!(&1, :card, fn card -> Map.put(card, :meta, %{"codingWorkflow" => workflow}) end)
     )
 
-    {:ok, view, html} = live(conn, "/automation")
+    {:ok, view, html} = open(conn, "/automation")
     assert html =~ "Independent review approved"
     assert html =~ "aaaaaaaaaaaa"
 
@@ -175,7 +210,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
 
     refute_private(inspect(:sys.get_state(view.pid), limit: :infinity))
     Agent.update(state, &put_in(&1.card.meta["codingWorkflow"]["prUrl"], "javascript:alert(1)"))
-    send(view.pid, :work_tick)
+    reload(view)
     refute render(view) =~ "javascript:"
     refute has_element?(view, "a", "Open pull request")
 
@@ -187,7 +222,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
       )
     )
 
-    send(view.pid, :work_tick)
+    reload(view)
     refute render(view) =~ "github.com:65536"
     refute has_element?(view, "a", "Open pull request")
   end
@@ -217,7 +252,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
       |> Map.update!(:run, &%{&1 | meta: %{router_session_key: run_session, retry_attempt: 2}})
     end)
 
-    {:ok, view, _} = live(conn, "/automation")
+    {:ok, view, _} = open(conn, "/automation")
     assert has_element?(view, "#work-card-task_demo", "failed")
     assert has_element?(view, "#work-card-task_demo", "needs retry")
     assert has_element?(view, "#work-card-task_demo", "attempt 3")
@@ -254,7 +289,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
         service(state, module, function, args)
     end)
 
-    {:ok, view, _} = live(conn, "/automation")
+    {:ok, view, _} = open(conn, "/automation")
     assert has_element?(view, "#work-board-board_demo", "reconciling")
     refute has_element?(view, "#work-boards-board_demo-start")
     refute has_element?(view, "#work-boards-board_demo-stop")
@@ -264,7 +299,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
     conn: conn,
     state: state
   } do
-    {:ok, view, _} = live(conn, "/automation")
+    {:ok, view, _} = open(conn, "/automation")
     preview(view, "boards", "board_demo", "start")
 
     assert has_element?(
@@ -328,13 +363,13 @@ defmodule LemonWeb.WorkManagementLiveTest do
     conn: conn,
     state: state
   } do
-    {:ok, view, _} = live(conn, "/automation?tab=cron")
+    {:ok, view, _} = open(conn, "/automation?tab=cron")
     refute has_element?(view, "#work-cron-cron_demo-remove")
     preview(view, "cron", "cron_demo", "remove")
     assert Agent.get(state, & &1.calls) == []
 
     Agent.update(state, &put_in(&1.run.status, :completed))
-    send(view.pid, :work_tick)
+    reload(view)
     assert has_element?(view, "#work-cron-cron_demo-remove")
     preview(view, "cron", "cron_demo", "remove")
     assert has_element?(view, "#work-confirm-dialog", "cannot be undone")
@@ -356,7 +391,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
     conn: conn,
     state: state
   } do
-    {:ok, view, _} = live(conn, "/automation?tab=cron")
+    {:ok, view, _} = open(conn, "/automation?tab=cron")
     render_click(view, "open-runs", %{"id" => "cron_demo"})
 
     render_click(view, "preview", %{
@@ -374,7 +409,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
   end
 
   test "stale preview and forged targets never reach mutation", %{conn: conn, state: state} do
-    {:ok, view, _} = live(conn, "/automation")
+    {:ok, view, _} = open(conn, "/automation")
     assert render_click(view, "confirm") =~ "Preview the exact action"
     preview(view, "boards", "missing", "start")
     assert Agent.get(state, & &1.calls) == []
@@ -399,14 +434,14 @@ defmodule LemonWeb.WorkManagementLiveTest do
 
   test "initial and live lookup failures are unavailable, not idle", %{conn: conn, state: state} do
     Agent.update(state, &Map.put(&1, :unavailable, true))
-    {:ok, view, html} = live(conn, "/automation")
+    {:ok, view, html} = open(conn, "/automation")
     assert html =~ "Service unavailable"
     refute has_element?(view, "#work-empty")
     Agent.update(state, &Map.put(&1, :unavailable, false))
-    render_click(view, "refresh")
+    reload(view, "refresh")
     assert render(view) =~ "Safe board"
     Agent.update(state, &Map.put(&1, :runtime_unavailable, true))
-    render_click(view, "refresh")
+    reload(view, "refresh")
     assert render(view) =~ "unavailable"
     assert has_element?(view, "#work-card-task_demo")
     assert render(view) =~ "Last known dispatcher: idle"
@@ -414,13 +449,13 @@ defmodule LemonWeb.WorkManagementLiveTest do
     preview(view, "boards", "board_demo", "start")
     assert Agent.get(state, & &1.calls) == []
     Agent.update(state, &Map.put(&1, :unavailable, true))
-    render_click(view, "refresh")
+    reload(view, "refresh")
     assert render(view) =~ "Service unavailable"
     assert has_element?(view, "#work-card-task_demo")
   end
 
   test "unknown mutation outcomes are honest and not repeated", %{conn: conn, state: state} do
-    {:ok, view, _} = live(conn, "/automation")
+    {:ok, view, _} = open(conn, "/automation")
     Agent.update(state, &Map.put(&1, :unknown, true))
     preview(view, "boards", "board_demo", "start")
     assert render_click(view, "confirm") =~ "Outcome unknown"
@@ -434,7 +469,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
     conn: conn,
     state: state
   } do
-    {:ok, view, _} = live(conn, "/automation?tab=cron")
+    {:ok, view, _} = open(conn, "/automation?tab=cron")
     render_click(view, "new-cron")
     assert has_element?(view, "#cron-form-modal")
     assert has_element?(view, "#cron-schedule-preview", "Daily at 09:00")
@@ -481,7 +516,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
     conn: conn,
     state: state
   } do
-    {:ok, view, _} = live(conn, "/automation?tab=cron")
+    {:ok, view, _} = open(conn, "/automation?tab=cron")
     render_click(view, "edit-cron", %{"id" => "cron_demo"})
     assert has_element?(view, "#cron-form-modal", "Edit cron job")
     assert has_element?(view, "#cron-schedule-preview", "Every hour")
@@ -551,7 +586,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
     conn: conn,
     state: state
   } do
-    {:ok, view, _} = live(conn, "/automation?tab=goals")
+    {:ok, view, _} = open(conn, "/automation?tab=goals")
     render_click(view, "new-goal")
     assert has_element?(view, "#goal-form-modal", "already has a goal")
 
@@ -583,7 +618,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
   end
 
   test "filter narrows the active tab by safe labels", %{conn: conn} do
-    {:ok, view, _} = live(conn, "/automation?tab=cron")
+    {:ok, view, _} = open(conn, "/automation?tab=cron")
     render_change(view, "filter", %{"filter" => "nothing-matches"})
     refute has_element?(view, "#work-cron-cron_demo")
     assert render(view) =~ "Nothing matches"
@@ -635,7 +670,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
         apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
     end)
 
-    {:ok, view, _} = live(conn, "/automation")
+    {:ok, view, _} = open(conn, "/automation")
     preview(view, "boards", board.id, "start")
     render_click(view, "confirm")
 
@@ -656,6 +691,93 @@ defmodule LemonWeb.WorkManagementLiveTest do
 
     assert {:ok, %{running: true}} = KanbanDispatcher.status(board.id, name: dispatcher)
     KanbanDispatcher.stop_board(board.id, name: dispatcher)
+  end
+
+  defmodule BlockingKanbanWorker do
+    @moduledoc false
+    def run(task, _opts) do
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:worker_ready, task.id})
+
+      receive do
+        :finish -> :ok
+      after
+        10_000 -> {:error, :worker_timeout}
+      end
+    end
+  end
+
+  test "stop confirms across dispatcher ticks that renew a live worker's lease", %{conn: conn} do
+    workspace =
+      Path.join(System.tmp_dir!(), "web-stop-tick-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(workspace)
+
+    {:ok, authority} =
+      LemonAgent.Workspace.KanbanAuthority.new(
+        %{agent_id: "default", session_key: "agent:default:main"},
+        nil,
+        workspace
+      )
+
+    {:ok, board} =
+      KanbanStore.create_board("Web stop across tick", workspace: workspace, authority: authority)
+
+    {:ok, task} = KanbanStore.create_task(board.id, "Long card")
+    :persistent_term.put({BlockingKanbanWorker, :test_pid}, self())
+
+    dispatcher =
+      start_supervised!(
+        {KanbanDispatcher, name: __MODULE__.TickDispatcher, worker_mod: BlockingKanbanWorker}
+      )
+
+    on_exit(fn ->
+      :persistent_term.erase({BlockingKanbanWorker, :test_pid})
+      KanbanStore.clear_board(board.id)
+      File.rm_rf!(workspace)
+    end)
+
+    Application.put_env(:lemon_web, :work_service_fun, fn
+      KanbanStore, :list_boards, _ ->
+        {:ok, [KanbanStore.get_board(board.id)]}
+
+      KanbanStore, :list_tasks, args ->
+        apply(KanbanStore, :list_tasks, args)
+
+      GoalStore, :list, _ ->
+        {:ok, []}
+
+      CronManager, :list, _ ->
+        []
+
+      KanbanDispatcher, :status, [id] ->
+        KanbanDispatcher.status(id, name: dispatcher)
+
+      KanbanDispatcher, fun, [id, opts] ->
+        apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
+    end)
+
+    {:ok, _} =
+      KanbanDispatcher.start_board(board.id, name: dispatcher, interval_ms: 10, lease_ms: 60_000)
+
+    task_id = task.id
+    assert_receive {:worker_ready, ^task_id}, 5_000
+    _ = :sys.get_state(dispatcher)
+
+    {:ok, view, _} = open(conn, "/automation")
+    preview(view, "boards", board.id, "stop")
+    expires = KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"]
+
+    Enum.reduce_while(1..200, nil, fn _, _ ->
+      Process.sleep(10)
+      renewed = KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"]
+      if renewed > expires, do: {:halt, :ok}, else: {:cont, nil}
+    end)
+
+    assert KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"] > expires
+
+    html = render_click(view, "confirm")
+    refute html =~ "State changed since preview"
+    assert {:ok, %{running: false}} = KanbanDispatcher.status(board.id, name: dispatcher)
   end
 
   test "work without recorded authority is quarantined until an operator reauthorizes it", %{
@@ -694,7 +816,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
         apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
     end)
 
-    {:ok, view, _} = live(conn, "/automation")
+    {:ok, view, _} = open(conn, "/automation")
     assert has_element?(view, "#work-board-#{board.id}", "quarantined")
     refute has_element?(view, "#work-boards-#{board.id}-start")
 
@@ -759,7 +881,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
         apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
     end)
 
-    {:ok, view, _} = live(conn, "/automation")
+    {:ok, view, _} = open(conn, "/automation")
     assert has_element?(view, "#work-boards-#{board.id}-grant-publish")
 
     # The previewed destination changed before confirmation: refused.
@@ -833,7 +955,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
              board.workspace
            )
 
-    {:ok, view, _} = live(conn, "/automation")
+    {:ok, view, _} = open(conn, "/automation")
     assert has_element?(view, "#work-boards-#{board.id}-allow-in-place")
     preview(view, "boards", board.id, "allow-in-place")
     digest = LemonAgent.Workspace.KanbanAuthority.workspace_digest(board.workspace)
@@ -873,6 +995,30 @@ defmodule LemonWeb.WorkManagementLiveTest do
     assert CronText.describe("0,30 * * * *") == "Every hour at :00, :30"
     assert CronText.describe("5 4 1-7 * 2") == "Custom schedule"
     assert CronText.describe("Custom schedule") == "Custom schedule"
+  end
+
+  defp flush_service_calls do
+    receive do
+      {:service_call, _, _, _} -> flush_service_calls()
+    after
+      0 -> :ok
+    end
+  end
+
+  # The page never reads services on the dead render; wait for the connected
+  # mount's async load.
+  defp open(conn, path) do
+    {:ok, view, _html} = live(conn, path)
+    {:ok, view, render_async(view)}
+  end
+
+  # A Bus event (or the refresh button) reloads asynchronously.
+  defp reload(view, trigger \\ :event) do
+    if trigger == :event,
+      do: send(view.pid, :event_refresh),
+      else: render_click(view, trigger)
+
+    render_async(view)
   end
 
   defp preview(view, kind, id, action),

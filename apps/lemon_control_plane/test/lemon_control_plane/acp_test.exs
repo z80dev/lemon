@@ -1675,7 +1675,9 @@ defmodule LemonControlPlane.ACPTest do
   end
 
   defp clear_acp_session_store do
-    for {_session_id, session} <- LemonCore.SessionMetadataStore.list_acp() do
+    {:ok, sessions} = LemonCore.SessionMetadataStore.list_acp()
+
+    for {_session_id, session} <- sessions do
       LemonCore.SessionMetadataStore.delete(session.session_key)
     end
   end

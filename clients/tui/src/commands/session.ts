@@ -20,7 +20,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { ControlPlaneError, NotConnectedError, RequestTimeoutError } from "../protocol/errors.ts";
+import { ControlPlaneError, classifyMutationError, failureCode } from "../protocol/errors.ts";
 import type { ControlPlaneMethods } from "../protocol/methods.ts";
 import { METHOD } from "../protocol/methods.ts";
 import type {
@@ -1162,14 +1162,9 @@ function requireSessionMethod(ctx: CommandContext, method: string): boolean {
 }
 
 function safeSessionFailure(ctx: CommandContext, action: string, error: unknown): void {
-	const code =
-		error instanceof ControlPlaneError ||
-		error instanceof NotConnectedError ||
-		error instanceof RequestTimeoutError
-			? error.code
-			: "LOCAL_VALIDATION";
+	const code = failureCode(error, "LOCAL_VALIDATION");
 	ctx.ui.notice(
-		error instanceof RequestTimeoutError
+		code !== "LOCAL_VALIDATION" && classifyMutationError(error) === "unknown"
 			? `session ${action} outcome unknown (${code}); nothing was changed here — refresh and check before retrying`
 			: `session ${action} did not complete (${code}); refresh and retry — no success was recorded`,
 		"error",

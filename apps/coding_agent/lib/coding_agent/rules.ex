@@ -37,8 +37,11 @@ defmodule CodingAgent.Rules do
   `always_on` applies always, `manual` keeps the rule out of the prompt, and
   `glob`/`model_decision` use `globs`/`description`. GitHub `applyTo` becomes
   `globs`; `*`, `**` and `**/*` make the rule always apply. Legacy single
-  files always apply. Invalid YAML falls back to plain `key: value` lines, so
-  Cursor's unquoted `globs: *.ts` parses.
+  files always apply. Frontmatter is parsed by `LemonSkills.Frontmatter`;
+  invalid YAML falls back to plain `key: value` lines, so Cursor's unquoted
+  `globs: *.ts` parses. A repeated key (also `always-apply` next to
+  `alwaysApply`) or frontmatter over 16 KiB rejects the rule with a warning;
+  it still shadows lower-priority rules of the same name.
 
   `streamPattern` is a non-empty, byte-oriented regex source (no UTF mode).
   `injectionLimit` is a positive integer, defaulting to 1. A stream rule is
@@ -60,17 +63,31 @@ defmodule CodingAgent.Rules do
 
   ## Prompt
 
-  Always-apply rules are injected in full. Other rules with a description or
-  globs are listed in a rulebook index (name, description, globs, absolute
-  path) for the model to `read` when they apply. Rules with neither are not
-  surfaced. Rule files are repository data with the same trust as
-  `AGENTS.md`. Output is sorted by name, so prompt bytes are stable.
+  Always-apply rules are injected in full, up to the limits below. Other rules
+  with a description or globs are listed in a rulebook index (name,
+  description, globs, absolute path) for the model to `read` when they apply.
+  Rules with neither are not surfaced. Rule files are repository data with the
+  same trust as `AGENTS.md`. Output is sorted by name, so prompt bytes are
+  stable.
+
+  ## Limits
+
+  At most 256 rule files are read per discovery, in precedence order (project
+  sources first); when more exist, `sections/1` adds a note that the rest were
+  ignored. Each rule file is read up to 64 KiB, and a longer body ends with a
+  marker naming its path. Always-apply bodies share a 128 KiB budget; a body
+  past it is cut or replaced by a marker naming its path. Rulebook
+  descriptions are collapsed to one line of at most 300 characters. Reads go
+  through `CodingAgent.ResourceLoader.SourceReader`, which caches them per
+  session by file stat; parsed rules are cached by content.
   """
 
   require Logger
 
   alias CodingAgent.Config
+  alias CodingAgent.ResourceLoader.SourceReader
   alias LemonCore.TrustedRoot
+  alias LemonSkills.Frontmatter
 
   @type rule :: %{
           name: String.t(),
@@ -91,30 +108,60 @@ defmodule CodingAgent.Rules do
   @agent_dirs [".agent", ".agents"]
   @github_always_globs ["*", "**", "**/*"]
   @max_rule_dir_depth 8
+  @max_frontmatter_bytes 16 * 1024
+  # Prompt limits. A rule file is read up to 64 KiB, the per-file limit of
+  # `@` imports and command files; always-apply bodies share 128 KiB (half the
+  # 256 KiB instruction-file budget); at most 256 rule files are read per
+  # discovery, so a monorepo rule set cannot flood the rulebook; a rulebook
+  # description is one line of at most 300 characters.
+  @max_rule_bytes 64 * 1024
+  @max_always_apply_bytes 128 * 1024
+  @max_rule_files 256
+  @max_description_chars 300
 
   @doc """
   Discover enabled, valid rules for `cwd`: project rules first, deduplicated
   by name, sorted by name. Invalid stream declarations still shadow namesakes.
   Project stream rules are dropped unless the operator allows them for this
-  trusted root.
+  trusted root. At most #{@max_rule_files} rule files are read, in precedence
+  order.
   """
   @spec discover(String.t()) :: [rule()]
-  def discover(cwd) do
-    home = Config.home_dir()
+  def discover(cwd), do: cwd |> discover_limited() |> elem(0)
 
-    project =
-      case TrustedRoot.project(cwd) do
-        {root, ancestors} ->
-          ancestors |> project_rules(root, home) |> gate_project_stream_rules(root)
+  # `{rules, limited?}`: `limited?` when more than `@max_rule_files` files exist.
+  defp discover_limited(cwd) do
+    SourceReader.span(:rules, fn ->
+      home = Config.home_dir()
 
-        :none ->
-          []
-      end
+      {project_root, project_candidates} =
+        case TrustedRoot.project(cwd) do
+          {root, ancestors} -> {root, project_rules(ancestors, root, home)}
+          :none -> {nil, []}
+        end
 
-    (project ++ global_rules(home))
-    |> Enum.uniq_by(& &1.name)
-    |> Enum.reject(&(&1.stream_pattern == :invalid or &1.injection_limit == :invalid))
-    |> Enum.sort_by(& &1.name)
+      candidates =
+        project_candidates |> Stream.concat(global_rules(home)) |> Enum.take(@max_rule_files + 1)
+
+      limited? = length(candidates) > @max_rule_files
+
+      {project, global} =
+        candidates
+        |> Enum.take(@max_rule_files)
+        |> Enum.flat_map(&load_rule/1)
+        |> Enum.split_with(&(&1.level == :project))
+
+      rules =
+        (gate_project_stream_rules(project, project_root) ++ global)
+        |> Enum.uniq_by(& &1.name)
+        |> Enum.reject(
+          &(Map.has_key?(&1, :rejected) or &1.stream_pattern == :invalid or
+              &1.injection_limit == :invalid)
+        )
+        |> Enum.sort_by(& &1.name)
+
+      {rules, limited?}
+    end)
   end
 
   defp gate_project_stream_rules(rules, root) do
@@ -195,13 +242,17 @@ defmodule CodingAgent.Rules do
   @doc """
   Labelled system-prompt sections for the rules discovered from `cwd`: an
   always-apply header (category `:system_prompt`) and one `:context_files`
-  section per always-apply rule, then one `:context_files` rulebook index.
-  Labels carry the rule name and scope, never an absolute path.
+  section per always-apply rule, then one `:context_files` rulebook index and,
+  when more than #{@max_rule_files} rule files exist, a `:system_prompt` note
+  that the rest were not loaded. Always-apply bodies share a
+  #{div(@max_always_apply_bytes, 1024)} KiB budget. Labels carry the rule name
+  and scope, never an absolute path.
   """
   @spec sections(String.t()) :: [section()]
   def sections(cwd) do
-    %{always_apply: always, rulebook: rulebook} = cwd |> discover() |> buckets()
-    always_sections(always) ++ rulebook_sections(rulebook)
+    {rules, limited?} = discover_limited(cwd)
+    %{always_apply: always, rulebook: rulebook} = buckets(rules)
+    always_sections(always) ++ rulebook_sections(rulebook) ++ limit_sections(limited?)
   end
 
   # ============================================================================
@@ -220,15 +271,46 @@ defmodule CodingAgent.Rules do
           "in this session; a project rule replaces a global rule of the same name."
     }
 
+    {sections, _remaining} =
+      Enum.map_reduce(rules, @max_always_apply_bytes, fn rule, remaining ->
+        {body, remaining} = always_body(rule, remaining)
+
+        {%{
+           category: :context_files,
+           label: "rule #{rule.name} (#{rule.level})",
+           text: "<!-- Rule: #{rule.name} (from: #{rule.path}) -->\n#{body}"
+         }, remaining}
+      end)
+
+    [header | sections]
+  end
+
+  defp always_body(rule, remaining) when byte_size(rule.content) <= remaining,
+    do: {rule.content, remaining - byte_size(rule.content)}
+
+  defp always_body(rule, remaining) do
+    budget = "the #{div(@max_always_apply_bytes, 1024)} KiB always-apply rule budget is exhausted"
+
+    body =
+      case SourceReader.truncate_utf8(rule.content, remaining) do
+        "" -> "[... rule not loaded: #{budget}; read #{rule.path} and follow it]"
+        kept -> kept <> "\n\n[... rule truncated: #{budget}; read #{rule.path} for the rest]"
+      end
+
+    {body, 0}
+  end
+
+  defp limit_sections(false), do: []
+
+  defp limit_sections(true) do
     [
-      header
-      | Enum.map(rules, fn rule ->
-          %{
-            category: :context_files,
-            label: "rule #{rule.name} (#{rule.level})",
-            text: "<!-- Rule: #{rule.name} (from: #{rule.path}) -->\n#{rule.content}"
-          }
-        end)
+      %{
+        category: :system_prompt,
+        label: "Rule limit",
+        text:
+          "Note: only the first #{@max_rule_files} rule files were loaded (project rules " <>
+            "first, in precedence order); the remaining rule files were ignored."
+      }
     ]
   end
 
@@ -251,15 +333,31 @@ defmodule CodingAgent.Rules do
   end
 
   defp rulebook_entry(rule) do
-    head = if rule.description, do: "- #{rule.name}: #{rule.description}", else: "- #{rule.name}"
+    head =
+      case rule.description && one_line(rule.description) do
+        nil -> "- #{rule.name}"
+        description -> "- #{rule.name}: #{description}"
+      end
+
     globs = if rule.globs == [], do: [], else: ["  Globs: " <> Enum.join(rule.globs, ", ")]
     Enum.join([head | globs] ++ ["  File: #{rule.path}"], "\n")
+  end
+
+  defp one_line(text) do
+    text = text |> String.split() |> Enum.join(" ")
+
+    if String.length(text) > @max_description_chars,
+      do: String.slice(text, 0, @max_description_chars - 1) <> "…",
+      else: text
   end
 
   # ============================================================================
   # Discovery
   # ============================================================================
 
+  # Sources yield candidates `{path, name, level, kind, root}` lazily in
+  # precedence order, so discovery stops listing once the file limit is met.
+  #
   # `ancestors` is cwd and its ancestors up to the trusted root (realpaths,
   # nearest first); empty when cwd does not resolve inside the root.
   defp project_rules([], _root, _home), do: []
@@ -267,24 +365,24 @@ defmodule CodingAgent.Rules do
   defp project_rules([cwd | _] = ancestors, root, home) do
     dirs = project_dirs(ancestors, home)
 
-    Enum.concat([
-      Enum.flat_map(dirs, &rule_dir(Path.join([&1, ".lemon", "rules"]), :project, root)),
-      Enum.flat_map(dirs, fn dir ->
-        Enum.flat_map(@agent_dirs, &rule_dir(Path.join([dir, &1, "rules"]), :project, root))
+    Stream.concat([
+      Stream.flat_map(dirs, &rule_dir(Path.join([&1, ".lemon", "rules"]), :project, root)),
+      Stream.flat_map(dirs, fn dir ->
+        Stream.flat_map(@agent_dirs, &rule_dir(Path.join([dir, &1, "rules"]), :project, root))
       end),
       rule_dir(Path.join([cwd, ".cursor", "rules"]), :project, root, recursive: true),
       legacy_rule(Path.join(cwd, ".cursorrules"), "cursorrules", :project, root),
       rule_dir(Path.join([cwd, ".windsurf", "rules"]), :project, root, exts: [".md"]),
       legacy_rule(Path.join(cwd, ".windsurfrules"), "windsurfrules", :project, root),
-      clinerules(dirs, root),
+      lazy(fn -> clinerules(dirs, root) end),
       github_instructions(Path.join([cwd, ".github", "instructions"]), root)
     ])
   end
 
   defp global_rules(home) do
-    Enum.concat([
+    Stream.concat([
       rule_dir(Path.join(Path.expand(Config.agent_dir()), "rules"), :global, :unconfined),
-      Enum.flat_map(
+      Stream.flat_map(
         @agent_dirs,
         &rule_dir(Path.join([home, &1, "rules"]), :global, :unconfined)
       ),
@@ -296,6 +394,8 @@ defmodule CodingAgent.Rules do
       )
     ])
   end
+
+  defp lazy(fun), do: Stream.flat_map([nil], fn nil -> fun.() end)
 
   # The home directory itself holds global (not project) configuration and is
   # skipped even when it lies inside the trusted root.
@@ -325,47 +425,39 @@ defmodule CodingAgent.Rules do
   end
 
   defp github_instructions(dir, root) do
-    if admit_dir?(dir, root) do
-      dir
-      |> list_files([".md"], true, 0, root)
-      |> Enum.filter(&String.ends_with?(&1, ".instructions.md"))
-      |> Enum.flat_map(fn path ->
-        name = path |> Path.relative_to(dir) |> String.replace_suffix(".instructions.md", "")
-        load_rule(path, name, :project, :github, root)
-      end)
-    else
-      []
-    end
+    lazy(fn ->
+      if admit_dir?(dir, root) do
+        dir
+        |> list_files([".md"], true, 0, root)
+        |> Stream.filter(&String.ends_with?(&1, ".instructions.md"))
+        |> Stream.map(fn path ->
+          name = path |> Path.relative_to(dir) |> String.replace_suffix(".instructions.md", "")
+          {path, name, :project, :github, root}
+        end)
+      else
+        []
+      end
+    end)
   end
 
   defp rule_dir(dir, level, root, opts \\ []) do
     exts = Keyword.get(opts, :exts, @rule_exts)
 
-    if admit_dir?(dir, root) do
-      dir
-      |> list_files(exts, Keyword.get(opts, :recursive, false), 0, root)
-      |> Enum.flat_map(fn path ->
-        name = path |> Path.relative_to(dir) |> Path.rootname()
-        load_rule(path, name, level, :standard, root)
-      end)
-    else
-      []
-    end
+    lazy(fn ->
+      if admit_dir?(dir, root) do
+        dir
+        |> list_files(exts, Keyword.get(opts, :recursive, false), 0, root)
+        |> Stream.map(fn path ->
+          {path, path |> Path.relative_to(dir) |> Path.rootname(), level, :standard, root}
+        end)
+      else
+        []
+      end
+    end)
   end
 
   defp legacy_rule(path, name, level, root) do
-    if admit_file?(path, root), do: load_rule(path, name, level, :legacy, root), else: []
-  end
-
-  # Project rules are read from the validated realpath, never the original
-  # spelling, so a link swapped in after discovery is re-checked.
-  defp read_rule(path, :unconfined), do: File.read(path)
-
-  defp read_rule(path, root) do
-    case TrustedRoot.read(path, root) do
-      {:ok, content, _real} -> {:ok, content}
-      :error -> :error
-    end
+    lazy(fn -> if admit_file?(path, root), do: [{path, name, level, :legacy, root}], else: [] end)
   end
 
   # Project files and directories must resolve inside the trusted root (a
@@ -377,8 +469,8 @@ defmodule CodingAgent.Rules do
   defp admit_dir?(_dir, :unconfined), do: true
   defp admit_dir?(dir, root), do: match?({:ok, _}, TrustedRoot.dir(dir, root))
 
-  # Sorted admitted files with one of `exts`; hidden entries and symlinked
-  # directories are skipped.
+  # Sorted admitted files with one of `exts`, lazily; hidden entries and
+  # symlinked directories are skipped.
   defp list_files(_dir, _exts, _recursive, depth, _root) when depth > @max_rule_dir_depth,
     do: []
 
@@ -388,7 +480,7 @@ defmodule CodingAgent.Rules do
         names
         |> Enum.reject(&String.starts_with?(&1, "."))
         |> Enum.sort()
-        |> Enum.flat_map(fn name ->
+        |> Stream.flat_map(fn name ->
           path = Path.join(dir, name)
 
           case File.lstat(path) do
@@ -412,17 +504,62 @@ defmodule CodingAgent.Rules do
   # Parsing
   # ============================================================================
 
-  defp load_rule(path, name, level, kind, root) do
-    with {:ok, content} <- read_rule(path, root),
-         true <- String.valid?(content),
-         {frontmatter, body} = parse_frontmatter(content),
-         true <- parse_boolean(frontmatter["enabled"]) != false,
+  # Project rules are read from the validated realpath, never the original
+  # spelling, so a link swapped in after discovery is re-checked. Reads are
+  # bounded and the parsed rule is cached while the file is unchanged.
+  defp load_rule({path, name, level, kind, root}) do
+    case SourceReader.read(path, root, max_bytes: @max_rule_bytes) do
+      {:ok, %{content: content, truncated: truncated}} ->
+        SourceReader.memo({:rule, path, name, level, kind, root}, {content, truncated}, fn ->
+          parse_rule(content, truncated, %{name: name, path: path, level: level}, kind)
+        end)
+
+      :error ->
+        []
+    end
+  end
+
+  defp parse_rule(content, truncated, base, kind) do
+    case parse_frontmatter(content, truncated) do
+      {:ok, frontmatter, body} ->
+        body =
+          if truncated,
+            do:
+              body <>
+                "\n\n[... rule truncated at #{div(@max_rule_bytes, 1024)} KiB; read " <>
+                "#{base.path} for the rest]",
+            else: body
+
+        build_enabled_rule(kind, frontmatter, base, body)
+
+      {:error, reason} ->
+        Logger.warning("Ignored rule #{base.name}: #{rejection_reason(reason)}")
+        [rejected_rule(base, reason)]
+    end
+  end
+
+  defp build_enabled_rule(kind, frontmatter, base, body) do
+    with true <- parse_boolean(frontmatter["enabled"]) != false,
          body when body != "" <- String.trim(body) do
-      [build_rule(kind, frontmatter, %{name: name, path: path, content: body, level: level})]
+      [build_rule(kind, frontmatter, Map.put(base, :content, body))]
     else
       _ -> []
     end
   end
+
+  # A rule whose frontmatter is refused still shadows lower-priority rules of
+  # the same name; `discover/1` drops it after deduplication.
+  defp rejected_rule(base, reason) do
+    %{}
+    |> standard_fields()
+    |> Map.merge(base)
+    |> Map.merge(%{content: "", rejected: reason})
+  end
+
+  defp rejection_reason(:too_large),
+    do: "frontmatter exceeds #{div(@max_frontmatter_bytes, 1024)} KiB"
+
+  defp rejection_reason(reason), do: Frontmatter.describe_error(reason)
 
   defp build_rule(:legacy, frontmatter, base) do
     frontmatter
@@ -556,34 +693,42 @@ defmodule CodingAgent.Rules do
 
   defp parse_boolean(_value), do: nil
 
-  defp parse_frontmatter(content) do
+  # A truncated read that starts a frontmatter block but never closes it had
+  # frontmatter longer than the whole read limit.
+  defp parse_frontmatter(content, truncated) do
     content = String.replace(content, "\r\n", "\n")
 
     case Regex.run(~r/\A---[ \t]*\n(?:(.*?)\n)?---[ \t]*(?:\n|\z)(.*)\z/s, content) do
-      [_, meta, body] -> {parse_metadata(meta), body}
-      nil -> {%{}, content}
+      [_, meta, body] ->
+        with {:ok, frontmatter} <- parse_metadata(meta), do: {:ok, frontmatter, body}
+
+      nil ->
+        if truncated and Regex.match?(~r/\A---[ \t]*\n/, content),
+          do: {:error, :too_large},
+          else: {:ok, %{}, content}
     end
   end
 
-  defp parse_metadata(""), do: %{}
+  defp parse_metadata(""), do: {:ok, %{}}
 
   defp parse_metadata(meta) do
-    case YamlElixir.read_from_string(meta) do
-      {:ok, map} when is_map(map) -> normalize_keys(map)
-      {:ok, _other} -> %{}
-      {:error, _reason} -> fallback_metadata(meta)
+    case Frontmatter.parse_yaml(meta, max_bytes: @max_frontmatter_bytes) do
+      {:ok, map} -> map |> Enum.to_list() |> normalize_pairs()
+      {:error, :malformed} -> meta |> fallback_pairs() |> normalize_pairs()
+      {:error, :not_a_mapping} -> {:ok, %{}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
   # Line-by-line `key: value` parse for frontmatter that is not valid YAML.
   # Each value is parsed on its own and kept as the raw string when that fails.
-  defp fallback_metadata(meta) do
+  defp fallback_pairs(meta) do
     meta
     |> String.split("\n")
-    |> Enum.reduce(%{}, fn line, acc ->
+    |> Enum.flat_map(fn line ->
       case Regex.run(~r/^([\w-]+):\s*(.*)$/, line) do
-        [_, key, raw] -> Map.put(acc, normalize_key(key), fallback_value(String.trim(raw)))
-        nil -> acc
+        [_, key, raw] -> [{key, fallback_value(String.trim(raw))}]
+        nil -> []
       end
     end)
   end
@@ -591,21 +736,27 @@ defmodule CodingAgent.Rules do
   defp fallback_value(""), do: nil
 
   defp fallback_value(raw) do
-    case YamlElixir.read_from_string(raw) do
-      {:ok, value} when is_binary(value) or is_boolean(value) or is_number(value) -> value
-      {:ok, value} when is_list(value) -> value
-      _ -> raw
+    case Frontmatter.parse_yaml("value: " <> raw) do
+      {:ok, %{"value" => value}}
+      when is_binary(value) or is_boolean(value) or is_number(value) or is_list(value) ->
+        value
+
+      _ ->
+        raw
     end
   end
 
-  defp normalize_keys(map) do
-    Map.new(map, fn
-      {key, value} when is_binary(key) -> {normalize_key(key), value}
-      pair -> pair
-    end)
+  # Kebab-case keys (`always-apply`) are read as camelCase (`alwaysApply`).
+  # Keys that repeat, also after that normalization, are refused as in
+  # subagent definitions.
+  defp normalize_pairs(pairs) do
+    pairs = Enum.map(pairs, fn {key, value} -> {normalize_key(key), value} end)
+
+    if length(Enum.uniq_by(pairs, &elem(&1, 0))) == length(pairs),
+      do: {:ok, Map.new(pairs)},
+      else: {:error, :duplicate_key}
   end
 
-  # Kebab-case keys (`always-apply`) are read as camelCase (`alwaysApply`).
   defp normalize_key(key) do
     Regex.replace(~r/-([a-z])/, key, fn _, char -> String.upcase(char) end)
   end

@@ -30,7 +30,7 @@ defmodule LemonAi.Providers.Bedrock do
   alias LemonAi.Types.{AssistantMessage, Context, Model, StreamOptions, Usage}
   alias LemonAi.Types.{TextContent, ThinkingContent, ToolCall}
   alias LemonAi.Types.{UserMessage, ToolResultMessage}
-  alias LemonAi.Providers.TextSanitizer
+  alias LemonAi.Providers.{StreamTransport, TextSanitizer}
   require Logger
 
   # ============================================================================
@@ -104,11 +104,12 @@ defmodule LemonAi.Providers.Bedrock do
                access_key,
                secret_key,
                session_token,
-               trace_id
+               opts,
+               output.provider
              ) do
-          {:ok, response} ->
+          {:ok, chunks} ->
             EventStream.push_async(stream, {:start, output})
-            output = process_event_stream(response.body, output, stream, model)
+            output = process_event_stream(chunks, output, stream, model)
 
             if output.stop_reason in [:error, :aborted] do
               EventStream.error(stream, output)
@@ -116,41 +117,18 @@ defmodule LemonAi.Providers.Bedrock do
               EventStream.complete(stream, output)
             end
 
-          {:error, %{status: status, body: body, headers: response_headers}} ->
-            HttpTrace.log_error("bedrock", "http_error", %{
+          {:error, details, retry_after_ms} ->
+            HttpTrace.log_error("bedrock", "request_error", %{
               trace_id: trace_id,
-              status: status,
-              provider_request_id:
-                HttpTrace.response_header_value(response_headers, [
-                  "x-amzn-requestid",
-                  "x-amz-request-id",
-                  "x-request-id"
-                ]),
-              body_bytes: HttpTrace.body_bytes(body),
-              body_preview: HttpTrace.body_preview(body),
+              status: details.status,
+              category: details.category,
               model: model.id,
               region: region,
               session_id: opts.session_id,
               converted_messages: length(message_list)
             })
 
-            error_msg = extract_error_message(body, status)
-            output = %{output | stop_reason: :error, error_message: error_msg}
-            EventStream.push_async(stream, {:start, output})
-            EventStream.error(stream, output)
-
-          {:error, reason} ->
-            HttpTrace.log_error("bedrock", "transport_error", %{
-              trace_id: trace_id,
-              error: inspect(reason, limit: 50, printable_limit: 8_000),
-              model: model.id,
-              region: region,
-              session_id: opts.session_id,
-              converted_messages: length(message_list)
-            })
-
-            error_msg = "Request failed: #{inspect(reason)}"
-            output = %{output | stop_reason: :error, error_message: error_msg}
+            output = error_assistant_message(output, details, retry_after_ms)
             EventStream.push_async(stream, {:start, output})
             EventStream.error(stream, output)
         end
@@ -655,7 +633,8 @@ defmodule LemonAi.Providers.Bedrock do
          access_key,
          secret_key,
          session_token,
-         trace_id
+         opts,
+         provider
        ) do
     url = "https://#{endpoint.host}#{endpoint.path}"
     json_body = Jason.encode!(body)
@@ -677,30 +656,14 @@ defmodule LemonAi.Providers.Bedrock do
         date_stamp
       )
 
-    # Use Req for HTTP request with streaming
-    case Req.post(url, body: json_body, headers: headers, into: :self, receive_timeout: 600_000) do
-      {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
-        HttpTrace.log("bedrock", "response_headers", %{
-          trace_id: trace_id,
-          status: status,
-          provider_request_id:
-            HttpTrace.response_header_value(response.headers, [
-              "x-amzn-requestid",
-              "x-amz-request-id",
-              "x-request-id"
-            ])
-        })
-
-        # Stream the response body
-        body_stream = stream_response_body(response)
-        {:ok, %{status: status, body: body_stream, headers: response.headers}}
-
-      {:ok, %Req.Response{status: status, body: body, headers: response_headers}} ->
-        {:error, %{status: status, body: body, headers: response_headers}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    StreamTransport.post_stream(
+      url,
+      headers,
+      json_body,
+      LemonAi.Provider.retry_policy(opts),
+      provider: provider,
+      idle_timeout: StreamTransport.idle_timeout_for(opts.stream_idle_timeout)
+    )
   end
 
   defp summarize_http_request(trace_id, model, context, opts, endpoint, _body, messages) do
@@ -789,38 +752,6 @@ defmodule LemonAi.Providers.Bedrock do
   end
 
   defp trace_header(_headers, _key), do: nil
-
-  defp stream_response_body(%Req.Response{body: %Req.Response.Async{ref: ref}} = response) do
-    Stream.resource(
-      fn -> false end,
-      fn
-        true ->
-          {:halt, true}
-
-        false ->
-          receive do
-            {^ref, _} = message ->
-              case Req.parse_message(response, message) do
-                {:ok, parts} ->
-                  chunks = for {:data, data} <- parts, do: data
-                  {chunks, :done in parts}
-
-                {:error, reason} ->
-                  Logger.error("Stream error: #{inspect(reason)}")
-                  {:halt, true}
-
-                :unknown ->
-                  {[], false}
-              end
-          after
-            60_000 ->
-              Logger.error("Stream timeout")
-              {:halt, true}
-          end
-      end,
-      fn _ -> Req.cancel_async_response(response) end
-    )
-  end
 
   defp build_signed_headers(
          host,
@@ -943,32 +874,47 @@ defmodule LemonAi.Providers.Bedrock do
   # Event Stream Processing (Bedrock Binary Protocol)
   # ============================================================================
 
+  # `messageStop` is the terminal event (usage `metadata` may follow). A body
+  # that ends, errors, idles out or stops parsing before it fails the stream.
   defp process_event_stream(body_stream, output, stream, model) do
-    # State for tracking content blocks by index
     initial_state = %{
       output: output,
       model: model,
       # Map of content_block_index -> block data
       blocks: %{},
       # Buffer for incomplete frames
-      buffer: <<>>
+      buffer: <<>>,
+      terminal?: false,
+      failure: nil
     }
 
     final_state =
-      body_stream
-      |> Enum.reduce(initial_state, fn chunk, state ->
-        process_chunk(chunk, state, stream)
+      Enum.reduce_while(body_stream, initial_state, fn
+        {:stream_error, details}, state ->
+          {:halt, %{state | failure: details}}
+
+        chunk, state ->
+          state = process_chunk(chunk, state, stream)
+          if state.failure, do: {:halt, state}, else: {:cont, state}
       end)
 
-    Enum.reduce(final_state.blocks, final_state.output, fn
-      {_index, %{type: :tool_call, index: idx, argument_chunks: chunks}}, output ->
-        block = Enum.at(output.content, idx)
-        block = finalize_tool_arguments(block, chunks)
-        %{output | content: List.replace_at(output.content, idx, block)}
+    output =
+      Enum.reduce(final_state.blocks, final_state.output, fn
+        {_index, %{type: :tool_call, index: idx, argument_chunks: chunks}}, output ->
+          block = Enum.at(output.content, idx)
+          block = finalize_tool_arguments(block, chunks)
+          %{output | content: List.replace_at(output.content, idx, block)}
 
-      _, output ->
-        output
-    end)
+        _, output ->
+          output
+      end)
+
+    cond do
+      output.stop_reason == :error -> output
+      final_state.terminal? -> output
+      final_state.failure -> error_assistant_message(output, final_state.failure)
+      true -> error_assistant_message(output, StreamTransport.truncated(output.provider))
+    end
   end
 
   defp process_chunk(chunk, state, stream) do
@@ -988,9 +934,9 @@ defmodule LemonAi.Providers.Bedrock do
       :incomplete ->
         %{state | buffer: buffer}
 
-      {:error, reason} ->
-        Logger.error("Frame parse error: #{inspect(reason)}")
-        %{state | buffer: <<>>}
+      {:error, _reason} ->
+        Logger.warning("Bedrock event stream frame could not be parsed")
+        %{state | buffer: <<>>, failure: StreamTransport.malformed_event()}
     end
   end
 
@@ -1238,10 +1184,10 @@ defmodule LemonAi.Providers.Bedrock do
       {:ok, event} ->
         stop_reason = map_stop_reason(event["stopReason"])
         output = %{state.output | stop_reason: stop_reason}
-        %{state | output: output}
+        %{state | output: output, terminal?: true}
 
       _ ->
-        state
+        %{state | failure: StreamTransport.malformed_event()}
     end
   end
 
@@ -1423,18 +1369,6 @@ defmodule LemonAi.Providers.Bedrock do
       {:ok, result} when is_map(result) -> result
       _ -> %{}
     end
-  end
-
-  defp extract_error_message(body, status) when is_binary(body) do
-    case Jason.decode(body) do
-      {:ok, %{"message" => msg}} -> msg
-      {:ok, %{"Message" => msg}} -> msg
-      _ -> "HTTP #{status}: #{body}"
-    end
-  end
-
-  defp extract_error_message(body, status) do
-    "HTTP #{status}: #{inspect(body)}"
   end
 
   # ============================================================================

@@ -45,15 +45,15 @@ remain independently supervised.
 1. Router-owned `SessionCoordinator` decides queue semantics (`collect`, `followup`, `steer`, `interrupt`) and hands queue-semantic-free `%LemonCore.ExecutionCommand{}` values to `LemonGateway.Runtime`.
 2. Gateway-owned transports that still live in this app submit `%LemonCore.RunRequest{}` through `LemonCore.RouterBridge`, not directly into gateway internals.
 3. `Runtime.submit_execution/1` starts a temporary **Run** directly under `RunSupervisor`; `:ok` acknowledges a started or already-live child, not executor admission or completion.
-4. The **Run** claims its engine session before requesting capacity. A conflicting claim completes with `:session_in_use` without consuming a permit.
+4. The **Run** claims its engine session while it starts, before requesting capacity. A conflicting claim refuses the start: `submit_execution/1` returns `{:error, :session_in_use}` with no Run, permit or terminal record, and the router retries it within its pre-start deadline.
 5. After the terminal fence, the Run waits asynchronously in **Slots**' global FIFO. It rechecks terminal/cancellation state before invoking the executor.
 6. The native executor streams lifecycle events and deltas back to the Run.
 7. The **Run** broadcasts events on `"run:<run_id>"`; router and channels own semantic output and rendering.
-8. Completion persists the terminal receipt before notification and releases the claim and permit.
+8. Completion persists the terminal receipt, then releases the permit and claim exactly once, then notifies, so an observer of the completion can start the session's next run.
 
 Exact-run cancellation removes slot waiters; a late grant cannot authorize a
 terminal run to execute. RunRegistry prevents two live Runs for the same run ID.
-Router retries only runtime unavailability, bounded by its pre-start deadline;
+Router retries only runtime unavailability and a busy engine session, bounded by its pre-start deadline;
 definite rejection terminalizes once rather than retrying gateway admission.
 
 Gateway has no separate per-conversation launch queue and no independent waiter
@@ -64,12 +64,18 @@ but direct runtime callers bypass that protection. See the canonical
 Native executor death publishes an immediate structured `:executor_down`
 completion and releases the permit/claim. The native session runner monitors its
 event sink and aborts/saves/stops its owned session when that sink disappears.
-Terminal receipts are durable before their bus notification is emitted.
+Terminal receipts are durable before their bus notification is emitted. Every
+Run exit path publishes one: losing the permit authority completes waiting and
+running Runs with `:runtime_unavailable`, and an unreadable terminal fence with
+`:run_state_unavailable`. A Run registers its run ID before
+`submit_execution/1` returns, so the router monitors it while it waits for a permit.
 Cancellation of a running native session retains its slot until ordered terminal
 tool results and the agent's cancellation/error event have drained. The original
 cancellation reason wins even if the executor races with successful completion;
-the owned native journal is saved before publishing the terminal receipt. A
-15-second drain deadline bounds an unresponsive executor, without claiming that
+the owned native journal is saved before publishing the terminal receipt. The
+executor's `cancel/1` is an asynchronous request: whatever it returns, the Run
+holds the permit and claim until the executor process exits. A 15-second drain
+deadline bounds an unresponsive executor, without claiming that
 an interrupted tool had no effects.
 
 ## Singleton Executor Contract

@@ -1142,9 +1142,14 @@ config :coding_agent,
 
 The process limit holds capacity for the managed command's live lifetime, not
 just the launch callback. `lane_caps.background_exec` remains a separate launch
-concurrency cap. `:coding_agent, :task_max_concurrency` (default `8`) is the
-single shared cap for native task children and background sessions. They acquire
-the same monitored semaphore; the unused main/subagent lanes no longer exist.
+concurrency cap. `:coding_agent, :task_max_concurrency` (default `8`) caps
+concurrently running native task lineages: a child's descendants (synchronous
+launches and joins included) reuse its slot instead of deadlocking the pool.
+`/bg` background sessions use their own pool,
+`:coding_agent, :background_run_max_concurrency` (default `8`), so idle
+background sessions never block a task. A join without an explicit timeout
+yields (children keep running) after `:coding_agent, :task_join_timeout_ms`
+(default 30 minutes). The unused main/subagent lanes no longer exist.
 The pending limit bounds waiting admissions per LaneQueue; the acceptance ledger
 also bounds in-flight registrations. Process/pending limits are integers up to
 1,000,000 (process minimum 1, pending minimum 0). Admission deadline/wait values
@@ -1581,7 +1586,9 @@ permanent and always prevent recovery. A run seen in both graceful carryover and
 the crash scan is dispatched only once. Unportable requests, invocation-bound
 capabilities and named-node executions are not automatically re-issued; they
 converge to interrupted/unknown instead. Graceful restart carryover still works
-independently of this flag.
+independently of this flag. A recovery or replay call that times out is an
+unknown outcome for that run ID alone: it stays pending for the next boot while
+the remaining runs and carried items are still recovered.
 
 From a local operator console,
 `LemonRouter.RestartCarryover.CrashRecovery.operator_view(limit: 20)` returns recent
@@ -2940,7 +2947,7 @@ for the auto order, fail-closed behavior, LCU prerequisites and connector rollba
 ```toml
 [runtime.tools.browser]
 provider = "auto" # tern, lcu, relay, local, cdp, browserbase, browser_use,
-                  # firecrawl, camofox, controller, hybrid
+                  # firecrawl, camofox
 tern = true # false disables native Tern browser integration
 ```
 
@@ -2962,12 +2969,10 @@ The following environment variables configure individual backends:
 | `LEMON_BROWSER_CDP_ENDPOINT` | none | HTTP discovery or direct `ws`/`wss` CDP endpoint |
 | `LEMON_BROWSER_ATTACH_ONLY` | `false` | Never launch a replacement browser |
 | `LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS` | `false` | Required to attach to any browser Lemon did not launch (CDP endpoint, attach-only, relay); such a browser bypasses the egress proxy |
-| `LEMON_BROWSER_CDP_PORT` | `18800` | Managed local Chrome CDP port |
+| `LEMON_BROWSER_CDP_PORT` | `18800` | Local CDP port for attach-only mode; managed Chrome uses a free port |
 | `LEMON_BROWSER_RELAY_PORT` | `9224` | Loopback MV3 relay port |
 | `LEMON_BROWSER_RELAY_TOKEN` | none | Required relay shared secret |
-| `LEMON_BROWSER_BACKEND` | `local` | `local`, `tern`, `controller`, `hybrid`, `browserbase`, `browser_use`, `firecrawl`, or `camofox` |
-| `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | `local` | Local/private route used by `hybrid` |
-| `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | none | Required public route used by `hybrid` |
+| `LEMON_BROWSER_BACKEND` | `local` | `local`, `tern`, `browserbase`, `browser_use`, `firecrawl`, or `camofox` |
 | `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | none | Browserbase hosted sessions |
 | `BROWSER_USE_API_KEY` | none | Browser Use Cloud hosted sessions |
 | `CAMOFOX_URL` / `CAMOFOX_API_KEY` | none | Camofox REST/Firefox server |

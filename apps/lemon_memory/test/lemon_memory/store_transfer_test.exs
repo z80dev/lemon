@@ -79,7 +79,8 @@ defmodule LemonMemory.StoreTransferTest do
     assert [^incoming] = Store.search(ctx.server, "searchable", scope: :all, limit: 10)
   end
 
-  test "stale revisions prevent publication and preserve old rows and pending intent", ctx do
+  test "stale revisions prevent publication, preserve old rows and free the pending intent",
+       ctx do
     old = doc("old", "alice", ctx.home)
     :ok = Store.put_sync(ctx.server, old)
     assert {:ok, _} = Store.transfer_put_new(ctx.server, "operation", ctx.intent)
@@ -104,8 +105,7 @@ defmodule LemonMemory.StoreTransferTest do
 
     refute_received :published
     assert {:ok, ^changed} = Store.get_document(ctx.server, old.doc_id)
-    assert {:ok, entry} = Store.transfer_get(ctx.server, "operation")
-    assert entry == ctx.intent
+    assert {:error, :not_found} = Store.transfer_get(ctx.server, "operation")
   end
 
   test "foreign identifier collisions rollback deletion and never overwrite foreign summaries",
@@ -137,7 +137,7 @@ defmodule LemonMemory.StoreTransferTest do
     assert {:ok, ^foreign} = Store.get_document(ctx.server, foreign.doc_id)
   end
 
-  test "publication failure rolls back SQLite and receipt, leaving reconciliation pending", ctx do
+  test "publication failure rolls back SQLite and receipt and frees the pending intent", ctx do
     old = doc("old", "alice", ctx.home)
     incoming = doc("new", "alice", ctx.home)
     :ok = Store.put_sync(ctx.server, old)
@@ -157,8 +157,7 @@ defmodule LemonMemory.StoreTransferTest do
 
     assert {:ok, ^old} = Store.get_document(ctx.server, old.doc_id)
     assert {:error, :not_found} = Store.get_document(ctx.server, incoming.doc_id)
-    assert {:ok, entry} = Store.transfer_get(ctx.server, "operation")
-    assert entry == ctx.intent
+    assert {:error, :not_found} = Store.transfer_get(ctx.server, "operation")
     assert Store.search(ctx.server, "new", scope: :all, limit: 10) == []
   end
 
@@ -198,6 +197,9 @@ defmodule LemonMemory.StoreTransferTest do
                publish
              )
 
+    # Another operation's intent is never freed by a failure that is not its own.
+    assert {:ok, ctx.intent} == Store.transfer_get(ctx.server, "operation")
+
     assert {:error, :transfer_conflict} =
              Store.transfer_import(
                ctx.server,
@@ -211,6 +213,198 @@ defmodule LemonMemory.StoreTransferTest do
              )
 
     refute_received :published
+    assert {:error, :not_found} = Store.transfer_get(ctx.server, "operation")
+  end
+
+  test "a boundary that never runs is definite and the same operation can be retried", ctx do
+    incoming = doc("retried", "alice", ctx.home)
+    assert {:ok, _} = Store.transfer_put_new(ctx.server, "operation", ctx.intent)
+    owner = self()
+
+    publish = fn ->
+      send(owner, :published)
+      :ok
+    end
+
+    assert {:error, :memory_unavailable} =
+             Store.transfer_import(
+               ctx.server,
+               "alice",
+               ctx.home,
+               [],
+               [incoming],
+               "operation",
+               ctx.completed,
+               publish,
+               boundary: fn _run -> {:error, :memory_unavailable} end
+             )
+
+    refute_received :published
+    assert {:error, :not_found} = Store.transfer_get(ctx.server, "operation")
+    assert {:ok, _} = Store.transfer_put_new(ctx.server, "operation", ctx.intent)
+
+    assert {:ok, completed} =
+             Store.transfer_import(
+               ctx.server,
+               "alice",
+               ctx.home,
+               [],
+               [incoming],
+               "operation",
+               ctx.completed,
+               publish
+             )
+
+    assert completed == ctx.completed
+    assert_received :published
+    assert {:ok, ^incoming} = Store.get_document(ctx.server, incoming.doc_id)
+  end
+
+  test "an unverified rollback stays pending and keeps the intent", ctx do
+    assert {:ok, _} = Store.transfer_put_new(ctx.server, "operation", ctx.intent)
+
+    assert {:error, :transfer_pending} =
+             Store.transfer_import(
+               ctx.server,
+               "alice",
+               ctx.home,
+               [],
+               [],
+               "operation",
+               ctx.completed,
+               fn -> {:error, :memory_unavailable} end,
+               rollback: fn -> {:error, :restore_failed} end
+             )
+
+    assert {:ok, ctx.intent} == Store.transfer_get(ctx.server, "operation")
+  end
+
+  test "the receipt commit releases the named snapshot and previews only", ctx do
+    assert {:ok, _} = Store.transfer_put_new(ctx.server, "operation", ctx.intent)
+    assert {:ok, _} = Store.transfer_put_new(ctx.server, "source:op", envelope(["mem_x"]))
+
+    assert {:ok, _} =
+             Store.transfer_put_new(ctx.server, "preview:op:" <> sha("a"), %{"preview" => %{}})
+
+    assert {:ok, _} = Store.transfer_put_new(ctx.server, "preview:other:1", %{"preview" => %{}})
+
+    assert {:ok, _} =
+             Store.transfer_import(
+               ctx.server,
+               "alice",
+               ctx.home,
+               [],
+               [],
+               "operation",
+               ctx.completed,
+               fn -> :ok end,
+               release: [{:key, "source:op"}, {:prefix, "preview:op:"}]
+             )
+
+    assert {:error, :not_found} = Store.transfer_get(ctx.server, "source:op")
+    assert {:error, :not_found} = Store.transfer_get(ctx.server, "preview:op:" <> sha("a"))
+    assert {:ok, _} = Store.transfer_get(ctx.server, "preview:other:1")
+    assert {:ok, ctx.completed} == Store.transfer_get(ctx.server, "operation")
+    assert :ok = Store.transfer_release(ctx.server, [{:prefix, "preview:other:"}])
+    assert {:error, :not_found} = Store.transfer_get(ctx.server, "preview:other:1")
+  end
+
+  test "deleting a captured document deletes every snapshot that holds it", ctx do
+    secret = "Private fact about the deploy key rotation."
+    kept = doc("kept", "alice", ctx.home)
+    private = %{doc("private", "alice", ctx.home) | answer_summary: secret}
+    for record <- [kept, private], do: :ok = Store.put_sync(ctx.server, record)
+
+    assert {:ok, _} =
+             Store.transfer_put_new(ctx.server, "source:a", envelope([private.doc_id], secret))
+
+    assert {:ok, _} = Store.transfer_put_new(ctx.server, "source:b", envelope([kept.doc_id]))
+    assert {:ok, _} = Store.transfer_put_new(ctx.server, "operation", ctx.intent)
+    assert journal_bytes(ctx) =~ secret
+
+    assert {:ok, :deleted} =
+             Store.delete_document_if_unchanged(
+               ctx.server,
+               private.doc_id,
+               Store.document_revision(private)
+             )
+
+    refute journal_bytes(ctx) =~ secret
+    assert {:error, :not_found} = Store.transfer_get(ctx.server, "source:a")
+    assert {:ok, _} = Store.transfer_get(ctx.server, "source:b")
+    assert {:ok, _} = Store.transfer_get(ctx.server, "operation")
+
+    assert {:ok, :deleted} = Store.delete_document(ctx.server, kept.doc_id)
+    assert {:error, :not_found} = Store.transfer_get(ctx.server, "source:b")
+    assert {:ok, _} = Store.transfer_get(ctx.server, "operation")
+  end
+
+  test "scope erasure removes snapshots of the erased documents and of an erased agent", ctx do
+    session = doc("session", "alice", ctx.home)
+    workspace = %{doc("workspace", "alice", ctx.home) | workspace_key: "/work/a"}
+    other = %{doc("other", "alice", ctx.home) | session_key: "agent:alice:other"}
+    for record <- [session, workspace, other], do: :ok = Store.put_sync(ctx.server, record)
+
+    for {key, ids} <- [
+          {"source:session", [session.doc_id]},
+          {"source:workspace", [workspace.doc_id]},
+          {"source:other", [other.doc_id]},
+          {"source:empty", []}
+        ],
+        do: assert({:ok, _} = Store.transfer_put_new(ctx.server, key, envelope(ids)))
+
+    Store.delete_by_session(ctx.server, "agent:alice:main")
+    _ = Store.stats(ctx.server)
+    assert {:error, :not_found} = Store.transfer_get(ctx.server, "source:session")
+    assert {:ok, _} = Store.transfer_get(ctx.server, "source:other")
+
+    :ok = Store.put_sync(ctx.server, workspace)
+
+    assert {:ok, _} =
+             Store.transfer_put_new(ctx.server, "source:workspace", envelope([workspace.doc_id]))
+
+    Store.delete_by_workspace(ctx.server, "/work/a")
+    _ = Store.stats(ctx.server)
+    assert {:error, :not_found} = Store.transfer_get(ctx.server, "source:workspace")
+
+    Store.delete_by_agent(ctx.server, "alice")
+    _ = Store.stats(ctx.server)
+    assert {:error, :not_found} = Store.transfer_get(ctx.server, "source:other")
+    # A snapshot of the agent's preference files alone goes with the agent too.
+    assert {:error, :not_found} = Store.transfer_get(ctx.server, "source:empty")
+  end
+
+  test "retention and the transfer TTL prune snapshots and previews, not receipts", %{
+    tmp_dir: root
+  } do
+    server = :"store_transfer_ttl_#{System.unique_integer([:positive])}"
+    path = Path.join(root, "ttl")
+
+    start_supervised!(
+      Supervisor.child_spec(
+        {Store, name: server, path: path, retention_ms: 120_000, transfer_ttl_ms: 60_000},
+        id: server
+      )
+    )
+
+    home = sha("ttl-home")
+    old = %{doc("aged", "alice", home) | ingested_at_ms: 1}
+    fresh = doc("fresh", "alice", home)
+    for record <- [old, fresh], do: :ok = Store.put_sync(server, record)
+    assert {:ok, _} = Store.transfer_put_new(server, "source:aged", envelope([old.doc_id]))
+    assert {:ok, _} = Store.transfer_put_new(server, "source:fresh", envelope([fresh.doc_id]))
+    assert {:ok, _} = Store.transfer_put_new(server, "preview:fresh:1", %{"preview" => %{}})
+    assert {:ok, _} = Store.transfer_put_new(server, "destination:fresh", %{"state" => "pending"})
+
+    assert {:ok, %{swept: 1}} = Store.prune(server)
+    assert {:error, :not_found} = Store.transfer_get(server, "source:aged")
+    assert {:ok, _} = Store.transfer_get(server, "source:fresh")
+
+    age_journal(Path.join(path, "memory.sqlite3"), 60_001)
+    assert {:ok, _} = Store.prune(server)
+    assert {:error, :not_found} = Store.transfer_get(server, "source:fresh")
+    assert {:error, :not_found} = Store.transfer_get(server, "preview:fresh:1")
+    assert {:ok, _} = Store.transfer_get(server, "destination:fresh")
   end
 
   test "index kinds are SQLite strings while source atom metadata remains unchanged", ctx do
@@ -315,6 +509,50 @@ defmodule LemonMemory.StoreTransferTest do
     record = doc("after-admission-failure", "alice", ctx.home)
     assert :ok = Store.put_sync(ctx.server, record)
     assert {:ok, ^record} = Store.get_document(ctx.server, record.doc_id)
+  end
+
+  # The shape `LemonSkills.ProfileMemoryTransfer` freezes: content lives under
+  # `snapshot.documents[*]` and `snapshot.preferences`.
+  defp envelope(ids, text \\ "Saved fact.") do
+    %{
+      "profileId" => "alice",
+      "mutationId" => "operation",
+      "snapshot" => %{
+        "documents" => Enum.map(ids, &%{"id" => &1, "answerSummary" => text}),
+        "preferences" => %{"USER.md" => text, "MEMORY.md" => nil}
+      }
+    }
+  end
+
+  # Every journal payload as stored, read through a separate SQLite connection.
+  defp journal_bytes(ctx) do
+    with_connection(Path.join(ctx.tmp_dir, "memory.sqlite3"), fn conn ->
+      {:ok, stmt} = Exqlite.Sqlite3.prepare(conn, "SELECT payload FROM memory_transfer_journal")
+      {:ok, rows} = Exqlite.Sqlite3.fetch_all(conn, stmt)
+      :ok = Exqlite.Sqlite3.release(conn, stmt)
+      rows |> List.flatten() |> Enum.join("\n")
+    end)
+  end
+
+  defp age_journal(database, by_ms) do
+    with_connection(database, fn conn ->
+      :ok =
+        Exqlite.Sqlite3.execute(
+          conn,
+          "UPDATE memory_transfer_journal SET created_at_ms = created_at_ms - #{by_ms}"
+        )
+    end)
+  end
+
+  defp with_connection(database, fun) do
+    {:ok, conn} = Exqlite.Sqlite3.open(database)
+
+    try do
+      :ok = Exqlite.Sqlite3.execute(conn, "PRAGMA busy_timeout=5000")
+      fun.(conn)
+    after
+      Exqlite.Sqlite3.close(conn)
+    end
   end
 
   defp doc(id, agent, home) do

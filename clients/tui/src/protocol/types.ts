@@ -86,13 +86,16 @@ export type SessionsSnapshotResult =
 			status: "ok";
 			sessionKey: string;
 			identity: SessionSnapshotIdentity;
-			eventCursor?: SessionEventCursor | null;
+			/** True when the caller lacks `operator.content` and rows carry metadata only. */
+			contentWithheld?: boolean;
 			/** Owner-verified terminal continuity for this request's continuationFrom. */
 			continuation?: boolean;
 			consistency: {
 				boundary: "stable_owner_reads";
 				atomic: false;
-				eventCursor: null;
+				/** Read with the native projection in one owner call; null when no live owner. */
+				eventCursor: SessionEventCursor | null;
+				runStatus?: string;
 			};
 			snapshot: {
 				phase: string;

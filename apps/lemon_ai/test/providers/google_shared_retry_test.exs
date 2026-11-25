@@ -1,19 +1,20 @@
 defmodule LemonAi.Providers.GoogleSharedRetryTest do
   @moduledoc """
-  Unit tests for GoogleShared retry and error handling utilities.
+  Unit tests for the retry classification and timing used by the Google providers.
   """
   use ExUnit.Case, async: true
 
+  alias LemonAi.{Error, Retry}
   alias LemonAi.Providers.GoogleShared
 
   # ============================================================================
   # Retry Delay Extraction Tests
   # ============================================================================
 
-  describe "extract_retry_delay/2" do
+  describe "Retry.extract_retry_delay_ms/2" do
     test "extracts delay from 'Your quota will reset after Xs' format" do
       error_text = "Your quota will reset after 39s"
-      delay = GoogleShared.extract_retry_delay(error_text)
+      delay = Retry.extract_retry_delay_ms(error_text)
 
       assert delay != nil
       # 39s + 1s buffer = 40000ms
@@ -22,7 +23,7 @@ defmodule LemonAi.Providers.GoogleSharedRetryTest do
 
     test "extracts delay from hours+minutes+seconds format" do
       error_text = "Your quota will reset after 18h31m10s"
-      delay = GoogleShared.extract_retry_delay(error_text)
+      delay = Retry.extract_retry_delay_ms(error_text)
 
       assert delay != nil
       # (18*3600 + 31*60 + 10) * 1000 + 1000 = 66_671_000
@@ -32,7 +33,7 @@ defmodule LemonAi.Providers.GoogleSharedRetryTest do
 
     test "extracts delay from minutes+seconds format" do
       error_text = "Your quota will reset after 10m15s"
-      delay = GoogleShared.extract_retry_delay(error_text)
+      delay = Retry.extract_retry_delay_ms(error_text)
 
       assert delay != nil
       expected = (10 * 60 + 15) * 1000 + 1000
@@ -41,7 +42,7 @@ defmodule LemonAi.Providers.GoogleSharedRetryTest do
 
     test "extracts delay from 'Please retry in Xs' format" do
       error_text = "Please retry in 5s"
-      delay = GoogleShared.extract_retry_delay(error_text)
+      delay = Retry.extract_retry_delay_ms(error_text)
 
       assert delay != nil
       assert delay == 6000
@@ -49,7 +50,7 @@ defmodule LemonAi.Providers.GoogleSharedRetryTest do
 
     test "extracts delay from 'Please retry in Xms' format" do
       error_text = "Please retry in 500ms"
-      delay = GoogleShared.extract_retry_delay(error_text)
+      delay = Retry.extract_retry_delay_ms(error_text)
 
       assert delay != nil
       # 500ms + 1000ms buffer, ceiled = 1500
@@ -58,7 +59,7 @@ defmodule LemonAi.Providers.GoogleSharedRetryTest do
 
     test "extracts delay from retryDelay JSON field" do
       error_text = ~s({"error": {"message": "Rate limited", "retryDelay": "34.074824224s"}})
-      delay = GoogleShared.extract_retry_delay(error_text)
+      delay = Retry.extract_retry_delay_ms(error_text)
 
       assert delay != nil
       # 34.074... seconds + 1s buffer, ceiled
@@ -69,7 +70,7 @@ defmodule LemonAi.Providers.GoogleSharedRetryTest do
     test "extracts delay from retry-after header" do
       error_text = "Rate limited"
       headers = %{"retry-after" => "10"}
-      delay = GoogleShared.extract_retry_delay(error_text, headers)
+      delay = Retry.extract_retry_delay_ms(error_text, headers)
 
       assert delay != nil
       assert delay == 11_000
@@ -78,7 +79,7 @@ defmodule LemonAi.Providers.GoogleSharedRetryTest do
     test "extracts delay from x-ratelimit-reset-after header" do
       error_text = "Rate limited"
       headers = %{"x-ratelimit-reset-after" => "5.5"}
-      delay = GoogleShared.extract_retry_delay(error_text, headers)
+      delay = Retry.extract_retry_delay_ms(error_text, headers)
 
       assert delay != nil
       assert delay == 6500
@@ -87,21 +88,21 @@ defmodule LemonAi.Providers.GoogleSharedRetryTest do
     test "prefers header delay over text delay" do
       error_text = "Your quota will reset after 60s"
       headers = %{"retry-after" => "5"}
-      delay = GoogleShared.extract_retry_delay(error_text, headers)
+      delay = Retry.extract_retry_delay_ms(error_text, headers)
 
       assert delay == 6000
     end
 
     test "returns nil for unrecognized format" do
       error_text = "An unknown error occurred"
-      delay = GoogleShared.extract_retry_delay(error_text)
+      delay = Retry.extract_retry_delay_ms(error_text)
 
       assert delay == nil
     end
 
     test "handles fractional seconds" do
       error_text = "Your quota will reset after 1.5s"
-      delay = GoogleShared.extract_retry_delay(error_text)
+      delay = Retry.extract_retry_delay_ms(error_text)
 
       assert delay != nil
       assert delay == 2500
@@ -109,7 +110,7 @@ defmodule LemonAi.Providers.GoogleSharedRetryTest do
 
     test "handles zero delay gracefully" do
       error_text = "Please retry in 0s"
-      delay = GoogleShared.extract_retry_delay(error_text)
+      delay = Retry.extract_retry_delay_ms(error_text)
 
       # Zero or negative should return nil
       assert delay == nil
@@ -120,92 +121,58 @@ defmodule LemonAi.Providers.GoogleSharedRetryTest do
   # Retryable Error Detection Tests
   # ============================================================================
 
-  describe "retryable_error?/2" do
+  describe "Error.retryable_http_error?/2" do
     test "returns true for 429 Too Many Requests" do
-      assert GoogleShared.retryable_error?(429, "Rate limited") == true
+      assert Error.retryable_http_error?(429, "Rate limited") == true
     end
 
     test "returns true for 500 Internal Server Error" do
-      assert GoogleShared.retryable_error?(500, "Internal error") == true
+      assert Error.retryable_http_error?(500, "Internal error") == true
     end
 
     test "returns true for 502 Bad Gateway" do
-      assert GoogleShared.retryable_error?(502, "Bad gateway") == true
+      assert Error.retryable_http_error?(502, "Bad gateway") == true
     end
 
     test "returns true for 503 Service Unavailable" do
-      assert GoogleShared.retryable_error?(503, "Service unavailable") == true
+      assert Error.retryable_http_error?(503, "Service unavailable") == true
     end
 
     test "returns true for 504 Gateway Timeout" do
-      assert GoogleShared.retryable_error?(504, "Gateway timeout") == true
+      assert Error.retryable_http_error?(504, "Gateway timeout") == true
     end
 
     test "returns true for RESOURCE_EXHAUSTED error" do
-      assert GoogleShared.retryable_error?(400, "RESOURCE_EXHAUSTED: quota exceeded") == true
+      assert Error.retryable_http_error?(400, "RESOURCE_EXHAUSTED: quota exceeded") == true
     end
 
     test "returns true for rate limit error text" do
-      assert GoogleShared.retryable_error?(400, "rate limit exceeded") == true
-      assert GoogleShared.retryable_error?(400, "RateLimit error") == true
+      assert Error.retryable_http_error?(400, "rate limit exceeded") == true
+      assert Error.retryable_http_error?(400, "RateLimit error") == true
     end
 
     test "returns true for overloaded error" do
-      assert GoogleShared.retryable_error?(400, "Model is currently overloaded") == true
+      assert Error.retryable_http_error?(400, "Model is currently overloaded") == true
     end
 
     test "returns true for service unavailable text" do
-      assert GoogleShared.retryable_error?(400, "service unavailable") == true
+      assert Error.retryable_http_error?(400, "service unavailable") == true
     end
 
     test "returns true for connection closed error" do
-      assert GoogleShared.retryable_error?(0, "other side closed connection") == true
+      assert Error.retryable_http_error?(0, "other side closed connection") == true
     end
 
     test "returns false for 400 with unrecognized error" do
-      assert GoogleShared.retryable_error?(400, "Invalid request body") == false
+      assert Error.retryable_http_error?(400, "Invalid request body") == false
     end
 
     test "returns false for 401 Unauthorized" do
-      assert GoogleShared.retryable_error?(401, "Invalid API key") == false
+      assert Error.retryable_http_error?(401, "Invalid API key") == false
     end
 
     test "returns false for 404 Not Found" do
-      assert GoogleShared.retryable_error?(404, "Model not found") == false
-    end
-  end
-
-  # ============================================================================
-  # Error Message Extraction Tests
-  # ============================================================================
-
-  describe "extract_error_message/1" do
-    test "extracts message from Google API error format" do
-      error_json =
-        Jason.encode!(%{
-          "error" => %{
-            "code" => 400,
-            "message" => "API key not valid",
-            "status" => "INVALID_ARGUMENT"
-          }
-        })
-
-      assert GoogleShared.extract_error_message(error_json) == "API key not valid"
-    end
-
-    test "returns raw text for non-JSON error" do
-      error_text = "Connection refused"
-      assert GoogleShared.extract_error_message(error_text) == "Connection refused"
-    end
-
-    test "returns raw text for malformed JSON" do
-      error_text = "{invalid json"
-      assert GoogleShared.extract_error_message(error_text) == "{invalid json"
-    end
-
-    test "returns raw text when message is missing" do
-      error_json = Jason.encode!(%{"error" => %{"code" => 500}})
-      assert GoogleShared.extract_error_message(error_json) == error_json
+      assert Error.retryable_http_error?(404, "Model not found") == false
     end
   end
 

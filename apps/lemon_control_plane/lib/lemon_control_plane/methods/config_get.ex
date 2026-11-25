@@ -17,6 +17,7 @@ defmodule LemonControlPlane.Methods.ConfigGet do
 
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.ConfigStore
+  alias LemonControlPlane.Protocol.Errors
   alias LemonCore.Redact
 
   # Allowed config keys that can be retrieved from Application.get_env. These
@@ -53,18 +54,27 @@ defmodule LemonControlPlane.Methods.ConfigGet do
 
     case params["key"] do
       nil ->
-        config = get_all_config(admin?)
-        {:ok, Map.put(config, "summary", summary(config, admin?))}
+        with {:ok, config} <- get_all_config(admin?) do
+          {:ok, Map.put(config, "summary", summary(config, admin?))}
+        end
 
       key ->
-        value =
-          cond do
-            admin? -> key |> get_config_value() |> project_admin(key)
-            key in @public_keys -> key |> get_config_value() |> public_value()
-            true -> nil
-          end
+        with {:ok, value} <- requested_value(key, admin?) do
+          {:ok, %{"key" => key, "value" => value, "summary" => summary(key, value, admin?)}}
+        end
+    end
+  end
 
-        {:ok, %{"key" => key, "value" => value, "summary" => summary(key, value, admin?)}}
+  defp requested_value(key, admin?) do
+    cond do
+      admin? ->
+        with {:ok, value} <- get_config_value(key), do: {:ok, project_admin(value, key)}
+
+      key in @public_keys ->
+        with {:ok, value} <- get_config_value(key), do: {:ok, public_value(value)}
+
+      true ->
+        {:ok, nil}
     end
   end
 
@@ -104,15 +114,12 @@ defmodule LemonControlPlane.Methods.ConfigGet do
     }
   end
 
+  # A stored value wins; an unset key falls back to the allowed application config.
   defp get_config_value(key) do
-    # First check the store (user-set values)
-    case ConfigStore.get(key) do
-      nil ->
-        # Fall back to Application.get_env only for allowed keys
-        get_app_config_value(key)
-
-      value ->
-        value
+    case ConfigStore.fetch(key) do
+      {:ok, nil} -> {:ok, get_app_config_value(key)}
+      {:ok, value} -> {:ok, value}
+      {:error, _reason} -> unavailable()
     end
   end
 
@@ -129,36 +136,36 @@ defmodule LemonControlPlane.Methods.ConfigGet do
   end
 
   defp get_all_config(admin?) do
-    stored = ConfigStore.list()
+    case ConfigStore.fetch_all() do
+      {:ok, stored} ->
+        stored_map = Map.new(stored, fn {k, v} -> {to_string(k), v} end)
 
-    stored_map =
-      if is_list(stored) do
-        Enum.into(stored, %{}, fn {k, v} -> {to_string(k), v} end)
-      else
-        %{}
-      end
+        app_config =
+          Enum.reduce(@allowed_app_config_keys, %{}, fn {key, {app, config_key}}, acc ->
+            case Application.get_env(app, config_key) do
+              nil -> acc
+              value -> Map.put(acc, key, value)
+            end
+          end)
 
-    app_config =
-      Enum.reduce(@allowed_app_config_keys, %{}, fn {key, {app, config_key}}, acc ->
-        case Application.get_env(app, config_key) do
-          nil -> acc
-          value -> Map.put(acc, key, value)
+        config = Map.merge(app_config, stored_map)
+
+        if admin? do
+          {:ok, Redact.operator(config)}
+        else
+          {:ok,
+           config
+           |> Map.take(@public_keys)
+           |> Map.new(fn {key, value} -> {key, public_value(value)} end)
+           |> Map.reject(fn {_key, value} -> is_nil(value) end)}
         end
-      end)
 
-    config = Map.merge(app_config, stored_map)
-
-    if admin? do
-      Redact.operator(config)
-    else
-      config
-      |> Map.take(@public_keys)
-      |> Map.new(fn {key, value} -> {key, public_value(value)} end)
-      |> Map.reject(fn {_key, value} -> is_nil(value) end)
+      {:error, _reason} ->
+        unavailable()
     end
-  rescue
-    _ -> %{}
   end
+
+  defp unavailable, do: {:error, Errors.unavailable("Configuration is unavailable")}
 
   # Projecting the value under its own key masks it when the key is sensitive.
   defp project_admin(nil, _key), do: nil

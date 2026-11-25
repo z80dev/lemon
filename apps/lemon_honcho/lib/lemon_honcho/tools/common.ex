@@ -298,6 +298,20 @@ defmodule LemonHoncho.Tools.Common do
     %AgentToolResult{content: [%TextContent{text: message}], details: %{error: message}}
   end
 
+  @doc """
+  The message for a remote change Honcho may or may not have applied.
+
+  `LemonHoncho.Client` returns `{:error, :outcome_unknown}` when a sent-once
+  call (a dialectic question, a conclusion write or delete) got no answer. The
+  model is told exactly that, so it checks before repeating rather than
+  duplicating the write or paying for the question twice.
+  """
+  @spec outcome_unknown_message(String.t()) :: String.t()
+  def outcome_unknown_message(action) do
+    "Honcho did not answer the #{action} request, so it may or may not have been applied. " <>
+      "Check the current state before repeating it."
+  end
+
   @doc "The message for a Honcho call rejected with HTTP 401."
   @spec unauthorized_message() :: String.t()
   def unauthorized_message do

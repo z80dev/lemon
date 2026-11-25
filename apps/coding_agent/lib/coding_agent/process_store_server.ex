@@ -3,19 +3,34 @@ defmodule CodingAgent.ProcessStoreServer do
   GenServer that owns the ProcessStore ETS table and manages DETS persistence.
 
   Serializes launch admission, lifetime capacity and artifact accounting with
-  every record mutation. Reload preserves surviving registered sessions,
-  cancels unclaimed queued launches and marks missing live owners as :lost
-  without treating their absence as proof of external workload termination.
-  A lost unmanaged row without a live owner or a valid workload witness has no
-  admission charge. Explicit managed reservations remain charged until external
-  termination is confirmed, even when their BEAM owner has disappeared.
+  every record mutation. Requests carry data only; no caller closure runs in
+  this owner. A storage failure replies `{:error, :store_unavailable}` and
+  the owner keeps running.
+
+  ## Restart semantics
+
+  A crashed owner's restart reclaims the live mirror from its ETS heir; a boot
+  (first start, application restart or clean stop) reloads DETS. Both apply
+  the same live-owner reconciliation: surviving registered sessions are
+  preserved and re-monitored, unclaimed queued launches are cancelled and
+  missing live owners are marked :lost without treating their absence as
+  proof of external workload termination. A lost unmanaged row without a live
+  owner or a valid workload witness has no admission charge. Explicit managed
+  reservations remain charged until external termination is confirmed, even
+  when their BEAM owner has disappeared.
+
+  `CodingAgent.ProcessManager` (and every `CodingAgent.ProcessSession`,
+  including one-shot foreground commands) is started before this owner, so a
+  store restart never restarts the sessions or stops their process groups.
   """
 
   use CodingAgent.DurableTable
+  require Logger
 
   @table :coding_agent_processes
   @dets_table :coding_agent_processes_dets
   @default_ttl_seconds 86_400
+  @max_log_lines 1000
 
   # Client API
 
@@ -74,11 +89,6 @@ defmodule CodingAgent.ProcessStoreServer do
     )
   end
 
-  @doc false
-  def transaction(server, fun) when is_function(fun, 0) do
-    GenServer.call(server, {:transaction, fun}, 30_000)
-  end
-
   # Server Callbacks
 
   @impl true
@@ -107,10 +117,12 @@ defmodule CodingAgent.ProcessStoreServer do
         dets_table: @dets_table,
         path: dets_path(opts),
         normalize: &__MODULE__.normalize_row/2,
+        # Its normalization only resolves owners that are gone, so it also
+        # applies to a reclaimed mirror whose monitors died with the owner.
+        reclaim: &__MODULE__.normalize_row/2,
         timestamp: &__MODULE__.expiry_timestamp/1,
         after_load: &__MODULE__.restore_capacity/1,
         reload_empty: true,
-        required: true,
         ttl_key: :process_store_ttl_seconds,
         interval_key: :process_store_cleanup_interval_seconds
       )
@@ -118,20 +130,43 @@ defmodule CodingAgent.ProcessStoreServer do
     {:ok, state}
   end
 
+  # Requests are data; no caller closure runs here. Storage failure is a
+  # reply, never an owner exit: the owner keeps serving and restarts of it
+  # cannot cascade into ProcessManager's sessions.
   @impl true
-  def handle_call(:ensure_table, _from, state) do
+  def handle_call(:dets_status, _from, state), do: {:reply, DurableTable.status(state), state}
+
+  def handle_call(request, from, state) do
     state = ensure_tables(state)
-    {:reply, :ok, state}
+
+    if state.dets_initialized,
+      do: serve(request, from, state),
+      else: {:reply, {:error, :store_unavailable}, state}
+  rescue
+    error ->
+      Logger.warning("Process store request failed: #{inspect(error.__struct__)}")
+      {:reply, {:error, :store_unavailable}, state}
+  catch
+    :throw, :store_unavailable -> {:reply, {:error, :store_unavailable}, state}
   end
 
-  def handle_call({:transaction, fun}, _from, state) do
-    state = ensure_tables(state)
-    {:reply, fun.(), state}
-  end
+  defp serve(:ensure_table, _from, state), do: {:reply, :ok, state}
 
-  def handle_call({:register_launch, id, owner, fingerprint, deadline, owner_pid}, from, state) do
-    state = ensure_tables(state)
+  defp serve({:new_process, id, attachment, record}, _from, state),
+    do: {:reply, attach_process(id, attachment, record), state}
 
+  defp serve({:append_logs, id, lines, opts}, _from, state),
+    do: {:reply, append_logs(id, lines, opts), state}
+
+  defp serve({:update_record, id, changes, durable}, _from, state),
+    do: {:reply, update_record(id, changes, durable), state}
+
+  defp serve({:insert_record, id, record, logs}, _from, state),
+    do: {:reply, insert_record(id, record, logs), state}
+
+  defp serve({:delete, id}, _from, state), do: {:reply, delete_process(id), state}
+
+  defp serve({:register_launch, id, owner, fingerprint, deadline, owner_pid}, from, state) do
     reply =
       case :ets.lookup(@table, id) do
         [] ->
@@ -177,9 +212,7 @@ defmodule CodingAgent.ProcessStoreServer do
     {:reply, reply, state}
   end
 
-  def handle_call({:claim_launch, id, owner, fingerprint}, {session, _tag}, state) do
-    state = ensure_tables(state)
-
+  defp serve({:claim_launch, id, owner, fingerprint}, {session, _tag}, state) do
     reply =
       case :ets.lookup(@table, id) do
         [
@@ -251,9 +284,7 @@ defmodule CodingAgent.ProcessStoreServer do
     {:reply, reply, state}
   end
 
-  def handle_call({:classify_launch, id, classification, reason}, _from, state) do
-    state = ensure_tables(state)
-
+  defp serve({:classify_launch, id, classification, reason}, _from, state) do
     state =
       case :ets.lookup(@table, id) do
         [{^id, %{status: :cleared}, _}] ->
@@ -289,7 +320,7 @@ defmodule CodingAgent.ProcessStoreServer do
     {:reply, :ok, state}
   end
 
-  def handle_call({:subscribe_capacity, pid}, _from, state) do
+  defp serve({:subscribe_capacity, pid}, _from, state) do
     state =
       if Map.has_key?(state.capacity_subscribers, pid) do
         state
@@ -300,7 +331,7 @@ defmodule CodingAgent.ProcessStoreServer do
     {:reply, :ok, state}
   end
 
-  def handle_call({:yield_launch, id, owner}, _from, state) do
+  defp serve({:yield_launch, id, owner}, _from, state) do
     case {:ets.lookup(@table, id), Map.get(state.pending, id)} do
       {[{^id, %{owner: ^owner, launch_classification: :queued}, _}], pending}
       when is_map(pending) ->
@@ -324,7 +355,7 @@ defmodule CodingAgent.ProcessStoreServer do
     end
   end
 
-  def handle_call({:yielded_launch, id}, _from, state) do
+  defp serve({:yielded_launch, id}, _from, state) do
     yielded =
       case Map.get(state.pending, id) do
         %{caller: nil, owner: owner} when is_pid(owner) -> Process.alive?(owner)
@@ -334,20 +365,16 @@ defmodule CodingAgent.ProcessStoreServer do
     {:reply, yielded, state}
   end
 
-  def handle_call(:background_counts, _from, state) do
-    state = ensure_tables(state)
+  defp serve(:background_counts, _from, state) do
     counts = capacity_counts() |> Map.new(fn {key, count} -> {key, min(count, 1_000_000)} end)
     {:reply, Map.put(counts, :limit, state.background_limit), state}
   end
 
-  def handle_call(:background_capacity_available, _from, state) do
-    state = ensure_tables(state)
+  defp serve(:background_capacity_available, _from, state) do
     {:reply, state.occupied < state.background_limit, state}
   end
 
-  def handle_call({:cancel_launch, id, owner}, _from, state) do
-    state = ensure_tables(state)
-
+  defp serve({:cancel_launch, id, owner}, _from, state) do
     reply =
       case :ets.lookup(@table, id) do
         [{^id, %{owner: ^owner, launch_classification: :queued} = record, logs}] ->
@@ -370,9 +397,7 @@ defmodule CodingAgent.ProcessStoreServer do
     {:reply, reply, state}
   end
 
-  def handle_call({:confirm_termination, id, cause}, _from, state) do
-    state = ensure_tables(state)
-
+  defp serve({:confirm_termination, id, cause}, _from, state) do
     state =
       case :ets.lookup(@table, id) do
         [{^id, %{status: :cleared}, _}] ->
@@ -400,9 +425,7 @@ defmodule CodingAgent.ProcessStoreServer do
     {:reply, :ok, state}
   end
 
-  def handle_call({:launch_receipt, id, owner}, _from, state) do
-    state = ensure_tables(state)
-
+  defp serve({:launch_receipt, id, owner}, _from, state) do
     reply =
       case :ets.lookup(@table, id) do
         [{^id, %{owner: ^owner, launch_fingerprint: fingerprint} = record, logs}]
@@ -417,15 +440,12 @@ defmodule CodingAgent.ProcessStoreServer do
     {:reply, reply, state}
   end
 
-  def handle_call({:cleanup, ttl_seconds}, _from, state) do
-    state = ensure_tables(state)
-    deleted_count = DurableTable.cleanup(state, ttl_seconds, &CodingAgent.ProcessStore.delete/1)
+  defp serve({:cleanup, ttl_seconds}, _from, state) do
+    deleted_count = DurableTable.cleanup(state, ttl_seconds, &delete_process/1)
     {:reply, {:ok, deleted_count}, state}
   end
 
-  def handle_call(:clear, _from, state) do
-    state = ensure_tables(state)
-
+  defp serve(:clear, _from, state) do
     # Test reset wipes launch tombstones and held reservations too, but keeps a
     # record (and its artifact charge) whose output file could not be removed.
     failed? =
@@ -453,32 +473,37 @@ defmodule CodingAgent.ProcessStoreServer do
     {:reply, reply, %{state | occupied: capacity_counts().occupied}}
   end
 
-  def handle_call(:dets_status, _from, state) do
-    {:reply, DurableTable.status(state), state}
-  end
-
-  def handle_call(
-        {:reserve_artifact, process_id, requested, owner_budget, runtime_budget},
-        _from,
-        state
-      ) do
-    state = ensure_tables(state)
+  defp serve(
+         {:reserve_artifact, process_id, requested, owner_budget, runtime_budget},
+         _from,
+         state
+       ) do
     {:reply, do_reserve_artifact(process_id, requested, owner_budget, runtime_budget), state}
   end
 
   @impl true
-  def handle_info(:cleanup, state) do
+  def handle_info(message, state) do
+    serve_info(message, state)
+  rescue
+    error ->
+      Logger.warning("Process store event failed: #{inspect(error.__struct__)}")
+      {:noreply, state}
+  catch
+    :throw, :store_unavailable -> {:noreply, state}
+  end
+
+  defp serve_info(:cleanup, state) do
     state = ensure_tables(state)
 
-    DurableTable.periodic_cleanup(state, &CodingAgent.ProcessStore.delete/1)
+    DurableTable.periodic_cleanup(state, &delete_process/1)
     {:noreply, state}
   end
 
-  def handle_info({:pending_launch_deadline, id}, state) do
+  defp serve_info({:pending_launch_deadline, id}, state) do
     {:noreply, terminalize_pending(state, id, :expired, :admission_deadline)}
   end
 
-  def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
+  defp serve_info({:DOWN, ref, :process, pid, _reason}, state) do
     cond do
       Map.get(state.capacity_subscribers, pid) == ref ->
         {:noreply, update_in(state.capacity_subscribers, &Map.delete(&1, pid))}
@@ -496,20 +521,177 @@ defmodule CodingAgent.ProcessStoreServer do
     end
   end
 
-  def handle_info({:EXIT, _pid, _reason}, state) do
-    # Handle linked process exits if needed
-    {:noreply, state}
+  defp serve_info(_message, state), do: {:noreply, state}
+
+  # Owner-side record operations. Each reads the current tuple in this mailbox.
+  defp attach_process(id, %{owner: owner, fingerprint: fingerprint} = attachment, record) do
+    case :ets.lookup(@table, id) do
+      [{^id, %{status: :cleared}, _}] ->
+        {:error, "process identity cleared"}
+
+      [{^id, %{owner: ^owner, launch_fingerprint: ^fingerprint} = launch, logs}]
+      when is_binary(fingerprint) ->
+        attached =
+          attachment.metadata
+          |> Enum.reduce(launch, fn {key, value}, acc -> Map.put_new(acc, key, value) end)
+          |> Map.put(:updated_at, System.system_time(:second))
+
+        DurableTable.put(@table, {id, attached, logs}, :sync)
+
+      [{^id, %{launch_fingerprint: existing}, _}] when is_binary(existing) ->
+        {:error, "process launch identity conflict"}
+
+      _ when is_binary(fingerprint) ->
+        {:error, "managed process launch missing"}
+
+      _ ->
+        insert_record(id, record, [])
+    end
   end
 
-  # Private Functions
+  defp append_logs(id, lines, opts) do
+    case :ets.lookup(@table, id) do
+      [{^id, %{status: :cleared}, _}] ->
+        :ok
+
+      [{^id, record, logs}] ->
+        logs = Enum.reverse(lines, logs) |> Enum.take(Keyword.get(opts, :keep, @max_log_lines))
+        total = Map.get(record, :total_lines, 0) + length(lines)
+
+        record =
+          record
+          |> Map.put(:updated_at, System.system_time(:second))
+          |> Map.put(:log_line_count, length(logs))
+          |> Map.put(:total_lines, Keyword.get(opts, :total_lines, total))
+          |> Map.put(:output, Keyword.get(opts, :output, Map.get(record, :output)))
+          |> Map.put(:partial_line, Keyword.get(opts, :partial_line, ""))
+          |> Map.put(
+            :read_cursor,
+            Keyword.get(opts, :read_cursor, Map.get(record, :read_cursor, 0))
+          )
+
+        insert_record(id, record, logs)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp update_record(id, changes, durable) do
+    case :ets.lookup(@table, id) do
+      [{^id, %{status: :cleared}, _}] ->
+        :ok
+
+      [{^id, record, logs}] ->
+        updated =
+          record
+          |> Map.merge(changes)
+          |> Map.put(:updated_at, System.system_time(:second))
+
+        if durable and is_binary(Map.get(updated, :launch_fingerprint)) do
+          # Owned workload provenance must survive a crash before the command
+          # is unblocked; do not publish a volatile identity before syncing it.
+          :ok = DurableTable.put(@table, {id, updated, logs}, :sync)
+          CodingAgent.ProcessStore.notify_change(id)
+        else
+          insert_record(id, updated, logs)
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp insert_record(id, record, logs) do
+    case :ets.lookup(@table, id) do
+      [{^id, %{status: :cleared}, _}] ->
+        :ok
+
+      _ ->
+        :ok = DurableTable.put(@table, {id, record, logs})
+        CodingAgent.ProcessStore.notify_change(id)
+    end
+  end
+
+  defp delete_process(id) do
+    case :ets.lookup(@table, id) do
+      [{^id, %{status: :cleared}, _}] ->
+        :ok
+
+      [{^id, %{launch_fingerprint: fingerprint} = record, _}] when is_binary(fingerprint) ->
+        delete_record(id, record)
+
+      [{^id, record, _}] ->
+        if capture_open?(id, record),
+          do: {:error, :process_alive},
+          else: delete_record(id, record)
+
+      [] ->
+        :ok
+    end
+  end
+
+  defp delete_record(id, %{launch_fingerprint: fingerprint} = record)
+       when is_binary(fingerprint) do
+    held =
+      Map.get(
+        record,
+        :capacity_held,
+        Map.get(record, :status) in [:running, :starting, :killing, :lost]
+      ) and
+        not Map.get(record, :termination_confirmed, false)
+
+    unknown =
+      Map.get(record, :launch_classification) == :outcome_unknown and
+        not Map.get(record, :termination_confirmed, false)
+
+    pending = Map.get(record, :launch_classification) == :queued
+
+    if held or unknown or pending or capture_open?(id, record) do
+      {:error, :process_not_terminal}
+    else
+      with :ok <- CodingAgent.ProcessStore.remove_output(record) do
+        tombstone =
+          record
+          |> Map.take([
+            :id,
+            :owner,
+            :launch_fingerprint,
+            :launch_classification,
+            :launch_reason,
+            :inserted_at,
+            :updated_at,
+            :completed_at,
+            :termination_confirmed
+          ])
+          |> Map.put(:capacity_held, false)
+          |> Map.put(:launch_terminal_status, Map.get(record, :status))
+          |> Map.put(:status, :cleared)
+
+        :ok = DurableTable.put(@table, {id, tombstone, []}, :sync)
+        CodingAgent.ProcessStore.notify_change(id)
+      end
+    end
+  end
+
+  defp delete_record(id, record) do
+    with :ok <- CodingAgent.ProcessStore.remove_output(record) do
+      :ok = DurableTable.delete(@table, id)
+      CodingAgent.ProcessStore.notify_change(id)
+    end
+  end
+
+  defp capture_open?(id, record) do
+    session_alive?(id) and get_in(record, [:output, :finalized]) != true
+  end
+
+  # No external start may be acknowledged with only volatile provenance. A
+  # failed write is a `:store_unavailable` reply to the request that needed it.
   defp persist_launch(id, record, logs) do
-    # No external start may be acknowledged with only volatile provenance.
     :ok = DurableTable.put(@table, {id, record, logs}, :sync)
     CodingAgent.ProcessStore.notify_change(id)
   rescue
-    _ -> exit(:launch_store_unavailable)
-  catch
-    _, _ -> exit(:launch_store_unavailable)
+    _ -> throw(:store_unavailable)
   end
 
   defp reconcile_launch_record(id, record, logs) do
@@ -936,7 +1118,7 @@ defmodule CodingAgent.ProcessStoreServer do
                 |> Map.merge(%{artifact_capacity: 0, artifact_reclaimed: true})
 
               reclaimed = record |> Map.put(:full_output_path, nil) |> Map.put(:output, output)
-              CodingAgent.ProcessStore.insert_record(id, reclaimed, logs)
+              insert_record(id, reclaimed, logs)
               {owned - if(Map.get(record, :owner) == owner, do: charge, else: 0), total - charge}
             else
               {owned, total}

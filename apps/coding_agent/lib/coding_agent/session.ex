@@ -352,6 +352,8 @@ defmodule CodingAgent.Session do
       resource-ownership bindings remain independently enforced.
 
     * `:budget_limits` - Cumulative run/session caps, overriding SettingsManager.budgets.
+    * `:delegated_budget` - Run caps (`max_run_tokens`, `max_run_cost_usd`) a
+      delegating `agent` call reserved for this run; they only tighten the caps.
     * `:model` - The AI model to use (`LemonAi.Types.Model.t()`). If not provided,
       uses `default_model` from SettingsManager.
     * `:system_prompt` - Explicit system prompt text. Takes highest precedence
@@ -422,6 +424,13 @@ defmodule CodingAgent.Session do
   `{:error, {:already_started, owner_pid}}` without loading or rewriting it and
   without sending an abnormal linked exit to the caller.
 
+  `init/1` only admits the process as the journal's live owner. Journal load,
+  settings, extensions, WASM and profile MCP connection run in
+  `handle_continue/2`, so a supervisor starting this process is never blocked
+  by them. `start_link/1` (and `CodingAgent.SessionSupervisor.start_session/1`)
+  still return only after initialization finished, with `{:error, reason}` and
+  no linked exit when it failed.
+
   ## Examples
 
       # With explicit system prompt only
@@ -446,12 +455,47 @@ defmodule CodingAgent.Session do
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
-    with {:ok, opts} <- validate_execution_options(opts) do
-      {name, opts} = Keyword.pop(opts, :name)
-      # Keep short inter-message gaps warm; reclaim heaps between user turns.
-      server_opts = [hibernate_after: Keyword.get(opts, :hibernate_after, 5_000)]
-      server_opts = if name, do: Keyword.put(server_opts, :name, name), else: server_opts
-      GenServer.start_link(__MODULE__, opts, server_opts)
+    ref = make_ref()
+
+    with {:ok, opts} <- validate_execution_options(opts),
+         {:ok, pid} <- start_owner(opts, {self(), ref}) do
+      await_initialized(pid, ref)
+    end
+  end
+
+  @doc false
+  # Admits the owner and returns without waiting for initialization, which
+  # reports `{ref, :ok | {:error, reason}}` to `reply_to`. Supervisors call this
+  # so slow initialization never runs in (and serializes) the supervisor.
+  # `opts` must already have passed `validate_execution_options/1`.
+  @spec start_owner(keyword(), {pid(), reference()}) :: GenServer.on_start()
+  def start_owner(opts, {caller, ref} = reply_to) when is_pid(caller) and is_reference(ref) do
+    {name, opts} = Keyword.pop(opts, :name)
+    # Keep short inter-message gaps warm; reclaim heaps between user turns.
+    server_opts = [hibernate_after: Keyword.get(opts, :hibernate_after, 5_000)]
+    server_opts = if name, do: Keyword.put(server_opts, :name, name), else: server_opts
+    GenServer.start_link(__MODULE__, {opts, reply_to}, server_opts)
+  end
+
+  @doc false
+  @spec await_initialized(pid(), reference()) :: {:ok, pid()} | {:error, term()}
+  def await_initialized(pid, ref) do
+    monitor = Process.monitor(pid)
+
+    receive do
+      {^ref, :ok} ->
+        Process.demonitor(monitor, [:flush])
+        {:ok, pid}
+
+      {^ref, {:error, reason}} ->
+        # The owner releases the journal before replying; report only once it
+        # is gone, as a failed synchronous init would.
+        receive do
+          {:DOWN, ^monitor, :process, ^pid, _} -> {:error, reason}
+        end
+
+      {:DOWN, ^monitor, :process, ^pid, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1074,27 +1118,65 @@ defmodule CodingAgent.Session do
   # GenServer Callbacks
   # ============================================================================
 
-  @spec init(keyword()) ::
-          {:ok, t()} | {:error, {:already_started, pid()}} | {:stop, term()}
+  @spec init({keyword(), {pid(), reference()}}) ::
+          {:ok, {:starting, keyword(), {pid(), reference()}, String.t()},
+           {:continue, :initialize}}
+          | {:error, term()}
   @impl true
-  def init(opts) do
+  def init({opts, reply_to}) do
     Process.flag(:trap_exit, true)
     CodingAgent.SessionRegistry.track_live()
 
-    Ownership.initialize(opts, fn owned_opts ->
-      connection =
-        if Keyword.get(owned_opts, :executor_root, false),
-          do: CodingAgent.Session.Invocation.open_mcp(owned_opts),
-          else: {:ok, Keyword.get(owned_opts, :mcp_session_id)}
+    # Only ownership admission runs here, inside the starter (often the
+    # SessionSupervisor). Everything slow runs in handle_continue/2 below.
+    case Ownership.admit(opts) do
+      {:ok, opts, path} -> {:ok, {:starting, opts, reply_to, path}, {:continue, :initialize}}
+      {:error, _reason} = error -> error
+    end
+  end
 
-      case connection do
-        {:ok, id} ->
-          initialize_owned_session(Keyword.put(owned_opts, :mcp_session_id, id))
+  @impl true
+  def handle_continue(:initialize, {:starting, opts, {caller, ref}, path} = starting) do
+    case initialize_owner(opts, path) do
+      {:ok, state} ->
+        send(caller, {ref, :ok})
+        {:noreply, state}
 
-        {:error, reason} ->
-          {:stop, reason}
-      end
-    end)
+      {:error, reason} ->
+        # Release the journal before replying so a retry is not refused by
+        # this dying owner. A linked starter already has its answer; unlink so
+        # the failure is not also delivered as an exit signal.
+        Ownership.release(path)
+        Process.unlink(caller)
+        send(caller, {ref, {:error, reason}})
+        {:stop, {:shutdown, reason}, starting}
+    end
+  end
+
+  defp initialize_owner(opts, path) do
+    connection =
+      if Keyword.get(opts, :executor_root, false),
+        do: CodingAgent.Session.Invocation.open_mcp(opts),
+        else: {:ok, Keyword.get(opts, :mcp_session_id)}
+
+    with {:ok, id} <- connection,
+         {:ok, state} <- initialize_owned_session(Keyword.put(opts, :mcp_session_id, id)) do
+      # Admission published the requested journal; follow the file the
+      # lifecycle actually opened if a preloaded journal selected another.
+      if Path.expand(state.session_file) != Path.expand(path),
+        do: Ownership.transfer(path, state.session_file, fn -> :ok end)
+
+      {:ok, state}
+    end
+  catch
+    :error, reason ->
+      {:error, {Exception.normalize(:error, reason, __STACKTRACE__), __STACKTRACE__}}
+
+    :exit, reason ->
+      {:error, reason}
+
+    :throw, value ->
+      {:error, {{:nocatch, value}, __STACKTRACE__}}
   end
 
   defp initialize_owned_session(opts) do
@@ -2323,8 +2405,12 @@ defmodule CodingAgent.Session do
     |> Map.put(:event_cursor, CodingAgent.Session.EventLog.cursor(state.event_log))
   end
 
-  @spec terminate(term(), t()) :: :ok
+  @spec terminate(term(), t() | {:starting, keyword(), {pid(), reference()}, String.t()}) :: :ok
   @impl true
+  # Initialization failed before a session state existed; handle_continue/2
+  # already released the journal and answered the starter.
+  def terminate(_reason, {:starting, _opts, _reply_to, _path}), do: :ok
+
   def terminate(reason, state) do
     _ = WasmBridge.cancel_host_calls(state, :session_unavailable)
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)

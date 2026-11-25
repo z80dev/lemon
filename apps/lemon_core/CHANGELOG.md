@@ -6,8 +6,33 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** the `controller` and `hybrid` ids from
+  `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
+
 ### Changed
 
+- `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
+  fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
+  instead of launching a browser (#660).
+- `LemonCore.EngineRuntime` documents the router's submit outcomes as
+  implemented: only `{:error, :runtime_unavailable}` is retried, an exit,
+  malformed acknowledgement or `{:error, :outcome_unknown}` is adopted under the
+  fixed run ID, and `run_pid/1` should return a queued run's owner, which the
+  router monitors from acceptance (#641).
+- The `LemonCore.Store` expiry sweep no longer deletes `:cron_runs` rows by
+  age; `LemonAutomation.CronStore` owns cron retention (#675).
+- **Breaking (0.3.0):** `LemonCore.A2AStore.list_tasks/2` returns
+  `{:ok, tasks}` or `{:error, :store_unavailable}` instead of `[]` on an
+  unreadable store; `update_task/3` returns `{:error, :store_unavailable}`
+  instead of `:not_found` in that case. New strict readers:
+  `A2AStore.fetch_task/2`, `ExecApprovalStore.fetch_global_policies/0` and
+  `fetch_global_policy_map/0`, which replaces `get_global_policy_map/0` (#619).
+  router monitors from acceptance (#641). `{:error, :session_in_use}` is
+  retried like runtime unavailability, and the documented cancellation reasons
+  are `:run_idle_watchdog_timeout` (was `:run_watchdog_timeout`),
+  `:user_requested`, `:runtime_restart` and `:run_process_terminated` (#643).
 - `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
   OS processes (#586).
 - **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,
@@ -52,7 +77,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `LemonCore.RunStore.fetch_history_count/1`, and ACP metadata helpers on
   `LemonCore.SessionMetadataStore` (`fetch_acp/1`, `fetch_acp_by_id/1`,
   `list_acp/0`, `put_acp/2`, `clear_acp_run_state/1`) so ACP metadata shares the
-  canonical session lifecycle store (#615, #652).
+  canonical session lifecycle store; ACP reads fail closed with
+  `{:error, :store_unavailable}`, never an empty list (#615, #652).
 - Consolidated Mix task startup and simplified service identity matching.
 - Fixed task projection fallback action IDs to include their action kind.
 
@@ -220,6 +246,17 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `LemonCore.Update.ReceiptStore.with_lock/2` uses `LemonCore.Service.Lock`:
+  a holder killed without cleanup is recovered by the next operation instead of
+  returning `{:error, :update_locked}` forever, stale `.partial` staging is
+  removed on acquire, and `Service.Lock` logs every stale-owner recovery (#683).
+- `LemonCore.Service.Lock` acquisitions no longer fork `ps`/`id`: the new
+  `LemonCore.Service.Identity.self_identity/0` and `current_uid/0` capture this
+  OS process's identity and effective uid once (Linux: `/proc/self`, `ps`/`id`
+  fallback; failures are not cached), `Identity.uid/1` and
+  `LemonCore.LoopbackListener` share the cached uid, and
+  `Identity.boot_check/0` (run at application start) logs an error when `ps`
+  is unavailable (#684).
 - `Durable.sync_file` no longer leaks a stray port `EXIT` message to its caller
   (#555).
 - Credential redaction classifies trailing separator-delimited and camelCase

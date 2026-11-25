@@ -168,6 +168,9 @@ defmodule LemonMCP.SkillsMcpSourceTest do
     state = %{
       disabled: false,
       invocations: %{},
+      workers: %{},
+      scopes: %{},
+      scope_used: %{},
       tool_cache: %{"safe" => %{server_name: "server", original_name: {:tool, "mutate"}}},
       servers: %{
         "server" => %{
@@ -735,68 +738,6 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       assert {:error, {:blocked_prompt, "brief"}} =
                McpSource.call_tool(tool_name.("prompt_get"), %{"name" => "brief"})
     end
-
-    test "bridges configured sampling review through exec approvals", %{tmp_dir: tmp_dir} do
-      server_script = Path.join(tmp_dir, "fixture_sampling_mcp_server.exs")
-      File.write!(server_script, fixture_sampling_server_script())
-
-      elixir = System.find_executable("elixir")
-      parent = self()
-      run_id = "mcp_sampling_run_#{System.unique_integer([:positive, :monotonic])}"
-      session_key = "agent:mcp-sampling-test:main"
-
-      delegate = fn params, summary ->
-        send(parent, {:sampling_delegate, params, summary})
-
-        {:ok,
-         %{
-           "role" => "assistant",
-           "content" => %{"type" => "text", "text" => "sampled"},
-           "model" => "lemon-test",
-           "stopReason" => "endTurn"
-         }}
-      end
-
-      Application.put_env(:lemon_skills, :mcp_servers, [
-        {:stdio, elixir, [server_script],
-         sampling_policy: [
-           mode: :reviewed_model,
-           reviewer: :ops_approval,
-           delegate: delegate,
-           max_tokens: 32,
-           approval_timeout_ms: 15_000,
-           approval_context: [
-             run_id: run_id,
-             session_key: session_key,
-             agent_id: "mcp-sampling-test"
-           ]
-         ]}
-      ])
-
-      task = Task.async(fn -> McpSource.discover_tools(force_refresh: true) end)
-      pending = wait_for_pending_approval(run_id)
-
-      assert pending.tool == "mcp_elixir_sampling"
-      assert pending.session_key == session_key
-      assert pending.action.type == "mcp_sampling"
-      assert pending.action.server == "elixir"
-      assert pending.action.message_count == 1
-      assert pending.action.max_tokens == 16
-      assert pending.action.requested_model == "lemon-test"
-      assert pending.rationale =~ "MCP sampling request"
-      assert pending.rationale =~ "request="
-      refute inspect(pending) =~ "secret prompt"
-
-      assert {:ok, %{decision: :approve_once, outcome: :approved}} =
-               LemonCore.ExecApprovals.resolve(pending.id, :approve_once)
-
-      tools = Task.await(task, 5_000)
-      assert Enum.any?(tools, &(&1.label == "MCP echo"))
-
-      assert_receive {:sampling_delegate, params, summary}, 1_000
-      assert get_in(params, ["messages", Access.at(0), "content", "text"]) == "secret prompt"
-      refute inspect(summary) =~ "secret prompt"
-    end
   end
 
   describe "HTTP MCP discovery and calls" do
@@ -1249,7 +1190,7 @@ defmodule LemonMCP.SkillsMcpSourceTest do
              ] = LemonSkills.Config.mcp_servers()
     end
 
-    test "parses stdio sampling approval config from environment JSON" do
+    test "a server `sampling` entry is not parsed: Lemon answers no sampling requests" do
       previous_env = System.get_env("LEMON_MCP_SERVERS")
 
       on_exit(fn ->
@@ -1267,27 +1208,12 @@ defmodule LemonMCP.SkillsMcpSourceTest do
             "type" => "stdio",
             "command" => "elixir",
             "args" => ["server.exs"],
-            "sampling" => %{
-              "mode" => "reviewed_model",
-              "reviewer" => "ops_approval",
-              "max_tokens" => 64,
-              "allowed_models" => ["lemon-test"]
-            }
+            "sampling" => %{"mode" => "reviewed_model", "reviewer" => "ops_approval"}
           }
         ])
       )
 
-      assert [
-               {:stdio, "elixir", ["server.exs"],
-                [
-                  sampling_policy: [
-                    mode: "reviewed_model",
-                    reviewer: :ops_approval,
-                    max_tokens: 64,
-                    allowed_models: ["lemon-test"]
-                  ]
-                ]}
-             ] = LemonSkills.Config.mcp_servers()
+      assert [{:stdio, "elixir", ["server.exs"]}] = LemonSkills.Config.mcp_servers()
     end
   end
 
@@ -1296,13 +1222,6 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       configs = [
         {:stdio, "npx", ["-y", "server"]},
         {:stdio, "uvx", ["server"], allow_tools: ["safe_tool"]},
-        {:stdio, "uvx", ["server"],
-         sampling_policy: [
-           mode: :reviewed_model,
-           reviewer: :ops_approval,
-           max_tokens: 64,
-           allowed_models: ["lemon-test"]
-         ]},
         {:http, "http://localhost:3000/mcp"},
         {:http, "http://localhost:3001/mcp",
          headers: [{"Authorization", "Bearer test"}], allow_tools: ["echo"]},
@@ -1337,7 +1256,7 @@ defmodule LemonMCP.SkillsMcpSourceTest do
         {:stdio, "uvx", ["server"], allow_tools: [:not_string]},
         {:http, "http://localhost:3002/mcp", headers: [{"Authorization", :bad}]},
         {:http, "http://localhost:3003/mcp", oauth: [client_id: "client"]},
-        {:stdio, "uvx", ["server"], sampling_policy: [max_tokens: 0]}
+        {:stdio, "uvx", ["server"], timeout_ms: 0}
       ]
 
       assert {:error, errors} = LemonSkills.Config.validate_mcp_servers(configs)
@@ -1582,84 +1501,6 @@ defmodule LemonMCP.SkillsMcpSourceTest do
     end
 
     FixtureMcpServer.run()
-    '''
-  end
-
-  defp fixture_sampling_server_script do
-    ~S'''
-    defmodule FixtureSamplingMcpServer do
-      def run do
-        IO.stream(:stdio, :line)
-        |> Enum.each(&handle_line/1)
-      end
-
-      defp handle_line(line) do
-        request = :json.decode(String.trim(line))
-        handle_request(request)
-      end
-
-      defp handle_request(%{"method" => "initialize", "id" => id, "params" => params}) do
-        Process.put(:saw_sampling_capability, Map.has_key?(params["capabilities"] || %{}, "sampling"))
-
-        respond(%{
-          "jsonrpc" => "2.0",
-          "id" => id,
-          "result" => %{
-            "protocolVersion" => "2024-11-05",
-            "capabilities" => %{"tools" => %{}},
-            "serverInfo" => %{"name" => "fixture-sampling-mcp", "version" => "1.0.0"}
-          }
-        })
-      end
-
-      defp handle_request(%{"method" => "notifications/initialized"}) do
-        respond(%{
-          "jsonrpc" => "2.0",
-          "id" => "sampling-1",
-          "method" => "sampling/createMessage",
-          "params" => %{
-            "messages" => [
-              %{"role" => "user", "content" => %{"type" => "text", "text" => "secret prompt"}}
-            ],
-            "maxTokens" => 16,
-            "modelPreferences" => %{"hints" => [%{"name" => "lemon-test"}]},
-            "sawSamplingCapability" => Process.get(:saw_sampling_capability)
-          }
-        })
-      end
-
-      defp handle_request(%{"id" => "sampling-1", "result" => _result}), do: :ok
-
-      defp handle_request(%{"method" => "tools/list", "id" => id}) do
-        respond(%{
-          "jsonrpc" => "2.0",
-          "id" => id,
-          "result" => %{
-            "tools" => [
-              %{
-                "name" => "echo",
-                "description" => "Echo a safe message",
-                "inputSchema" => %{"type" => "object", "properties" => %{}}
-              }
-            ]
-          }
-        })
-      end
-
-      defp handle_request(%{"id" => id}) do
-        respond(%{
-          "jsonrpc" => "2.0",
-          "id" => id,
-          "error" => %{"code" => -32601, "message" => "Method not found"}
-        })
-      end
-
-      defp respond(response) do
-        IO.write([:json.encode(response), "\n"])
-      end
-    end
-
-    FixtureSamplingMcpServer.run()
     '''
   end
 

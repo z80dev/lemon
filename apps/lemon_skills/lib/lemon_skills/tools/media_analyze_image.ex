@@ -13,20 +13,16 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   alias LemonAi.Types.TextContent
   alias LemonCore.Config
   alias LemonSkills.Tools.MediaCommon
-  alias LemonMedia.MediaJobSupervisor
 
   import LemonSkills.Tools.MediaCommon,
     only: [
       bounded_integer: 3,
-      optional_string: 1,
-      provider_error_kind: 1,
-      transient_status?: 1,
-      wait_for_job: 3
+      optional_string: 1
     ]
 
-  @topic "media_jobs"
-  @default_timeout_ms 15_000
-  @max_timeout_ms 120_000
+  @local_timeout_ms 15_000
+  @provider_timeout_ms 120_000
+  @max_timeout_ms 300_000
   @max_image_bytes 20 * 1024 * 1024
   @local_provider "local_vision"
   @openai_provider "openai_vision"
@@ -118,7 +114,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
             "description" => "Maximum time to wait for the supervised media worker."
           }
         },
-        "required" => ["imagePath"]
+        "required" => ["imagePath", "provider"]
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
@@ -130,14 +126,14 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
 
   Reads `"imagePath"` (required; must be a regular file of 20MB or less under
   the project), `"prompt"` (defaults to `"Describe the image and note any
-  visible text."`), `"provider"` (defaults to `"local_vision"`; the only other
-  accepted value is `"openai_vision"`), `"model"` (defaults to
+  visible text."`), `"provider"` (required: `"local_vision"` or
+  `"openai_vision"`), `"model"` (defaults to
   `"local_vision_preview"` for local jobs and `"gpt-4o-mini"` for OpenAI),
   `"detail"` (defaults to `"auto"`), `"filename"`,
   `"responseFormat"`/`"response_format"` (defaults to `"json"`; `"text"` is
   the other accepted value), `"maxRetries"` (defaults to `1`, clamped 0-3),
   `"sendToChannel"` (defaults to `false`), and `"timeoutMs"` (defaults to
-  `15_000`, clamped 100-120_000).
+  `15_000` local or `120_000` provider-backed, clamped 100-300_000).
 
   On success returns a `%LemonAgent.Types.AgentToolResult{}` marked
   `trust: :untrusted`, with `content` the pretty-printed JSON payload and
@@ -157,12 +153,12 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
          {:ok, provider} <- provider(params),
          {:ok, generation} <- generation(provider, params, image),
          {:ok, runtime} <- runtime(cwd, opts, generation),
-         {:ok, timeout_ms} <- MediaCommon.timeout_ms(params, @default_timeout_ms, @max_timeout_ms),
+         {:ok, timeout_ms} <-
+           MediaCommon.timeout_ms(params, default_timeout_ms(provider), @max_timeout_ms),
          {:ok, artifact_path} <-
            MediaCommon.artifact_path(params, cwd, opts, generation.format, "media-analysis"),
-         :ok <- Phoenix.PubSub.subscribe(LemonCore.PubSub, @topic),
-         {:ok, _pid, queued_job} <-
-           MediaJobSupervisor.start_job(
+         {:ok, completed_job} <-
+           MediaCommon.run_job(
              %{
                type: :vision,
                provider: provider,
@@ -175,11 +171,14 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
                cwd,
                opts,
                artifact_path,
-               runner(artifact_path, image, prompt, generation, runtime)
-             )
-           ),
-         :ok <- AbortHelpers.check_abort(signal),
-         {:ok, completed_job} <- wait_for_job(queued_job.job_id, timeout_ms, signal) do
+               MediaCommon.runner(generation, artifact_path, runtime, %{
+                 image: image,
+                 prompt: prompt
+               })
+             ),
+             timeout_ms,
+             signal
+           ) do
       payload = payload(completed_job, artifact_path, params)
 
       %AgentToolResult{
@@ -239,13 +238,17 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   defp prompt(params), do: {:ok, optional_string(params["prompt"]) || @default_prompt}
 
   defp provider(params) do
-    case Map.get(params, "provider", @local_provider) do
+    case Map.get(params, "provider") do
       @local_provider -> {:ok, @local_provider}
       @openai_provider -> {:ok, @openai_provider}
+      nil -> {:error, "provider is required"}
       other when is_binary(other) -> {:error, "unsupported media vision provider: #{other}"}
       _other -> {:error, "provider must be a string"}
     end
   end
+
+  defp default_timeout_ms(@local_provider), do: @local_timeout_ms
+  defp default_timeout_ms(_provider), do: @provider_timeout_ms
 
   defp generation(@local_provider, params, _image) do
     with {:ok, format} <- analysis_format(params) do
@@ -294,34 +297,6 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
     end
   end
 
-  defp runner(artifact_path, image, _prompt, %{provider: @local_provider}, _runtime) do
-    &run_local_analysis(&1, artifact_path, image)
-  end
-
-  defp runner(artifact_path, image, prompt, %{provider: @openai_provider} = generation, runtime) do
-    &run_openai_analysis(&1, artifact_path, image, prompt, generation, runtime)
-  end
-
-  defp run_local_analysis(_attrs, artifact_path, image) do
-    analysis =
-      "local image analysis preview for #{image.mime_type} image #{String.slice(image.hash, 0, 12)}"
-
-    write_analysis_artifact(
-      artifact_path,
-      Jason.encode!(%{"text" => analysis}, pretty: true),
-      analysis
-    )
-  end
-
-  defp run_openai_analysis(_attrs, artifact_path, image, prompt, generation, runtime) do
-    with {:ok, api_key} <-
-           MediaCommon.provider_api_key(runtime, :missing_openai_vision_api_key, runtime.provider),
-         {:ok, response} <- post_openai_analysis(image, prompt, generation, runtime, api_key),
-         {:ok, analysis, content} <- normalize_analysis_response(response, generation.format) do
-      write_analysis_artifact(artifact_path, content, analysis)
-    end
-  end
-
   defp runtime(_cwd, _opts, %{provider: @local_provider}), do: {:ok, nil}
 
   defp runtime(cwd, opts, %{provider: @openai_provider} = generation) do
@@ -338,8 +313,10 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
            ) do
       {:ok,
        Map.merge(endpoint, %{
+         credential:
+           MediaCommon.credential(endpoint, :missing_openai_vision_api_key, endpoint.provider),
          api_model: api_model,
-         http_post: Keyword.get(opts, :media_vision_http_post, &Req.post/2)
+         http_post: Keyword.get(opts, :media_vision_http_post)
        })}
     end
   end
@@ -358,121 +335,6 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   end
 
   defp openai_compatible_provider_and_model(_model), do: {:openai, @default_openai_model}
-
-  defp post_openai_analysis(image, prompt, generation, runtime, api_key) do
-    url = String.trim_trailing(runtime.base_url, "/") <> "/chat/completions"
-
-    body = %{
-      "model" => runtime.api_model,
-      "messages" => [
-        %{
-          "role" => "user",
-          "content" => [
-            %{"type" => "text", "text" => prompt},
-            %{
-              "type" => "image_url",
-              "image_url" => %{
-                "url" => "data:#{image.mime_type};base64,#{Base.encode64(image.bytes)}",
-                "detail" => generation.detail
-              }
-            }
-          ]
-        }
-      ]
-    }
-
-    request_opts = [
-      headers: [{"authorization", "Bearer #{api_key}"}],
-      json: body,
-      receive_timeout: 300_000
-    ]
-
-    do_post_openai_analysis(runtime, url, request_opts, generation.max_retries)
-  end
-
-  defp do_post_openai_analysis(runtime, url, request_opts, remaining_retries) do
-    case runtime.http_post.(url, request_opts) do
-      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
-        {:ok, response_body}
-
-      {:ok, %{status: status, body: response_body}} ->
-        if transient_status?(status) and remaining_retries > 0 do
-          do_post_openai_analysis(runtime, url, request_opts, remaining_retries - 1)
-        else
-          {:error, {:openai_vision_http_error, status, provider_error_kind(response_body)}}
-        end
-
-      {:error, _reason} when remaining_retries > 0 ->
-        do_post_openai_analysis(runtime, url, request_opts, remaining_retries - 1)
-
-      {:error, reason} ->
-        {:error, {:openai_vision_request_failed, provider_error_kind(reason)}}
-    end
-  end
-
-  defp normalize_analysis_response(response, "json") when is_map(response) do
-    text = response_text(response)
-    content = Jason.encode!(%{"text" => text}, pretty: true)
-    {:ok, text, content}
-  end
-
-  defp normalize_analysis_response(response, "json") when is_binary(response) do
-    case Jason.decode(response) do
-      {:ok, decoded} when is_map(decoded) -> normalize_analysis_response(decoded, "json")
-      _ -> {:ok, response, Jason.encode!(%{"text" => response}, pretty: true)}
-    end
-  end
-
-  defp normalize_analysis_response(response, "text") when is_binary(response) do
-    {:ok, response, response}
-  end
-
-  defp normalize_analysis_response(response, "text") when is_map(response) do
-    text = response_text(response)
-    {:ok, text, text}
-  end
-
-  defp response_text(%{"choices" => [%{"message" => %{"content" => content}} | _]}) do
-    content_text(content)
-  end
-
-  defp response_text(%{choices: [%{message: %{content: content}} | _]}) do
-    content_text(content)
-  end
-
-  defp response_text(%{"output_text" => text}) when is_binary(text), do: text
-  defp response_text(%{output_text: text}) when is_binary(text), do: text
-  defp response_text(%{"text" => text}) when is_binary(text), do: text
-  defp response_text(%{text: text}) when is_binary(text), do: text
-  defp response_text(response), do: Jason.encode!(response)
-
-  defp content_text(content) when is_binary(content), do: content
-
-  defp content_text(content) when is_list(content) do
-    content
-    |> Enum.flat_map(fn
-      %{"text" => text} when is_binary(text) -> [text]
-      %{text: text} when is_binary(text) -> [text]
-      _other -> []
-    end)
-    |> Enum.join("\n")
-  end
-
-  defp content_text(content), do: to_string(content)
-
-  defp write_analysis_artifact(artifact_path, content, analysis) when is_binary(content) do
-    with :ok <- MediaCommon.write_artifact(artifact_path, content),
-         {:ok, stat} <- File.stat(artifact_path) do
-      {:ok,
-       %{
-         artifact_path: artifact_path,
-         artifact_name: Path.basename(artifact_path),
-         mime_type: mime_type_from_path(artifact_path),
-         bytes: stat.size,
-         analysis: analysis
-       }}
-    end
-  end
 
   defp payload(job, artifact_path, params) do
     job

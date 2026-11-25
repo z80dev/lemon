@@ -4,6 +4,7 @@ defmodule LemonControlPlane.Methods.TaskList do
   import LemonControlPlane.Methods.Params
 
   alias LemonControlPlane.Auth.Authorize
+  alias LemonControlPlane.Protocol.Errors
   alias LemonCore.{AgentRuntime, Redact}
 
   @default_limit 100
@@ -28,17 +29,6 @@ defmodule LemonControlPlane.Methods.TaskList do
     event_limit =
       normalize_limit(get_param(params, "eventLimit"), @default_event_limit, @max_event_limit)
 
-    tasks =
-      fetch_tasks(
-        run_id,
-        agent_id,
-        limit,
-        {content?, include_events, include_record},
-        event_limit,
-        status_filter,
-        mode
-      )
-
     filters = %{
       "runId" => run_id,
       "agentId" => agent_id,
@@ -49,20 +39,19 @@ defmodule LemonControlPlane.Methods.TaskList do
     }
 
     filters = if mode == :recent, do: Map.put(filters, "status", status_filter), else: filters
-    {:ok, response(tasks, filters, mode, content?)}
-  rescue
-    _ ->
-      filters = %{
-        "runId" => nil,
-        "agentId" => nil,
-        "limit" => @default_limit,
-        "includeEvents" => false,
-        "includeRecord" => false,
-        "eventLimit" => @default_event_limit
-      }
 
-      filters = if mode == :recent, do: Map.put(filters, "status", nil), else: filters
-      {:ok, response([], filters, mode, Authorize.content?(ctx))}
+    case fetch_tasks(
+           run_id,
+           agent_id,
+           limit,
+           {content?, include_events, include_record},
+           event_limit,
+           status_filter,
+           mode
+         ) do
+      {:ok, tasks} -> {:ok, response(tasks, filters, mode, content?)}
+      :unavailable -> {:error, Errors.unavailable("Task state is unavailable")}
+    end
   end
 
   defp response(tasks, filters, mode, content?) do
@@ -116,24 +105,43 @@ defmodule LemonControlPlane.Methods.TaskList do
          status_filter,
          mode
        ) do
-    AgentRuntime.call(:list_tasks, [], [])
-    |> Enum.map(fn {task_id, _record} ->
-      task_from_store(task_id, includes, event_limit, mode)
+    with {:ok, task_ids} <- list_task_ids(),
+         {:ok, tasks} <- read_tasks(task_ids, includes, event_limit, mode) do
+      {:ok,
+       tasks
+       |> Enum.filter(&(active_status?(&1) == (mode == :active)))
+       |> Enum.filter(
+         &(mode == :active or status_filter in [nil, ""] or &1["status"] == status_filter)
+       )
+       |> Enum.filter(&filter_by_run(&1, run_id))
+       |> Enum.filter(&filter_by_agent(&1, agent_id))
+       |> Enum.sort_by(&task_sort_key(&1, mode), :desc)
+       |> Enum.take(limit)}
+    end
+  end
+
+  defp list_task_ids do
+    case AgentRuntime.call(:list_tasks, [], :unavailable) do
+      tasks when is_list(tasks) -> {:ok, Enum.map(tasks, fn {task_id, _record} -> task_id end)}
+      _unavailable -> :unavailable
+    end
+  end
+
+  # A task removed between listing and reading is skipped; any other read
+  # failure makes the whole list unavailable rather than silently shorter.
+  defp read_tasks(task_ids, includes, event_limit, mode) do
+    Enum.reduce_while(task_ids, {:ok, []}, fn task_id, {:ok, acc} ->
+      case task_from_store(task_id, includes, event_limit, mode) do
+        {:ok, task} -> {:cont, {:ok, [task | acc]}}
+        :gone -> {:cont, {:ok, acc}}
+        :unavailable -> {:halt, :unavailable}
+      end
     end)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.filter(&(active_status?(&1) == (mode == :active)))
-    |> Enum.filter(
-      &(mode == :active or status_filter in [nil, ""] or &1["status"] == status_filter)
-    )
-    |> Enum.filter(&filter_by_run(&1, run_id))
-    |> Enum.filter(&filter_by_agent(&1, agent_id))
-    |> Enum.sort_by(&task_sort_key(&1, mode), :desc)
-    |> Enum.take(limit)
   end
 
   defp task_from_store(task_id, {content?, include_events, include_record}, event_limit, mode) do
     case AgentRuntime.call(:get_task, [task_id], :unavailable) do
-      {:ok, record, events} ->
+      {:ok, record, events} when is_map(record) and is_list(events) ->
         status = derive_task_status(record, mode)
         engine = get_map(record, :engine) || infer_engine(record, events)
         started_at = to_ms(get_map(record, :started_at))
@@ -148,36 +156,38 @@ defmodule LemonControlPlane.Methods.TaskList do
             true -> nil
           end
 
-        %{
-          "taskId" => task_id,
-          "parentRunId" => get_map(record, :parent_run_id),
-          "runId" => get_map(record, :run_id),
-          "sessionKey" => get_map(record, :session_key),
-          "agentId" => get_map(record, :agent_id),
-          "engine" => engine,
-          "role" => get_map(record, :role),
-          "status" => status,
-          "startedAtMs" => started_at,
-          "completedAtMs" => completed_at,
-          "durationMs" => duration_ms,
-          "createdAtMs" => inserted_at,
-          "updatedAtMs" => updated_at,
-          "eventCount" => length(events),
-          "reasoningCount" => reasoning_count(events)
-        }
-        |> maybe_put_content(record, events, content?)
-        |> maybe_put(
-          "events",
-          events |> Enum.take(event_limit) |> Enum.map(&Redact.project/1),
-          include_events
-        )
-        |> maybe_put("record", Redact.project(record), include_record)
+        {:ok,
+         %{
+           "taskId" => task_id,
+           "parentRunId" => get_map(record, :parent_run_id),
+           "runId" => get_map(record, :run_id),
+           "sessionKey" => get_map(record, :session_key),
+           "agentId" => get_map(record, :agent_id),
+           "engine" => engine,
+           "role" => get_map(record, :role),
+           "status" => status,
+           "startedAtMs" => started_at,
+           "completedAtMs" => completed_at,
+           "durationMs" => duration_ms,
+           "createdAtMs" => inserted_at,
+           "updatedAtMs" => updated_at,
+           "eventCount" => length(events),
+           "reasoningCount" => reasoning_count(events)
+         }
+         |> maybe_put_content(record, events, content?)
+         |> maybe_put(
+           "events",
+           events |> Enum.take(event_limit) |> Enum.map(&Redact.project/1),
+           include_events
+         )
+         |> maybe_put("record", Redact.project(record), include_record)}
 
       {:error, :not_found} ->
-        nil
+        :gone
+
+      _unavailable ->
+        :unavailable
     end
-  rescue
-    _ -> nil
   end
 
   defp active_status?(%{"status" => status}), do: status in ["active", "queued"]

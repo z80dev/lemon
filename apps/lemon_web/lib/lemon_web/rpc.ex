@@ -26,14 +26,22 @@ defmodule LemonWeb.Rpc do
 
   @type error :: %{code: atom(), message: String.t(), details: map() | nil}
 
-  @doc "Calls `method` with `params` as the web operator."
-  @spec call(String.t(), map() | nil) :: {:ok, term()} | {:error, error()}
-  def call(method, params \\ %{}) when is_binary(method) do
-    ctx = %{
-      auth: Map.put(Authorize.default_operator(), :client_id, "lemon-web"),
-      conn_id: "lemon-web:" <> inspect(self()),
-      conn_pid: self()
-    }
+  @doc """
+  Calls `method` with `params` as the web operator.
+
+  `connection: false` omits the caller's process as a connection identity. Use
+  it only for methods that otherwise require a registered WebSocket connection
+  (`sessions.events` re-checks connection membership); the LiveView calling it
+  has already passed `LemonWeb.LiveAuth`.
+  """
+  @spec call(String.t(), map() | nil, keyword()) :: {:ok, term()} | {:error, error()}
+  def call(method, params \\ %{}, opts \\ []) when is_binary(method) do
+    ctx = %{auth: Map.put(Authorize.default_operator(), :client_id, "lemon-web")}
+
+    ctx =
+      if Keyword.get(opts, :connection, true),
+        do: Map.merge(ctx, %{conn_id: "lemon-web:" <> inspect(self()), conn_pid: self()}),
+        else: ctx
 
     case Registry.dispatch(method, params || %{}, ctx) do
       {:ok, payload} -> {:ok, payload}

@@ -98,17 +98,22 @@ CodingAgent.Supervisor (one_for_one)
   |     +-- ExecutionNode.ToolSession.Supervisor (DynamicSupervisor)
   +-- Wasm.SidecarSupervisor
   +-- TaskSupervisor (bounded Task.Supervisor)
-  +-- TaskStoreServer, AsyncFollowups, Tools.Task.Control, Tools.Task.Speculation
+  +-- TaskStoreServer, AsyncFollowups
+  +-- TaskRuntime.Tree (rest_for_one)
+  |     +-- TaskRuntime.Journal (owner snapshots for crash adoption)
+  |     +-- TaskRuntime.Registry, TaskRuntime.Parents
+  |     +-- TaskRuntime.Supervisor (DynamicSupervisor; one TaskRuntime.Child per task)
+  +-- Tools.Task.Speculation
   +-- TaskProgressBindingServer, ParentQuestionStoreServer, RunGraphServer
   +-- ProcessSupervisor (rest_for_one)
   |     +-- ProcessRegistry
+  |     +-- ProcessManager (DynamicSupervisor; before the store, so a store
+  |     |   restart never stops running commands)
   |     +-- ProcessStoreServer
-  |     +-- ProcessManager (DynamicSupervisor)
   |     +-- LaneQueue (background process launch FIFO)
   +-- SessionTree (rest_for_one)
   |     +-- SessionRegistry
   |     +-- SessionSupervisor (DynamicSupervisor)
-  |     +-- Tools.Task.LiveBridgeSupervisor
   +-- AdvisorSupervisor (DynamicSupervisor; temporary session reviewers)
   +-- BackgroundRun.Tree (rest_for_one)
   |     +-- BackgroundRun.Registry
@@ -505,6 +510,15 @@ Task, process, run-graph and parent-question stores share
 `CodingAgent.DurableTable`: each domain server remains the serialized owner,
 loads its existing DETS tuples before readiness, and normalizes interrupted work
 through a domain callback. File names and tuple layouts are unchanged.
+`CodingAgent.RuntimeTables` is the ETS heir of every DETS-backed mirror: an
+owner that crashes is restarted with its live table, so queued and running
+tasks/runs keep their state and their workers' later finishes are accepted.
+Restart normalization (queued/running work becomes `:lost`, persisted) applies
+only at boot: first start, application restart or a clean owner stop. The run
+graph marks queued or running runs idle for `:run_graph_stale_ttl_seconds`
+(default 7 days) `:lost` with `:stale` instead of keeping them forever.
+`ProcessStoreServer` accepts data-only requests (no caller closures) and replies
+`{:error, :store_unavailable}` when its storage fails rather than exiting.
 Task-progress bindings use the same lifecycle with no DETS backing and remain
 transient. Expiration uses a private timestamp/key index rather than folding
 every retained record or log buffer; sweeps run in the owner mailbox, not an
@@ -741,7 +755,9 @@ is retried. `LaneQueue` reports the mapped reason inside `task_start_failed`;
 delegated runs already submitted retain their tracking-error receipt instead of
 claiming that the remote work was never started.
 
-The delegated `agent` tool mirrors each accepted async router run into `RunGraph`, so `agent action=join` waits on the same lifecycle that its completion watcher updates. TaskStore and RunGraph retain the parent run/session, the parent's child list links to the delegated run, and request metadata carries trusted `delegated_by.run_id`; caller-supplied metadata cannot forge that lineage. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
+The delegated `agent` tool registers every delegated run (sync or async) in `RunGraph` before submitting it, so `agent action=join` waits on the same lifecycle that its completion watcher updates. TaskStore and RunGraph retain the parent run/session, the parent's child list links to the delegated run, and request metadata carries trusted `delegated_by.run_id`; caller-supplied metadata cannot forge that lineage. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
+
+Delegation is bounded. A synchronous `agent` run or an `agent action=join` lends the calling run's gateway permit (`LemonGateway.Slots.suspend/2`) while it waits and takes it back at the front of the queue afterwards, so parents blocked on children and delegation chains cannot stall admission under `[gateway].max_concurrent_runs`; only the calling run's own permit is lent (an `agent` call inside an in-process `task` child lends nothing). Both waits are limited by `timeout_ms` (default 120000); a synchronous run that times out is aborted. `CodingAgent.BudgetEnforcer` refuses a delegation when the parent session's budget or the parent run's budget is exhausted or its `max_children` are active, reserves the child against the parent, and sends the child's token/cost limits as `meta.delegated_budget`; the child session applies them as `max_run_tokens`/`max_run_cost_usd` (they can only tighten its configured caps) and stops when it would exceed them. Model-supplied metadata cannot set that field. The child's reported usage is charged to the parent run and the parent session's budget scope on completion. Aborting the run that delegated (or a synchronous timeout) aborts its sync and async children through the run orchestrator (`RouterBridge.abort_run/2`); each child then emits its own terminal event.
 
 `agent action=poll` and `action=join` are scoped like `task`: each delegated task record stores the submitting session and agent as its owner, and `Control.authorize/2` makes a foreign `task_id` indistinguishable from a missing one, so another session can neither read its status nor consume its join followup. Poll and join reuse `CodingAgent.Tools.Task.Result`: join content carries each child's answer and poll returns bounded, structured details rather than raw child events. When router submission returns `:outcome_unknown`, the tool records a `tracking_lost` task under the request's fixed run id and starts the normal completion watcher; it never resubmits automatically.
 
@@ -960,8 +976,13 @@ working directory. Automatic resume refuses a missing or corrupt mapped journal
 instead of replacing that session's history with a fresh conversation. Unbound
 automatic native tokens retain their fresh-session fallback.
 
-Each assistant message also stores a versioned `system-prompt-digest` snapshot in
-the same JSONL append: the digest, exact ordered prompt blocks and resume metadata.
+Each assistant message also stores a versioned `system-prompt-digest` reference:
+the prompt digest and the plan revision it was composed under. The exact ordered
+prompt blocks are journaled once per digest on a branch, as a
+`lemon.prompt_snapshot` custom entry appended just before the first reply that
+used them (with a separate base prompt only when a plan overlay makes one
+differ). Journals written before this format embed the blocks in every reply and
+are still read.
 The digest includes block order and directory-derived flags, not just flattened
 text. Resume and branch restoration adopt a rebuilt prompt only when its digest
 matches the selected branch's latest reply; otherwise they retain the journaled
@@ -1486,19 +1507,18 @@ Once `worker-1` is online, a model can route a delegated run through the
 
 An explicit abort cancels the registry invocation and sends
 `node.invoke.cancel` to the targeted worker. Node disconnects fail pending
-invocations. Steering and redirect operations are not supported across this
-remote boundary.
+invocations. Steer and redirect cross the boundary as `node.invoke.control`
+(text only, at most 16 KiB, bound to the live invocation and run); the controller
+reports them accepted only after the worker's `node.invoke.control.result`
+confirms that the destination session took the text, and fails closed on
+disconnect, timeout, or a terminal run.
 
 ## Dependencies
 
 ### Umbrella Dependencies
 
-| App | Purpose |
-|-----|---------|
-| `agent_core` | Core agent runtime, types (`AgentTool`, `AgentToolResult`), event loop, abort signals |
-| `ai` | AI model providers, LLM integration, message types, OAuth resolution |
-| `lemon_skills` | Skill discovery, loading, and relevance matching |
-| `lemon_core` | Shared primitives -- sessions, storage, bus (PubSub), exec approvals, secrets, config, telemetry, introspection |
+The direct umbrella dependencies are generated from `mix.exs` in
+[architecture boundaries](../../docs/architecture_boundaries.md#direct-dependency-policy).
 
 ### External Dependencies
 

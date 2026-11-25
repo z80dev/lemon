@@ -17,10 +17,16 @@ defmodule LemonHoncho.ToolsTest.StubClient do
   @spec set_peer_config(term(), String.t(), String.t(), map()) :: {:ok, map()}
   def set_peer_config(_config, _session_id, _peer, _flags), do: {:ok, %{}}
 
-  @spec chat(term(), String.t(), String.t(), keyword()) :: {:ok, String.t()}
+  # "unanswered" stands for a dialectic call that timed out after it was sent.
+  @spec chat(term(), String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, :outcome_unknown}
   def chat(_config, peer, query, opts) do
     record(:chat, {peer, query, opts})
-    {:ok, "They review diffs before prose."}
+
+    case query do
+      "unanswered" -> {:error, :outcome_unknown}
+      _other -> {:ok, "They review diffs before prose."}
+    end
   end
 
   @spec session_search(term(), String.t(), String.t(), keyword()) :: {:ok, [map()]}
@@ -296,6 +302,13 @@ defmodule LemonHoncho.ToolsTest do
 
       params = %{"query" => "anything", "target" => "dog"}
       assert error(execute(Reasoning, params)) =~ "target"
+    end
+
+    test "says an unanswered question may still have been processed" do
+      result = execute(Reasoning, %{"query" => "unanswered"})
+
+      assert error(result) =~ "may or may not have been applied"
+      assert_received {:honcho_call, :chat, {_peer, "unanswered", _opts}}
     end
   end
 

@@ -1973,9 +1973,6 @@ defmodule CodingAgent.ExtensionsTest do
 
         @impl true
         def put(_doc, _opts), do: :ok
-
-        @impl true
-        def search(_query, _opts), do: []
       end
 
       defmodule MyStorageModule do
@@ -2050,9 +2047,6 @@ defmodule CodingAgent.ExtensionsTest do
 
         @impl true
         def put(_doc, _opts), do: :ok
-
-        @impl true
-        def search(_query, _opts), do: []
       end
       """
 

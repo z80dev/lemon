@@ -67,11 +67,15 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
     peer = "-100#{System.unique_integer([:positive])}"
     key = "agent:default:telegram:default:group:#{peer}"
 
+    test_pid = self()
+
     opts = [
       agent_id: "default",
       workspace: workspace,
       channel_context: %{channel_id: "telegram", peer_kind: :group, peer_id: peer},
-      meta: %{transport: "telegram"}
+      meta: %{transport: "telegram"},
+      start_task: &{:ok, spawn(&1)},
+      deliver: &send(test_pid, {:goal_reply, &1})
     ]
 
     on_exit(fn ->
@@ -94,7 +98,10 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
     assert GoalStatusMessage.handle(key, "set Fix the failing build", opts) =~ "Goal Set"
     assert GoalStore.get(key).cwd == workspace
 
-    assert GoalStatusMessage.handle(key, "loop once", opts) =~ "Goal Loop Tick"
+    assert GoalStatusMessage.handle(key, "loop once", opts) =~ "Goal Loop Tick Queued"
+    assert_receive {:goal_reply, tick}, 5_000
+    assert tick =~ "Goal Loop Tick"
+    assert tick =~ "Run id:"
 
     assert_receive {:execution, judge}, 2_000
     assert judge.meta.goal_judge == true
@@ -108,7 +115,9 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
       assert ToolPolicy.approval_mode(worker.tool_policy, tool) == :always
     end
 
-    assert GoalStatusMessage.handle(key, "continue", opts) =~ "Goal Continuation Submitted"
+    assert GoalStatusMessage.handle(key, "continue", opts) =~ "Goal Continuation Queued"
+    assert_receive {:goal_reply, continued_text}, 5_000
+    assert continued_text =~ "Goal Continuation Submitted"
     assert_receive {:execution, continued}, 2_000
     assert continued.meta.goal_continuation == true
     assert ToolPolicy.approval_mode(continued.tool_policy, "bash") == :always
@@ -139,9 +148,13 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
 
     for args <- ["loop once", "loop start", "continue"] do
       text = GoalStatusMessage.handle(key, args, opts)
-      refute text =~ "Submitted"
       refute text =~ "Started"
-      refute text =~ "Goal Loop Tick"
+
+      if args != "loop start" do
+        assert_receive {:goal_reply, delivered}, 5_000
+        refute delivered =~ "Submitted"
+        refute delivered =~ "Run id:"
+      end
     end
 
     refute_receive {:execution, _command}, 300

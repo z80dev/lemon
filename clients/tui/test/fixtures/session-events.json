@@ -30,5 +30,32 @@
     "entries": [],
     "cursor": null,
     "hasMore": false
+  },
+  "snapshot": {
+    "status": "ok",
+    "contentWithheld": false,
+    "sessionKey": "session-contract",
+    "identity": {"sessionKey": "session-contract", "sessionId": "native-owner", "branchId": null, "runId": null, "attempt": null, "revision": "0162d2eae43b356126030259af59350e105157f43a96e641f4e13d2115787ee6"},
+    "continuation": false,
+    "consistency": {
+      "boundary": "stable_owner_reads",
+      "atomic": false,
+      "eventCursor": {"version": 1, "sessionId": "native-owner", "streamId": "owner-stream", "seq": 2},
+      "runStatus": "ok"
+    },
+    "snapshot": {
+      "phase": "idle",
+      "terminal": false,
+      "answer": {"text": "", "canonical": false, "truncated": false},
+      "messages": [],
+      "messagesTruncated": false,
+      "actions": [],
+      "actionsTruncated": false,
+      "approvals": {"status": "forbidden"},
+      "children": {"status": "ok", "items": [], "truncated": false},
+      "processes": {"status": "ok", "items": [], "truncated": false},
+      "todos": {"status": "ok", "items": [], "truncated": false, "revision": [0, null]},
+      "plan": {"status": "ok", "value": {"mode": "code", "content": null, "truncated": false}}
+    }
   }
 }

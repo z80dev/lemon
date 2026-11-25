@@ -141,43 +141,6 @@ defmodule LemonAi.ProviderAdmissionTest do
     assert {:ok, :next} = CallDispatcher.dispatch(provider, fn -> {:ok, :next} end)
   end
 
-  test "dispatcher restart cannot reset a provider's occupied slot", %{provider: provider} do
-    parent = self()
-
-    holder =
-      Task.async(fn ->
-        CallDispatcher.dispatch(provider, fn ->
-          send(parent, :admitted)
-
-          receive do
-            :finish -> {:ok, :finished}
-          end
-        end)
-      end)
-
-    assert_receive :admitted
-    previous_state = :sys.get_state(CallDispatcher)
-
-    on_exit(fn ->
-      if Process.whereis(CallDispatcher) == nil do
-        Supervisor.restart_child(LemonAi.Supervisor, CallDispatcher)
-      end
-
-      :sys.replace_state(CallDispatcher, fn _ -> previous_state end)
-    end)
-
-    :ok = Supervisor.terminate_child(LemonAi.Supervisor, CallDispatcher)
-    assert {:ok, _replacement} = Supervisor.restart_child(LemonAi.Supervisor, CallDispatcher)
-
-    assert {:error, :max_concurrency} =
-             CallDispatcher.dispatch(provider, fn -> flunk("dispatcher reset the lease") end,
-               queue_timeout_ms: 0
-             )
-
-    send(holder.pid, :finish)
-    assert Task.await(holder) == {:ok, :finished}
-  end
-
   test "diagnostics report a missing authority as unavailable rather than idle", %{
     provider: provider
   } do

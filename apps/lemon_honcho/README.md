@@ -118,7 +118,7 @@ how much of a turn it may spend.
 | `LEMON_HONCHO_PIN_USER_PEER` | `false` | Pin channel turns to `user_peer`, ahead of aliases and generated peer names |
 | `LEMON_HONCHO_USER_PEER_ALIASES` | `{}` | JSON map of channel-qualified sender ids (`telegram_123`) to valid peer ids; many-to-one aliases are supported |
 | `LEMON_HONCHO_RUNTIME_PEER_PREFIX` | empty | Prefix for non-owner channel sender peers; empty uses `telegram_123`-style ids, while owners and local CLI/TUI/web turns keep `user_peer` |
-| `HONCHO_TIMEOUT_MS` | `30000` | Timeout for one attempt at an HTTP call. A turn-path call may retry twice; `mix lemon.honcho`'s probes do not |
+| `HONCHO_TIMEOUT_MS` | `30000` | Timeout for one attempt at an HTTP call. A turn-path read may retry twice; uploads, dialectic questions and conclusion writes are sent once; `mix lemon.honcho`'s probes do not retry |
 | `LEMON_HONCHO_ENABLED` | `true` | Master switch. Still inert without a key or base URL |
 | `LEMON_HONCHO_RECALL_MODE` | `hybrid` | How memory reaches the model: `hybrid` (both), `context` (injection only, tools inactive), `tools` (tools only, nothing injected) |
 | `LEMON_HONCHO_SESSION_STRATEGY` | `per-directory` | What a session maps to: `per-session`, `per-directory`, `per-repo`, `global` |
@@ -152,8 +152,9 @@ platform-to-satellite dependency.
 **Memory provider.** When configured, `LemonHoncho.Application` registers
 `LemonHoncho.MemoryProvider` with `LemonMemory.Providers` under the id `"honcho"`,
 label `"Honcho"`, source `"satellite"`, scopes `[:session, :agent, :workspace, :all]`,
-and a timeout of `HONCHO_TIMEOUT_MS` capped at 5 seconds — search runs on the agent's
-path, and a slow provider is a slow turn. Failures are isolated by
+and a timeout of `HONCHO_TIMEOUT_MS` capped at 5 seconds. The provider is a write
+target only: `put/2` hands each finished run to the session manager for upload, and
+`recall` never searches Honcho. Failures are isolated by
 `LemonMemory.Providers`, so a Honcho outage narrows results rather than failing a
 search.
 
@@ -283,8 +284,7 @@ text reach it, and nothing else does:
 3. **Whatever a tool call passes.** `honcho_search` and `honcho_reasoning` send the
    model's query; `honcho_conclude` sends the conclusion text it was asked to record or
    the query it was asked to search; `honcho_profile` sends the peer-card lines it was
-   asked to store. A `recall` call reaches Honcho the same way, through
-   `LemonHoncho.MemoryProvider`, and sends its query. This material is the model's own
+   asked to store. This material is the model's own
    words — often a verbatim paste of what the user just said — and is sent only when the
    model calls the tool. `LEMON_HONCHO_SAVE_MESSAGES=false` stops the two that write.
 4. **Identifiers.** The workspace name, the two peer ids, and the derived session id —
@@ -318,7 +318,6 @@ The budget belongs to the call site, and so does what withholding means there:
 | `honcho_conclude` `conclusion` | the fact to record | 2,000 characters (anything longer is rejected outright, so the clip never fires) | the call is **refused**; nothing is recorded |
 | `honcho_conclude` `query` | the model's query | 1,500 characters | the call is **refused**; no search runs |
 | `honcho_profile` `card` | each card line | 500 characters per line, at most 50 lines (over-long lines are rejected outright) | the **whole write** is refused; the stored card is untouched |
-| `recall` via `LemonHoncho.MemoryProvider` | whatever the search was given | 2,000 characters | the search returns no Honcho results, with no explanation |
 
 A refusal is an ordinary tool result, not an error: the turn continues, the model is
 told which parameter tripped the screen and that nothing was sent, stored, or logged,
@@ -329,11 +328,9 @@ reported as a search of something is a wrong answer rather than an empty one;
 `honcho_profile` refuses hardest, since a card write is a replace and sending the
 surviving lines would delete the withheld one as a side effect of a safety check.
 
-Neither of the two non-tool paths can report a withhold, and neither needs to fail over
-it. The session manager reads on without a query, since there the query only focuses the
-representation. The memory provider returns the same `[]` every other failure returns,
-because `LemonMemory.Provider` gives `search/2` exactly one channel; a caller that needs
-to know why asks a tool.
+The one non-tool path cannot report a withhold, and does not need to fail over it: the
+session manager reads on without a query, since there the query only focuses the
+representation.
 
 Two things are deliberately not screened. `honcho_context` sends no user-derived text
 at all — only an optional token budget — so it has nothing to screen. And
@@ -433,9 +430,6 @@ Worth knowing before you go looking for it:
   `unified`; there is no way to set the four observation flags individually.
 * **No session-start prewarm.** The first turn's bounded wait is the whole of it —
   nothing is fetched before the user speaks.
-* **Search results are messages, not runs.** A Honcho hit is one utterance by one
-  peer, so `LemonHoncho.MemoryProvider` puts it in `answer_summary` and leaves
-  `prompt_summary`, `run_id`, `tools_used`, and `model` empty. Searches are filtered to
-  the requester's agent, peer and memory ownership; the provider answers only
-  `:session` searches of a mapped session, and returns `[]` for `:agent`,
-  `:workspace` and `:all`, whose options do not identify the person asking.
+* **`recall` does not search Honcho.** The memory provider is a write target only;
+  Honcho memory reaches the model through the owner-scoped context block and the
+  explicit `honcho_*` tools.

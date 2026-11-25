@@ -32,6 +32,7 @@
 
 # Load support files
 Code.require_file("support/integration_config.ex", __DIR__)
+Code.require_file("support/stream_server.ex", __DIR__)
 
 # Provider retry backoff must not slow unit tests down; tests that assert on
 # retry timing install their own `:sleep_fun`.

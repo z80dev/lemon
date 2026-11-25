@@ -262,10 +262,12 @@ defmodule LemonAi.Providers.RetrySafetyTest do
     refute_received :provider_request
   end
 
-  defp openai_body(delta) do
-    "data: #{Jason.encode!(%{"choices" => [%{"delta" => delta}]})}\n\n"
+  defp openai_body(delta, finish_reason \\ nil) do
+    choice = %{"delta" => delta, "finish_reason" => finish_reason}
+    "data: #{Jason.encode!(%{"choices" => [choice]})}\n\n"
   end
 
+  # A Req async response whose connection fails mid-body or completes.
   defp openai_adapter(body, outcome) do
     parent = self()
 
@@ -276,13 +278,25 @@ defmodule LemonAi.Providers.RetrySafetyTest do
       send(pid, {ref, {:data, body}})
 
       case outcome do
-        :error -> send(pid, {:DOWN, ref, :process, pid, :closed})
+        :error -> send(pid, {ref, {:error, %Mint.TransportError{reason: :closed}}})
         :success -> send(pid, {ref, :done})
       end
 
-      {request, %Req.Response{status: 200, body: %Req.Response.Async{pid: pid, ref: ref}}}
+      async = %Req.Response.Async{
+        pid: pid,
+        ref: ref,
+        stream_fun: &async_message/2,
+        cancel_fun: fn _ref -> :ok end
+      }
+
+      {request, %Req.Response{status: 200, body: async}}
     end
   end
+
+  defp async_message(ref, {ref, {:data, data}}), do: {:ok, [data: data]}
+  defp async_message(ref, {ref, :done}), do: {:ok, [:done]}
+  defp async_message(ref, {ref, {:error, reason}}), do: {:error, reason}
+  defp async_message(_ref, _message), do: :unknown
 
   test "OpenAI completions never retries text, thinking or tool transport failures" do
     for {delta, expected_event, provider} <- [
@@ -316,7 +330,7 @@ defmodule LemonAi.Providers.RetrySafetyTest do
   test "OpenAI completions metadata-only transport failure remains retryable" do
     {:ok, count} = Agent.start_link(fn -> 0 end)
     first = openai_adapter(openai_body(%{}), :error)
-    second = openai_adapter(openai_body(%{"content" => "ok"}), :success)
+    second = openai_adapter(openai_body(%{"content" => "ok"}, "stop"), :success)
 
     Req.default_options(
       adapter: fn request ->
