@@ -28,6 +28,15 @@ defmodule LemonLsp.WorkspaceRootTest do
     assert WorkspaceRoot.detect(b, tmp, ["mix.exs"]) == tmp
   end
 
+  test "a cwd of / contains every file", %{tmp: tmp} do
+    write(tmp, "mix.exs", "def project, do: [apps_path: \"apps\"]")
+    write(tmp, "apps/a/mix.exs", "def project, do: [app: :a]")
+    a = write(tmp, "apps/a/lib/a.ex")
+
+    assert WorkspaceRoot.detect(a, "/", ["mix.exs"]) == tmp
+    assert WorkspaceRoot.detect("/x.ex", "/", ["absent.marker"]) == "/"
+  end
+
   test "the outermost workspace wins over nested workspaces", %{tmp: tmp} do
     write(tmp, "Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n")
     write(tmp, "crates/inner/Cargo.toml", "[workspace]\n[package]\nname = \"inner\"\n")

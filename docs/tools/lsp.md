@@ -138,7 +138,10 @@ At most eight language servers are live per manager (`max_active_count` in
 session with no in-flight request to stop; its owners receive
 `{LemonLsp.ServerManager, :server_stopped, session_id}` and reconnect on next use,
 and it appears in `recent_sessions` with status `:evicted`. A session serving a
-request is never evicted; when all eight are busy the acquire fails with
+request is never evicted. A session that does not answer the stop request within
+1 s is skipped, and its stop request expires, so it never stops later. When all
+eight are busy, or no slot frees within the 4 s admission deadline (inside
+`start_session/2`'s 5 s call), the acquire fails with
 `{:error, :lsp_session_limit}`. The cap bounds memory: one process per root costs
 from 55 MiB peak RSS (clangd after opening a one-file C project) to about
 350 MiB for BEAM-hosted servers (a BEAM with every module of this umbrella and

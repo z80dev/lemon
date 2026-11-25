@@ -113,7 +113,9 @@ defmodule LemonLsp.Session do
   defp publish(state),
     do: send(state.manager, {:session_status, self(), status_from_state(state), state.last_used})
 
-  defp touch(message, state) when message in [:status, :refresh, :evict_if_idle], do: state
+  defp touch(:status, state), do: state
+  defp touch(:refresh, state), do: state
+  defp touch({:evict_if_idle, _expires_at}, state), do: state
   defp touch(_message, state), do: %{state | last_used: System.unique_integer([:monotonic])}
 
   defp session_call(:status, _from, state) do
@@ -126,21 +128,28 @@ defmodule LemonLsp.Session do
   end
 
   # Decided here, not from the manager's last published status, so a request
-  # dispatched since then keeps its session alive.
-  defp session_call(:evict_if_idle, _from, state) do
-    if pending_request_count(state.sessions) == 0 do
-      state =
-        Enum.reduce(state.sessions, state, fn {session_id, session}, state ->
-          info = stopped_session_info(session, :evicted)
+  # dispatched since then keeps its session alive. A probe read after its
+  # monotonic expiry (the session was suspended or backlogged) is refused: the
+  # manager has stopped waiting for it and may already have freed a slot elsewhere.
+  defp session_call({:evict_if_idle, expires_at}, _from, state) do
+    cond do
+      System.monotonic_time(:millisecond) >= expires_at ->
+        {:reply, {:error, :expired}, state}
 
-          state
-          |> update_in([:sessions], &Map.delete(&1, session_id))
-          |> remember_session(Map.delete(info, :session_id))
-        end)
+      pending_request_count(state.sessions) > 0 ->
+        {:reply, {:error, :busy}, state}
 
-      {:reply, :ok, state}
-    else
-      {:reply, {:error, :busy}, state}
+      true ->
+        state =
+          Enum.reduce(state.sessions, state, fn {session_id, session}, state ->
+            info = stopped_session_info(session, :evicted)
+
+            state
+            |> update_in([:sessions], &Map.delete(&1, session_id))
+            |> remember_session(Map.delete(info, :session_id))
+          end)
+
+        {:reply, :ok, state}
     end
   end
 

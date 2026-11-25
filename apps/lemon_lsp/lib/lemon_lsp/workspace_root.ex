@@ -21,7 +21,7 @@ defmodule LemonLsp.WorkspaceRoot do
     dir = path |> Path.expand() |> Path.dirname()
     cwd = Path.expand(cwd)
 
-    if dir == cwd or String.starts_with?(dir, cwd <> "/") do
+    if inside?(dir, cwd) do
       chain = ancestors(dir, cwd)
 
       Enum.find(Enum.reverse(chain), &workspace?(&1, markers)) ||
@@ -36,6 +36,10 @@ defmodule LemonLsp.WorkspaceRoot do
     parent = Path.dirname(dir)
     if dir == stop or parent == dir, do: [dir], else: [dir | ancestors(parent, stop)]
   end
+
+  # Expanded paths: only the root itself ends in "/".
+  defp inside?(_dir, "/"), do: true
+  defp inside?(dir, cwd), do: dir == cwd or String.starts_with?(dir, cwd <> "/")
 
   defp marked?(dir, markers), do: Enum.any?(markers, &File.exists?(Path.join(dir, &1)))
 

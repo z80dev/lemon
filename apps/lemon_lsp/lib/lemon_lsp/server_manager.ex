@@ -10,8 +10,9 @@ defmodule LemonLsp.ServerManager do
   Acquiring a new pool beyond that asks
   the least-recently-used session with no in-flight request to stop (its owners
   receive `{LemonLsp.ServerManager, :server_stopped, session_id}` and reconnect
-  on next use); when every live session is busy the acquire fails with
-  `{:error, :lsp_session_limit}`.
+  on next use); when every live session is busy, or no slot frees within the
+  admission deadline (4 s, inside `start_session/2`'s 5 s call), the acquire
+  fails with `{:error, :lsp_session_limit}`.
   """
 
   use GenServer
@@ -38,8 +39,15 @@ defmodule LemonLsp.ServerManager do
   # session; outermost-root detection keeps a monorepo at one root.
   @max_live_sessions 8
   # A session answers eviction from its own loop; one that cannot within this
-  # window (suspended or stuck) is skipped for the next candidate.
+  # window (suspended or stuck) is skipped for the next candidate. The probe
+  # carries its expiry, so a late-read probe never evicts.
   @eviction_timeout_ms 1_000
+  # The manager waits this long past a probe's expiry for an answer sent before it.
+  @eviction_reply_margin_ms 100
+  # Admission never outlives `start_session/2`'s 5 s call: a request still
+  # unplaced at its deadline fails instead of starting or joining a session for
+  # a caller that may have given up (an orphan lease).
+  @admission_timeout_ms 4_000
 
   @type server :: GenServer.server()
   @typedoc """
@@ -346,7 +354,17 @@ defmodule LemonLsp.ServerManager do
          {:ok, command} <- LemonLsp.Servers.resolve_command(server_id, root) do
       key = {command.server.id, cwd, command.server.config_hash}
       opts = Keyword.put(opts, :owner, opts[:owner] || caller)
-      request = %{server_id: server_id, opts: opts, key: key, from: from, tried: MapSet.new()}
+
+      request = %{
+        id: make_ref(),
+        server_id: server_id,
+        opts: opts,
+        key: key,
+        from: from,
+        tried: MapSet.new(),
+        deadline: System.monotonic_time(:millisecond) + @admission_timeout_ms
+      }
+
       {:noreply, admit(request, state)}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -420,6 +438,20 @@ defmodule LemonLsp.ServerManager do
     end
   end
 
+  # A request parked behind an evicting session fails at its deadline if that
+  # session has not exited by then.
+  def handle_info({:admission_timeout, pid, id}, state) do
+    {timed_out, waiting} =
+      Enum.split_with(Map.get(state.parked, pid, []), &(&1.id == id))
+
+    Enum.each(timed_out, &GenServer.reply(&1.from, {:error, :lsp_session_limit}))
+
+    parked =
+      if waiting == [], do: Map.delete(state.parked, pid), else: %{state.parked | pid => waiting}
+
+    {:noreply, %{state | parked: parked}}
+  end
+
   def handle_info({ref, reply}, state) when is_reference(ref) do
     case Map.pop(state.evictions, ref) do
       {nil, _evictions} ->
@@ -455,10 +487,24 @@ defmodule LemonLsp.ServerManager do
   # Joins the pooled session for the key, else starts one when a live slot is
   # free, else asks the least-recently-used session without in-flight requests to
   # stop. A request for a pool whose session is being evicted waits for its exit.
+  # Past its deadline a request is refused rather than placed.
   defp admit(request, state) do
+    if System.monotonic_time(:millisecond) >= request.deadline do
+      GenServer.reply(request.from, {:error, :lsp_session_limit})
+      state
+    else
+      place(request, state)
+    end
+  end
+
+  defp place(request, state) do
     case Registry.lookup(LemonLsp.SessionRegistry, {:pool, self(), request.key}) do
       [{pid, _}] ->
         if MapSet.member?(state.evicting, pid) do
+          Process.send_after(self(), {:admission_timeout, pid, request.id}, request.deadline,
+            abs: true
+          )
+
           update_in(state.parked[pid], &[request | &1 || []])
         else
           forward(pid, {:start_session, request.server_id, request.opts}, request.from)
@@ -492,10 +538,22 @@ defmodule LemonLsp.ServerManager do
 
       {pid, _status} ->
         # The session decides atomically: it stops only while nothing is in
-        # flight and answers `{:error, :busy}` otherwise.
+        # flight and before `expires_at`, and answers an error otherwise.
         ref = make_ref()
-        forward(pid, :evict_if_idle, {self(), ref})
-        timer = Process.send_after(self(), {:eviction_timeout, ref}, @eviction_timeout_ms)
+
+        expires_at =
+          min(System.monotonic_time(:millisecond) + @eviction_timeout_ms, request.deadline)
+
+        forward(pid, {:evict_if_idle, expires_at}, {self(), ref})
+
+        timer =
+          Process.send_after(
+            self(),
+            {:eviction_timeout, ref},
+            expires_at + @eviction_reply_margin_ms,
+            abs: true
+          )
+
         eviction = Map.merge(request, %{pid: pid, timer: timer})
         %{state | evictions: Map.put(state.evictions, ref, eviction)}
     end

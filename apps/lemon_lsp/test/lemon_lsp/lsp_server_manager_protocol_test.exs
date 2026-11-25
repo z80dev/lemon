@@ -708,7 +708,8 @@ defmodule LemonLsp.ServerManagerProtocolTest do
       Enum.each(requests, &assert({:error, :session_stopped} = Task.await(&1)))
     end
 
-    test "a session that cannot answer eviction is skipped for the next candidate", ctx do
+    test "a session that cannot answer eviction is skipped and its late probe never evicts",
+         ctx do
       [stuck, next_lru | rest] = start_roots(ctx, 1..ctx.max)
       for id <- rest, do: assert({:ok, _} = touch(id))
       stuck_pid = session_pid(stuck)
@@ -721,6 +722,37 @@ defmodule LemonLsp.ServerManagerProtocolTest do
       after
         :sys.resume(stuck_pid)
       end
+
+      # The expired probe is read before this call: it must not stop the session.
+      assert {:ok, _} = touch(stuck)
+      assert session_pid(stuck) == stuck_pid
+      assert wait_until(fn -> ServerManager.status().active_count == ctx.max end)
+    end
+
+    test "admission fails within start_session's call when no candidate answers", ctx do
+      ids = start_roots(ctx, 1..ctx.max)
+      pids = Enum.map(ids, &session_pid/1)
+      Enum.each(pids, &(:ok = :sys.suspend(&1)))
+      extra = Path.join(ctx.tmp_dir, "root-extra")
+      File.mkdir_p!(extra)
+
+      try do
+        {elapsed_us, result} =
+          :timer.tc(fn ->
+            ServerManager.start_session(:elixir_ls, cwd: extra, config_root: ctx.tmp_dir)
+          end)
+
+        assert result == {:error, :lsp_session_limit}
+        assert elapsed_us < 5_000_000
+      after
+        Enum.each(pids, &:sys.resume/1)
+      end
+
+      # Every late probe has expired: no session stops, and nothing was
+      # started for the refused caller.
+      for id <- ids, do: assert({:ok, _} = touch(id))
+      assert Enum.map(ids, &session_pid/1) == pids
+      assert wait_until(fn -> ServerManager.status().active_count == ctx.max end)
     end
   end
 
