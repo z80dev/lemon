@@ -172,7 +172,7 @@ Regenerate from the repository root with `bun clients/tui/scripts/generate-comma
 
 | Command | Aliases | Arguments | Description |
 | --- | --- | --- | --- |
-| /palette | — | [query] | search commands, local skills and prompt templates |
+| /palette | — | [query] | search commands and skills, including the daemon's file commands |
 | /output | — | — | browse complete tool output receipts |
 | /diff | — | — | inspect the latest edit diff without card truncation |
 
@@ -215,7 +215,7 @@ Overlays own their keys; picker-local shortcuts are not configurable here.
 | lemon.transcript.toggleLatest | alt+e | Expand/collapse the latest tool card or thinking block |
 | lemon.transcript.cycleDetail | ctrl+t | Cycle detail for every card: collapsed → expanded → default |
 | lemon.links.browse | alt+l | Browse the transcript's links and open one by its hint tag |
-| lemon.palette.open | ctrl+p | Search commands, skills and prompts |
+| lemon.palette.open | ctrl+p | Search commands and skills |
 | lemon.tasks.toggle | alt+a | Open/close the Agent Hub (subagents) |
 | lemon.omp.toggle | alt+m | Show/hide omp delegate sessions |
 | lemon.tools.toggle | alt+o | Collapse/expand all tool output |

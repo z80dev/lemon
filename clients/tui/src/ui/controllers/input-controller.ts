@@ -41,7 +41,7 @@ export const LEMON_KEYBINDINGS = {
 	},
 	"lemon.palette.open": {
 		defaultKeys: "ctrl+p",
-		description: "Search commands, skills and prompts",
+		description: "Search commands and skills",
 	},
 	"lemon.tasks.toggle": {
 		defaultKeys: "alt+a",

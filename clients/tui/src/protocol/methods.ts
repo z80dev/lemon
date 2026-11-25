@@ -78,8 +78,7 @@ import type {
 	ChatHistoryResult,
 	ChatSendParams,
 	ChatSendResult,
-	ConfigGetParams,
-	ConfigSetParams,
+	CommandsListResult,
 	GoalSetParams,
 	HealthResult,
 	LogsTailParams,
@@ -128,6 +127,7 @@ import type {
 	SessionsResetResult,
 	SessionsSnapshotParams,
 	SessionsSnapshotResult,
+	SkillsListResult,
 	UsageStatusResult,
 } from "./types.ts";
 import type { UserPromptResolveParams } from "./user-prompt.ts";
@@ -187,6 +187,7 @@ export const METHOD = {
 	sessionsLabel: "sessions.label",
 	sessionDetail: "session.detail",
 	commandsCatalog: "commands.catalog",
+	commandsList: "commands.list",
 	backgroundStart: "background.start",
 	backgroundList: "background.list",
 	backgroundStatus: "background.status",
@@ -227,8 +228,7 @@ export const METHOD = {
 	cronRemove: "cron.remove",
 	cronRun: "cron.run",
 	logsTail: "logs.tail",
-	configGet: "config.get",
-	configSet: "config.set",
+	skillsList: "skills.list",
 	skillsHermesCatalog: "skills.hermes.catalog",
 	skillsInstall: "skills.install",
 	blueprintsList: "blueprints.list",
@@ -717,6 +717,11 @@ export class ControlPlaneMethods {
 		return this.#call<Record<string, unknown>>(METHOD.commandsCatalog, params, options);
 	}
 
+	/** File-defined slash commands the daemon expands for `cwd`, read fresh each call. */
+	commandsList(params: { cwd: string }, options?: RequestOptions): Promise<CommandsListResult> {
+		return this.#call<CommandsListResult>(METHOD.commandsList, params, options);
+	}
+
 	backgroundStart(
 		params: {
 			prompt: string;
@@ -996,15 +1001,12 @@ export class ControlPlaneMethods {
 		return this.#call(METHOD.logsTail, params, options);
 	}
 
-	configGet(params?: ConfigGetParams, options?: RequestOptions): Promise<unknown> {
-		return this.#call(METHOD.configGet, params, options);
-	}
-
-	configSet(params: ConfigSetParams, options?: RequestOptions): Promise<unknown> {
-		return this.#call(METHOD.configSet, params, options);
-	}
-
 	// -- skills -------------------------------------------------------------
+
+	/** Installed skills (global and, with `cwd`, that project's) the daemon serves. */
+	skillsList(params: { cwd?: string }, options?: RequestOptions): Promise<SkillsListResult> {
+		return this.#call<SkillsListResult>(METHOD.skillsList, params, options);
+	}
 
 	skillsHermesCatalog(
 		params?: Record<string, unknown>,

@@ -42,11 +42,7 @@ import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
 import { type CommandHost, type CommandRegistry, createCommandRegistry } from "./commands/index.ts";
 import { contextWindowFromCache } from "./commands/model.ts";
-import {
-	discoverFileCommands,
-	fileSlashCommand,
-	type PaletteSourceOptions,
-} from "./commands/palette-source.ts";
+import { daemonFileCommands } from "./commands/palette-source.ts";
 import { parsePlanReceipt } from "./commands/plan.ts";
 import { type OverlayHost, SUBMISSION_MODES } from "./commands/registry.ts";
 import {
@@ -171,8 +167,6 @@ export interface AppShellOptions {
 	/** `[tui] vim_mode`: start the composer in Vim-style modal editing. */
 	vimMode?: boolean;
 	keybindings?: unknown;
-	/** Local roots for skills, prompts and file commands; tests inject a fixture home. */
-	resources?: Omit<PaletteSourceOptions, "cwd">;
 }
 
 /** How a prompt reaches its session; `confirm` verifies and remembers a probed profile route. */
@@ -505,10 +499,7 @@ export class AppShell {
 		this.#host = this.#buildHost();
 		this.commands = createCommandRegistry({
 			openExternalEditor: () => this.openExternalEditor(),
-		}).setFileCommandSource(async () => {
-			const found = await discoverFileCommands({ ...options.resources, cwd: this.#cwd });
-			return { commands: found.commands.map(fileSlashCommand), issues: found.issues };
-		});
+		}).setFileCommandSource(() => daemonFileCommands(this.methods, this.#cwd));
 		this.#palette = new CommandPalette({
 			context: () => ({
 				store: this.store,
@@ -526,7 +517,6 @@ export class AppShell {
 			present: (overlay) => this.selectors.open(overlay),
 			repaint: () => this.selectors.repaint(),
 			notice: (text, level) => this.events.notice(text, level),
-			resources: options.resources,
 			bindingKeys: (action) => this.input.keybindings.getKeys(action as never),
 		});
 		this.commandController = new CommandController({

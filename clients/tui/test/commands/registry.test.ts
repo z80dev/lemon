@@ -103,7 +103,7 @@ describe("CommandRegistry", () => {
 
 describe("file-defined commands", () => {
 	const fileCommand = (name: string, summary = "from a file"): SlashCommand =>
-		fileSlashCommand({ name, description: summary, source: "claude", scope: "project", path: "" });
+		fileSlashCommand({ name, description: summary, argumentHint: null });
 
 	test("built-ins win, the first file command wins, and they list after built-ins", () => {
 		const registry = new CommandRegistry().register({

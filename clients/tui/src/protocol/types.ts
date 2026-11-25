@@ -1057,15 +1057,31 @@ export interface LogsTailParams {
 	[key: string]: unknown;
 }
 
-export interface ConfigGetParams {
-	key?: string;
+/** One file-defined slash command the daemon expands (`commands.list`). */
+export interface DaemonFileCommand {
+	name: string;
+	description: string;
+	argumentHint: string | null;
+}
+
+export interface CommandsListResult {
+	commands: DaemonFileCommand[];
+	truncated: boolean;
+}
+
+/** The palette-relevant part of one `skills.list` entry. */
+export interface SkillsListEntry {
+	key: string;
+	name?: string | null;
+	description?: string | null;
+	enabled?: boolean;
+	activation?: string | null;
 	[key: string]: unknown;
 }
 
-export interface ConfigSetParams {
-	key: string;
-	value: unknown;
-	[key: string]: unknown;
+export interface SkillsListResult {
+	skills: SkillsListEntry[];
+	summary?: { truncated?: boolean; [key: string]: unknown };
 }
 
 // -- process jobs --------------------------------------------------------------

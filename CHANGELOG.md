@@ -10,6 +10,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Read-scoped control-plane method `commands.list(cwd)` returns the file slash
+  commands the daemon would expand for a directory, advertised in `hello-ok`.
+  The TUI palette, `/help` and autocomplete now use it and `skills.list`
+  instead of scanning command, prompt and skill directories locally, so they
+  follow the daemon's configured agent directory and drop a deleted command
+  file on the next refresh. The palette no longer lists local prompt templates
+  (#718).
 - `lemon browser stop` (admin control-plane method `browser.stop`) stops the
   local browser driver and the Chrome it launched (#660).
 - `lemon setup omp` reuses the provider logins and API keys omp already holds:
@@ -662,6 +669,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   longer end (or let a second prompt overwrite) a newly accepted prompt (#630).
 
 ### Removed
+
+- **Breaking:** the `config.get` and `config.set` control-plane methods and
+  their `:system_config` store. Nothing read the stored values (setting
+  `logLevel` changed only what `config.get` reported); configuration lives in
+  `config.toml` (#712).
 
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the

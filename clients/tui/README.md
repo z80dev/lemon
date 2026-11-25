@@ -347,8 +347,8 @@ on reconnect and when opening or changing models. Older daemons without
   row, Esc, typing or pasting runs nothing and returns the prompt to the
   composer. This holds
   wherever the text came from — typing, completions, history, native terminal
-  edits, pastes or `$EDITOR`. As a convenience, pasted text, palette templates
-  and skills, restored queue items, rewound or retried prompts, plan feedback
+  edits, pastes or `$EDITOR`. As a convenience, pasted text, palette skills,
+  restored queue items, rewound or retried prompts, plan feedback
   and delegated native sends enter the composer sanitized and then escaped
   (`\{!`, and `\!` where they open the prompt), so they reach the model
   literally without asking. Interactive `!cmd` has no deadline: it owns the
@@ -359,19 +359,21 @@ on reconnect and when opening or changing models. Older daemons without
   is terminated so descendants cannot outlive it or hold the TUI's capture
   pipes open. Command text over 4096 characters is refused, not confirmed.
   Ctrl+P, `/palette`, or `/` in an empty editor opens one fuzzy command palette
-  for command names, aliases, descriptions, local skills, and prompt templates.
+  for command names, aliases, descriptions and skills.
   Ctrl+P and `/palette` keep destructive selections and argument-taking actions
   as drafts rather than sending them. When typing `/` directly, Enter executes
   an exact command or alias; a space after a recognized command returns its full
   text to the editor for arguments. Escape preserves the typed slash query.
-  Templates are discovered from `.lemon/prompts`, `.claude/prompts`, and
-  `$LEMON_AGENT_DIR/prompts` (default `~/.lemon/agent/prompts`), with project names
-  taking precedence. Local skills insert an explicit `read_skill` request; the
-  palette does not claim that a remote daemon or selected profile installed them.
-  File slash commands (`.claude/commands`, `.codex/prompts`, `.gemini/commands`
-  and the other roots in [file slash commands](../../docs/user-guide/slash-commands.md))
-  register as commands after the built-ins, which win name collisions; `/name
-  args` is sent verbatim and the daemon expands it.
+  The TUI scans no command or skill directories itself: each palette opening
+  asks the daemon for its [file slash commands](../../docs/user-guide/slash-commands.md)
+  (`commands.list` for the TUI's working directory) and installed skills
+  (`skills.list`), so the palette lists exactly what the daemon expands,
+  including its configured agent directory, and a deleted command file
+  disappears on the next opening. File commands register after the built-ins,
+  which win name collisions; `/name args` is sent verbatim and the daemon
+  expands it. A skill inserts an explicit `read_skill` request; a disabled skill
+  is listed as unavailable. A failed read is shown in the palette and keeps the
+  last file-command list rather than presenting an empty one.
 - `/skills` live official Hermes catalog browser: category drill-down, fuzzy
   filtering, descriptions, installed markers, and Space-toggle multi-select
   import through Lemon's normal audit/approval flow. A blocked bundle opens a

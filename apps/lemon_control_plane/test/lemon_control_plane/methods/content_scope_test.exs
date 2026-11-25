@@ -12,7 +12,6 @@ defmodule LemonControlPlane.Methods.ContentScopeTest do
   use ExUnit.Case, async: false
 
   alias LemonAutomation.{CronManager, CronRun, CronStore}
-  alias LemonControlPlane.ConfigStore
   alias LemonControlPlane.Methods.Registry
   alias LemonControlPlane.TestSupport.SessionCleanup
   alias LemonCore.{RunStore, Store}
@@ -334,54 +333,5 @@ defmodule LemonControlPlane.Methods.ContentScopeTest do
     assert result["summary"]["cleanup"]["includesLogMessages"] == false
 
     assert_content(dispatch("logs.tail", %{}, with_content()))
-  end
-
-  describe "config.get" do
-    setup c do
-      nested = "contentScopeNested#{c.token}"
-      text = "contentScopeText#{c.token}"
-      credential = "sk-" <> String.duplicate("c", 40)
-
-      :ok = ConfigStore.put(nested, [%{"api_key" => "private-value"}, %{"label" => @content}])
-      :ok = ConfigStore.put(text, "OPENAI_API_KEY=#{credential} #{@unlabelled}")
-
-      on_exit(fn ->
-        Store.delete(:system_config, nested)
-        Store.delete(:system_config, text)
-      end)
-
-      %{nested: nested, text: text, credential: credential}
-    end
-
-    test "read scope sees only explicitly public fields", c do
-      all = dispatch("config.get", %{}, read_only())
-      refute Map.has_key?(all, c.nested)
-      refute Map.has_key?(all, c.text)
-      refute Jason.encode!(all) =~ "private-value"
-      assert_withheld(all)
-
-      single = dispatch("config.get", %{"key" => c.nested}, read_only())
-      assert single["value"] == nil
-      assert single["summary"]["valueReturned"] == false
-      refute Jason.encode!(single) =~ "private-value"
-
-      assert %{"value" => _} = dispatch("config.get", %{"key" => "logLevel"}, read_only())
-    end
-
-    test "admin scope gets values through the shared projector", c do
-      admin = %{auth: %{role: :operator, scopes: [:read, :admin]}}
-
-      nested = dispatch("config.get", %{"key" => c.nested}, admin)
-      assert [%{"api_key" => "[REDACTED]"}, %{"label" => @content}] = nested["value"]
-
-      text = dispatch("config.get", %{"key" => c.text}, admin)
-      refute text["value"] =~ c.credential
-      assert text["value"] =~ "[REDACTED]"
-
-      all = dispatch("config.get", %{}, admin)
-      refute Jason.encode!(all) =~ "private-value"
-      refute Jason.encode!(all) =~ c.credential
-      assert all[c.nested] == nested["value"]
-    end
   end
 end

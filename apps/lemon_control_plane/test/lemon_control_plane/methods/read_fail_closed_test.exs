@@ -11,7 +11,6 @@ defmodule LemonControlPlane.Methods.ReadFailClosedTest do
 
   alias LemonControlPlane.Methods.{
     ChatHistory,
-    ConfigGet,
     CronRuns,
     CronStatus,
     ExecApprovalsGet,
@@ -81,8 +80,6 @@ defmodule LemonControlPlane.Methods.ReadFailClosedTest do
   # call. Every row must answer with an explicit unavailable error.
   @rows [
     {"exec.approvals.get", :store, &__MODULE__.exec_approvals/0},
-    {"config.get (all)", :store, &__MODULE__.config_all/0},
-    {"config.get (key)", :store, &__MODULE__.config_key/0},
     {"cron.runs", :store, &__MODULE__.cron_runs/0},
     {"sessions.preview", :run_history, &__MODULE__.sessions_preview/0},
     {"chat.history", :run_history, &__MODULE__.chat_history/0},
@@ -141,8 +138,6 @@ defmodule LemonControlPlane.Methods.ReadFailClosedTest do
   end
 
   def exec_approvals, do: ExecApprovalsGet.handle(%{}, @ctx)
-  def config_all, do: ConfigGet.handle(%{}, @ctx)
-  def config_key, do: ConfigGet.handle(%{"key" => "logLevel"}, @ctx)
   def cron_runs, do: CronRuns.handle(%{"id" => "cron-job-unreadable"}, @ctx)
   def sessions_preview, do: SessionsPreview.handle(%{"sessionKey" => session_key()}, @ctx)
   def chat_history, do: ChatHistory.handle(%{"sessionKey" => session_key()}, @ctx)

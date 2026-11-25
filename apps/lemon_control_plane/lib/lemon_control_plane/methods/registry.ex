@@ -66,6 +66,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.BrowserStop,
     # Channels
     LemonControlPlane.Methods.CommandsCatalog,
+    LemonControlPlane.Methods.CommandsList,
     LemonControlPlane.Methods.ChannelPairing,
     LemonControlPlane.Methods.BackgroundStart,
     LemonControlPlane.Methods.BackgroundList,
@@ -249,9 +250,6 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.NodeNativeLineageFloor,
     LemonControlPlane.Methods.NodesList,
     LemonControlPlane.Methods.NodesRevoke,
-    # Config
-    LemonControlPlane.Methods.ConfigGet,
-    LemonControlPlane.Methods.ConfigSet,
     # Connect challenge (node pairing handshake)
     LemonControlPlane.Methods.ConnectChallenge,
     # omp delegate sessions

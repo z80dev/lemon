@@ -12,6 +12,10 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Added
 
+- Read-scoped `commands.list` (required absolute `cwd`) returns the agent
+  runtime's `slash_commands/1` projection — `name`, `description`,
+  `argumentHint` — read fresh on every call, bounded to 1,000 entries; an
+  unavailable runtime is `UNAVAILABLE`, never an empty list (#718).
 - Admin-only `browser.stop` stops the local browser driver and the Chrome it
   launched; attached browsers keep running (#660).
 - `system.stop` drains active runs and carries queued work across the restart
@@ -53,6 +57,12 @@ All notable changes to `lemon_control_plane` are documented here.
   non-generating discovery. Explicit Codex CLI import (`providers.management.import`,
   `node.providers.management.import`) stays destination-local and maps missing or
   unusable logins to conflicts; listings optionally include readiness.
+
+### Removed
+
+- **Breaking:** `config.get`, `config.set` and `LemonControlPlane.ConfigStore`
+  (the `:system_config` table). The store had no reader besides `config.get`,
+  so a stored `logLevel` was reported but never applied (#712).
 
 ### Changed
 
