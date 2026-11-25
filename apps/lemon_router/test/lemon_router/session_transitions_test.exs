@@ -368,7 +368,6 @@ defmodule LemonRouter.SessionTransitionsTest do
 
     assert next_state.active == nil
     assert Enum.map(next_state.queue, & &1.run_id) == ["run2", "run3"]
-    assert Enum.at(next_state.queue, 1).meta[:suppress_router_phase_events] == true
     assert effects == [:maybe_start_next]
   end
 
@@ -471,7 +470,6 @@ defmodule LemonRouter.SessionTransitionsTest do
     assert [queued] = next_state.queue
     assert queued.run_id == "run2"
     assert queued.queue_mode == :followup
-    assert queued.meta[:suppress_router_phase_events] == true
     assert next_state.pending_steers == %{}
     assert effects == [:maybe_start_next]
   end
@@ -700,7 +698,6 @@ defmodule LemonRouter.SessionTransitionsTest do
              SessionTransitions.dispatch_steer_failed(idle_state, "run2", 100)
 
     assert Enum.map(idle_next_state.queue, & &1.run_id) == ["run2"]
-    assert hd(idle_next_state.queue).meta[:suppress_router_phase_events] == true
     assert idle_next_state.pending_steers == %{}
     assert idle_effects == [:maybe_start_next]
 

@@ -4,7 +4,7 @@ defmodule LemonGateway.RunStatusRedactionTest do
   @secret "PRIVATE-prompt-and-answer-text"
 
   for {module, kept} <- [
-        {LemonGateway.Run, [run_id: "run_1", session_key: "sk_1", current_phase: :streaming]}
+        {LemonGateway.Run, [run_id: "run_1", session_key: "sk_1", completed: false]}
       ] do
     @module module
     @kept kept

@@ -116,7 +116,6 @@ automatically.
 | `run_started` | transient | `sessions.events`, then `sessions.snapshot` (current run identity) |
 | `delta` | transient | `sessions.events`, then `sessions.snapshot` (answer state); final text from the run's completion |
 | `engine_action` | transient | `sessions.events`, then `sessions.snapshot` (actions and process receipts) |
-| `run_phase_changed` | best_effort | none; it has no consumer |
 | `cron_tick` | best_effort | none |
 | `heartbeat_alert`, `heartbeat_suppressed` | best_effort | the cron run record |
 | `config_reloaded`, `config_reload_failed` | best_effort | the configuration itself |
@@ -244,7 +243,6 @@ The busiest topic and the only one whose subscribers span the umbrella.
 | `:delta` (typed) | `LemonGateway.Run` | `Events.Delta` (`run_id`, `seq`, `text`, `ts_ms`, `meta`) |
 | `:run_completed` (typed) | `LemonGateway.Run` (including admission failures); synthetic completions from `LemonRouter.RunProcess`, `RunProcess.Watchdog`, and `SessionCoordinator` | `Events.RunCompleted` wrapping `Events.Completion`; synthetic ones carry `meta.synthetic == true` |
 | `:run_failed` (typed) | `LemonRouter.RunProcess` (abnormal termination) | `Events.RunFailed` (`run_id`, `session_key`, `reason`) |
-| `:run_phase_changed` (typed) | `LemonRouter.PhasePublisher` (the only publisher; the gateway tracks phases but does not broadcast them) | `Events.RunPhaseChanged`, built with `RunPhaseChanged.build/1` |
 | `:engine_action` (typed) | `LemonGateway.Run`; `CodingAgent.TaskRuntime.Child` (a task's owner) and `Task.Async` for projected child actions; `LemonCore.Event.engine_reasoning/1` | `Events.EngineAction` wrapping `Events.Action` |
 | `:engine_started`, `:engine_completed`, `:engine_event` | `LemonGateway.Run` (native executor events) | plain maps; `:engine_event` is the escape hatch for unrecognised native events (not registered) |
 | `:checkpoint_created` / `_restored` / `_deleted` | `LemonCore.Checkpoint`; remote ones relayed by `LemonGateway.Run` | map (checkpoint id/kind, tool, action, path counts) — also on `session:<key>` (not registered) |
@@ -454,7 +452,6 @@ Bold fields are enforced.
 | | `delta` → `Delta` | **run_id**, **seq**, **text**, ts_ms, meta |
 | | `run_completed` → `RunCompleted` | **completed** (`Completion`), duration_ms |
 | | `run_failed` → `RunFailed` | **run_id**, session_key, **reason** |
-| | `run_phase_changed` → `RunPhaseChanged` | **run_id**, session_key, conversation_key, **phase**, previous_phase, **source**, at |
 | | `engine_action` → `EngineAction` | **action** (`Action`), engine, phase (`:started \| :updated \| :completed`, default `:updated`), ok, message, level |
 | `exec_approvals` | `approval_requested` → `ApprovalRequested` | **approval_id**, **pending** (`ApprovalPending`) |
 | | `approval_resolved` → `ApprovalResolved` | **approval_id**, **decision** (`:approve_once`, `:approve_session`, `:approve_agent`, `:approve_global`, `:deny`, `:timeout`, `:cancelled`, `:expired`), pending |
@@ -575,7 +572,7 @@ still work because consumers coerce at their entry points.
 
 - **Registered types with no WS mapping.** `EventBridge` maps run started/completed, delta,
   engine action, goals, approvals, channel delivery, cron, heartbeat alert/suppressed and
-  tick. It does **not** map `:run_failed`, `:run_phase_changed`, `:config_reloaded`,
+  tick. It does **not** map `:run_failed`, `:config_reloaded`,
   `:config_reload_failed`, `:secret_changed`, `:talk_mode_changed` or `:routing_feedback`.
   The catch-all logs one warning per such type — and a second distinct warning when a
   registered type arrives with a payload that is not (and cannot be coerced into) its
@@ -600,7 +597,8 @@ types; the shim was removed on 2026-08-13 once `EventBridge` and the other consu
 converted to struct patterns. Notable fixes along the way: `:run_failed` now uses the
 `LemonCore.Event` envelope; timer-heartbeat completion output is read from
 `completed.answer`; publishers gate on `Bus.running?/0` instead of `Process.whereis/1`;
-the gateway no longer publishes a duplicate `:run_phase_changed`; the bare-tuple
+the gateway no longer publishes a duplicate `:run_phase_changed` (the type itself was
+retired in #710: it had no consumer); the bare-tuple
 `DependencyManager.build_event/3` fallback and its receive clauses were deleted;
 `:acp_client_request` left the bus for `LemonCore.ACPClientBridge`; and the `kanban*`
 broadcasts were deleted. `:channel_delivery` (2026-08-16) gave `channels` its first publisher.

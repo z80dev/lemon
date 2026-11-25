@@ -46,7 +46,6 @@ defmodule LemonCore.Events do
     delta: Events.Delta,
     run_completed: Events.RunCompleted,
     run_failed: Events.RunFailed,
-    run_phase_changed: Events.RunPhaseChanged,
     engine_action: Events.EngineAction,
 
     # exec_approvals

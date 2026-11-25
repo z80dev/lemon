@@ -371,6 +371,22 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert_receive {:started, "run2", _}
   end
 
+  # #710: phases were broadcast per submission with no subscriber.
+  test "admission, queueing and dropping publish no run phase events", %{
+    run_supervisor: run_supervisor
+  } do
+    key = {:session, unique_session_key()}
+    for run_id <- ["phase_run1", "phase_run2"], do: LemonCore.Bus.subscribe("run:" <> run_id)
+
+    :ok = submit(key, "phase_run1", "one", :collect, run_supervisor)
+    assert_receive {:started, "phase_run1", _}
+    :ok = submit(key, "phase_run2", "two", :collect, run_supervisor)
+    SessionCoordinator.abort_session(elem(key, 1), :user_requested)
+    assert_receive {:aborted, "phase_run1", :user_requested}
+
+    refute_receive %LemonCore.Event{type: :run_phase_changed}, 200
+  end
+
   test "cancel(session_key) preserves queued work end to end", %{run_supervisor: run_supervisor} do
     session_key = unique_session_key()
     key = {:session, session_key}

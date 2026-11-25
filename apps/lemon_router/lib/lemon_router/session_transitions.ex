@@ -512,7 +512,6 @@ defmodule LemonRouter.SessionTransitions do
         session_key: current.session_key,
         conversation_key: current.conversation_key,
         meta: meta,
-        current_phase: nil,
         execution_request: %{
           previous_request
           | run_id: current.run_id,
@@ -591,7 +590,6 @@ defmodule LemonRouter.SessionTransitions do
         fallback_mode: :followup,
         active_run_id: Keyword.get(opts, :active_run_id)
       )
-      |> suppress_router_phases()
 
     case maybe_merge_followup(
            state.queue,
@@ -620,7 +618,6 @@ defmodule LemonRouter.SessionTransitions do
         fallback_mode: :collect,
         active_run_id: Keyword.get(opts, :active_run_id)
       )
-      |> suppress_router_phases()
 
     %SessionState{state | queue: state.queue ++ [submission]}
   end
@@ -848,8 +845,4 @@ defmodule LemonRouter.SessionTransitions do
   end
 
   defp receipt_requested_mode(_receipt), do: nil
-
-  defp suppress_router_phases(%Submission{} = submission) do
-    %{submission | meta: Map.put(submission.meta || %{}, :suppress_router_phase_events, true)}
-  end
 end

@@ -663,6 +663,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** the write-only run-phase pipeline: `LemonRouter.PhasePublisher`, the
+  `:run_phase_changed` bus event (`LemonCore.Events.RunPhaseChanged`),
+  `LemonCore.RunPhase`, `LemonCore.RunPhaseGraph`, the router's per-submission phase
+  broadcasts and the gateway's phase tracking. Nothing subscribed to the event, so the
+  control-plane `EventBridge` no longer logs an unmapped-type warning for it (#710).
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.

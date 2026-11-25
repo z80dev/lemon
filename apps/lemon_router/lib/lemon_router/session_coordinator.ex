@@ -27,7 +27,6 @@ defmodule LemonRouter.SessionCoordinator do
   alias LemonCore.{Events, MapHelpers}
 
   alias LemonRouter.{
-    PhasePublisher,
     QueueEffect,
     RestartCarryover,
     RunReceiptStore,
@@ -444,8 +443,6 @@ defmodule LemonRouter.SessionCoordinator do
         reply?: true
       )
 
-    next_state = maybe_emit_submit_phases(recovered_state, submission, next_state)
-
     case disposition(recovered_state, submission, next_state) do
       nil ->
         {:reply, reply, next_state}
@@ -622,7 +619,7 @@ defmodule LemonRouter.SessionCoordinator do
   end
 
   def handle_info(:maybe_start_next, state) do
-    {next_state, _result} = maybe_start_next(state, return_result?: false, emit_phase?: true)
+    {next_state, _result} = maybe_start_next(state, return_result?: false)
     {:noreply, next_state}
   end
 
@@ -854,11 +851,7 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp apply_effect(:maybe_start_next, state, reply_acc, opts) do
     {next_state, start_result} =
-      maybe_start_next(
-        state,
-        return_result?: Keyword.get(opts, :reply?, false),
-        emit_phase?: not Keyword.get(opts, :reply?, false)
-      )
+      maybe_start_next(state, return_result?: Keyword.get(opts, :reply?, false))
 
     {next_state, merge_reply(reply_acc, start_result)}
   end
@@ -915,43 +908,6 @@ defmodule LemonRouter.SessionCoordinator do
   defp merge_reply(reply, :started), do: reply
   defp merge_reply(reply, {:error, _reason}), do: reply
 
-  defp maybe_emit_submit_phases(
-         _original_state,
-         %Submission{} = submission,
-         %SessionState{} = state
-       ) do
-    active_submission = active_submission(state)
-
-    cond do
-      active_submission_run_id(state) == submission.run_id and
-          phase_emission_enabled?(active_submission || submission) ->
-        active_submission =
-          (active_submission || submission)
-          |> PhasePublisher.emit(:accepted, nil)
-          |> PhasePublisher.emit(:waiting_for_slot, :accepted)
-
-        put_active_submission_phase(state, submission.run_id, active_submission.current_phase)
-
-      queued_submission?(state, submission.run_id) ->
-        queued_submission =
-          Enum.find(state.queue, &(&1.run_id == submission.run_id)) || submission
-
-        if phase_emission_enabled?(queued_submission) do
-          queued_submission =
-            queued_submission
-            |> PhasePublisher.emit(:accepted, nil)
-            |> PhasePublisher.emit(:queued_in_session, :accepted)
-
-          put_queued_submission_phase(state, submission.run_id, queued_submission.current_phase)
-        else
-          state
-        end
-
-      true ->
-        state
-    end
-  end
-
   defp active_submission_run_id(%SessionState{
          active: %{submission: %Submission{run_id: run_id}}
        }),
@@ -964,37 +920,6 @@ defmodule LemonRouter.SessionCoordinator do
     do: submission
 
   defp active_submission(_state), do: nil
-
-  defp queued_submission?(%SessionState{queue: queue}, run_id) when is_binary(run_id) do
-    Enum.any?(queue, &(&1.run_id == run_id))
-  end
-
-  defp queued_submission?(_state, _run_id), do: false
-
-  defp put_queued_submission_phase(%SessionState{queue: queue} = state, run_id, phase)
-       when is_binary(run_id) do
-    %SessionState{
-      state
-      | queue:
-          Enum.map(queue, fn
-            %Submission{run_id: ^run_id} = submission -> Submission.put_phase(submission, phase)
-            submission -> submission
-          end)
-    }
-  end
-
-  defp put_queued_submission_phase(state, _run_id, _phase), do: state
-
-  defp put_active_submission_phase(
-         %SessionState{active: %{run_id: run_id, submission: %Submission{} = submission} = active} =
-           state,
-         run_id,
-         phase
-       ) do
-    %SessionState{state | active: %{active | submission: Submission.put_phase(submission, phase)}}
-  end
-
-  defp put_active_submission_phase(state, _run_id, _phase), do: state
 
   # A draining runtime keeps queued work queued so RestartCarryover can carry it
   # across the restart instead of starting a run that would be cut short.
@@ -1015,7 +940,7 @@ defmodule LemonRouter.SessionCoordinator do
 
     case start_result do
       {:ok, pid} when is_pid(pid) ->
-        next_state = activate_submission(state, next, rest, pid, opts)
+        next_state = activate_submission(state, next, rest, pid)
 
         if opts[:return_result?], do: {next_state, :started}, else: {next_state, :ok}
 
@@ -1037,7 +962,7 @@ defmodule LemonRouter.SessionCoordinator do
                 "key=#{inspect(state.conversation_key)} start_error=#{inspect(reason)}"
             )
 
-            next_state = activate_submission(state, next, rest, pid, opts)
+            next_state = activate_submission(state, next, rest, pid)
             if opts[:return_result?], do: {next_state, :started}, else: {next_state, :ok}
 
           nil ->
@@ -1124,20 +1049,17 @@ defmodule LemonRouter.SessionCoordinator do
     end
   end
 
-  defp activate_submission(%SessionState{} = state, next, rest, pid, opts) do
+  defp activate_submission(%SessionState{} = state, %Submission{} = next, rest, pid) do
     mon_ref = Process.monitor(pid)
-
-    started_submission =
-      maybe_emit_waiting_for_slot(next, Keyword.get(opts, :emit_phase?, true))
 
     %SessionState{
       state
       | active: %{
           pid: pid,
           mon_ref: mon_ref,
-          run_id: started_submission.run_id,
-          session_key: started_submission.session_key,
-          submission: started_submission
+          run_id: next.run_id,
+          session_key: next.session_key,
+          submission: next
         },
         queue: rest
     }
@@ -1184,17 +1106,6 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp start_failure_reason(reason), do: inspect(reason, limit: 20, printable_limit: 1_000)
 
-  defp maybe_emit_waiting_for_slot(%Submission{} = submission, true) do
-    if phase_emission_enabled?(submission) do
-      previous_phase = submission.current_phase || :accepted
-      PhasePublisher.emit(submission, :waiting_for_slot, previous_phase)
-    else
-      submission
-    end
-  end
-
-  defp maybe_emit_waiting_for_slot(%Submission{} = submission, false), do: submission
-
   defp complete_dropped_submissions(original_state, next_state, opts) do
     retained = retained_run_ids(next_state)
     replacement = List.last(next_state.queue)
@@ -1231,21 +1142,8 @@ defmodule LemonRouter.SessionCoordinator do
           )
 
         LemonRouter.RunCompletion.publish(submission.execution_request, event)
-
-        if not ok? and phase_emission_enabled?(submission) do
-          _ =
-            PhasePublisher.emit(
-              submission,
-              :aborted,
-              submission.current_phase || :queued_in_session
-            )
-        end
       end
     end)
-  end
-
-  defp phase_emission_enabled?(%Submission{} = submission) do
-    not truthy?(MapHelpers.get_key(submission.meta || %{}, :suppress_router_phase_events))
   end
 
   defp maybe_cleanup_event_bridge_runs(
@@ -1455,9 +1353,4 @@ defmodule LemonRouter.SessionCoordinator do
   end
 
   defp resume_conversation_key(_), do: nil
-
-  defp truthy?(true), do: true
-  defp truthy?("true"), do: true
-  defp truthy?(1), do: true
-  defp truthy?(_value), do: false
 end

@@ -32,7 +32,6 @@ defmodule LemonGateway.Run do
     LemonCore.StatusRedaction.gen_server(status, [
       :run_id,
       :session_key,
-      :current_phase,
       :completed,
       :cancelled
     ])
@@ -41,11 +40,7 @@ defmodule LemonGateway.Run do
   require Logger
   import LemonGateway.Event, only: [is_started: 1, is_action_event: 1, is_completed: 1]
 
-  alias LemonCore.{
-    RunPhase,
-    RunPhaseGraph,
-    RunStore
-  }
+  alias LemonCore.RunStore
 
   alias LemonCore.Events
   alias LemonCore.Cwd
@@ -131,7 +126,6 @@ defmodule LemonGateway.Run do
       completed: false,
       claim_key: claim_key,
       last_resume: request.resume,
-      current_phase: nil,
       cancelled: false,
       cancel_reason: nil,
       cancel_timeout_ref: nil,
@@ -239,7 +233,6 @@ defmodule LemonGateway.Run do
   end
 
   defp start_executor({:ok, executor}, state) do
-    state = maybe_track_phase(state, :dispatched_to_gateway)
     request = state.execution_request
 
     Logger.debug(
@@ -247,7 +240,6 @@ defmodule LemonGateway.Run do
         "resume=#{inspect(request.resume)} cwd=#{inspect(request.cwd)}"
     )
 
-    state = maybe_track_phase(state, :starting_engine)
     renderer_state = state.renderer.init(%{engine: @engine_provenance})
 
     cwd =
@@ -417,12 +409,6 @@ defmodule LemonGateway.Run do
 
     RunStore.append_event(state.run_id, event)
 
-    state =
-      cond do
-        is_action_event(event) -> maybe_track_phase(state, :streaming)
-        true -> state
-      end
-
     cond do
       is_started(event) ->
         Logger.debug(
@@ -482,7 +468,6 @@ defmodule LemonGateway.Run do
   # Handle delta events from engine (for streaming)
   def handle_info({:engine_delta, run_ref, text}, %{run_ref: run_ref} = state)
       when is_binary(text) do
-    state = maybe_track_phase(state, :streaming)
     new_seq = state.delta_seq + 1
 
     # Emit first_token telemetry on first delta
@@ -752,13 +737,6 @@ defmodule LemonGateway.Run do
   # an observer that sees the completion can start the session's next run.
   defp finalize(state, %{__event__: :completed} = completed) do
     state = %{state | completed: true}
-    terminal_phase = terminal_phase_for_completion(state, completed)
-
-    state =
-      case terminal_phase do
-        :completed -> maybe_track_phase(state, :finalizing)
-        _ -> state
-      end
 
     # Add run_id, session_key, and accumulated answer to completed event
     answer = Map.get(completed, :answer)
@@ -833,8 +811,7 @@ defmodule LemonGateway.Run do
       unregister_progress_mapping(state.execution_request)
     end
 
-    state = %{state | progress_mapping_registered?: false}
-    if published?, do: maybe_track_phase(state, terminal_phase), else: state
+    %{state | progress_mapping_registered?: false}
   end
 
   defp log_run_failure(_state, %{__event__: :completed} = completed) do
@@ -904,66 +881,6 @@ defmodule LemonGateway.Run do
     meta = Map.merge(%{run_id: run_id}, extra_meta)
     event = LemonCore.Event.new(event_type, payload, meta)
     LemonCore.Bus.broadcast(topic, event)
-  end
-
-  # Tracks the run's phase and validates each transition, but does not publish it.
-  # `:run_phase_changed` has a single publisher — `LemonRouter.PhasePublisher` — because the
-  # router owns the phase graph. The gateway published the same transitions until Phase 3.1,
-  # which meant two events per transition with different `source` values. The local tracking
-  # stays: it is what makes an out-of-order phase visible in the gateway's own logs.
-  defp maybe_track_phase(%{run_id: run_id} = state, phase) when is_binary(run_id) do
-    previous_phase = Map.get(state, :current_phase)
-
-    cond do
-      previous_phase == phase ->
-        state
-
-      not RunPhase.valid?(phase) ->
-        Logger.warning(
-          "Gateway run phase skipped run_id=#{inspect(run_id)} invalid_phase=#{inspect(phase)}"
-        )
-
-        state
-
-      is_nil(previous_phase) ->
-        %{state | current_phase: phase}
-
-      true ->
-        case RunPhaseGraph.transition(previous_phase, phase) do
-          :ok ->
-            %{state | current_phase: phase}
-
-          {:error, {:invalid_transition, _, _}} ->
-            Logger.warning(
-              "Gateway run phase skipped run_id=#{inspect(run_id)} previous_phase=#{inspect(previous_phase)} phase=#{inspect(phase)}"
-            )
-
-            state
-        end
-    end
-  end
-
-  defp maybe_track_phase(state, _phase), do: state
-
-  defp terminal_phase_for_completion(%{cancelled: true}, _completed), do: :aborted
-
-  defp terminal_phase_for_completion(_state, %{__event__: :completed} = completed) do
-    cond do
-      Map.get(completed, :ok) == true ->
-        :completed
-
-      Map.get(completed, :error) in [
-        :user_requested,
-        :interrupted,
-        :new_session,
-        :aborted,
-        :runtime_restart
-      ] ->
-        :aborted
-
-      true ->
-        :failed
-    end
   end
 
   # Helper to build standard meta from state

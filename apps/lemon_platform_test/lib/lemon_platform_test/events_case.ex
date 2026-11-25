@@ -332,8 +332,6 @@ defmodule LemonPlatformTest.EventsCase do
   defp sample_value(LemonCore.Events.ChannelDelivery, :kind), do: :final_text
   defp sample_value(LemonCore.Events.ApprovalResolved, :decision), do: :deny
   defp sample_value(LemonCore.Events.CronJobChanged, :action), do: :created
-  defp sample_value(LemonCore.Events.RunPhaseChanged, :phase), do: :running
-  defp sample_value(LemonCore.Events.RunPhaseChanged, :source), do: :lemon_platform_test
   defp sample_value(LemonCore.Events.SecretChanged, :action), do: :put
   defp sample_value(LemonCore.Events.RoutingFeedback, :outcome), do: :success
   defp sample_value(LemonCore.Events.RunCompleted, :completed), do: completion_example()
