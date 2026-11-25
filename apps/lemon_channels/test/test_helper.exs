@@ -63,6 +63,8 @@ exclude_tags =
 
 ExUnit.start(capture_log: true, exclude: exclude_tags)
 
+Code.require_file("../../lemon_platform_test/test_support.exs", __DIR__)
+
 # An umbrella `mix test` runs every later app suite in this VM, and this
 # callback runs after each of them too: restart everything it stops, or the
 # later suites see a stopped lemon_channels.

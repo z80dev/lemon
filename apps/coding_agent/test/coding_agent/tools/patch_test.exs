@@ -1101,15 +1101,15 @@ defmodule CodingAgent.Tools.PatchTest do
 
       # Use a deterministic barrier so all tasks start at the same moment,
       # exercising genuine concurrent write contention without random timing.
-      start_barrier = CodingAgent.AsyncHelpers.barrier(3)
+      start_barrier = LemonPlatformTest.Testing.AsyncHelpers.barrier(3)
 
       # Launch concurrent patches to same file
       tasks =
         for i <- 1..3 do
           Task.async(fn ->
             # Signal readiness and wait for all tasks to be ready before proceeding
-            CodingAgent.AsyncHelpers.arrive(start_barrier)
-            CodingAgent.AsyncHelpers.await_barrier(start_barrier)
+            LemonPlatformTest.Testing.AsyncHelpers.arrive(start_barrier)
+            LemonPlatformTest.Testing.AsyncHelpers.await_barrier(start_barrier)
 
             patch_text = """
             *** Update File: race.txt
@@ -1614,7 +1614,7 @@ defmodule CodingAgent.Tools.PatchTest do
       # Start patch in a task and abort during execution.
       # Use a latch so the aborter fires only after Patch.execute has been called,
       # removing the race between the spawn and the execute call.
-      execute_latch = CodingAgent.AsyncHelpers.latch()
+      execute_latch = LemonPlatformTest.Testing.AsyncHelpers.latch()
 
       task =
         Task.async(fn ->
@@ -1634,13 +1634,13 @@ defmodule CodingAgent.Tools.PatchTest do
 
           # Spawn aborter first; it will wait on the latch before aborting
           spawn(fn ->
-            CodingAgent.AsyncHelpers.await_latch(execute_latch)
+            LemonPlatformTest.Testing.AsyncHelpers.await_latch(execute_latch)
             AbortSignal.abort(signal)
           end)
 
           # Release the latch immediately before calling execute so the aborter
           # can fire concurrently with (or just after) the execute call begins.
-          CodingAgent.AsyncHelpers.release(execute_latch)
+          LemonPlatformTest.Testing.AsyncHelpers.release(execute_latch)
           Patch.execute("call_1", %{"patch_text" => patch_text}, signal, nil, tmp_dir, [])
         end)
 

@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.BashShellStateTest do
   use ExUnit.Case, async: false
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias CodingAgent.ProcessManager
   alias CodingAgent.Tools.Bash

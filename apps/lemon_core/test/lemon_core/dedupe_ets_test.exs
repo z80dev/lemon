@@ -6,7 +6,7 @@ defmodule LemonCore.Dedupe.EtsTest do
 
   alias LemonCore.Dedupe.Ets
 
-  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1]
+  import LemonPlatformTest.Testing.AsyncHelpers, only: [assert_eventually: 1]
 
   setup do
     # Use a unique table name for each test to avoid conflicts

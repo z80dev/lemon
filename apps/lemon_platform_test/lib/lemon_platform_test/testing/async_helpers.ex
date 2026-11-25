@@ -1,4 +1,4 @@
-defmodule LemonCore.Testing.AsyncHelpers do
+defmodule LemonPlatformTest.Testing.AsyncHelpers do
   @moduledoc """
   Shared deterministic synchronization primitives for async test suites.
 
@@ -6,9 +6,8 @@ defmodule LemonCore.Testing.AsyncHelpers do
   coordination barriers so that concurrency tests do not depend on wall-clock
   timing and are therefore reproducible across machines and load conditions.
 
-  This module lives in `lib/` (not `test/`) so that every app in the umbrella
-  can `import LemonCore.Testing.AsyncHelpers` in its test helpers without
-  adding extra compile-time dependencies.
+  Available through the published test kit and through the umbrella
+  test bootstrap; no application startup is required.
 
   ## Primitives
 

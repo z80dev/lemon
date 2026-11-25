@@ -125,7 +125,7 @@ Application.ensure_all_started(:lemon_skills)
 # Compile test support files
 Code.require_file("support/permission_helpers.ex", __DIR__)
 Code.require_file("support/test_git_repo.ex", __DIR__)
-Code.require_file("support/async_helpers.ex", __DIR__)
+Code.require_file("../../lemon_platform_test/test_support.exs", __DIR__)
 Code.require_file("support/session_cleanup.ex", __DIR__)
 Code.require_file("support/tool_intent_recorder.ex", __DIR__)
 Code.require_file("support/task_runtime_helpers.ex", __DIR__)

@@ -776,7 +776,7 @@ defmodule CodingAgent.ExecutorTest do
       assert_receive {:DOWN, ^debug_ref, :process, ^debug_server, _}, 10_000
 
       for pid <- [child, debuggee] do
-        CodingAgent.AsyncHelpers.assert_eventually(
+        LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(
           fn ->
             case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)],
                    stderr_to_stdout: true

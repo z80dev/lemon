@@ -1,7 +1,7 @@
 defmodule LemonSkills.MigratorTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.Testing.HermeticEnv
+  alias LemonPlatformTest.Testing.HermeticEnv
   alias LemonSkills.{Config, Lockfile, Migrator}
 
   @moduletag :tmp_dir

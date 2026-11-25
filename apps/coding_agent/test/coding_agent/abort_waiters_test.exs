@@ -34,7 +34,7 @@ defmodule CodingAgent.AbortWaitersTest do
     assert [{^owner, _}] = Registry.lookup(LemonAgent.AbortSignal.Registry, parent_signal)
     AbortSignal.abort(parent_signal)
     # With no worker to wait for, the cancellation terminalizes at once.
-    CodingAgent.AsyncHelpers.assert_eventually(fn ->
+    LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(fn ->
       match?({:killed, %{phase: :killed}}, :sys.get_state(owner))
     end)
 
@@ -57,7 +57,7 @@ defmodule CodingAgent.AbortWaitersTest do
     owner = TaskRuntime.whereis(id)
     join = Task.async(fn -> JoinAwait.await([run_id], [id], :wait_all, parent_signal) end)
 
-    CodingAgent.AsyncHelpers.assert_eventually(fn ->
+    LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(fn ->
       Enum.any?(
         Registry.lookup(LemonAgent.AbortSignal.Registry, parent_signal),
         fn {pid, _} -> pid == join.pid end

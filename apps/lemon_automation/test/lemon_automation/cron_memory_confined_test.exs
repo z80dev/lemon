@@ -9,7 +9,7 @@ defmodule LemonAutomation.CronMemoryConfinedTest do
 
   alias LemonAutomation.{CronJob, CronMemory, CronRun}
   alias LemonCore.SessionKey
-  alias LemonCore.Testing.FileServerTap
+  alias LemonPlatformTest.Testing.FileServerTap
 
   @moduletag :tmp_dir
 

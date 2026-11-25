@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.WebSearchTest do
   use ExUnit.Case, async: false
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias CodingAgent.Tools.WebSearch
   alias LemonAgent.AbortSignal

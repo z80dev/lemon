@@ -157,7 +157,7 @@ apps; optional consumers register at runtime. See [README](README.md),
   compare-and-swap; only `expect: :absent` (atomic no-replace) and
   opened-inode bindings (`read`/`overwrite`/`append`) are exact. Do not build
   a guarantee on more.
-- Race regressions use `LemonCore.Testing.FileServerTap` (`async: false`),
+- Race regressions use `LemonPlatformTest.Testing.FileServerTap` (`async: false`),
   which swaps a directory between a path-based check and its use, and the
   helper's test-only `stage_hook:` (FIFO pause inside `replace/5`).
 

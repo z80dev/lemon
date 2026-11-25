@@ -19,7 +19,7 @@ defmodule CodingAgent.SessionTest do
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias LemonAi.Types.{
     AssistantMessage,
@@ -1798,7 +1798,7 @@ defmodule CodingAgent.SessionApprovalEventsTest do
   alias LemonAgent.Test.Mocks
   alias LemonCore.ExecApprovals
   alias LemonCore.ExecApprovalStore
-  alias LemonCore.Testing.AsyncHelpers
+  alias LemonPlatformTest.Testing.AsyncHelpers
 
   @moduletag :tmp_dir
 

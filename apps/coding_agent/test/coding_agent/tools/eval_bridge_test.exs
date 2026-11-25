@@ -2,7 +2,7 @@ defmodule CodingAgent.Tools.EvalBridgeTest do
   # Real kernels are spawned; run serially like the other eval suites.
   use ExUnit.Case, async: false
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias CodingAgent.MutationLock
   alias CodingAgent.Session

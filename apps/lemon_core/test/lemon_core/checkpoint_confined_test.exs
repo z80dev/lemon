@@ -7,7 +7,7 @@ defmodule LemonCore.CheckpointConfinedTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Checkpoint
-  alias LemonCore.Testing.FileServerTap
+  alias LemonPlatformTest.Testing.FileServerTap
 
   @moduletag :tmp_dir
 

@@ -1,10 +1,10 @@
-defmodule LemonCore.TestingTest do
+defmodule LemonPlatformTest.TestingTest do
   @moduledoc """
   Tests for the Testing module itself.
   """
   use ExUnit.Case, async: true
 
-  alias LemonCore.Testing.{Harness, Helpers}
+  alias LemonPlatformTest.Testing.{Harness, Helpers}
 
   describe "Harness" do
     test "build/1 creates temp directory and returns context" do

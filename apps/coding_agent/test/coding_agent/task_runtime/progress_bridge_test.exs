@@ -1,7 +1,7 @@
 defmodule CodingAgent.TaskRuntime.ProgressBridgeTest do
   use ExUnit.Case, async: false
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskProgressBindingServer

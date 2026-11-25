@@ -314,7 +314,7 @@ defmodule CodingAgent.TaskStoreTest do
 
       Process.exit(owner, :kill)
 
-      CodingAgent.AsyncHelpers.assert_eventually(fn ->
+      LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(fn ->
         not TaskStore.auto_followup_suppressed?(task_id)
       end)
 

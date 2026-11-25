@@ -7,7 +7,7 @@ defmodule LemonCore.FileAccessRaceTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.FileAccess
-  alias LemonCore.Testing.FileServerTap
+  alias LemonPlatformTest.Testing.FileServerTap
 
   @moduletag :tmp_dir
 

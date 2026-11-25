@@ -2,7 +2,7 @@ defmodule LemonGateway.EngineSessionClaimTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.EngineSessionClaim
-  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1]
+  import LemonPlatformTest.Testing.AsyncHelpers, only: [assert_eventually: 1]
 
   setup do
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)

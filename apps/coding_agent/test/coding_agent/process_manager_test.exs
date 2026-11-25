@@ -4,7 +4,7 @@ defmodule CodingAgent.ProcessManagerTest do
   alias CodingAgent.ProcessManager
   alias CodingAgent.ProcessStore
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   # Exit only after the stop request arrives, deterministically exercising a
   # concurrent session exit rather than relying on scheduler timing.

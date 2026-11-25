@@ -13,3 +13,5 @@ _ = File.mkdir_p(lock_dir)
 System.put_env("LEMON_LOCK_DIR", lock_dir)
 
 ExUnit.start(capture_log: true)
+
+Code.require_file("../../lemon_platform_test/test_support.exs", __DIR__)

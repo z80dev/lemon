@@ -2,7 +2,7 @@ defmodule LemonCore.ExecApprovalsTest do
   @moduledoc """
   Tests for the ExecApprovals module.
   """
-  use LemonCore.Testing.Case, async: false
+  use LemonPlatformTest.Testing.Case, async: false
   @moduletag with_store: true
 
   alias LemonCore.Events.ApprovalResolved
@@ -27,7 +27,7 @@ defmodule LemonCore.ExecApprovalsTest do
 
   # Waits for a request running in another process to create its pending approval.
   defp await_pending_approvals do
-    LemonCore.Testing.AsyncHelpers.assert_eventually(
+    LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(
       fn -> ExecApprovalStore.list_pending() != [] end,
       timeout: 5_000
     )
@@ -1002,7 +1002,7 @@ defmodule LemonCore.ExecApprovalsTest do
           # Hold Store until the exact-record timeout claim is queued, then
           # queue the resolver's owner read behind it. Only timeout may win.
           assert :ok =
-                   LemonCore.Testing.AsyncHelpers.assert_eventually(
+                   LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(
                      fn -> queued_pending_transitions(store, approval_id) == 1 end,
                      timeout: 2_000,
                      interval: 1,
@@ -1015,7 +1015,7 @@ defmodule LemonCore.ExecApprovalsTest do
             end)
 
           assert :ok =
-                   LemonCore.Testing.AsyncHelpers.assert_eventually(
+                   LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(
                      fn -> queued_pending_transitions(store, approval_id) == 2 end,
                      timeout: 1_000,
                      interval: 1,

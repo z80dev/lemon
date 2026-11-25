@@ -232,7 +232,7 @@ defmodule LemonComputerUse.ApprovalTest do
 
   describe "an owner that ends expires its untimed approval" do
     alias LemonCore.{ExecApprovalExpiry, ExecApprovals, ExecApprovalStore, RunStore}
-    alias LemonCore.Testing.AsyncHelpers
+    alias LemonPlatformTest.Testing.AsyncHelpers
 
     setup do
       n = System.unique_integer([:positive])

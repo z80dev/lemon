@@ -1,8 +1,6 @@
 defmodule CodingAgent.Search.DispatcherTest do
   use ExUnit.Case, async: false
 
-  import CodingAgent.AsyncHelpers
-
   alias CodingAgent.Search.Dispatcher
   alias CodingAgent.Search.Registry
   alias LemonAgent.AbortSignal

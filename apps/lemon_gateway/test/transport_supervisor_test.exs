@@ -16,7 +16,9 @@ defmodule LemonGateway.TransportSupervisorTest do
   - Generic transport handling
   """
   use ExUnit.Case, async: false
-  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1, assert_eventually: 2]
+
+  import LemonPlatformTest.Testing.AsyncHelpers,
+    only: [assert_eventually: 1, assert_eventually: 2]
 
   alias Elixir.LemonGateway.TransportRegistry
   alias Elixir.LemonGateway.TransportSupervisor

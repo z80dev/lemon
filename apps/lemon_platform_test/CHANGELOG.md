@@ -6,6 +6,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Added
+
+- `LemonPlatformTest.Testing` now owns the shared ExUnit harness, async
+  synchronization, environment isolation, and file race helpers moved from
+  `LemonCore.Testing` (#730).
+
 ### Removed
 
 - **Breaking:** `ProviderCase` no longer probes `search/2` (the callback left `LemonMemory.Provider`); `hostile_queries/0`, the `:queries` option and the registry fan-out search test are removed. The suite checks the behaviour declaration, `put/2` and registration (#656).

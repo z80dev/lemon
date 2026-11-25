@@ -135,7 +135,7 @@ defmodule CodingAgent.Session.StartupIsolationTest do
     assert Task.yield(slow, 0) == nil
 
     # The second start was admitted and is initializing beside the blocked one.
-    CodingAgent.AsyncHelpers.assert_eventually(fn ->
+    LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(fn ->
       length(SessionSupervisor.list_sessions() -- existing) == 2
     end)
 

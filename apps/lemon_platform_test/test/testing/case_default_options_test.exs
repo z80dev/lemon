@@ -1,5 +1,5 @@
-defmodule LemonCore.Testing.CaseDefaultOptionsTest do
-  use LemonCore.Testing.Case, async: true
+defmodule LemonPlatformTest.Testing.CaseDefaultOptionsTest do
+  use LemonPlatformTest.Testing.Case, async: true
 
   test "without with_store the harness does not claim a store", %{harness: harness} do
     assert harness.store == nil

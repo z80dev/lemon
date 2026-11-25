@@ -2,7 +2,7 @@ defmodule LemonCore.Config.AgentTest do
   @moduledoc """
   Tests for the Config.Agent module.
   """
-  use LemonCore.Testing.Case, async: false
+  use LemonPlatformTest.Testing.Case, async: false
 
   alias LemonCore.Config.Agent
 

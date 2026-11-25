@@ -74,13 +74,10 @@ defmodule LemonCore.MixProject do
       # Tooling for the lemon repository itself stays out of the tarball: the
       # architecture/docs lint (`mix lemon.quality`), the managed-install
       # self-updater (`mix lemon.update`), the repo's benchmark runner and task
-      # catalog, and the in-repo test harness (`LemonCore.Testing*`, used only
-      # by the umbrella's own suites). Nothing else in lib/ references these
-      # modules, and scripts/verify_packages compiles and runs the tarball
-      # without them.
+      # catalog. scripts/verify_packages compiles and runs the tarball without
+      # those modules.
       exclude_patterns: [
-        ~r{^lib/lemon_core/(quality|update|testing)/},
-        ~r{^lib/lemon_core/testing\.ex$},
+        ~r{^lib/lemon_core/(quality|update)/},
         # The compiled helper is built per platform by the consumer.
         ~r{^priv/(lemon_confined_fs|\.lemon_confined_fs\.platform)},
         ~r{^lib/mix/tasks/lemon\.(quality|architecture\.docs|check_duplicate_tests|update|bench|help)\.ex$}

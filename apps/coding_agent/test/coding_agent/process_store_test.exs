@@ -5,7 +5,7 @@ defmodule CodingAgent.ProcessStoreTest do
   alias CodingAgent.ProcessSession
   alias CodingAgent.ProcessStore
   alias CodingAgent.ProcessStoreServer
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   setup do
     # Clear all processes before each test

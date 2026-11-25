@@ -7,7 +7,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
 
-  import LemonCore.Testing.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias LemonAi.Types.{
     StreamOptions,

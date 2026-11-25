@@ -5,7 +5,7 @@ defmodule LemonCore.StoreTest do
 
   alias LemonCore.RunHistoryStore
   alias LemonCore.Store
-  alias LemonCore.Testing.AsyncHelpers
+  alias LemonPlatformTest.Testing.AsyncHelpers
 
   setup do
     assert {:ok, _} = Application.ensure_all_started(:lemon_core)

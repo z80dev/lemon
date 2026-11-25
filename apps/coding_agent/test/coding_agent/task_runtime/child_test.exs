@@ -1,7 +1,7 @@
 defmodule CodingAgent.TaskRuntime.ChildTest do
   use ExUnit.Case, async: false
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias CodingAgent.{TaskRuntime, TaskRuntimeHelpers, TaskStore}
   alias CodingAgent.TaskRuntime.Control

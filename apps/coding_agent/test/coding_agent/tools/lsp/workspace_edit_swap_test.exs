@@ -12,7 +12,7 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditSwapTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.Lsp.{Text, WorkspaceEdit}
-  alias LemonCore.Testing.FileServerTap
+  alias LemonPlatformTest.Testing.FileServerTap
 
   @moduletag :tmp_dir
 

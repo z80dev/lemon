@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.ReadFormatsTest do
   use ExUnit.Case, async: true
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias CodingAgent.Tools.{ReadFormats, ReadFormatText, ReadFormatCommand}
   alias LemonAgent.AbortSignal

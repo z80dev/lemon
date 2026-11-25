@@ -2,7 +2,7 @@ defmodule LemonCore.Config.ToolsTest do
   @moduledoc """
   Tests for the Config.Tools module.
   """
-  use LemonCore.Testing.Case, async: false
+  use LemonPlatformTest.Testing.Case, async: false
 
   alias LemonCore.Config.{Tools, Validator}
 

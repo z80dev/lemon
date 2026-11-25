@@ -2,7 +2,7 @@ defmodule LemonCore.Config.ReadmeTest do
   @moduledoc """
   Tests to verify the examples in the README work correctly.
   """
-  use LemonCore.Testing.Case, async: false
+  use LemonPlatformTest.Testing.Case, async: false
 
   alias LemonCore.Config
 

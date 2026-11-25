@@ -206,7 +206,10 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
     # Zero TTL uses the production timer path, not a sleep or a polling race.
     assert :ok = GenServer.call(session, {:retain_root, 0})
     assert_receive {:DOWN, ^ref, :process, ^session, :normal}, 5_000
-    CodingAgent.AsyncHelpers.assert_eventually(fn -> SessionRegistry.lookup(id) == :error end)
+
+    LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(fn ->
+      SessionRegistry.lookup(id) == :error
+    end)
 
     {second, restored, ^id} = start_turn(ctx, "after parking", id)
     refute restored == session

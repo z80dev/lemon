@@ -3,7 +3,7 @@ defmodule LemonAgent.ModelRuntime.CredentialHealthTest do
 
   alias LemonAgent.ModelRuntime.CredentialHealth
 
-  import LemonCore.Testing.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   setup do
     CredentialHealth.reset()

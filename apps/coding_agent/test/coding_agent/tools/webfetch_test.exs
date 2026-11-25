@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.WebFetchTest do
   use ExUnit.Case, async: false
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   alias CodingAgent.Tools.{ReadPdf, WebFetch}
   alias LemonAgent.AbortSignal

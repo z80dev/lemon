@@ -56,9 +56,8 @@ defmodule LemonPlatformTest.MixProject do
   end
 
   defp description do
-    "Contract-test kit for the Lemon platform's extension behaviours: ExUnit " <>
-      "case templates that hold your Store backend or memory Provider " <>
-      "implementation to the documented contract."
+    "Shared ExUnit helpers and contract-test suites for Lemon extension " <>
+      "behaviours, including Store backends and memory providers."
   end
 
   defp package do
@@ -101,7 +100,7 @@ defmodule LemonPlatformTest.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger]]
+    [extra_applications: [:logger, :crypto]]
   end
 
   defp deps do

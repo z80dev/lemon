@@ -8,7 +8,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
   alias CodingAgent.Session
   alias CodingAgent.SessionSupervisor
 
-  import CodingAgent.AsyncHelpers
+  import LemonPlatformTest.Testing.AsyncHelpers
 
   setup do
     unique = System.unique_integer([:positive])

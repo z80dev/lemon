@@ -69,7 +69,7 @@ defmodule CodingAgent.Tools.TaskFamilyMessagingTest do
     assert Process.whereis(Control) == control
     second = Task.async(fn -> Control.send_message(busy, "second delivery", opts) end)
 
-    CodingAgent.AsyncHelpers.assert_eventually(fn ->
+    LemonPlatformTest.Testing.AsyncHelpers.assert_eventually(fn ->
       {:messages, messages} = Process.info(recipient, :messages)
 
       Enum.any?(messages, fn

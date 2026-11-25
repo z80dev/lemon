@@ -1012,21 +1012,8 @@ mix test --cover apps/lemon_core
 
 ### Test Harness
 
-The harness (`LemonCore.Testing*`) serves this repository's own test suites
-and is not part of the published Hex package.
-
-```elixir
-defmodule MyTest do
-  use LemonCore.Testing.Case, async: true
-
-  test "example", %{harness: harness, tmp_dir: tmp_dir} do
-    path = temp_file!(harness, "config.toml", "[agent]\ndefault_model = \"test\"")
-    key = unique_session_key("mytest")
-  end
-end
-```
-
-Available helpers: `unique_token/0`, `unique_scope/0`, `unique_session_key/0`, `unique_run_id/0`, `temp_file!/3`, `temp_dir!/2`, `clear_store_table/1`, `mock_home!/1`, `random_master_key/0`. `use LemonCore.Testing.Case, with_store: true` (or `@tag with_store: true`) starts `LemonCore.Store` for the module (or test).
+Shared test helpers now live in [lemon_platform_test](../lemon_platform_test/README.md#shared-test-helpers),
+under `LemonPlatformTest.Testing`. Core does not package or depend on the kit.
 
 ## Important Notes
 

@@ -55,7 +55,7 @@ defmodule CodingAgent.InternalLocalProcUrlsTest do
   end
 
   test "process URLs list, peek, send stdin and terminate", %{tmp_dir: cwd} do
-    import CodingAgent.AsyncHelpers
+    import LemonPlatformTest.Testing.AsyncHelpers
     alias CodingAgent.{ProcessManager, ProcessStore}
     opts = [session_id: "proc-owner"]
     assert {:ok, id} = ProcessManager.exec(command: "cat", cwd: cwd, owner: "proc-owner")

@@ -12,7 +12,7 @@ defmodule CodingAgent.Tools.MutationSwapRaceTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.{Edit, Patch, Write}
-  alias LemonCore.Testing.FileServerTap
+  alias LemonPlatformTest.Testing.FileServerTap
 
   @moduletag :tmp_dir
 

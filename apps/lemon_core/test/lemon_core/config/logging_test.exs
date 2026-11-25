@@ -2,7 +2,7 @@ defmodule LemonCore.Config.LoggingTest do
   @moduledoc """
   Tests for the Config.Logging module.
   """
-  use LemonCore.Testing.Case, async: false
+  use LemonPlatformTest.Testing.Case, async: false
 
   alias LemonCore.Config.Logging
   alias LemonCore.Config.Validator

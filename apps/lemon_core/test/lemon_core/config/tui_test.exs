@@ -2,7 +2,7 @@ defmodule LemonCore.Config.TUITest do
   @moduledoc """
   Tests for the Config.TUI module.
   """
-  use LemonCore.Testing.Case, async: false
+  use LemonPlatformTest.Testing.Case, async: false
 
   alias LemonCore.Config.TUI
   alias LemonCore.Config.Validator
