@@ -12,6 +12,7 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedTest do
     Model,
     ModelCost,
     TextContent,
+    ThinkingContent,
     ToolCall,
     ToolResultMessage,
     Usage,
@@ -21,38 +22,26 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedTest do
   @soft_function_call_output_bytes 65_536
 
   test "process_stream catches thrown stream errors" do
-    {:ok, stream} = EventStream.start_link()
+    events = Stream.map([:error], fn _ -> throw({:stream_error, "boom"}) end)
+    assert {:error, "boom"} = process_events(events)
+  end
 
-    events =
-      Stream.resource(
-        fn -> :ok end,
-        fn _ -> throw({:stream_error, "boom"}) end,
-        fn _ -> :ok end
-      )
-
-    output = %AssistantMessage{
-      role: :assistant,
-      content: [],
-      api: :openai_responses,
-      provider: :openai,
-      model: "gpt-4o",
-      usage: %Usage{cost: %Cost{}},
-      stop_reason: :stop,
-      timestamp: System.system_time(:millisecond)
-    }
-
-    model = %Model{
-      id: "gpt-4o",
-      name: "GPT-4o",
-      api: :openai_responses,
-      provider: :openai,
-      base_url: "https://api.openai.com/v1",
-      cost: %ModelCost{}
-    }
-
-    assert {:error, "boom"} = OpenAIResponsesShared.process_stream(events, output, stream, model)
-
-    EventStream.cancel(stream, :test_cleanup)
+  test "process_stream reports provider error payloads" do
+    for {event, error} <- [
+          {%{
+             "type" => "error",
+             "code" => "rate_limit_exceeded",
+             "message" => "Too many requests"
+           }, "Error Code rate_limit_exceeded: Too many requests"},
+          {%{"type" => "error", "code" => "unknown_error", "message" => nil},
+           "Error Code unknown_error: Unknown error"},
+          {%{
+             "type" => "response.failed",
+             "response" => %{"error" => %{"message" => "Quota exceeded"}}
+           }, "Quota exceeded"}
+        ] do
+      assert {:error, ^error} = process_events([event])
+    end
   end
 
   test "adds synthetic tool results for trailing tool calls" do
@@ -272,23 +261,20 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedTest do
     EventStream.cancel(stream, :test_cleanup)
   end
 
-  test "fast service-tier responses use the model's priority price" do
-    assert OpenAIResponsesShared.service_tier_cost_multiplier(
-             "fast",
-             %{"priority" => 2.5}
-           ) == 2.5
+  test "uses the configured service-tier multiplier and defaults to the standard price" do
+    for {tier, multiplier} <- [
+          {"flex", 0.5},
+          {"priority", 2.0},
+          {"fast", 2.0},
+          {"auto", 1.0},
+          {"default", 1.0},
+          {"unknown", 1.0},
+          {nil, 1.0}
+        ] do
+      assert OpenAIResponsesShared.service_tier_cost_multiplier(tier) == multiplier
+    end
 
-    assert OpenAIResponsesShared.service_tier_cost_multiplier("fast") == 2.0
-    assert OpenAIResponsesShared.service_tier_cost_multiplier("default") == 1.0
-  end
-
-  test "sanitize_surrogates handles invalid utf-8 safely" do
-    invalid = <<0xC3, 0x28, 0xFF>>
-
-    sanitized = OpenAIResponsesShared.sanitize_surrogates(invalid)
-
-    assert is_binary(sanitized)
-    assert String.valid?(sanitized)
+    assert OpenAIResponsesShared.service_tier_cost_multiplier("fast", %{"priority" => 2.5}) == 2.5
   end
 
   test "convert_messages sanitizes invalid utf8 in system and user content" do
@@ -661,9 +647,19 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedTest do
     assert [%AssistantMessage{}, %ToolResultMessage{}, %UserMessage{}] = messages
   end
 
-  test "parse_streaming_json handles partial objects" do
-    assert %{"a" => 1} = OpenAIResponsesShared.parse_streaming_json("{\"a\":1")
-    assert %{} = OpenAIResponsesShared.parse_streaming_json("{not-json")
+  test "parse_streaming_json recovers partial objects and rejects inputs that are not objects" do
+    for {input, expected} <- [
+          {~S|{"a":1|, %{"a" => 1}},
+          {~S|{"a":{"b":{"c":{"d":1|, %{"a" => %{"b" => %{"c" => %{"d" => 1}}}}},
+          {~S|{"arr":[1,2,3|, %{"arr" => [1, 2, 3]}},
+          {~S|{"text":"hello \"world|, %{"text" => ~s(hello "world)}},
+          {"{not-json", %{}},
+          {"[1,2,3]", %{}},
+          {nil, %{}},
+          {123, %{}}
+        ] do
+      assert OpenAIResponsesShared.parse_streaming_json(input) == expected
+    end
   end
 
   test "apply_service_tier_pricing adjusts costs" do
@@ -740,118 +736,161 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedTest do
     assert is_nil(result.cost.total)
   end
 
-  test "process_stream maps failed status to error stop_reason" do
-    {:ok, stream} = EventStream.start_link()
-
-    events = [
-      %{"type" => "response.completed", "response" => %{"status" => "failed"}}
-    ]
-
-    output = %AssistantMessage{
-      role: :assistant,
-      content: [],
-      api: :openai_responses,
-      provider: :openai,
-      model: "gpt-4o",
-      usage: %Usage{cost: %Cost{}},
-      stop_reason: :stop,
-      timestamp: System.system_time(:millisecond)
-    }
-
-    model = %Model{
-      id: "gpt-4o",
-      name: "GPT-4o",
-      api: :openai_responses,
-      provider: :openai,
-      base_url: "https://api.openai.com/v1",
-      cost: %ModelCost{}
-    }
-
-    assert {:ok, final} = OpenAIResponsesShared.process_stream(events, output, stream, model)
-    assert final.stop_reason == :error
-
-    EventStream.cancel(stream, :test_cleanup)
+  test "process_stream maps wire completion statuses to stop reasons" do
+    for {status, reason} <- [
+          {"completed", :stop},
+          {"queued", :stop},
+          {"in_progress", :stop},
+          {"incomplete", :length},
+          {"failed", :error},
+          {"cancelled", :error}
+        ] do
+      assert {:ok, %{stop_reason: ^reason}} = process_events([completion(status)])
+    end
   end
 
-  test "process_stream maps incomplete status to length" do
-    {:ok, stream} = EventStream.start_link()
+  test "halts immediately once response.completed arrives" do
+    events =
+      Stream.map([:terminal, :unexpected], fn
+        :terminal -> completion()
+        :unexpected -> flunk("consumed another event after response.completed")
+      end)
 
-    events = [
-      %{"type" => "response.completed", "response" => %{"status" => "incomplete"}}
-    ]
-
-    output = %AssistantMessage{
-      role: :assistant,
-      content: [],
-      api: :openai_responses,
-      provider: :openai,
-      model: "gpt-4o",
-      usage: %Usage{cost: %Cost{}},
-      stop_reason: :stop,
-      timestamp: System.system_time(:millisecond)
-    }
-
-    model = %Model{
-      id: "gpt-4o",
-      name: "GPT-4o",
-      api: :openai_responses,
-      provider: :openai,
-      base_url: "https://api.openai.com/v1",
-      cost: %ModelCost{}
-    }
-
-    assert {:ok, final} = OpenAIResponsesShared.process_stream(events, output, stream, model)
-    assert final.stop_reason == :length
-
-    EventStream.cancel(stream, :test_cleanup)
+    assert {:ok, %{stop_reason: :stop}} = process_events(events)
   end
 
-  test "process_stream promotes stop_reason to tool_use when tool calls exist" do
-    {:ok, stream} = EventStream.start_link()
+  test "converts a tool list into ordered function definitions with their schemas" do
+    schema = %{
+      "type" => "object",
+      "properties" => %{"path" => %{"type" => "string"}},
+      "required" => ["path"]
+    }
 
-    events = [
-      %{
-        "type" => "response.output_item.added",
-        "item" => %{
-          "type" => "function_call",
-          "call_id" => "call_1",
-          "id" => "fc_1",
-          "name" => "tool_a"
-        }
-      },
-      %{
-        "type" => "response.function_call_arguments.done",
-        "arguments" => "{\"a\":1}"
-      },
-      %{"type" => "response.completed", "response" => %{"status" => "completed"}}
+    tools = [
+      %LemonAi.Types.Tool{name: "read_file", description: "Read a file", parameters: schema},
+      %LemonAi.Types.Tool{name: "list_files", description: "List files", parameters: %{}}
     ]
 
-    output = %AssistantMessage{
-      role: :assistant,
-      content: [],
-      api: :openai_responses,
-      provider: :openai,
-      model: "gpt-4o",
-      usage: %Usage{cost: %Cost{}},
-      stop_reason: :stop,
-      timestamp: System.system_time(:millisecond)
+    assert OpenAIResponsesShared.convert_tools([]) == []
+
+    assert [
+             %{
+               "type" => "function",
+               "name" => "read_file",
+               "description" => "Read a file",
+               "parameters" => ^schema
+             },
+             %{
+               "type" => "function",
+               "name" => "list_files",
+               "description" => "List files",
+               "parameters" => %{}
+             }
+           ] = OpenAIResponsesShared.convert_tools(tools)
+  end
+
+  test "long assistant message IDs are shortened consistently and remain distinct" do
+    first = String.duplicate("🌟", 65) <> "a"
+    second = String.duplicate("🌟", 65) <> "b"
+
+    content =
+      for id <- [first, second, first], do: %TextContent{text: "message", text_signature: id}
+
+    context = %LemonAi.Types.Context{messages: [assistant_message(content)]}
+
+    assert [
+             %{"type" => "message", "id" => "msg_" <> _ = short_first},
+             %{"type" => "message", "id" => "msg_" <> _ = short_second},
+             %{"type" => "message", "id" => repeated}
+           ] =
+             OpenAIResponsesShared.convert_messages(base_model(), context, MapSet.new([:openai]))
+
+    assert byte_size(short_first) in 5..64
+    assert byte_size(short_second) in 5..64
+    assert repeated == short_first
+    refute short_first == short_second
+  end
+
+  test "retains signed reasoning for the same model and converts it to text across models" do
+    signature = ~s({"type":"reasoning","summary":[]})
+    thinking = %ThinkingContent{thinking: "Some reasoning", thinking_signature: signature}
+    messages = [assistant_message([thinking])]
+
+    assert [%AssistantMessage{content: [^thinking]}] =
+             OpenAIResponsesShared.transform_messages(
+               messages,
+               base_model(),
+               MapSet.new([:openai])
+             )
+
+    assert [%AssistantMessage{content: [%TextContent{text: "Some reasoning"}]}] =
+             OpenAIResponsesShared.transform_messages(
+               messages,
+               %{base_model() | id: "gpt-5"},
+               MapSet.new([:openai])
+             )
+  end
+
+  test "process_stream emits text and refusal deltas as text content" do
+    for {kind, content_key, first, last} <- [
+          {"output_text", "text", "Hello, ", "world!"},
+          {"refusal", "refusal", "I cannot ", "do that."}
+        ] do
+      text = first <> last
+
+      events = [
+        %{"type" => "response.output_item.added", "item" => %{"type" => "message"}},
+        %{"type" => "response.#{kind}.delta", "delta" => first},
+        %{"type" => "response.#{kind}.delta", "delta" => last},
+        %{
+          "type" => "response.output_item.done",
+          "item" => %{"type" => "message", "content" => [%{"type" => kind, content_key => text}]}
+        },
+        completion()
+      ]
+
+      assert {%AssistantMessage{content: [%TextContent{text: ^text}]} = final,
+              [
+                {:text_start, 0},
+                {:text_delta, 0, ^first},
+                {:text_delta, 0, ^last},
+                {:text_end, 0, ^text},
+                {:done, :stop, final}
+              ]} = process_and_drain(events)
+    end
+  end
+
+  test "process_stream emits function call deltas and ends with decoded arguments" do
+    args_start = ~s({"path": ")
+    args_end = ~s(/test.txt"})
+
+    item = %{
+      "type" => "function_call",
+      "call_id" => "call_abc",
+      "id" => "fc_123",
+      "name" => "read_file"
     }
 
-    model = %Model{
-      id: "gpt-4o",
-      name: "GPT-4o",
-      api: :openai_responses,
-      provider: :openai,
-      base_url: "https://api.openai.com/v1",
-      cost: %ModelCost{}
-    }
+    events = [
+      %{"type" => "response.output_item.added", "item" => item},
+      %{"type" => "response.function_call_arguments.delta", "delta" => args_start},
+      %{"type" => "response.function_call_arguments.delta", "delta" => args_end},
+      %{"type" => "response.function_call_arguments.done", "arguments" => args_start <> args_end},
+      %{"type" => "response.output_item.done", "item" => item},
+      completion()
+    ]
 
-    assert {:ok, final} = OpenAIResponsesShared.process_stream(events, output, stream, model)
-    assert final.stop_reason == :tool_use
-    assert [%ToolCall{arguments: %{"a" => 1}} = call] = final.content
+    assert {%AssistantMessage{stop_reason: :tool_use, content: [%ToolCall{} = call]} = final,
+            [
+              {:tool_call_start, 0, %ToolCall{id: "call_abc|fc_123", name: "read_file"}},
+              {:tool_call_delta, 0, ^args_start},
+              {:tool_call_delta, 0, ^args_end},
+              {:tool_call_end, 0, call},
+              {:done, :tool_use, final}
+            ]} = process_and_drain(events)
+
+    assert call.arguments == %{"path" => "/test.txt"}
     refute Map.has_key?(call, :argument_chunks)
-
-    EventStream.cancel(stream, :test_cleanup)
   end
 
   test "process_stream normalizes malformed function call identity fields" do
@@ -999,25 +1038,82 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedTest do
     EventStream.cancel(stream, :test_cleanup)
   end
 
-  test "process_stream builds reasoning blocks with signature" do
+  test "process_stream emits reasoning summary parts and retains their signed wire item" do
+    parts = ["First, analyze the problem.", "Then solve it."]
+    item = %{"type" => "reasoning", "summary" => Enum.map(parts, &%{"text" => &1})}
+
+    deltas =
+      Enum.flat_map(parts, fn text ->
+        [
+          %{
+            "type" => "response.reasoning_summary_part.added",
+            "part" => %{"type" => "summary_text"}
+          },
+          %{"type" => "response.reasoning_summary_text.delta", "delta" => text},
+          %{"type" => "response.reasoning_summary_part.done"}
+        ]
+      end)
+
+    events =
+      [%{"type" => "response.output_item.added", "item" => %{"type" => "reasoning"}} | deltas] ++
+        [%{"type" => "response.output_item.done", "item" => item}, completion()]
+
+    [first, second] = parts
+    thinking = Enum.join(parts, "\n\n")
+
+    assert {%AssistantMessage{
+              content: [%ThinkingContent{thinking: ^thinking, thinking_signature: signature}]
+            } = final,
+            [
+              {:thinking_start, 0},
+              {:thinking_delta, 0, ^first},
+              {:thinking_delta, 0, "\n\n"},
+              {:thinking_delta, 0, ^second},
+              {:thinking_delta, 0, "\n\n"},
+              {:thinking_end, 0, ^thinking},
+              {:done, :stop, final}
+            ]} = process_and_drain(events)
+
+    assert Jason.decode!(signature) == item
+  end
+
+  defp completion(status \\ "completed") do
+    %{"type" => "response.completed", "response" => %{"status" => status}}
+  end
+
+  defp process_events(events) do
     {:ok, stream} = EventStream.start_link()
 
-    events = [
-      %{
-        "type" => "response.output_item.added",
-        "item" => %{"type" => "reasoning"}
-      },
-      %{"type" => "response.reasoning_summary_text.delta", "delta" => "Step 1"},
-      %{
-        "type" => "response.output_item.done",
-        "item" => %{"type" => "reasoning", "summary" => [%{"text" => "Step 1"}]}
-      },
-      %{"type" => "response.completed", "response" => %{"status" => "completed"}}
-    ]
+    try do
+      OpenAIResponsesShared.process_stream(events, assistant_message(), stream, base_model())
+    after
+      EventStream.cancel(stream, :test_cleanup)
+    end
+  end
 
-    output = %AssistantMessage{
+  defp process_and_drain(events) do
+    {:ok, stream} = EventStream.start_link()
+
+    try do
+      assert {:ok, final} =
+               OpenAIResponsesShared.process_stream(
+                 events,
+                 assistant_message(),
+                 stream,
+                 base_model()
+               )
+
+      EventStream.complete(stream, final)
+      {final, Enum.to_list(EventStream.events(stream))}
+    after
+      EventStream.cancel(stream, :test_cleanup)
+    end
+  end
+
+  defp assistant_message(content \\ []) do
+    %AssistantMessage{
       role: :assistant,
-      content: [],
+      content: content,
       api: :openai_responses,
       provider: :openai,
       model: "gpt-4o",
@@ -1025,21 +1121,9 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedTest do
       stop_reason: :stop,
       timestamp: System.system_time(:millisecond)
     }
+  end
 
-    model = %Model{
-      id: "gpt-4o",
-      name: "GPT-4o",
-      api: :openai_responses,
-      provider: :openai,
-      base_url: "https://api.openai.com/v1",
-      cost: %ModelCost{}
-    }
-
-    assert {:ok, final} = OpenAIResponsesShared.process_stream(events, output, stream, model)
-    [%LemonAi.Types.ThinkingContent{} = block] = final.content
-    assert block.thinking == "Step 1"
-    assert is_binary(block.thinking_signature)
-
-    EventStream.cancel(stream, :test_cleanup)
+  defp base_model do
+    %Model{id: "gpt-4o", api: :openai_responses, provider: :openai, cost: %ModelCost{}}
   end
 end

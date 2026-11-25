@@ -50,8 +50,10 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 `mix lemon.quality` checks that local markdown links in tracked
 `docs/**/*.md` files resolve, that the generated dependency table in
 `docs/architecture_boundaries.md` is current, that every app's `deps/0` matches
-`LemonCore.Quality.ArchitecturePolicy`, and that no two test modules share a
-name. Add `--validate-config` to also validate the runtime config.
+`LemonCore.Quality.ArchitecturePolicy`, that no two test modules share a
+name, and that no layered `_edge_cases`/`_comprehensive`-style test file sits
+beside its canonical test (see [Behavior-focused coverage](#behavior-focused-coverage)).
+Add `--validate-config` to also validate the runtime config.
 
 `quality` needs `shellcheck`, `python3` and `node` on `PATH`. Client lanes reinstall
 dependencies; set `LEMON_TEST_REUSE_NODE_MODULES=1` to reuse existing
@@ -393,6 +395,19 @@ their protocol tests; keep omission, authentication, streaming, and error cases
 that exercise different branches. Stream and loop coverage must retain terminal
 ordering, cancellation, monitoring, and tool-result accounting—not just a
 successful return or a nonempty event list.
+
+Each module has one canonical test file, `foo_test.exs` for `Foo`. A separate
+file is for a genuinely separate concern (`foo_concurrency_test.exs`), not a
+layer of extra cases: `mix lemon.check_duplicate_tests` (run by
+`mix lemon.quality`) fails when a `_edge_cases`, `_additional_edge_cases`,
+`_comprehensive`, `_extended` or `_consolidation` test file sits beside its
+canonical `foo_test.exs`, or declares `FooEdgeCasesTest` (and so on) while
+`FooTest` exists. Fold such cases into the canonical file and table-drive the
+variants. A facade keeps only tests of what it adds: `LemonAgent.EventStream`
+tests its abort-signal, `:agent` event format and cancel-grace options, while
+queue, drop-strategy, ownership and cancellation behaviour is tested once
+against `LemonAi.EventStream`. Do not keep tests that only check OTP, Jason or
+a property test's own generators.
 
 For pruning measurements, distinguish literal source test definitions from
 executed tests: parameterized cases, properties, doctests, tags, and moved cases
