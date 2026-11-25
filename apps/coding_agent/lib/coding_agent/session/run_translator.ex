@@ -40,7 +40,6 @@ defmodule CodingAgent.Session.RunTranslator do
     :delta_callback,
     :retry_action_id,
     :compaction_action_id,
-    :budget_usage,
     :budget_stop,
     :cancel_reason,
     usage_occurrences: [],
@@ -408,17 +407,12 @@ defmodule CodingAgent.Session.RunTranslator do
     %{t | compaction_action_id: nil}
   end
 
-  def handle_event(%__MODULE__{} = t, {:usage_budget_updated, usage}) do
-    %{t | budget_usage: usage}
-  end
-
   def handle_event(%__MODULE__{} = t, {:budget_exceeded, details}) do
     %{t | budget_stop: details}
   end
 
   def handle_event(%__MODULE__{} = t, {:error, {:budget_exceeded, details}, partial_state}) do
-    usage = Map.get(details, :provider_usage, Map.take(details, [:run_usage, :session_usage]))
-    t = %{t | budget_stop: details, budget_usage: usage}
+    t = %{t | budget_stop: details}
     emit_completed_error(t, details.message, partial_state)
   end
 
@@ -434,7 +428,6 @@ defmodule CodingAgent.Session.RunTranslator do
         t.usage_occurrences
         |> Enum.reverse()
         |> Presentation.build_usage()
-        |> with_budget_usage(t)
         |> with_metrics(t)
 
       emit_completed_ok(t, answer, usage)
@@ -611,7 +604,6 @@ defmodule CodingAgent.Session.RunTranslator do
         t.usage_occurrences
         |> Enum.reverse()
         |> Presentation.build_usage()
-        |> with_budget_usage(t)
         |> with_metrics(t)
 
       emitter_state =
@@ -635,47 +627,24 @@ defmodule CodingAgent.Session.RunTranslator do
     end
   end
 
-  defp with_budget_usage(usage, %{budget_usage: %{run_usage: _run_usage}}) do
-    # Enforcement totals are separate from provider telemetry and may be unknown.
-    # They cannot attest provider counters or fill their missing data.
-    usage = usage || %{}
-    cost = Map.get(usage, :cost)
-    total_cost = if is_map(cost), do: Map.get(cost, :total), else: cost
-
-    Map.merge(usage, %{
-      tokens: Map.get(usage, :total_tokens),
-      cost_usd: total_cost
-    })
-  end
-
-  defp with_budget_usage(usage, _translator), do: usage
-
   defp with_metrics(usage, t) do
-    unknown_usage = %{
+    unknown_cost = %{
       input: nil,
       output: nil,
       cache_read: nil,
       cache_write: nil,
       cache_write_long: nil,
-      total_tokens: nil,
-      context_tokens: nil,
-      cost: %{
-        input: nil,
-        output: nil,
-        cache_read: nil,
-        cache_write: nil,
-        cache_write_long: nil,
-        total: nil
-      }
+      total: nil
     }
 
-    usage = Map.merge(unknown_usage, usage || %{})
+    usage = usage || %LemonCore.Events.Usage{cost: unknown_cost}
 
-    Map.merge(usage, %{
-      turns: t.turns,
-      tool_errors: t.tool_errors,
-      occurrences: Enum.reverse(t.usage_occurrences)
-    })
+    %{
+      usage
+      | turns: t.turns,
+        tool_errors: t.tool_errors,
+        occurrences: Enum.reverse(t.usage_occurrences)
+    }
   end
 
   defp actual_model_meta(%{usage_occurrences: [occurrence | _]}) do

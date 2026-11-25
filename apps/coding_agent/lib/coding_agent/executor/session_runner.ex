@@ -110,9 +110,8 @@ defmodule CodingAgent.Executor.SessionRunner do
     defp attach_context_budget(state, fields) do
       case CodingAgent.Session.context_budget(state.session) do
         {:ok, budget} ->
-          Map.update(fields, :usage, %{context_budget: budget}, fn usage ->
-            Map.put(usage || %{}, :context_budget, budget)
-          end)
+          usage = Map.get(fields, :usage) || %LemonCore.Events.Usage{}
+          Map.put(fields, :usage, %{usage | context_budget: budget})
 
         _ ->
           fields

@@ -11,6 +11,11 @@
 
 ### Changed
 
+- **Breaking:** native run completions carry a `LemonCore.Events.Usage`, and each
+  usage occurrence's `usage` is one too (`Executor.Usage.occurrence/1`,
+  `Session.Presentation.build_usage/1`). The completion no longer duplicates
+  `total_tokens`/`cost.total` as `tokens`/`cost_usd`, and occurrences no longer
+  copy alternative counter spellings (#669).
 - Journal format: assistant entries' `system-prompt-digest` is now version 2, a
   `{digest, plan_revision}` reference to a `lemon.prompt_snapshot` custom entry
   written once per digest on the branch (`base_prompt` only when a plan overlay

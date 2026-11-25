@@ -3764,7 +3764,9 @@ proof; mention-triggered Discord prompts do not depend on this declaration.
 ## Telegram Context Compaction
 
 When a Telegram run approaches the model context limit, Lemon can proactively mark the session for compaction so the
-next user message is automatically rewritten with a compact transcript and sent as a fresh session.
+next user message is automatically rewritten with a compact transcript and sent as a fresh session. The check uses
+the context of the run's latest model call, not the tokens the whole run consumed: a run of many model calls does not
+compact sooner because it made more calls.
 
 ```toml
 [gateway.telegram.compaction]
