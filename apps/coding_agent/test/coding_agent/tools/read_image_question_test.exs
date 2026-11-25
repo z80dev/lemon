@@ -157,11 +157,15 @@ defmodule CodingAgent.Tools.ReadImageQuestionTest do
     assert text =~ "literal text"
   end
 
-  test "JSON queries retain their existing meaning", %{tmp_dir: dir} do
+  test "JSON remains readable as text without a query selector", %{tmp_dir: dir} do
     path = Path.join(dir, "data.json")
-    File.write!(path, ~s({"color":"red"}))
-    assert %AgentToolResult{content: [%TextContent{text: text}]} = read(path <> "?q=.color", dir)
-    assert text =~ "red"
+    json = ~s({"color":"red"})
+    File.write!(path, json)
+
+    assert %AgentToolResult{content: [%TextContent{text: ^json}]} = read(path <> ":raw", dir)
+
+    assert {:error, message} = read(path <> "?q=.color", dir)
+    assert message =~ "requires an image path"
   end
 
   test "bounds long completion answers and rejects empty questions", %{tmp_dir: dir} do

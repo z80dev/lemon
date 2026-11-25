@@ -153,9 +153,10 @@ timeout, are capped at 8192 characters, and remain untrusted file-derived conten
 Only a `?q=` suffix on an existing local source is recognized. Existing literal
 filenames win, including names containing `?` or `?q=`; the last suffix whose
 base exists is selected. Question text accepts URL encoding (`+` for spaces,
-`%26` for `&`). Non-image sources are rejected; JSON and SQLite retain their
-own query syntax. Tool constructors may supply `:image_question_complete`
-(a three-argument model/context/options completion function) for isolated tests.
+`%26` for `&`). Non-image sources are rejected, except that SQLite retains its
+own query syntax. JSON files are read as ordinary text. Tool constructors may
+supply `:image_question_complete` (a three-argument model/context/options
+completion function) for isolated tests.
 
 ## Merge conflicts
 

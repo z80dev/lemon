@@ -423,24 +423,26 @@ defmodule CodingAgent.Tools.ReadTest do
       end
     end
 
-    test "sidecars, unsupported gzip types, dotfiles and directories are not media", %{
+    test "sidecars, unsupported gzip types and dotfiles remain text; directories are refused", %{
       tmp_dir: cwd
     } do
       for name <- ~w(notes.txt scene.mtl image.png.gz scene.usdz.gz .png) do
         File.write!(Path.join(cwd, name), "ordinary text")
 
-        assert %AgentToolResult{details: details} =
+        assert %AgentToolResult{content: [%TextContent{text: text}], details: details} =
                  Read.execute("plain", %{"path" => name}, nil, nil, cwd, [])
 
+        assert text =~ "ordinary text"
         refute Map.has_key?(details, :media_path), name
       end
 
       File.mkdir!(Path.join(cwd, "folder.svg"))
 
-      assert %AgentToolResult{details: details} =
+      assert {:error, message} =
                Read.execute("dir", %{"path" => "folder.svg"}, nil, nil, cwd, [])
 
-      refute Map.has_key?(details, :media_path)
+      assert message =~ "Path is a directory"
+      assert message =~ "List directories with ls"
     end
 
     test "failed media reads retain their errors instead of a display receipt", %{tmp_dir: cwd} do

@@ -12,7 +12,7 @@ defmodule CodingAgent.ExecutionPolicyEntryPointsTest do
   alias CodingAgent.Executor
   alias CodingAgent.Executor.RemoteRequestCodec
   alias CodingAgent.Session
-  alias CodingAgent.Tools.Task.Params
+  alias CodingAgent.Tools.Task.InvocationAuthority
   alias LemonCore.{ExecutionContext, ToolPolicy}
   alias LemonCore.ExecutionCommand
 
@@ -74,7 +74,7 @@ defmodule CodingAgent.ExecutionPolicyEntryPointsTest do
       task_error = "Task execution authority is invalid: #{inspect(reason)}"
 
       assert {:error, ^task_error} =
-               Params.restrict_to_parent(%{tool_policy: policy}, tmp_dir,
+               InvocationAuthority.restrict_to_parent(%{tool_policy: policy}, tmp_dir,
                  execution_context: root_context(tmp_dir, "task-parent")
                ),
              label
@@ -111,14 +111,16 @@ defmodule CodingAgent.ExecutionPolicyEntryPointsTest do
       assert_same_authority(opts[:execution_context].tool_policy, expected, {:direct, policy})
 
       assert {:ok, task} =
-               Params.restrict_to_parent(%{tool_policy: policy}, tmp_dir,
+               InvocationAuthority.restrict_to_parent(%{tool_policy: policy}, tmp_dir,
                  execution_context: root_context(tmp_dir, "task-parent")
                )
 
       assert_same_authority(task.tool_policy, expected, {:task, policy})
+      assert_same_authority(task.execution_context.tool_policy, expected, {:task_context, policy})
       assert task.execution_context.parent_run_id == "task-parent"
 
       assert {:ok, payload} = remote_payload(tmp_dir, policy)
+      assert_same_authority(payload["toolPolicy"], expected, {:named_node_payload, policy})
 
       assert {:ok, request, _opts} =
                Worker.execution_request(payload, worker(tmp_dir), "invoke")
@@ -150,7 +152,7 @@ defmodule CodingAgent.ExecutionPolicyEntryPointsTest do
     }
 
     assert {:ok, task} =
-             Params.restrict_to_parent(%{tool_policy: widening}, tmp_dir,
+             InvocationAuthority.restrict_to_parent(%{tool_policy: widening}, tmp_dir,
                execution_context: parent
              )
 
@@ -172,6 +174,8 @@ defmodule CodingAgent.ExecutionPolicyEntryPointsTest do
 
     for policy <- [
           task.tool_policy,
+          task.execution_context.tool_policy,
+          payload["toolPolicy"],
           remote.tool_policy,
           remote.execution_context.tool_policy,
           forged.tool_policy,
