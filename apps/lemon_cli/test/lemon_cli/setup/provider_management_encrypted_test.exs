@@ -42,7 +42,7 @@ defmodule LemonCli.Setup.ProviderManagementEncryptedTest do
     key_path = Path.join(root, "master_key")
     File.write!(key_path, Base.encode64(:crypto.strong_rand_bytes(32)))
     File.chmod!(key_path, 0o600)
-    previous_settings = Map.new([Secrets, :paths], &{&1, Application.fetch_env(:lemon_core, &1)})
+    previous_settings = Map.new([:secrets, :paths], &{&1, Application.fetch_env(:lemon_core, &1)})
 
     names = [
       "HOME",
