@@ -12,6 +12,9 @@
 
 ### Removed
 
+- **Breaking:** removed `CodingAgent.Advisor`, the `CodingAgent.AdvisorSupervisor`
+  child and the session's internal `:advisor_context` call; `advisor:` session
+  options are refused with `{:error, {:unsupported_option, :advisor}}` (#705).
 - **Breaking:** removed `CodingAgent.SessionIndex`, `SessionManager.list_sessions/1`
   and `SessionEntry.session_info/2`; journal appends, checkpoints and
   `save_to_file/2` take no lock and write no `.index.sqlite3`. Older journals'

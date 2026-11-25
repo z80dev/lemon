@@ -645,6 +645,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** the opt-in session advisor (#600) is retired: `CodingAgent.Advisor`,
+  its `AdvisorSupervisor` child and the `advisor:` session option are removed.
+  No shipped caller enabled it; `start_session(advisor: ...)` now fails with
+  `{:error, {:unsupported_option, :advisor}}` instead of starting a reviewer (#705).
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.
