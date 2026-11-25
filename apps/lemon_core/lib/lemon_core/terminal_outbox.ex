@@ -129,7 +129,7 @@ defmodule LemonCore.TerminalOutbox do
   defp session_lock(server, session_key, fun) do
     # Only local detached effects need serializing against history deletion.
     # The router lifecycle fence excludes active run owners during deletion.
-    case :global.trans({{__MODULE__, server, session_key}, self()}, fun, [node()]) do
+    case :global.trans({{__MODULE__, server, session_key}, self()}, fun, [node()], 3) do
       :aborted -> {:error, :outcome_unknown}
       result -> result
     end

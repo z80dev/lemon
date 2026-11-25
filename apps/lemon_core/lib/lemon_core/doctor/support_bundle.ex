@@ -436,11 +436,15 @@ defmodule LemonCore.Doctor.SupportBundle do
                 else: "other"
               ),
             credential_reference_count:
-              Enum.sum_by(providers, fn provider ->
-                statuses
-                |> Enum.find(%{secret_references: []}, &(&1.raw == provider_key(provider)))
-                |> Map.fetch!(:secret_references)
-                |> length()
+              Enum.reduce(providers, 0, fn provider, count ->
+                status =
+                  Enum.find(
+                    statuses,
+                    %{secret_references: []},
+                    &(&1.raw == provider_key(provider))
+                  )
+
+                count + length(status.secret_references)
               end)
           }
         end),

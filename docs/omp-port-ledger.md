@@ -53,7 +53,7 @@ app-suite references below.
 | `apps/coding_agent/lib/coding_agent/debug/adapters.ex` | omp / pi-mono; source revision unknown | native port | `apps/coding_agent/test/coding_agent/debug/adapters_test.exs` |
 | `apps/coding_agent/lib/coding_agent/resource_loader.ex` | omp / pi-mono; source revision unknown | native port | `apps/coding_agent/test/coding_agent/resource_loader_test.exs` |
 | `apps/coding_agent/lib/coding_agent/security/secret_obfuscator/loader.ex` | omp / pi-mono; source revision unknown | native port | `apps/coding_agent/test` |
-| `apps/coding_agent/lib/coding_agent/session/model_resolver.ex` | omp / pi-mono; source revision unknown | native port | `apps/coding_agent/test/coding_agent/session/model_resolver_test.exs` |
+| `apps/coding_agent/lib/coding_agent/search/providers/kimi.ex` | omp Kimi web search contract; source revision unknown | native port | `apps/coding_agent/test/coding_agent/search/providers_test.exs` |
 | `apps/coding_agent/lib/coding_agent/session/planning.ex` | omp / pi-mono; source revision unknown | native port | `apps/coding_agent/test/coding_agent/session/planning_test.exs` |
 | `apps/coding_agent/lib/coding_agent/subagents.ex` | omp / pi-mono; source revision unknown | native port | `apps/coding_agent/test/coding_agent/subagents_test.exs` |
 | `apps/coding_agent/lib/coding_agent/tool_policy.ex` | omp / pi-mono; source revision unknown | native port | `apps/coding_agent/test/coding_agent/tool_policy_test.exs` |
@@ -63,16 +63,20 @@ app-suite references below.
 | `apps/lemon_agent/lib/lemon_agent/agent.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/agent_test.exs` |
 | `apps/lemon_agent/lib/lemon_agent/env.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/credentials.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/credentials_test.exs` |
+| `apps/lemon_agent/lib/lemon_agent/model_runtime/model_resolver.ex` | omp / pi-mono; source revision unknown | native port | `apps/coding_agent/test/coding_agent/session/model_resolver_test.exs` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/model_roles.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/model_roles_test.exs` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/omp_auth_broker.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/omp_auth_broker_test.exs` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/omp_broker.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/omp_broker_test.exs` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/omp_config.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/omp_broker_test.exs` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/omp_token.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/omp_token_test.exs` |
+| `apps/lemon_ai/lib/lemon_ai/auth/kimi_code_oauth.ex` | omp Kimi Code deployment mapping; source revision unknown | native port | `apps/lemon_ai/test/lemon_ai/auth/kimi_code_oauth_test.exs` |
 | `apps/lemon_ai/lib/lemon_ai/model_cache.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_ai/test/lemon_ai/model_cache_test.exs` |
+| `apps/lemon_ai/lib/lemon_ai/models/kimi_code_discovery.ex` | omp `kimiCodeModelManagerOptions`; source revision unknown | native port | `apps/lemon_ai/test/lemon_ai/models/kimi_code_discovery_test.exs` |
 | `apps/lemon_ai/lib/lemon_ai/models/omp_gateway.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_ai/test/lemon_ai/models/omp_gateway_test.exs` |
 | `apps/lemon_ai/lib/lemon_ai/models/open_ai.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_ai/test` |
 | `apps/lemon_ai/lib/lemon_ai/models/presets.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_ai/test/lemon_ai/models/presets_test.exs` |
 | `apps/lemon_ai/lib/lemon_ai/providers/kimi_code_usage.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_ai/test` |
+| `apps/lemon_ai/lib/lemon_ai/providers/moonshot_tool_schema.ex` | omp Moonshot schema normalization and dereferencing; source revision unknown | native port | `apps/lemon_ai/test/providers/moonshot_tool_schema_test.exs` |
 | `apps/lemon_cli/lib/lemon_cli/command_registry.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_cli/test/lemon_cli/command_registry_test.exs` |
 | `apps/lemon_cli/lib/lemon_cli/doctor/providers.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_cli/test` |
 | `apps/lemon_cli/lib/lemon_cli/omp_command.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_cli/test/lemon_cli/omp_command_test.exs` |
