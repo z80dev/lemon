@@ -927,6 +927,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   write-side rebuilds stop at `:format_max_decoded_bytes` (256 MiB), and
   archives over `:format_max_archive_entries` are refused, so a zip/gzip bomb
   can no longer exhaust node memory (#678).
+- Delegated and requested tool policies can no longer weaken their parent
+  (#71, #72, #73): a request, child or execution-node wire policy cannot waive
+  an approval gate that depends on call arguments (for example `write` with
+  `diagnostics` under `approval_mode = "write"`) with a per-tool `never`, and
+  cannot enable `workspace_read_exempt` the parent or operator policy lacks.
+  Router admission narrows operator layers with a request's `tool_policy`
+  instead of layering it.
 - Model file tools, browser and media outputs and checkpoint restore refuse
   Lemon operator state (`~/.lemon`, the agent directory, configured
   config/key/store/checkpoint/bot paths, extension roots) and the toolchain
