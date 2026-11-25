@@ -143,7 +143,7 @@ defmodule LemonCore.Application do
         {LemonCore.ConfigCache, config_cache_opts}
       ] ++
       store ++
-      if(runtime?, do: [LemonCore.RuntimeOwner], else: []) ++
+      owner_children(mode) ++
       [
         LemonCore.SessionActivity,
         LemonCore.Secrets.Usage,
@@ -157,6 +157,12 @@ defmodule LemonCore.Application do
         else: []
       )
   end
+
+  # The ownership process starts before every other store writer. A writable
+  # client holds the locks too; a read-only client writes nothing.
+  defp owner_children(:runtime), do: [LemonCore.RuntimeOwner]
+  defp owner_children(:client), do: [{LemonCore.RuntimeOwner, client: true}]
+  defp owner_children(:read_only_client), do: []
 
   # RunHistoryStore needs the SQLite NIF. `:exqlite` is an optional dependency,
   # so without it the rest of lemon_core still boots and run history reads exit

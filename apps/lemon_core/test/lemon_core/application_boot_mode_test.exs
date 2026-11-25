@@ -26,7 +26,6 @@ defmodule LemonCore.ApplicationBootModeTest do
       ids = ids(children)
 
       for absent <- [
-            LemonCore.RuntimeOwner,
             LemonCore.RunHistoryStore,
             LemonCore.ConfigReloader,
             LemonCore.ConfigReloader.Watcher,
@@ -41,6 +40,9 @@ defmodule LemonCore.ApplicationBootModeTest do
     assert Keyword.get(opts(LemonCore.Application.children(:read_only_client), Store), :read_only)
     refute Keyword.get(opts(LemonCore.Application.children(:client), Store), :read_only)
     assert Keyword.get(opts(LemonCore.Application.children(:client), Store), :defer_to_runtime)
+    # Only a writable client holds the ownership locks (and never recovers).
+    assert opts(LemonCore.Application.children(:client), LemonCore.RuntimeOwner) == [client: true]
+    refute LemonCore.RuntimeOwner in ids(LemonCore.Application.children(:read_only_client))
   end
 
   test "the runtime child list keeps ownership, recovery, sweeps and reloaders" do
@@ -116,39 +118,39 @@ defmodule LemonCore.ApplicationBootModeTest do
   end
 
   @tag :tmp_dir
-  test "a runtime started after a writable client takes the lease over", %{tmp_dir: tmp_dir} do
+  test "a runtime started after a writable client refuses instead of writing", %{
+    tmp_dir: tmp_dir
+  } do
     {database, client} = client_store_opts(tmp_dir)
     start_supervised!({Store, [name: :boot_mode_leased_client] ++ client}, id: :leased)
+    assert {:error, :runtime_owned} = Store.write_access(:boot_mode_leased_client)
+
+    # The client's ownership process holds the locks, then lets its store write.
+    {:ok, client_owner} =
+      GenServer.start(LemonCore.RuntimeOwner,
+        client: true,
+        database: database,
+        store: :boot_mode_leased_client
+      )
+
     assert :ok = Store.write_access(:boot_mode_leased_client)
     assert :ok = Store.put(:boot_mode_leased_client, :probe, :key, :before)
 
-    # The client holds the ownership lock for its whole life ...
-    lock = LemonCore.RuntimeOwner.lock_path(database)
+    # A runtime booting meanwhile waits its lock deadline, then refuses.
+    Process.flag(:trap_exit, true)
 
-    assert {:error, :lock_timeout} =
-             LemonCore.Service.Lock.with_lock_path(lock, [], fn -> :ok end)
+    assert {:error, :store_held_by_client} =
+             GenServer.start(LemonCore.RuntimeOwner, database: database)
 
-    # ... until a runtime asks: the client stops writing, then the runtime owns it.
-    {:ok, runtime} = GenServer.start(LemonCore.RuntimeOwner, database: database)
-    on_exit(fn -> stop_quietly(runtime) end)
-    assert GenServer.call(runtime, :owner?)
+    assert :ok = Store.put(:boot_mode_leased_client, :probe, :key, :still_only_writer)
+
+    # The client ends: its store stops writing and the runtime can own the database.
+    GenServer.stop(client_owner)
     assert {:error, :runtime_owned} = Store.write_access(:boot_mode_leased_client)
-    assert {:error, :runtime_owned} = Store.put(:boot_mode_leased_client, :probe, :key, :after)
-    assert {:ok, :before} = Store.fetch(:boot_mode_leased_client, :probe, :key)
-    refute File.exists?(lock <> ".takeover")
-  end
-
-  @tag :tmp_dir
-  test "a writable client's lease ends with the store", %{tmp_dir: tmp_dir} do
-    {database, client} = client_store_opts(tmp_dir)
-    store = start_supervised!({Store, [name: :boot_mode_short_client] ++ client}, id: :short)
-    assert :ok = Store.write_access(:boot_mode_short_client)
-    :ok = stop_supervised(:short)
-    refute Process.alive?(store)
-
     {:ok, runtime} = GenServer.start(LemonCore.RuntimeOwner, database: database)
     on_exit(fn -> stop_quietly(runtime) end)
     assert GenServer.call(runtime, :owner?)
+    assert {:ok, :still_only_writer} = Store.fetch(:boot_mode_leased_client, :probe, :key)
   end
 
   defp client_store_opts(tmp_dir) do

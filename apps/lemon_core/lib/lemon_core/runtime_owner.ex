@@ -11,18 +11,15 @@ defmodule LemonCore.RuntimeOwner do
   follower and must leave other runtimes' records alone. An in-memory store
   cannot be shared, so its VM always owns it.
 
-  One-shot CLI VMs boot `:lemon_core` in client mode (see
-  `LemonCore.Application`) and never start this process. A writable client
-  store takes the same lock for its whole lifetime with `client_lease/3`, so
-  at most one VM writes the database whichever starts first:
-
-    * a runtime already holds the lock: the client store refuses every write;
-    * the client holds it: a booting runtime writes a takeover request
-      (`<lock>.takeover`) and waits up to three seconds; the client lease
-      turns its store read-only (after any write in progress), then releases
-      the lock, and the runtime becomes the owner. A runtime's store takes no
-      writes before this process has settled ownership: it starts before
-      every store writer in the supervision tree.
+  A writable one-shot client (`client: true`, see `LemonCore.Application`)
+  runs this process too. Its store starts refusing writes
+  (`defer_to_runtime: true`); this process takes `<database>.client.lock` and
+  then the runtime lock without waiting, holds both for the VM's lifetime and
+  only then lets the store write (`LemonCore.Store.claim_writes/1`). When a
+  runtime holds the lock the store keeps refusing (`:runtime_owned`). A runtime
+  booting while a client holds the lock waits up to `@contention_timeout_ms`,
+  then refuses to start (`{:stop, :store_held_by_client}`) rather than run a
+  second writer; it starts before every other store writer in its tree.
   """
 
   use GenServer
@@ -33,17 +30,14 @@ defmodule LemonCore.RuntimeOwner do
 
   @acquire_timeout_ms 5_000
   @contention_timeout_ms 3_000
-  # A client lease polls for a takeover request this often and ignores
-  # requests older than a runtime's whole wait (left by a crashed runtime).
-  @takeover_poll_ms 50
-  @takeover_stale_s 10
 
   @doc false
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   @doc """
   Whether this VM owns its store's runtime state. `false` when this process is
-  not running or ownership could not be established (fail closed).
+  not running or ownership could not be established (fail closed). A client
+  VM is never the runtime owner.
   """
   @spec owner?() :: boolean()
   def owner? do
@@ -56,77 +50,21 @@ defmodule LemonCore.RuntimeOwner do
   @spec lock_path(Path.t()) :: Path.t()
   def lock_path(database) when is_binary(database), do: database <> ".runtime.lock"
 
-  @doc """
-  Takes the ownership lock at `lock_path` for a writable one-shot client
-  without waiting. Returns `:leased` when this client is now the only writer,
-  or `:held` when a live runtime holds the lock (or it cannot be taken: fail
-  closed). The lease lasts until `owner` exits. When a runtime asks to take
-  over, the lease calls `step_aside` (which must stop `owner` writing and
-  return only after any write in progress) and then releases the lock.
-
-  The lease runs in an unlinked process, so an `owner` that traps exits (the
-  store) never receives exits from the lock's liveness-check helpers.
-  """
-  @spec client_lease(Path.t(), pid(), (-> term())) :: :leased | :held
-  def client_lease(lock_path, owner, step_aside)
-      when is_binary(lock_path) and is_pid(owner) and is_function(step_aside, 0) do
-    parent = self()
-    ref = make_ref()
-
-    {pid, monitor} =
-      spawn_monitor(fn ->
-        owner_monitor = Process.monitor(owner)
-
-        result =
-          Lock.with_lock_path(lock_path, [], fn ->
-            send(parent, {ref, :leased})
-            hold_lease(takeover_path(lock_path), owner_monitor, step_aside)
-          end)
-
-        exit({:lease, result})
-      end)
-
-    receive do
-      {^ref, :leased} ->
-        Process.demonitor(monitor, [:flush])
-        :leased
-
-      {:DOWN, ^monitor, :process, ^pid, _not_leased} ->
-        :held
-    end
-  end
-
-  defp hold_lease(takeover, owner_monitor, step_aside) do
-    receive do
-      {:DOWN, ^owner_monitor, :process, _owner, _reason} -> :released
-    after
-      @takeover_poll_ms ->
-        if takeover_requested?(takeover) do
-          step_aside.()
-          :stepped_aside
-        else
-          hold_lease(takeover, owner_monitor, step_aside)
-        end
-    end
-  end
-
-  defp takeover_requested?(takeover) do
-    case File.stat(takeover, time: :posix) do
-      {:ok, %{mtime: mtime}} -> System.os_time(:second) - mtime <= @takeover_stale_s
-      {:error, _} -> false
-    end
-  end
-
-  defp takeover_path(lock_path), do: lock_path <> ".takeover"
+  @doc "The lock a writable one-shot client holds beside the runtime lock."
+  @spec client_lock_path(Path.t()) :: Path.t()
+  def client_lock_path(database) when is_binary(database), do: database <> ".client.lock"
 
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
+    client? = Keyword.get(opts, :client, false)
 
     case Keyword.get_lazy(opts, :database, &store_database/0) do
+      nil when client? -> claim(opts, %{owner?: false, holder: nil})
       nil -> {:ok, %{owner?: true, holder: nil}}
       {:error, _} -> {:ok, %{owner?: false, holder: nil}}
-      database -> {:ok, acquire(lock_path(database))}
+      database when client? -> client_init(database, opts)
+      database -> runtime_init(database)
     end
   end
 
@@ -134,8 +72,12 @@ defmodule LemonCore.RuntimeOwner do
   def handle_call(:owner?, _from, state), do: {:reply, state.owner?, state}
 
   @impl true
+  # A client that lost its locks stops, and its store stops writing with it.
+  def handle_info({:EXIT, holder, _reason}, %{holder: {holder, _ref}, client?: true} = state),
+    do: {:stop, :ownership_lock_lost, %{state | holder: nil}}
+
   def handle_info({:EXIT, holder, _reason}, %{holder: {holder, _ref}} = state) do
-    Logger.warning("runtime ownership lock holder exited; this VM no longer owns the store")
+    Logger.warning("store ownership lock holder exited; this VM no longer holds the store")
     {:noreply, %{state | owner?: false, holder: nil}}
   end
 
@@ -147,13 +89,45 @@ defmodule LemonCore.RuntimeOwner do
     send(holder, {ref, :release})
 
     receive do
-      {:DOWN, ^monitor, :process, ^holder, _} -> :ok
+      {:DOWN, ^monitor, :process, _, _} -> :ok
     after
       1_000 -> :ok
     end
   end
 
   def terminate(_reason, _state), do: :ok
+
+  defp runtime_init(database) do
+    case hold([lock_path(database)], @contention_timeout_ms) do
+      {:ok, holder} ->
+        {:ok, %{owner?: true, holder: holder}}
+
+      {:error, :lock_timeout} ->
+        if held?(client_lock_path(database)),
+          do: {:stop, :store_held_by_client},
+          else: {:ok, %{owner?: false, holder: nil}}
+
+      {:error, reason} ->
+        Logger.warning("runtime ownership lock unavailable: #{inspect(reason)}")
+        {:ok, %{owner?: false, holder: nil}}
+    end
+  end
+
+  # Client lock first, so a runtime that times out on the runtime lock always
+  # sees which kind of VM holds it.
+  defp client_init(database, opts) do
+    case hold([client_lock_path(database), lock_path(database)], 0) do
+      {:ok, holder} -> claim(opts, %{owner?: false, holder: holder, client?: true})
+      {:error, _held} -> {:ok, %{owner?: false, holder: nil}}
+    end
+  end
+
+  defp claim(opts, state) do
+    :ok = LemonCore.Store.claim_writes(Keyword.get(opts, :store, LemonCore.Store))
+    {:ok, state}
+  end
+
+  defp held?(path), do: Lock.with_lock_path(path, [], fn -> :free end) != :free
 
   defp store_database do
     case LemonCore.Store.location() do
@@ -164,46 +138,39 @@ defmodule LemonCore.RuntimeOwner do
     :exit, _ -> {:error, :store_unavailable}
   end
 
-  # The lock is held by a linked process for as long as this one lives; a
-  # killed holder leaves a record the next local acquisition can reclaim. The
-  # takeover request asks a client lease holding the lock to step aside.
-  defp acquire(path) do
+  # The locks are held by a linked task for as long as this process lives; a
+  # killed holder leaves records the next local acquisition can reclaim.
+  defp hold(paths, timeout) do
     parent = self()
     ref = make_ref()
-    takeover = takeover_path(path)
-    _ = File.write(takeover, "")
 
-    holder =
-      spawn_link(fn ->
+    {:ok, holder} =
+      Task.start_link(fn ->
         result =
-          Lock.with_lock_path(path, [timeout: @contention_timeout_ms], fn ->
-            _ = File.rm(takeover)
+          nest(paths, timeout, fn ->
             send(parent, {ref, :locked})
-
-            receive do
-              {^ref, :release} -> :ok
-            end
+            receive do: ({^ref, :release} -> :ok)
           end)
 
-        _ = File.rm(takeover)
         send(parent, {ref, result})
       end)
 
     receive do
       {^ref, :locked} ->
-        %{owner?: true, holder: {holder, ref}}
+        {:ok, {holder, ref}}
 
-      {^ref, {:error, :lock_timeout}} ->
-        %{owner?: false, holder: nil}
-
-      {^ref, {:error, reason}} ->
-        Logger.warning("runtime ownership lock unavailable: #{inspect(reason)}")
-        %{owner?: false, holder: nil}
+      {^ref, {:error, _} = error} ->
+        error
     after
       @acquire_timeout_ms ->
         Process.unlink(holder)
         Process.exit(holder, :kill)
-        %{owner?: false, holder: nil}
+        {:error, :lock_timeout}
     end
   end
+
+  defp nest([], _timeout, fun), do: fun.()
+
+  defp nest([path | rest], timeout, fun),
+    do: Lock.with_lock_path(path, [timeout: timeout], fn -> nest(rest, timeout, fun) end)
 end

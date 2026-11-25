@@ -112,31 +112,28 @@ defmodule LemonCli.ClientBootTest do
     assert LemonCore.RuntimeOwner.owner?()
   end
 
-  test "a daemon starting after a writable one-shot VM takes over before writing", c do
-    # The daemon is not up yet: the one-shot VM's store leases the database.
+  test "a daemon starting while a writable one-shot VM holds the store refuses to start", c do
+    # The daemon is not up yet: the one-shot VM holds the ownership locks.
     stop_child(LemonCore.RuntimeOwner)
     peer = start_peer(c)
-    :ok = :peer.call(peer, System, :put_env, ["LEMON_CONTROL_PLANE_PORT", closed_port()])
     assert :ok = :peer.call(peer, LemonCore.CLI, :start, [:lemon_core])
     assert :ok = :peer.call(peer, Store, :write_access, [])
     assert :ok = :peer.call(peer, Store, :put, [:client_boot_probe, :before, :value])
 
-    # The daemon's ownership process starts before any of its store writers.
+    # The daemon's ownership process (started before its store writers) waits
+    # its lock deadline, then refuses rather than become a second writer.
+    assert {:error, :store_held_by_client} =
+             Supervisor.restart_child(LemonCore.Supervisor, LemonCore.RuntimeOwner)
+
+    refute LemonCore.RuntimeOwner.owner?()
+    assert :ok = :peer.call(peer, Store, :put, [:client_boot_probe, :still, :value])
+
+    # Once the one-shot VM exits, the daemon owns the store.
+    :peer.stop(peer)
     restart_child(LemonCore.RuntimeOwner)
     assert LemonCore.RuntimeOwner.owner?()
-
-    assert {:error, :runtime_owned} = :peer.call(peer, Store, :write_access, [])
-
-    assert {:error, :runtime_owned} =
-             :peer.call(peer, Store, :put, [:client_boot_probe, :after, :value])
-
-    assert {1, ""} = run_cli(peer, ["secrets", "set", "LATE_SECRET", "late-value"])
-    :peer.stop(peer)
-
     assert {:ok, :value} = Store.fetch(:client_boot_probe, :before)
-    assert {:ok, nil} = Store.fetch(:client_boot_probe, :after)
-    assert {:ok, nil} = Store.fetch(LemonCore.Secrets.table(), {"default", "LATE_SECRET"})
-    assert LemonCore.RuntimeOwner.owner?()
+    assert {:ok, :value} = Store.fetch(:client_boot_probe, :still)
   end
 
   defp closed_port do
