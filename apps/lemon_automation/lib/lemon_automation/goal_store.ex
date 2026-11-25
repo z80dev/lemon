@@ -689,14 +689,16 @@ defmodule LemonAutomation.GoalStore do
         loop_auto_enabled: loop_auto_enabled(goal.meta)
       })
 
-    _ =
-      Introspection.record(event_type, payload,
-        run_id: string_opt(opts[:run_id]) || goal.last_run_id,
-        session_key: goal.session_key,
-        agent_id: goal.agent_id,
-        engine: "lemon",
-        provenance: :direct
-      )
+    if Keyword.get(opts, :record_introspection, true) do
+      _ =
+        Introspection.record(event_type, payload,
+          run_id: string_opt(opts[:run_id]) || goal.last_run_id,
+          session_key: goal.session_key,
+          agent_id: goal.agent_id,
+          engine: "lemon",
+          provenance: :direct
+        )
+    end
 
     if Bus.running?() do
       event = Event.new(event_type, payload, %{session_key: goal.session_key, goal_id: goal.id})

@@ -15,8 +15,8 @@ defmodule CodingAgent.SessionManualOperationTest do
 
   # Blocks inside the provider until the test releases (or cancels) it.
   defmodule BlockingProvider do
-    def stream(_model, _context, _opts) do
-      send(:session_manual_operation_test, {:provider_called, self()})
+    def stream(model, _context, _opts) do
+      send(:session_manual_operation_test, {:provider_called, model.id, self()})
 
       receive do
         {:release, text} ->
@@ -32,7 +32,7 @@ defmodule CodingAgent.SessionManualOperationTest do
         :cancel ->
           {:error, :provider_cancelled}
       after
-        5_000 -> {:error, :provider_timeout}
+        30_000 -> {:error, :provider_timeout}
       end
     end
   end
@@ -71,6 +71,8 @@ defmodule CodingAgent.SessionManualOperationTest do
     session_file = Path.join(tmp_dir, "session.jsonl")
     :ok = SessionManager.save_to_file(session_file, manager)
 
+    model_id = "manual-op-#{System.unique_integer([:positive])}"
+
     opts = [
       cwd: tmp_dir,
       workspace_dir: Path.join(tmp_dir, "workspace"),
@@ -78,11 +80,13 @@ defmodule CodingAgent.SessionManualOperationTest do
       extension_inventory: {[], []},
       mcp_tools: [],
       session_file: session_file,
-      model: Mocks.mock_model(api: @api),
+      model: Mocks.mock_model(id: model_id, api: @api),
       stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ok"))
     ]
 
-    start_supervised!(Supervisor.child_spec({Session, opts}, restart: :temporary))
+    session = start_supervised!(Supervisor.child_spec({Session, opts}, restart: :temporary))
+    Process.put({__MODULE__, :model_id, session}, model_id)
+    session
   end
 
   defp start_compact(session),
@@ -90,9 +94,11 @@ defmodule CodingAgent.SessionManualOperationTest do
 
   defp start_summary(session), do: Task.async(fn -> Session.summarize_current_branch(session) end)
 
-  # Waits until the provider is blocked inside the model call.
-  defp await_provider do
-    assert_receive {:provider_called, provider}, 5_000
+  # Waits until the provider for `session` is blocked inside the model call.
+  defp await_provider(session) do
+    model_id = Process.get({__MODULE__, :model_id, session})
+    assert is_binary(model_id)
+    assert_receive {:provider_called, ^model_id, provider}, 5_000
     provider
   end
 
@@ -108,7 +114,7 @@ defmodule CodingAgent.SessionManualOperationTest do
          %{tmp_dir: tmp_dir} do
       session = start_session(tmp_dir)
       caller = start_compact(session)
-      provider = await_provider()
+      provider = await_provider(session)
 
       assert_responsive(session)
 
@@ -136,7 +142,7 @@ defmodule CodingAgent.SessionManualOperationTest do
       session = start_session(tmp_dir)
       Session.subscribe(session)
       caller = start_compact(session)
-      provider = await_provider()
+      provider = await_provider(session)
 
       assert_responsive(session)
       send(provider, {:release, "manual summary"})
@@ -158,7 +164,7 @@ defmodule CodingAgent.SessionManualOperationTest do
     test "a result for a session that moved on is discarded as stale", %{tmp_dir: tmp_dir} do
       session = start_session(tmp_dir)
       caller = start_compact(session)
-      provider = await_provider()
+      provider = await_provider(session)
       before = Session.get_state(session).session_manager
 
       :sys.replace_state(session, fn state -> %{state | turn_index: state.turn_index + 1} end)
@@ -174,7 +180,7 @@ defmodule CodingAgent.SessionManualOperationTest do
     test "a crashed task replies with an error and clears the operation", %{tmp_dir: tmp_dir} do
       session = start_session(tmp_dir)
       caller = start_compact(session)
-      provider = await_provider()
+      provider = await_provider(session)
 
       Process.exit(task_pid(session), :kill)
 
@@ -197,7 +203,7 @@ defmodule CodingAgent.SessionManualOperationTest do
 
       session = start_session(tmp_dir)
       caller = start_compact(session)
-      provider = await_provider()
+      provider = await_provider(session)
       task_ref = Process.monitor(task_pid(session))
 
       assert {:error, :timeout} = Task.await(caller, 5_000)
@@ -219,7 +225,7 @@ defmodule CodingAgent.SessionManualOperationTest do
           end
         end)
 
-      provider = await_provider()
+      provider = await_provider(session)
       task_ref = Process.monitor(task_pid(session))
 
       :ok = GenServer.stop(session)
@@ -240,7 +246,7 @@ defmodule CodingAgent.SessionManualOperationTest do
          %{tmp_dir: tmp_dir} do
       session = start_session(tmp_dir)
       caller = start_summary(session)
-      provider = await_provider()
+      provider = await_provider(session)
 
       assert_responsive(session)
       assert {:error, :busy} = Session.compact(session)
@@ -260,7 +266,7 @@ defmodule CodingAgent.SessionManualOperationTest do
       session = start_session(tmp_dir)
       Session.subscribe(session)
       caller = start_summary(session)
-      provider = await_provider()
+      provider = await_provider(session)
 
       assert_responsive(session)
       send(provider, {:release, "branch summary"})

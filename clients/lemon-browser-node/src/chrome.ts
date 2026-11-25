@@ -114,7 +114,7 @@ export class ChromeSession {
     await this.launchChrome();
     // Owned from launch, so a failed wait still closes it.
     this.ownedBrowser = true;
-    const endpoint = await this.waitForDevTools(15_000);
+    const endpoint = await this.waitForDevTools(30_000);
     this.managedEndpoint = endpoint;
     return endpoint;
   }

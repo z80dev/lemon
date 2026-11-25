@@ -326,7 +326,7 @@ describe.skipIf(!chromePath)('managed Chrome egress proxy', () => {
       userDataDir,
       executablePath: chromePath,
       headless: true,
-      noSandbox: false,
+      noSandbox: process.platform === 'linux',
       attachOnly: false,
       egressPolicy: {
         resolve: async (host) => {

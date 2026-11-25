@@ -123,7 +123,8 @@ defmodule LemonSkills.McpSourceScopesTest do
       assert [] = McpSource.discover_tools(source, [])
     end
 
-    assert Agent.get(attempts, & &1) in 1..4
+    # 1 initial attempt + at most @reconnect_attempts (4) backoff retries = 5 max.
+    assert Agent.get(attempts, & &1) in 1..5
 
     failed =
       :sys.get_state(source).servers

@@ -16,7 +16,8 @@ defmodule LemonAutomation.GoalSessionParticipant do
     do: StoreRows.snapshot(session_key, GoalStore.lifecycle_tables())
 
   @impl true
-  def delete(session_key, :delete, _rows), do: GoalStore.clear(session_key)
+  def delete(session_key, :delete, _rows),
+    do: GoalStore.clear(session_key, record_introspection: false)
 
   @impl true
   def verify_deleted(session_key, :delete, rows),

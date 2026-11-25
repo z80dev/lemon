@@ -39,7 +39,7 @@ defmodule LemonAgent.ModelRuntime.ProviderFailover do
 
   @type stream_fn ::
           (LemonAi.Types.Model.t(), LemonAi.Types.Context.t(), StreamOptions.t() ->
-             {:ok, LemonAi.EventStream.t()} | LemonAi.EventStream.t() | {:error, term()})
+             {:ok, LemonAi.EventStream.t()} | LemonAi.EventStream.t() | {:error, term()} | term())
 
   @typedoc """
   Failover configuration: resolution `settings` (`t:ModelResolver.settings/0`,

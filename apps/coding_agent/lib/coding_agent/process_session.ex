@@ -917,6 +917,15 @@ defmodule CodingAgent.ProcessSession do
         true -> {:error, state.root_exit_code}
       end
 
+    state =
+      %{
+        state
+        | status: status,
+          exit_code: exit_code,
+          completed_at: System.system_time(:second)
+      }
+      |> publish_output()
+
     cond do
       state.termination_reason == :timeout -> ProcessStore.mark_error(state.process_id, :timeout)
       status == :completed -> ProcessStore.mark_completed(state.process_id, exit_code)
@@ -943,13 +952,7 @@ defmodule CodingAgent.ProcessSession do
 
     Process.send_after(self(), :stop_after_exit, 5_000)
 
-    %{
-      state
-      | status: status,
-        exit_code: exit_code,
-        completed_at: System.system_time(:second)
-    }
-    |> publish_output()
+    state
   end
 
   defp start_port(command, cwd, env, backend) do
