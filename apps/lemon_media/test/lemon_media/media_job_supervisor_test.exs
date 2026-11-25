@@ -178,7 +178,22 @@ defmodule LemonMedia.MediaJobSupervisorTest do
     assert [%{status: :cancelled, error_kind: "aborted"}] = MediaJobs.recent(dir: jobs_dir)
   end
 
-  test "a job never outlives a caller that is killed mid-wait" do
+  @tag :tmp_dir
+  test "an already expired deadline never enters the provider", %{tmp_dir: dir} do
+    parent = self()
+
+    assert {:error, {:cancelled, :timeout, %{status: :cancelled}}} =
+             MediaJobSupervisor.run_job(%{type: :image},
+               dir: dir,
+               runner: fn _attrs -> send(parent, :entered_provider) end,
+               timeout_ms: 0
+             )
+
+    refute_received :entered_provider
+    assert [%{status: :cancelled, error_kind: "timeout"}] = MediaJobs.recent(dir: dir)
+  end
+
+  test "the supervised job owner cancels a trapping provider even when the caller dies" do
     tmp_dir = tmp_dir()
     jobs_dir = Path.join(tmp_dir, "jobs")
     parent = self()
@@ -189,6 +204,7 @@ defmodule LemonMedia.MediaJobSupervisorTest do
         MediaJobSupervisor.run_job(%{job_id: "orphan", type: :image},
           dir: jobs_dir,
           runner: fn _attrs ->
+            Process.flag(:trap_exit, true)
             send(parent, {:runner_started, self()})
             Process.sleep(:infinity)
           end,
@@ -197,17 +213,16 @@ defmodule LemonMedia.MediaJobSupervisorTest do
       end)
 
     assert_receive {:runner_started, runner_pid}, 1_000
+    [owner] = Task.Supervisor.children(MediaJobSupervisor)
+    assert owner != runner_pid
+    owner_ref = Process.monitor(owner)
     runner_ref = Process.monitor(runner_pid)
     Process.exit(caller, :kill)
 
     assert_receive {:DOWN, ^runner_ref, :process, ^runner_pid, :killed}, 1_000
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}, 1_000
 
-    assert_eventually(fn ->
-      match?(
-        [%{status: :cancelled, error_kind: "caller_exited"}],
-        MediaJobs.recent(dir: jobs_dir)
-      )
-    end)
+    assert [%{status: :cancelled, error_kind: "caller_exited"}] = MediaJobs.recent(dir: jobs_dir)
   end
 
   test "a job killed underneath the caller is recorded failed, not running" do
@@ -318,19 +333,6 @@ defmodule LemonMedia.MediaJobSupervisorTest do
       true = Process.register(supervisor, MediaJobSupervisor)
     end
   end
-
-  defp assert_eventually(fun, attempts \\ 300)
-
-  defp assert_eventually(fun, attempts) when attempts > 0 do
-    if fun.() do
-      :ok
-    else
-      Process.sleep(10)
-      assert_eventually(fun, attempts - 1)
-    end
-  end
-
-  defp assert_eventually(fun, 0), do: assert(fun.())
 
   defp tmp_dir do
     Path.join(

@@ -54,9 +54,9 @@ Or run it under the job supervisor and wait for the outcome:
 `run_job/2` waits against one monotonic deadline; unrelated mailbox messages
 are neither consumed nor extend it. A job never outlives its caller: on
 timeout (`{:error, {:cancelled, :timeout, job}}`), abort
-(`{:error, {:cancelled, :aborted, job}}`) or caller exit the job process is
-killed, which cancels any in-flight provider request, and the record ends
-`:cancelled`. A job that crashes or is killed by someone else ends `:failed`
+(`{:error, {:cancelled, :aborted, job}}`) or caller exit, the supervised job
+owner kills the provider task before recording `:cancelled`.
+A job that crashes or is killed by someone else ends `:failed`
 (`{:error, {:failed, job}}`); runner errors also end `:failed`. Jobs are never
 restarted or retried.
 
