@@ -197,16 +197,16 @@ System.put_env(
 # address unless a test passes its own `resolve_host:` option.
 config :lemon_browser, :resolve_host, fn _host -> {:ok, [{93, 184, 215, 14}]} end
 
-# Prevent unit tests from starting real/interactive transports based on a developer's
-# local TOML config. Individual test suites can override these as needed and restart
-# the application under test. `LemonCore.GatewayConfig` honors this replacement
-# only in `config_test_mode`.
-config :lemon_core, :gateway_test_config,
+# Prevent unit tests from starting real transports from local TOML. Keep the
+# replacement a map so fixtures can overlay only the gateway keys they own.
+# LemonCore.GatewayConfig honors this replacement only in config_test_mode.
+config :lemon_core, :gateway_test_config, %{
   enable_telegram: false,
   max_concurrent_runs: 1,
   webhook: %{port: 0},
   bindings: [],
   projects: %{}
+}
 
 config :lemon_gateway, :telegram, nil
 
