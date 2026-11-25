@@ -326,9 +326,8 @@ defmodule LemonRouter.AdmissionContractTest do
       refute LemonRouter.run_active?(id)
     end
 
-    for cancel <- [:cast, :tombstone] do
+    for {cancel, complete_first?} <- [cast: false, tombstone: true] do
       test "work cancelled by #{cancel} in its conversation backlog never starts" do
-        cancel = unquote(cancel)
         session_key = "agent:default:test:admission-backlog:#{System.unique_integer([:positive])}"
 
         active = %{
@@ -358,8 +357,8 @@ defmodule LemonRouter.AdmissionContractTest do
         assert {:ok, %{state: :accepted, effective_mode: :queued}} =
                  RouterBridge.run_receipt(queued_id)
 
-        :ok = cancel_queued(cancel, queued_id)
-        if cancel == :tombstone, do: TestExecutor.complete(runner, %{answer: "done"})
+        :ok = cancel_queued(unquote(cancel), queued_id)
+        if unquote(complete_first?), do: TestExecutor.complete(runner, %{answer: "done"})
 
         assert_receive %LemonCore.Event{
                          type: :run_completed,
@@ -368,7 +367,7 @@ defmodule LemonRouter.AdmissionContractTest do
                        },
                        2_000
 
-        if cancel == :cast, do: TestExecutor.complete(runner, %{answer: "done"})
+        unless unquote(complete_first?), do: TestExecutor.complete(runner, %{answer: "done"})
 
         assert eventually(fn ->
                  not LemonRouter.run_active?(active_id) and
