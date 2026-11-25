@@ -549,9 +549,13 @@ token step of `setup gateway` send the write to that runtime over its control
 plane (`secrets.set` / `secrets.delete`, admin scope; set
 `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` when the runtime requires one). An
 unreachable runtime writes nothing; an unconfirmed write is reported as such,
-so check `lemon secrets list` before retrying. Other store writes without a
-runtime route, such as saving provider credentials in `lemon setup` or
-`lemon model`, are refused; stop the runtime (`lemon stop`) and re-run them.
+so check `lemon secrets list` before retrying. Saving a provider API key with
+`lemon setup`/`lemon model` under the default secret name and config goes to
+the runtime's `providers.management.api_key.set` (and `default.set` when you
+pick a default model), with the same nothing-written versus unconfirmed
+reporting and no retry. Other provider sign-ins, custom secret names or config
+paths have no runtime route and are refused; stop the runtime (`lemon stop`)
+to use them.
 
 ## Help and exit codes
 

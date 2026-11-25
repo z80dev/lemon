@@ -11,8 +11,10 @@ All notable changes to `lemon_cli` are documented here.
   golden `list` (#717). `LemonCli.SecretWriter` sends `secrets set|delete|
   import-env` and gateway bot-token writes to a running runtime that owns the
   store (`secrets.set` / `secrets.delete`); unreachable runtimes write nothing
-  and unconfirmed writes report outcome unknown. Provider-credential saves
-  refuse with `lemon stop` guidance while a runtime owns the store (#667).
+  and unconfirmed writes report outcome unknown. Default API-key provider
+  onboarding goes to the runtime's `providers.management.api_key.set` (and
+  `default.set` when a default model is chosen); other provider sign-ins refuse
+  with `lemon stop` guidance while a runtime owns the store (#667).
 - `lemon browser stop` stops the runtime's local browser driver and the
   Chrome it launched through the admin `browser.stop` method (#660).
 - `lemon setup omp [status|disconnect]` connects Lemon providers to omp's auth
