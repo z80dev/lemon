@@ -41,7 +41,7 @@ defmodule LemonControlPlane.Methods.ConfigUsageMethodsTest do
 
     test "redacts sensitive stored config values" do
       key = "openai_api_key"
-      previous = ConfigStore.get(key)
+      {:ok, previous} = ConfigStore.fetch(key)
 
       on_exit(fn ->
         case previous do
@@ -104,7 +104,7 @@ defmodule LemonControlPlane.Methods.ConfigUsageMethodsTest do
 
     test "redacts sensitive config value in response" do
       key = "provider_secret_token"
-      previous = ConfigStore.get(key)
+      {:ok, previous} = ConfigStore.fetch(key)
 
       on_exit(fn ->
         case previous do
@@ -121,7 +121,7 @@ defmodule LemonControlPlane.Methods.ConfigUsageMethodsTest do
       assert result["summary"]["cleanup"]["includesValue"] == false
       assert result["summary"]["cleanup"]["includesCredentialValues"] == false
       assert result["summary"]["cleanup"]["includesSecretValues"] == false
-      assert ConfigStore.get(key) == "private-token"
+      assert ConfigStore.fetch(key) == {:ok, "private-token"}
     end
 
     test "has correct method name and scopes" do

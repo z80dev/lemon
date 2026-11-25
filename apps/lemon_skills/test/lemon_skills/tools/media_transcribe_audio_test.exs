@@ -21,6 +21,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudioTest do
              tool.execute.(
                "call-1",
                %{
+                 "provider" => "local_transcript",
                  "audioPath" => "sample.wav",
                  "filename" => "sample-transcript",
                  "sendToChannel" => true

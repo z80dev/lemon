@@ -237,6 +237,10 @@ defmodule CodingAgent.Tools.LspFormatterTest do
     test "a file replaced while the formatter ran is refused", %{tmp_dir: cwd} do
       path = Path.join(cwd, "a.go")
       File.write!(path, "written\n")
+      # Keep the original inode allocated: Linux filesystems may hand a freed
+      # inode number straight to the replacement, which then has the same
+      # device/inode identity as the file that was written.
+      {:ok, original} = :file.open(path, [:read, :raw])
 
       formatter = fn ^path, _, _ ->
         File.rm!(path)
@@ -251,6 +255,7 @@ defmodule CodingAgent.Tools.LspFormatterTest do
 
       assert error =~ "File identity changed"
       assert File.read!(path) == "written\n"
+      :ok = :file.close(original)
     end
   end
 

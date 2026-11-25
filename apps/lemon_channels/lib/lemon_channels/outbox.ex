@@ -85,7 +85,8 @@ defmodule LemonChannels.Outbox do
   Enqueue a payload for delivery.
 
   If the content exceeds the channel's chunk limit, it will be automatically
-  split into multiple messages.
+  split into multiple messages. Splitting runs in the caller, never in the
+  queue owner, so a large reply cannot stall admission of other deliveries.
 
   Returns `{:ok, ref}` or `{:error, reason}`.
 
@@ -95,7 +96,7 @@ defmodule LemonChannels.Outbox do
   """
   @spec enqueue(GenServer.server(), OutboundPayload.t()) :: {:ok, reference()} | {:error, term()}
   def enqueue(server \\ __MODULE__, %OutboundPayload{} = payload) do
-    request = :gen_server.send_request(server, {:enqueue, payload})
+    request = :gen_server.send_request(server, {:enqueue, payload, chunk_payload(payload)})
 
     case :gen_server.receive_response(request, @call_timeout_ms) do
       {:reply, result} ->
@@ -164,14 +165,13 @@ defmodule LemonChannels.Outbox do
   end
 
   @impl true
-  def handle_call({:enqueue, payload}, from, state) do
-    # Check idempotency
-    case check_enqueue_idempotency(payload) do
+  def handle_call({:enqueue, payload, payloads}, from, state) do
+    # `payloads` is the caller-side chunking of `payload` (see enqueue/2).
+    case check_enqueue_idempotency(payload, payloads) do
       :duplicate ->
         ref = make_ref()
 
-        payload
-        |> maybe_chunk_payload()
+        payloads
         |> Enum.with_index()
         |> Enum.each(fn {chunk, index} ->
           token = {chunk.idempotency_key || ref, index}
@@ -182,9 +182,6 @@ defmodule LemonChannels.Outbox do
 
       :ok ->
         ref = make_ref()
-
-        # Apply chunking if needed
-        payloads = maybe_chunk_payload(payload)
         chunk_count = length(payloads)
 
         if queue_full?(state, chunk_count) do
@@ -406,8 +403,9 @@ defmodule LemonChannels.Outbox do
     %{kind: entry.payload.kind, attempts: entry.attempts}
   end
 
-  # Chunk a payload if its content exceeds the channel's chunk limit
-  defp maybe_chunk_payload(%OutboundPayload{content: content, channel_id: channel_id} = payload)
+  # Chunk a payload if its content exceeds the channel's chunk limit. Runs in
+  # the enqueueing process, before the queue owner sees the request.
+  defp chunk_payload(%OutboundPayload{content: content, channel_id: channel_id} = payload)
        when is_binary(content) do
     chunk_size = Chunker.chunk_size_for(channel_id)
 
@@ -459,7 +457,7 @@ defmodule LemonChannels.Outbox do
     end
   end
 
-  defp maybe_chunk_payload(payload) do
+  defp chunk_payload(payload) do
     # Non-text content or already processed
     [payload]
   end
@@ -805,9 +803,9 @@ defmodule LemonChannels.Outbox do
       else: nil
   end
 
-  defp check_enqueue_idempotency(payload) do
+  defp check_enqueue_idempotency(payload, payloads) do
     if voice_transcript?(payload) do
-      if Enum.all?(maybe_chunk_payload(payload), &(check_idempotency(&1) == :duplicate)),
+      if Enum.all?(payloads, &(check_idempotency(&1) == :duplicate)),
         do: :duplicate,
         else: :ok
     else

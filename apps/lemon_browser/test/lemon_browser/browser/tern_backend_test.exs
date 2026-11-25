@@ -95,6 +95,35 @@ defmodule LemonBrowser.TernBackendTest do
     assert {:error, {:unsupported, _}} = request("tabOpen", %{}, opts)
   end
 
+  test "a dead Tern client reconnects on the next request and keeps the block", %{opts: opts} do
+    assert {:ok, %{"targetId" => "100"}} =
+             request("navigate", %{"url" => "https://example.com/"}, opts)
+
+    assert_received {:tern, %{"op" => "open"}}
+    [{session, _}] = Registry.lookup(LemonBrowser.TernSessionRegistry, scope(opts))
+    client = :sys.get_state(session).client
+    ref = Process.monitor(client)
+    Process.exit(client, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^client, :killed}
+
+    assert {:ok, _} = request("snapshot", %{}, opts)
+    assert_received {:tern, %{"op" => "snapshot", "block" => 100}}
+    refute_received {:tern, %{"op" => "open"}}
+    reconnected = :sys.get_state(session).client
+    assert is_pid(reconnected) and reconnected != client
+    assert TernSession.opened?(opts)
+  end
+
+  test "a client closed by the daemon is forgotten without failing the pane", %{opts: opts} do
+    assert {:ok, _} = request("navigate", %{"url" => "https://example.com/"}, opts)
+    [{session, _}] = Registry.lookup(LemonBrowser.TernSessionRegistry, scope(opts))
+    client = :sys.get_state(session).client
+    LemonCore.Tern.close(client)
+    assert_eventually(fn -> is_nil(:sys.get_state(session).client) end)
+    assert Process.alive?(session)
+    assert {:ok, _} = request("snapshot", %{}, opts)
+  end
+
   test "navigation policy rejects metadata and mismatched routes before opening", %{opts: opts} do
     assert {:error, {:invalid, _}} =
              request("navigate", %{"url" => "http://169.254.169.254/latest"}, opts)
@@ -445,6 +474,9 @@ defmodule LemonBrowser.TernBackendTest do
     assert Enum.map(tasks, &Task.await(&1, 10_000)) == [:ok, :ok]
     assert :ok = TernSession.close(opts)
   end
+
+  defp scope(opts),
+    do: %{session_id: opts[:session_id], run_id: opts[:run_id], pane: opts[:tern_pane]}
 
   defp request(method, args, opts), do: Tern.request("browser." <> method, args, 2_000, opts)
 

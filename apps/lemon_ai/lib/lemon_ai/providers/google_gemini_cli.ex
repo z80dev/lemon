@@ -24,21 +24,10 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
   @behaviour LemonAi.Provider
 
   alias LemonAi.EventStream
-  alias LemonAi.Providers.GoogleShared
-  alias LemonAi.Retry
-  alias LemonAi.Providers.StreamingHelper
+  alias LemonAi.Providers.{GoogleShared, StreamingHelper, StreamTransport}
   import LemonAi.Providers.AssistantMessageHelper
 
-  alias LemonAi.Types.{
-    Context,
-    Cost,
-    Model,
-    StreamOptions,
-    TextContent,
-    ThinkingContent,
-    ToolCall,
-    Usage
-  }
+  alias LemonAi.Types.{Context, Model, StreamOptions}
 
   @default_endpoint "https://cloudcode-pa.googleapis.com"
   @antigravity_daily_endpoint "https://daily-cloudcode-pa.sandbox.googleapis.com"
@@ -65,10 +54,6 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
       })
   }
 
-  @max_retries 3
-  @base_delay_ms 1000
-  @max_empty_stream_retries 2
-  @empty_stream_base_delay_ms 500
   @claude_thinking_beta_header "interleaved-thinking-2025-05-14"
 
   # ============================================================================
@@ -109,16 +94,31 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
       request_body = build_request_body(model, context, project_id, opts, is_antigravity)
       headers = build_headers(access_token, model, opts, is_antigravity)
 
-      case make_request_with_retry(endpoints, headers, request_body, opts) do
-        {:ok, response} ->
-          process_response_stream(stream, response, output, model, headers, request_body, opts)
-
-        {:error, reason} ->
-          handle_error(stream, output, reason)
+      # Later attempts fall back along the endpoint list.
+      url = fn attempt ->
+        endpoint = Enum.at(endpoints, min(attempt, length(endpoints) - 1))
+        "#{endpoint}/v1internal:streamGenerateContent?alt=sse"
       end
+
+      result =
+        StreamTransport.post_sse(
+          url,
+          Map.to_list(headers),
+          request_body,
+          LemonAi.Provider.retry_policy(opts),
+          provider: model.provider,
+          idle_timeout: StreamTransport.idle_timeout_for(opts.stream_idle_timeout),
+          http_error: &GoogleShared.safe_http_error/3
+        )
+
+      GoogleShared.stream_response(stream, output, model, result,
+        unwrap_response: fn event -> event["response"] || event end,
+        adjust_usage: fn usage -> %{usage | input: usage.input - usage.cache_read} end,
+        empty_response_error:
+          "Cloud Code Assist API returned an empty response. Please try again."
+      )
     rescue
-      e ->
-        handle_error(stream, output, Exception.message(e))
+      e -> EventStream.error(stream, error_assistant_message(output, Exception.message(e)))
     end
   end
 
@@ -360,475 +360,6 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
     :crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower)
   end
 
-  defp make_request_with_retry(endpoints, headers, body, opts, attempt \\ 0)
-
-  defp make_request_with_retry(_endpoints, _headers, _body, _opts, attempt)
-       when attempt > @max_retries do
-    {:error, "Max retries exceeded"}
-  end
-
-  defp make_request_with_retry(endpoints, headers, body, opts, attempt) do
-    max_retries = request_max_retries(opts, @max_retries)
-    endpoint = Enum.at(endpoints, min(attempt, length(endpoints) - 1))
-    url = "#{endpoint}/v1internal:streamGenerateContent?alt=sse"
-
-    headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
-
-    case Req.post(url,
-           headers: headers_list,
-           json: body,
-           retry: false,
-           receive_timeout: 300_000,
-           into: :self
-         ) do
-      {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
-        {:ok, {url, resp}}
-
-      {:ok, %Req.Response{status: status, body: error_body, headers: response_headers}} ->
-        error_text = GoogleShared.normalize_http_error_body(error_body)
-
-        policy = LemonAi.Provider.retry_policy(opts)
-        error = {:http_error, status, error_text, response_headers}
-
-        delay =
-          if attempt < max_retries and GoogleShared.retryable_error?(status, error_text) do
-            Retry.http_retry_delay_ms(attempt, response_headers, policy, error)
-          else
-            :give_up
-          end
-
-        case delay do
-          :give_up ->
-            {:error, GoogleShared.safe_http_error(status, error_text, response_headers)}
-
-          delay_ms ->
-            LemonAi.Provider.retry_sleep(delay_ms, policy)
-            make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
-        end
-
-      {:error, %Req.TransportError{reason: reason}} ->
-        if attempt < max_retries do
-          delay = retry_delay_with_jitter(@base_delay_ms, attempt)
-          Process.sleep(delay)
-          make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
-        else
-          {:error, "Network error: #{inspect(reason)}"}
-        end
-
-      {:error, reason} ->
-        if attempt < max_retries do
-          delay = retry_delay_with_jitter(@base_delay_ms, attempt)
-          Process.sleep(delay)
-          make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
-        else
-          {:error, "Request failed: #{inspect(reason)}"}
-        end
-    end
-  end
-
-  defp request_max_retries(%{provider_retry: %{max_attempts: attempts}}, default)
-       when is_integer(attempts) and attempts > 0,
-       do: min(attempts - 1, default)
-
-  defp request_max_retries(_opts, default), do: default
-
-  defp process_response_stream(
-         stream,
-         response_tuple,
-         output,
-         model,
-         headers,
-         body,
-         opts,
-         empty_attempt \\ 0
-       )
-
-  defp process_response_stream(
-         stream,
-         _response_tuple,
-         output,
-         _model,
-         _headers,
-         _body,
-         _opts,
-         empty_attempt
-       )
-       when empty_attempt > @max_empty_stream_retries do
-    handle_error(stream, output, "Cloud Code Assist API returned an empty response")
-  end
-
-  defp process_response_stream(
-         stream,
-         {url, _response},
-         output,
-         model,
-         headers,
-         body,
-         opts,
-         empty_attempt
-       ) do
-    EventStream.push_async(stream, {:start, output})
-
-    state = %{
-      output: output,
-      current_block: nil,
-      tool_call_counter: 0,
-      has_content: false
-    }
-
-    final_state = receive_sse_events(stream, state, model)
-
-    if not final_state.has_content and
-         empty_attempt < request_max_retries(opts, @max_empty_stream_retries) do
-      # Retry on empty response
-      delay = retry_delay_with_jitter(@empty_stream_base_delay_ms, empty_attempt)
-      Process.sleep(delay)
-
-      headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
-
-      case Req.post(url,
-             headers: headers_list,
-             json: body,
-             retry: false,
-             receive_timeout: 300_000,
-             into: :self
-           ) do
-        {:ok, %Req.Response{status: status} = new_resp} when status in 200..299 ->
-          # Reset output for retry
-          new_output = %{output | content: [], timestamp: System.system_time(:millisecond)}
-
-          process_response_stream(
-            stream,
-            {url, new_resp},
-            new_output,
-            model,
-            headers,
-            body,
-            opts,
-            empty_attempt + 1
-          )
-
-        {:ok, %Req.Response{status: status, body: error_body, headers: response_headers}} ->
-          error_text = GoogleShared.normalize_http_error_body(error_body)
-
-          handle_error(
-            stream,
-            output,
-            GoogleShared.safe_http_error(status, error_text, response_headers, model.provider)
-          )
-
-        {:error, reason} ->
-          handle_error(stream, output, "Request failed: #{inspect(reason)}")
-      end
-    else
-      # Emit final block end if needed
-      final_state =
-        case final_state.current_block do
-          %TextContent{} = block ->
-            idx = length(final_state.output.content) - 1
-            EventStream.push_async(stream, {:text_end, idx, block.text})
-            final_state
-
-          %ThinkingContent{} = block ->
-            idx = length(final_state.output.content) - 1
-
-            EventStream.push_async(
-              stream,
-              {:thinking_end, idx, block.thinking}
-            )
-
-            final_state
-
-          _ ->
-            final_state
-        end
-
-      # Check for tool calls to set stop reason
-      output = final_state.output
-
-      output =
-        if Enum.any?(output.content, &match?(%ToolCall{}, &1)) do
-          %{output | stop_reason: :tool_use}
-        else
-          output
-        end
-
-      EventStream.complete(stream, output)
-    end
-  end
-
-  defp receive_sse_events(stream, state, model) do
-    receive do
-      msg ->
-        case GoogleShared.normalize_sse_message(msg) do
-          {:data, data} ->
-            new_state = process_sse_data(stream, state, data, model)
-            receive_sse_events(stream, new_state, model)
-
-          :done ->
-            state
-
-          :down ->
-            state
-
-          :ignore ->
-            receive_sse_events(stream, state, model)
-        end
-    after
-      300_000 ->
-        state
-    end
-  end
-
-  defp process_sse_data(stream, state, data, model) do
-    data
-    |> String.split("\n")
-    |> Enum.reduce(state, fn line, acc ->
-      if String.starts_with?(line, "data:") do
-        json_str = String.trim(String.slice(line, 5..-1//1))
-
-        if json_str != "" do
-          case Jason.decode(json_str) do
-            {:ok, chunk} -> process_chunk(stream, acc, chunk, model)
-            _ -> acc
-          end
-        else
-          acc
-        end
-      else
-        acc
-      end
-    end)
-  end
-
-  defp process_chunk(stream, state, chunk, model) do
-    # Cloud Code Assist wraps response in a "response" key
-    response_data = chunk["response"] || chunk
-    candidate = get_in(response_data, ["candidates", Access.at(0)])
-
-    state =
-      if candidate && candidate["content"] && candidate["content"]["parts"] do
-        Enum.reduce(candidate["content"]["parts"], state, fn part, acc ->
-          process_part(stream, acc, part, model)
-        end)
-      else
-        state
-      end
-
-    # Handle finish reason
-    state =
-      if finish_reason = get_in(candidate, ["finishReason"]) do
-        output = %{state.output | stop_reason: GoogleShared.map_stop_reason(finish_reason)}
-        %{state | output: output}
-      else
-        state
-      end
-
-    # Handle usage metadata
-    state =
-      if usage = response_data["usageMetadata"] do
-        prompt_tokens = usage["promptTokenCount"] || 0
-        cache_read_tokens = usage["cachedContentTokenCount"] || 0
-
-        usage_struct = %Usage{
-          input: prompt_tokens - cache_read_tokens,
-          output: (usage["candidatesTokenCount"] || 0) + (usage["thoughtsTokenCount"] || 0),
-          cache_read: cache_read_tokens,
-          cache_write: 0,
-          total_tokens: usage["totalTokenCount"] || 0,
-          cost: %Cost{}
-        }
-
-        usage_with_cost = GoogleShared.calculate_cost(model, Map.from_struct(usage_struct))
-
-        output = %{
-          state.output
-          | usage: %{
-              usage_struct
-              | cost: %Cost{
-                  input: usage_with_cost.cost.input,
-                  output: usage_with_cost.cost.output,
-                  cache_read: usage_with_cost.cost.cache_read,
-                  cache_write: usage_with_cost.cost.cache_write,
-                  total: usage_with_cost.cost.total
-                }
-            }
-        }
-
-        %{state | output: output}
-      else
-        state
-      end
-
-    state
-  end
-
-  defp process_part(stream, state, part, model) do
-    cond do
-      Map.has_key?(part, "text") ->
-        process_text_part(stream, state, part)
-
-      Map.has_key?(part, "functionCall") ->
-        process_function_call_part(stream, state, part, model)
-
-      true ->
-        state
-    end
-  end
-
-  defp process_text_part(stream, state, part) do
-    text = part["text"]
-    is_thinking = GoogleShared.thinking_part?(part)
-    thought_sig = part["thoughtSignature"]
-
-    # Check if we need to start a new block
-    {state, idx} =
-      case {state.current_block, is_thinking} do
-        {nil, true} ->
-          block = %ThinkingContent{thinking: "", thinking_signature: nil}
-          output = %{state.output | content: state.output.content ++ [block]}
-          idx = length(output.content) - 1
-          EventStream.push_async(stream, {:thinking_start, idx})
-          {%{state | output: output, current_block: block, has_content: true}, idx}
-
-        {nil, false} ->
-          block = %TextContent{text: "", text_signature: nil}
-          output = %{state.output | content: state.output.content ++ [block]}
-          idx = length(output.content) - 1
-          EventStream.push_async(stream, {:text_start, idx})
-          {%{state | output: output, current_block: block, has_content: true}, idx}
-
-        {%ThinkingContent{}, false} ->
-          old_idx = length(state.output.content) - 1
-
-          EventStream.push_async(
-            stream,
-            {:thinking_end, old_idx, state.current_block.thinking}
-          )
-
-          block = %TextContent{text: "", text_signature: nil}
-          output = %{state.output | content: state.output.content ++ [block]}
-          idx = length(output.content) - 1
-          EventStream.push_async(stream, {:text_start, idx})
-          {%{state | output: output, current_block: block}, idx}
-
-        {%TextContent{}, true} ->
-          old_idx = length(state.output.content) - 1
-
-          EventStream.push_async(
-            stream,
-            {:text_end, old_idx, state.current_block.text}
-          )
-
-          block = %ThinkingContent{thinking: "", thinking_signature: nil}
-          output = %{state.output | content: state.output.content ++ [block]}
-          idx = length(output.content) - 1
-          EventStream.push_async(stream, {:thinking_start, idx})
-          {%{state | output: output, current_block: block}, idx}
-
-        {%ThinkingContent{}, true} ->
-          {state, length(state.output.content) - 1}
-
-        {%TextContent{}, false} ->
-          {state, length(state.output.content) - 1}
-      end
-
-    # Update the current block with new text
-    {updated_block, event_type} =
-      if is_thinking do
-        block = state.current_block
-        new_sig = GoogleShared.retain_thought_signature(block.thinking_signature, thought_sig)
-
-        {%{block | thinking: block.thinking <> text, thinking_signature: new_sig},
-         :thinking_delta}
-      else
-        block = state.current_block
-        new_sig = GoogleShared.retain_thought_signature(block.text_signature, thought_sig)
-        {%{block | text: block.text <> text, text_signature: new_sig}, :text_delta}
-      end
-
-    # Update output content
-    content = List.replace_at(state.output.content, idx, updated_block)
-    output = %{state.output | content: content}
-
-    EventStream.push_async(stream, {event_type, idx, text})
-
-    %{state | output: output, current_block: updated_block}
-  end
-
-  defp process_function_call_part(stream, state, part, _model) do
-    func_call = part["functionCall"]
-
-    # End current text/thinking block if any
-    state =
-      case state.current_block do
-        %TextContent{} = block ->
-          idx = length(state.output.content) - 1
-          EventStream.push_async(stream, {:text_end, idx, block.text})
-          %{state | current_block: nil}
-
-        %ThinkingContent{} = block ->
-          idx = length(state.output.content) - 1
-          EventStream.push_async(stream, {:thinking_end, idx, block.thinking})
-          %{state | current_block: nil}
-
-        _ ->
-          state
-      end
-
-    # Generate tool call ID
-    provided_id = func_call["id"]
-
-    needs_new_id =
-      is_nil(provided_id) or
-        Enum.any?(state.output.content, fn
-          %ToolCall{id: id} -> id == provided_id
-          _ -> false
-        end)
-
-    tool_call_id =
-      if needs_new_id do
-        counter = state.tool_call_counter + 1
-        "#{func_call["name"]}_#{System.system_time(:millisecond)}_#{counter}"
-      else
-        provided_id
-      end
-
-    tool_call = %ToolCall{
-      type: :tool_call,
-      id: tool_call_id,
-      name: func_call["name"] || "",
-      arguments: func_call["args"] || %{},
-      thought_signature: part["thoughtSignature"]
-    }
-
-    output = %{state.output | content: state.output.content ++ [tool_call]}
-    idx = length(output.content) - 1
-
-    EventStream.push_async(stream, {:tool_call_start, idx, %{tool_call | arguments: %{}}})
-
-    EventStream.push_async(
-      stream,
-      {:tool_call_delta, idx, Jason.encode!(tool_call.arguments)}
-    )
-
-    EventStream.push_async(stream, {:tool_call_end, idx, tool_call})
-
-    %{
-      state
-      | output: output,
-        current_block: nil,
-        tool_call_counter: state.tool_call_counter + 1,
-        has_content: true
-    }
-  end
-
-  defp handle_error(stream, output, reason) do
-    error_output = error_assistant_message(output, reason)
-
-    EventStream.error(stream, error_output)
-  end
-
   # ============================================================================
   # Registration
   # ============================================================================
@@ -841,13 +372,6 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
       type: :worker,
       restart: :transient
     }
-  end
-
-  defp retry_delay_with_jitter(base_ms, attempt) do
-    Retry.backoff_delay_ms(
-      attempt,
-      Retry.policy(base_delay_ms: base_ms, max_delay_ms: base_ms * Integer.pow(2, attempt))
-    )
   end
 
   @doc "Register this provider with the registry"

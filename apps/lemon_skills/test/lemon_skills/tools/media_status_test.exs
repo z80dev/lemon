@@ -31,7 +31,7 @@ defmodule LemonSkills.Tools.MediaStatusTest do
 
     assert result.details["summary"]["count"] == 1
     assert result.details["summary"]["artifact_count"] == 1
-    assert result.details["worker_status"]["supervised"] == true
+    assert result.details["worker_status"] == %{"running" => true, "active_jobs" => 0}
 
     assert [
              %{

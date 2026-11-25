@@ -44,11 +44,7 @@ defmodule LemonSkills.Tools.RecallTest do
       )
     end
 
-    %{
-      store: store,
-      context: context,
-      search_fn: fn query, opts -> Store.search(store, query, opts) end
-    }
+    %{store: store, context: context}
   end
 
   test "browse and scroll expose only scoped session summaries", %{
@@ -111,9 +107,9 @@ defmodule LemonSkills.Tools.RecallTest do
 
   test "agent scope recalls this agent across projects without another agent's facts", %{
     tmp_dir: tmp_dir,
-    search_fn: search_fn
+    store: store
   } do
-    tool = recall_tool(tmp_dir, session_key: "agent:main:telegram:1", search_fn: search_fn)
+    tool = recall_tool(tmp_dir, session_key: "agent:main:telegram:1", store: store)
     result = tool.execute.("call", %{"query" => "Priya birthday"}, nil, nil)
 
     assert text(result) =~ "March 14th."
@@ -124,9 +120,9 @@ defmodule LemonSkills.Tools.RecallTest do
 
   test "project scope excludes facts from other projects", %{
     tmp_dir: tmp_dir,
-    search_fn: search_fn
+    store: store
   } do
-    tool = recall_tool(tmp_dir, agent_id: "main", search_fn: search_fn)
+    tool = recall_tool(tmp_dir, agent_id: "main", store: store)
     result = tool.execute.("call", %{"query" => "Priya birthday", "scope" => "project"}, nil, nil)
 
     assert text(result) =~ "March 14th."
@@ -136,7 +132,7 @@ defmodule LemonSkills.Tools.RecallTest do
 
   test "also finds matching lines in memory notes, skipping the template", %{
     tmp_dir: tmp_dir,
-    search_fn: search_fn
+    store: store
   } do
     workspace_dir = Path.join(tmp_dir, "home")
     File.mkdir_p!(Path.join(workspace_dir, "memory/topics"))
@@ -153,7 +149,7 @@ defmodule LemonSkills.Tools.RecallTest do
       recall_tool(tmp_dir,
         agent_id: "main",
         workspace_dir: workspace_dir,
-        search_fn: search_fn
+        store: store
       )
 
     result = tool.execute.("call", %{"query" => "staging deploy"}, nil, nil)
@@ -165,9 +161,9 @@ defmodule LemonSkills.Tools.RecallTest do
 
   test "rejects an empty query, an unknown scope, and a missing agent", %{
     tmp_dir: tmp_dir,
-    search_fn: search_fn
+    store: store
   } do
-    tool = recall_tool(tmp_dir, agent_id: "main", search_fn: search_fn)
+    tool = recall_tool(tmp_dir, agent_id: "main", store: store)
 
     assert {:error, "query must be a non-empty string"} =
              tool.execute.("call", %{"query" => "  "}, nil, nil)
@@ -175,7 +171,7 @@ defmodule LemonSkills.Tools.RecallTest do
     assert {:error, "scope must be agent or project"} =
              tool.execute.("call", %{"query" => "x", "scope" => "all"}, nil, nil)
 
-    agentless = recall_tool(tmp_dir, search_fn: search_fn)
+    agentless = recall_tool(tmp_dir, store: store)
 
     assert {:error, message} = agentless.execute.("call", %{"query" => "x"}, nil, nil)
     assert message =~ "try scope project"
@@ -183,7 +179,7 @@ defmodule LemonSkills.Tools.RecallTest do
 
   test "project history is shared with repository subdirectories", %{
     context: context,
-    search_fn: search_fn
+    store: store
   } do
     nested = Path.join(context.cwd, "apps/example")
     File.mkdir_p!(nested)
@@ -192,7 +188,7 @@ defmodule LemonSkills.Tools.RecallTest do
       recall_tool(nested,
         agent_id: context.agent_id,
         workspace_dir: context.workspace_dir,
-        search_fn: search_fn
+        store: store
       )
 
     result = tool.execute.("call", %{"scope" => "project", "query" => "Priya birthday"}, nil, nil)
@@ -202,8 +198,7 @@ defmodule LemonSkills.Tools.RecallTest do
 
   test "explicit project recall finds facts from repository subdirectories only", %{
     store: store,
-    context: context,
-    search_fn: search_fn
+    context: context
   } do
     fact = "Build release artifacts with mix release."
     assert {:ok, _} = Project.remember(context, fact, nil, store: store)
@@ -217,7 +212,7 @@ defmodule LemonSkills.Tools.RecallTest do
           {%{context | agent_id: "other"}, 0}
         ] do
       opts = other |> Map.delete(:cwd) |> Map.to_list()
-      tool = Recall.tool(other.cwd, opts ++ [store: store, search_fn: search_fn])
+      tool = Recall.tool(other.cwd, opts ++ [store: store])
 
       result =
         tool.execute.("call", %{"scope" => "project", "query" => "release artifacts"}, nil, nil)
@@ -226,14 +221,15 @@ defmodule LemonSkills.Tools.RecallTest do
       assert text(result) =~ fact == (expected == 1)
     end
 
-    agent_tool = recall_tool(context.cwd, agent_id: "main", store: store, search_fn: search_fn)
+    agent_tool = recall_tool(context.cwd, agent_id: "main", store: store)
     result = agent_tool.execute.("call", %{"query" => "release artifacts"}, nil, nil)
     assert result.details.project_facts == 0
     refute text(result) =~ fact
   end
 
-  test "untrusted search results cannot cross profile, agent, or project boundaries", %{
-    context: context
+  test "stored history cannot cross profile, agent, or project boundaries", %{
+    context: context,
+    store: store
   } do
     {:ok, scope} = Project.scope(context)
 
@@ -258,8 +254,10 @@ defmodule LemonSkills.Tools.RecallTest do
         )
       end
 
+    for doc <- docs, do: :ok = Store.put_sync(store, doc)
+
     for search_scope <- ["agent", "project"] do
-      tool = recall_tool(context.cwd, agent_id: "main", search_fn: fn _, _ -> docs end)
+      tool = recall_tool(context.cwd, agent_id: "main", store: store)
 
       result =
         tool.execute.("call", %{"query" => "birthday history", "scope" => search_scope}, nil, nil)
@@ -273,13 +271,16 @@ defmodule LemonSkills.Tools.RecallTest do
     end
   end
 
-  test "subagents and missing scope fail closed before searching", %{context: context} do
+  test "subagents and missing scope fail closed before searching", %{
+    context: context,
+    store: store
+  } do
     for scope <- [:subagent, nil], search_scope <- ["agent", "project"] do
       tool =
         recall_tool(context.cwd,
           agent_id: "main",
           session_scope: scope,
-          search_fn: fn _, _ -> flunk("unscoped recall must not search") end
+          store: store
         )
 
       assert {:error, _} =
@@ -294,17 +295,145 @@ defmodule LemonSkills.Tools.RecallTest do
 
   test "project recall does not surface agent-wide memory notes", %{
     context: context,
-    search_fn: search_fn
+    store: store
   } do
     File.mkdir_p!(Path.join(context.workspace_dir, "memory"))
     File.write!(Path.join(context.workspace_dir, "memory/private.md"), "Private birthday plans")
-    tool = recall_tool(context.cwd, agent_id: "main", search_fn: search_fn)
+    tool = recall_tool(context.cwd, agent_id: "main", store: store)
 
     result =
       tool.execute.("call", %{"query" => "private birthday", "scope" => "project"}, nil, nil)
 
     assert result.details.notes == 0
     refute text(result) =~ "Private birthday plans"
+  end
+
+  test "ownership is filtered before the limit: 20 matches with only the last 5 owned return 5",
+       %{tmp_dir: tmp_dir, store: store, context: context} do
+    {:ok, scope} = Project.scope(context)
+
+    # Same agent, another assistant home, and a stronger BM25 match: filtering
+    # after a limit of 5 would fill every slot with these and show nothing.
+    for i <- 1..15 do
+      :ok =
+        Store.put_sync(
+          store,
+          Document.new(
+            session_key: "agent:main:foreign:#{i}",
+            agent_id: "main",
+            workspace_key: tmp_dir,
+            prompt_summary: "zephyr zephyr zephyr",
+            answer_summary: "Foreign zephyr zephyr note #{i}.",
+            meta: %{"home_digest" => "foreign-home"}
+          )
+        )
+    end
+
+    for i <- 1..5 do
+      :ok =
+        Store.put_sync(
+          store,
+          Document.new(
+            session_key: "agent:main:owned:#{i}",
+            agent_id: "main",
+            workspace_key: tmp_dir,
+            prompt_summary: "zephyr",
+            answer_summary: "Owned note #{i}.",
+            meta: %{"home_digest" => scope.home_digest}
+          )
+        )
+    end
+
+    for search_scope <- ["agent", "project"] do
+      result =
+        recall_tool(tmp_dir, agent_id: "main", store: store).execute.(
+          "call",
+          %{"query" => "zephyr", "scope" => search_scope, "limit" => 5},
+          nil,
+          nil
+        )
+
+      assert result.details.conversations == 5
+      refute text(result) =~ "Foreign"
+      for i <- 1..5, do: assert(text(result) =~ "Owned note #{i}.")
+    end
+  end
+
+  defmodule SearchingProvider do
+    @moduledoc false
+    @behaviour LemonMemory.Provider
+
+    @impl true
+    def put(_doc, _opts), do: :ok
+
+    # Not part of the behaviour any more; recall must never call it.
+    def search(_query, _opts) do
+      send(:persistent_term.get({__MODULE__, :owner}), :remote_search_called)
+
+      [
+        Document.new(
+          session_key: "agent:main:remote",
+          agent_id: "main",
+          prompt_summary: "Priya birthday",
+          answer_summary: "Remote Priya birthday hit.",
+          meta: %{}
+        )
+      ]
+    end
+  end
+
+  test "with a provider registered, legacy recall makes no remote search call", %{
+    tmp_dir: tmp_dir,
+    store: store
+  } do
+    unless Process.whereis(LemonMemory.Providers),
+      do: start_supervised!({LemonMemory.Providers, []})
+
+    :persistent_term.put({SearchingProvider, :owner}, self())
+    id = "recall-test-#{System.unique_integer([:positive])}"
+    assert :ok = LemonMemory.Providers.register_provider(%{id: id, module: SearchingProvider})
+    on_exit(fn -> LemonMemory.Providers.unregister_provider(id) end)
+
+    result =
+      recall_tool(tmp_dir, agent_id: "main", store: store).execute.(
+        "call",
+        %{"query" => "Priya birthday", "limit" => 1},
+        nil,
+        nil
+      )
+
+    refute_received :remote_search_called
+    assert result.details.conversations == 1
+    refute text(result) =~ "Remote Priya"
+    assert text(result) =~ "Priya"
+  end
+
+  test "agent-scope output is unchanged on a single-owner fixture", %{
+    tmp_dir: tmp_dir,
+    store: store,
+    context: context
+  } do
+    query = "Priya birthday"
+
+    # The previous legacy algorithm: unowned agent search, then ownership filter.
+    expected =
+      store
+      |> Store.search(query, scope: :agent, scope_key: "main", limit: 5)
+      |> Enum.filter(&Project.history_document?(&1, context, :agent))
+
+    assert length(expected) == 2
+
+    result =
+      recall_tool(tmp_dir, agent_id: "main", store: store).execute.(
+        "call",
+        %{"query" => query},
+        nil,
+        nil
+      )
+
+    assert text(result) ==
+             "Past conversations (scope: agent, best match first):\n\n" <>
+               LemonMemory.SessionSearch.format_results(expected)
   end
 
   # Recall returns stored conversation and memory text: it must be untrusted on

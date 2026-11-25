@@ -1,17 +1,169 @@
 defmodule LemonCore.Service.Identity do
-  @moduledoc "Same-user process identity checks. Signals are bound to PID and start time."
+  @moduledoc """
+  Same-user process identity checks. Signals are bound to PID and start time.
+
+  This OS process's own identity and effective uid never change, so
+  `boot_check/0` (run by `LemonCore.Application`) publishes them once in
+  `:persistent_term`; lock acquisition then forks nothing. On Linux they come
+  from `/proc/self`, with `ps`/`id` as the fallback. A failed capture is never
+  published, and outside a booted application each read captures afresh.
+  Other processes are still inspected with `ps`, which the runtime image ships
+  (`procps`).
+  """
+
+  require Logger
+
   alias LemonCore.ProcessGroup
   alias LemonCore.Service.{Command, Role, Unit}
 
+  @self_key {__MODULE__, :self}
+  @uid_key {__MODULE__, :uid}
+  @at_clktck 17
+
+  @doc """
+  Publishes this OS process's identity and uid once at boot, and logs an error
+  when either is unavailable or `ps` (needed to verify other lock holders) is
+  missing.
+  """
+  @spec boot_check() ::
+          :ok | {:error, :process_identity_unverified | :uid_unavailable | :ps_unavailable}
+  def boot_check do
+    with {:ok, uid} <- current_uid(),
+         :ok <- :persistent_term.put(@uid_key, uid),
+         {:ok, identity} <- self_identity(),
+         :ok <- :persistent_term.put(@self_key, identity),
+         exe when is_binary(exe) <- System.find_executable("ps") do
+      :ok
+    else
+      nil -> boot_failed(:ps_unavailable)
+      {:error, reason} -> boot_failed(reason)
+    end
+  end
+
+  defp boot_failed(reason) do
+    Logger.error(
+      "Cross-process locks are unavailable (#{reason}): install procps so `ps` is on PATH"
+    )
+
+    {:error, reason}
+  end
+
+  @doc "Returns this OS process's real identity, published at boot or captured now."
+  @spec self_identity() :: {:ok, map()} | {:error, :process_identity_unverified}
+  def self_identity do
+    case :persistent_term.get(@self_key, nil) do
+      %{} = identity -> {:ok, identity}
+      nil -> capture_self([])
+    end
+  end
+
+  @doc "Captures this OS process's identity without the cache: `/proc` on Linux, else `ps`."
+  @spec capture_self(keyword()) :: {:ok, map()} | {:error, :process_identity_unverified}
+  def capture_self(opts) do
+    pid = String.to_integer(System.pid())
+
+    with true <- linux?(opts),
+         {:ok, identity} <- proc_identity(pid, Keyword.get(opts, :proc_root, "/proc")) do
+      {:ok, identity}
+    else
+      _ -> capture(pid, opts)
+    end
+  end
+
+  @doc "Returns this OS process's effective uid, published at boot or read now."
+  @spec current_uid() :: {:ok, non_neg_integer()} | {:error, :uid_unavailable}
+  def current_uid do
+    case :persistent_term.get(@uid_key, nil) do
+      uid when is_integer(uid) -> {:ok, uid}
+      nil -> read_uid()
+    end
+  end
+
   def uid(opts) do
     Keyword.get_lazy(opts, :uid, fn ->
-      case Command.run("id", ["-u"], opts) do
-        {value, 0} -> String.trim(value)
-        _ -> "unknown"
+      case current_uid() do
+        {:ok, uid} -> uid
+        {:error, _} -> "unknown"
       end
     end)
     |> to_string()
   end
+
+  defp read_uid do
+    with {:ok, status} <- File.read("/proc/self/status"),
+         [_, effective] <- Regex.run(~r/^Uid:\s+\d+\s+(\d+)/m, status) do
+      {:ok, String.to_integer(effective)}
+    else
+      _ -> id_uid()
+    end
+  end
+
+  defp id_uid do
+    with {output, 0} <- System.cmd("id", ["-u"], stderr_to_stdout: true),
+         {uid, ""} when uid >= 0 <- Integer.parse(String.trim(output)) do
+      {:ok, uid}
+    else
+      _ -> {:error, :uid_unavailable}
+    end
+  rescue
+    _ -> {:error, :uid_unavailable}
+  end
+
+  # Same arithmetic as procps `lstart`: boot time + start ticks / CLK_TCK,
+  # truncated to seconds and rendered like ctime(3) in local time.
+  defp proc_identity(pid, root) do
+    with {:ok, stat} <- File.read(Path.join([root, "self", "stat"])),
+         [_, stat_pid, rest] <- Regex.run(~r/\A(\d+) \(.*\) (.*)\z/s, stat),
+         ^pid <- String.to_integer(stat_pid),
+         {ticks, ""} <- rest |> String.split() |> Enum.at(19, "") |> Integer.parse(),
+         {:ok, system} <- File.read(Path.join(root, "stat")),
+         [_, btime] <- Regex.run(~r/^btime (\d+)$/m, system),
+         {:ok, hz} <- clock_ticks(root),
+         {:ok, executable} <- File.read_link(Path.join([root, "self", "exe"])) do
+      started = String.to_integer(btime) + div(ticks, hz)
+      {:ok, %{pid: pid, started_at: ctime(started), executable: executable}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp clock_ticks(root) do
+    with {:ok, auxv} <- File.read(Path.join([root, "self", "auxv"])) do
+      find_clktck(auxv)
+    end
+  end
+
+  defp find_clktck(<<@at_clktck::native-64, hz::native-64, _::binary>>) when hz > 0,
+    do: {:ok, hz}
+
+  defp find_clktck(<<0::native-64, _::native-64, _::binary>>), do: :error
+  defp find_clktck(<<_::native-64, _::native-64, rest::binary>>), do: find_clktck(rest)
+  defp find_clktck(_), do: :error
+
+  @days ~w(Mon Tue Wed Thu Fri Sat Sun)
+  @months ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
+
+  defp ctime(seconds) do
+    {{year, month, day} = date, {hour, minute, second}} =
+      :calendar.system_time_to_local_time(seconds, :second)
+
+    time =
+      [hour, minute, second]
+      |> Enum.map_join(":", &String.pad_leading(Integer.to_string(&1), 2, "0"))
+
+    Enum.join(
+      [
+        Enum.at(@days, :calendar.day_of_the_week(date) - 1),
+        Enum.at(@months, month - 1),
+        day,
+        time,
+        year
+      ],
+      " "
+    )
+  end
+
+  defp linux?(opts), do: Keyword.get(opts, :os, :os.type()) in [:linux, {:unix, :linux}]
 
   def capture(pid, opts) when is_integer(pid) and pid > 1 do
     with {output, 0} <-

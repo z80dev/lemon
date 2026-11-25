@@ -101,10 +101,10 @@ is now the single owner of "what can be picked from right now":
   surface, with its own unit tests
   (`apps/lemon_agent/test/lemon_agent/model_runtime/model_catalog_test.exs`).
 
-It lives in `agent_core` rather than `ai` because `agent_core` is the
-narrowest app that both depends on `ai` directly and is itself a permitted
+It lives in `lemon_agent` rather than `lemon_ai` because `lemon_agent` is the
+narrowest app that both depends on `lemon_ai` directly and is itself a permitted
 dependency for apps (like `lemon_channels`) that are not allowed to depend on
-`ai` per `docs/architecture_boundaries.md`.
+`lemon_ai` per `docs/architecture_boundaries.md`.
 
 Migrated consumers: `LemonChannels.Adapters.Telegram.Transport.ModelPicker`
 and `.CallbackHandler` each carried a ~150-line pasted copy of catalog

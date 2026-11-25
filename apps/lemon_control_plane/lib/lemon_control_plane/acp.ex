@@ -239,12 +239,13 @@ defmodule LemonControlPlane.ACP do
   def list_sessions(params, opts \\ [])
 
   def list_sessions(params, opts) when is_map(params) do
-    with {:ok, offset} <- parse_cursor(Map.get(params, "cursor")) do
+    with {:ok, offset} <- parse_cursor(Map.get(params, "cursor")),
+         {:ok, all} <- fetch_all_sessions() do
       cwd = Map.get(params, "cwd")
       restricted = restricted_principal(opts)
 
       sessions =
-        all_sessions()
+        all
         |> Enum.filter(fn {_id, session} ->
           is_nil(restricted) or Map.get(session, :owner) == restricted
         end)
@@ -540,14 +541,17 @@ defmodule LemonControlPlane.ACP do
        when is_binary(session_id) do
     restricted = restricted_principal(opts)
 
-    case get_session(session_id) do
-      %{} = session when not is_nil(restricted) ->
+    case fetch_session(session_id) do
+      {:ok, %{} = session} when not is_nil(restricted) ->
         if Map.get(session, :owner) == restricted,
           do: dispatch(method, params, opts),
           else: {:error, -32_602, "session not found"}
 
-      _ ->
+      {:ok, _session_or_absent} ->
         dispatch(method, params, opts)
+
+      {:error, _, _} = unavailable ->
+        unavailable
     end
   end
 
@@ -1887,15 +1891,18 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp existing_session(session_id) do
-    case get_session(session_id) do
-      nil ->
+    case fetch_session(session_id) do
+      {:ok, nil} ->
         {:error, -32_602, "session not found"}
 
-      session ->
+      {:ok, session} ->
         restore_native_resume(session)
         # Pre-native ACP sessions stored a selected Code/Plan mode; plan state is
         # native now, so the stale field is dropped on the next write.
         {:ok, Map.delete(session, :mode)}
+
+      {:error, _, _} = unavailable ->
+        unavailable
     end
   end
 
@@ -1947,10 +1954,22 @@ defmodule LemonControlPlane.ACP do
     :ok
   end
 
+  # Admission and listing read strictly: an unreadable session store is an
+  # error, never an unknown session or an empty list.
+  defp fetch_session(session_id) do
+    case Store.fetch(@session_store_table, session_id) do
+      {:ok, session} when is_map(session) -> {:ok, session}
+      {:ok, _absent} -> {:ok, nil}
+      {:error, _reason} -> session_store_unavailable()
+    end
+  end
+
+  # Best-effort read of a session already admitted by `existing_session/1`, for
+  # projections while its run streams.
   defp get_session(session_id) do
-    case Store.get(@session_store_table, session_id) do
-      session when is_map(session) -> session
-      _ -> nil
+    case fetch_session(session_id) do
+      {:ok, session} -> session
+      {:error, _, _} -> nil
     end
   end
 
@@ -1958,12 +1977,20 @@ defmodule LemonControlPlane.ACP do
     :ok = Store.put(@session_store_table, session_id, session)
   end
 
-  defp all_sessions do
-    @session_store_table
-    |> Store.list()
-    |> Enum.filter(fn {session_id, session} -> is_binary(session_id) and is_map(session) end)
-    |> Map.new()
+  defp fetch_all_sessions do
+    case Store.fetch_all(@session_store_table) do
+      {:ok, entries} ->
+        {:ok,
+         entries
+         |> Enum.filter(fn {session_id, session} -> is_binary(session_id) and is_map(session) end)
+         |> Map.new()}
+
+      {:error, _reason} ->
+        session_store_unavailable()
+    end
   end
+
+  defp session_store_unavailable, do: {:error, -32_603, "session store unavailable"}
 
   defp session_info(session_id, session) do
     client_capabilities = session_client_capabilities(session)

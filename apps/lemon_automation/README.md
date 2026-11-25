@@ -21,8 +21,7 @@ When automation is unavailable, curation skips automatic archival and reports wh
 LemonAutomation.Supervisor
   |-- Task.Supervisor (LemonAutomation.TaskSupervisor)
   |-- CronManager     (GenServer - scheduling engine, heartbeat policy, delivery)
-  |-- GoalContinuationManager (GenServer - supervised one-shot goal continuation)
-  |-- GoalLoopManager (GenServer - preview goal judge loop tick)
+  |-- GoalLoopManager (GenServer - goal judge loop ticks and one-shot continuations)
   |-- KanbanDispatcher (GenServer - durable board task leasing)
   |-- SkillCuratorManager (GenServer - idle learned-skill maintenance)
   |-- SynthesisRunnerManager (GenServer - scheduled skill synthesis)
@@ -117,11 +116,13 @@ IDs, and reasons.
 `:cron_run_submitter` used by CronManager (normally RunSubmitter ->
 LemonRouter), and routes completion back through CronManager.
 
-**GoalContinuationManager** runs persistent-goal continuations. It accepts one
-active session goal at a time and starts work through `TaskSupervisor` with
-`origin: :goal` and `queue_mode: :followup`. Goal targets persist their `cwd`;
-continuations and the read-only judge use that directory rather than daemon cwd.
-The goal records the accepted router run ID and bounded completion result.
+**Goal continuations** go through `GoalLoopManager.run_once/2` with
+`verdict: :continue` (no judge), submitted with `origin: :goal` and
+`queue_mode: :followup`. Goal targets persist their `cwd`; continuations and the
+read-only judge use that directory rather than daemon cwd. The goal records the
+accepted router run ID and bounded completion result. Chat `/goal continue` and
+`/goal loop once` run this call in a transport background task, reply at once,
+and post the verdict and run ID as a follow-up message.
 
 Goal work runs only under the caller authority recorded on the goal
 (`LemonAgent.Workspace.GoalAuthority`): the setting session or chat as
@@ -405,7 +406,6 @@ and the harmless disabled example under
 | `LemonAutomation.Heartbeat` | `lib/lemon_automation/heartbeat.ex` | Heartbeat policy (`meta.heartbeat` jobs; `HEARTBEAT_OK` suppression) applied during CronManager terminalization |
 | `LemonAutomation.CronDelivery` | `lib/lemon_automation/cron_delivery.ex` | Resolves the shared automation target grammar; `RunNotifications` binds invocations and hands terminal facts to channels |
 | `LemonAutomation.GoalContinuation` | `lib/lemon_automation/goal_continuation.ex` | Builds and submits one persistent-goal continuation run through LemonRouter |
-| `LemonAutomation.GoalContinuationManager` | `lib/lemon_automation/goal_continuation_manager.ex` | Supervised task entrypoint for one-shot goal continuation |
 | `LemonAutomation.GoalJudge` | `lib/lemon_automation/goal_judge.ex` | Normalizes preview goal-loop verdicts |
 | `LemonAutomation.GoalLoop` | `lib/lemon_automation/goal_loop.ex` | Applies one judge verdict to submit, complete, or pause a durable goal |
 | `LemonAutomation.GoalLoopManager` | `lib/lemon_automation/goal_loop_manager.ex` | Supervised goal-loop entrypoint with opt-in persisted auto scheduling |

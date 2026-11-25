@@ -1092,15 +1092,31 @@ defmodule LemonAgent.Workspace.KanbanStore do
         provenance: :direct
       )
 
-    # Kanban changes are recorded through Introspection above. They used to also broadcast on
-    # "kanban" and "kanban:<board_id>", which no process anywhere subscribed to — removed in
-    # Phase 3.1 rather than given a typed payload nobody would receive. If a consumer appears,
-    # add the topics back with a `LemonCore.Events` struct.
+    # A doorbell, not a payload: subscribers re-read the store. Lease renewals do
+    # not ring it (they change no operator-visible state).
+    ring_changed(board.id)
     :ok
   rescue
     error ->
       Logger.debug("Failed to emit kanban event #{event_type}: #{Exception.message(error)}")
       :ok
+  end
+
+  @doc """
+  Bus topic rung with the doorbell `{:kanban_changed, board_id}` after every
+  operator-visible board/task write (and dispatcher start/stop). Subscribers
+  re-read the store; the message carries no board or task content.
+  """
+  @spec changed_topic() :: String.t()
+  def changed_topic, do: "kanban"
+
+  @doc "Rings the `changed_topic/0` doorbell for `board_id`."
+  @spec ring_changed(binary()) :: :ok
+  def ring_changed(board_id) when is_binary(board_id) do
+    if LemonCore.Bus.running?(),
+      do: LemonCore.Bus.broadcast(changed_topic(), {:kanban_changed, board_id})
+
+    :ok
   end
 
   defp field(map, key), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))

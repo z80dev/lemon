@@ -352,7 +352,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
       %{
         __event__: :completed,
         ok: true,
-        answer: "",
+        answer: "wire complete",
         error: nil,
         usage: %{input_tokens: 3},
         meta: %{provider: "fake-boundary"},

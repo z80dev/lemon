@@ -212,7 +212,9 @@ defmodule LemonSkills.LockfileTest do
           Task.async(fn -> Lockfile.put(scope, sample_record(key)) end)
         end)
 
-      Enum.each(tasks, &Task.await/1)
+      # Every writer is admitted: contention waits for the lock, it never
+      # turns into a refused (or silently dropped) write.
+      assert Task.await_many(tasks, 30_000) == List.duplicate(:ok, num_writers)
 
       {:ok, skills} = Lockfile.read(scope)
       missing = Enum.reject(keys, &Map.has_key?(skills, &1))

@@ -29,7 +29,7 @@ defmodule LemonPlatformTest do
   |---|---|---|
   | `LemonCore.Store.Backend` | `LemonPlatformTest.BackendCase` | storage for the platform's key/value store |
   | `LemonChannels.Plugin` | `LemonPlatformTest.PluginCase` | a chat/messaging channel (Telegram, Discord, …) |
-  | `LemonMemory.Provider` | `LemonPlatformTest.ProviderCase` | a searchable long-term memory source |
+  | `LemonMemory.Provider` | `LemonPlatformTest.ProviderCase` | a long-term memory write target |
 
   Each case template's moduledoc is the reference guide for its behaviour: the
   contract in prose, a minimal worked implementation, and every option the suite

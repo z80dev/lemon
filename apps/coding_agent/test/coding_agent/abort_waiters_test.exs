@@ -1,50 +1,39 @@
 defmodule CodingAgent.AbortWaitersTest do
   use ExUnit.Case, async: false
 
-  alias CodingAgent.{JoinAwait, TaskStore}
-  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.{JoinAwait, TaskRuntime, TaskRuntimeHelpers, TaskStore}
   alias LemonAgent.AbortSignal
 
-  test "idle control does not schedule a signal sweep" do
-    parent = self()
+  test "an idle task owner schedules no timer" do
+    id = TaskStore.new_task(%{prompt: "idle owner"})
+    :ok = TaskRuntimeHelpers.register(id, nil)
 
-    pid =
-      spawn(fn ->
-        assert {:ok, :ready, %{}} = Control.init([])
-        send(parent, {:initialized, self()})
+    on_exit(fn ->
+      TaskRuntimeHelpers.stop(id)
+      TaskStore.delete_task(id)
+    end)
 
-        receive do
-          message -> send(parent, {:unexpected_control_timer, message})
-        after
-          120 -> send(parent, :idle_without_timer)
-        end
-      end)
-
-    assert_receive {:initialized, ^pid}
-    assert_receive :idle_without_timer, 500
-    refute_received {:unexpected_control_timer, _}
+    {:status, _, _, [_, _, _, _, status]} = :sys.get_status(TaskRuntime.whereis(id))
+    assert [{0, []}] = for({:data, fields} <- status, {~c"Time-outs", value} <- fields, do: value)
   end
 
-  test "parent abort is delivered to control without a sweep" do
-    {:ok, server} = :gen_statem.start_link(Control, [], [])
+  test "parent abort is delivered to the child's owner without a sweep" do
     signal = AbortSignal.new()
     parent_signal = AbortSignal.new()
     id = TaskStore.new_task(%{prompt: "abort regression"})
 
     on_exit(fn ->
-      if Process.alive?(server), do: GenServer.stop(server)
+      TaskRuntimeHelpers.stop(id)
       TaskStore.delete_task(id)
     end)
 
     assert :ok =
-             GenServer.call(
-               server,
-               {:register, id, signal, parent_signal, nil, fn _ -> :ok end, nil}
-             )
+             TaskRuntimeHelpers.register(id, nil, signal: signal, parent_signal: parent_signal)
 
-    assert [{^server, _}] = Registry.lookup(LemonAgent.AbortSignal.Registry, parent_signal)
+    owner = TaskRuntime.whereis(id)
+    assert [{^owner, _}] = Registry.lookup(LemonAgent.AbortSignal.Registry, parent_signal)
     AbortSignal.abort(parent_signal)
-    assert {:ready, %{^id => %{phase: :cancelling}}} = :sys.get_state(server)
+    assert {:cancelling, %{phase: :cancelling}} = :sys.get_state(owner)
     assert AbortSignal.aborted?(signal)
   end
 

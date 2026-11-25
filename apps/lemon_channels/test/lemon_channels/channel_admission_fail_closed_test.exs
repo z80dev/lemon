@@ -192,7 +192,14 @@ defmodule LemonChannels.ChannelAdmissionFailClosedTest do
 
       message =
         discord_message(unique_id(), "unaddressed chatter")
-        |> Map.put("thread_id", Integer.to_string(thread_id))
+        |> Map.put("channel_id", Integer.to_string(thread_id))
+
+      :ok =
+        LemonChannels.Adapters.Discord.ThreadResolver.observe_event(:THREAD_CREATE, %{
+          id: thread_id,
+          parent_id: @channel_id,
+          type: 11
+        })
 
       assert {:noreply, state} =
                Transport.process_event(
@@ -325,7 +332,10 @@ defmodule LemonChannels.ChannelAdmissionFailClosedTest do
     }
   end
 
+  # A Nostrum %Message{} has no channel object; the gateway fed the cache.
   defp discord_message(id, content) do
+    :ok = LemonChannels.Adapters.Discord.ThreadResolver.observe(%{id: @channel_id, type: 0})
+
     %{
       "id" => id,
       "channel_id" => Integer.to_string(@channel_id),

@@ -113,9 +113,9 @@ comparison remains pending.
 The [canonical paired workflow](../../docs/benchmarks/paired-disclosure.md)
 defines approval, configuration isolation, report metadata, all-attempt cost
 accounting, exploratory task-cluster uncertainty, redaction, and rollback.
-No authorized live paired evidence is recorded here: keep current defaults and
-keep the coding profile opt-in; any promotion remains pending an approved bounded
-run and sanitized report. Schema-size diagnostics alone do not justify promotion.
+The recorded disclosure decision (promote `coding` for cwd-scoped coding and
+`lemon -p`, `legacy` as rollback) rests on the isolated coding arena below; see
+that page. Schema-size diagnostics alone do not justify promotion.
 
 Paired runtime integrations bind a fresh `LEMON_EVAL_PROCESS_STORE` with
 `LemonEvals.PairedCleanup.configure!/0` **before** application boot, then call

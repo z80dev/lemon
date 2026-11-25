@@ -101,6 +101,14 @@ rather than detaching. PTY, ACP and remote/sandbox transports that only supply
 combined output report null streams and `output_combined: true`; null means
 unavailable, not empty. No tool text is parsed to manufacture an exit code.
 
+The relay is selected only by `CodingAgent.Tools.CodeMode.enabled?/1`: tool
+disclosure must be `enabled: true` **and** use the `code_mode` profile, the same
+predicate that exposes the sandboxed `eval`. With disclosure disabled (even if
+the profile is still `code_mode`) `bash` stays on managed bash, keeping command
+policy, `LaneQueue` admission and the artifact cap. When the relay is selected
+and `python3` is not on `PATH`, `bash` returns an error before starting the
+command.
+
 ### Paired evaluation and decision
 
 **Decision: keep opt-in.** The authorized bounded paired run reported on

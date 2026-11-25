@@ -176,6 +176,6 @@ served at the root of `https://lemon.food/`. See [docs hub](docs/README.md).
 
 Product releases use the serialized `release.yml` workflow and CalVer; package
 releases use independent semver. Only five packages are in the publish set;
-0.2.0 is published on Hex. See [platform status](docs/platform-split.md),
+the 0.2 line is on Hex. See [platform status](docs/platform-split.md),
 [package release instructions](docs/release/hex-packages.md) and
 [product release instructions](docs/release/versioning_and_channels.md).

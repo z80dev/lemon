@@ -23,9 +23,13 @@ defmodule LemonChannels.Adapters.Xmtp.Bridge do
     PortBridge.command(port_server, payload)
   end
 
-  @spec poll(pid()) :: :ok
-  def poll(port_server) when is_pid(port_server) do
-    PortBridge.command(port_server, %{"op" => "poll"})
+  @doc """
+  Ask the bridge for new messages. `cursors` maps a conversation id to the
+  decimal `sent_at_ns` high-water mark; the bridge emits only later messages.
+  """
+  @spec poll(pid(), %{binary() => binary()}) :: :ok
+  def poll(port_server, cursors) when is_pid(port_server) and is_map(cursors) do
+    PortBridge.command(port_server, %{"op" => "poll", "cursors" => cursors})
   end
 
   @spec acknowledge_inbound(pid(), binary()) :: :ok

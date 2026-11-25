@@ -15,7 +15,12 @@ defmodule LemonSkills.Tools.MediaGenerateSpeechTest do
              result =
              tool.execute.(
                "call-1",
-               %{"text" => text, "filename" => "speech-card", "sendToChannel" => true},
+               %{
+                 "provider" => "local_wav",
+                 "text" => text,
+                 "filename" => "speech-card",
+                 "sendToChannel" => true
+               },
                nil,
                nil
              )

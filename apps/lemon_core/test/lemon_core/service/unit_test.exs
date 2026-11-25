@@ -4,10 +4,15 @@ defmodule LemonCore.Service.UnitTest do
 
   @moduletag :tmp_dir
   setup %{tmp_dir: home} do
+    # Every launcher is a fixture: a role never depends on the host's PATH.
     bot = Path.join(home, ".local/bin/lemon-bot")
-    File.mkdir_p!(Path.dirname(bot))
-    File.write!(bot, "#!/bin/sh\nexit 0\n")
-    File.chmod!(bot, 0o700)
+    omp = Path.join(home, "tools/bin/omp")
+
+    for program <- [bot, omp] do
+      File.mkdir_p!(Path.dirname(program))
+      File.write!(program, "#!/bin/sh\nexit 0\n")
+      File.chmod!(program, 0o700)
+    end
 
     {:ok,
      opts: [
@@ -18,7 +23,8 @@ defmodule LemonCore.Service.UnitTest do
        controller: "ws://127.0.0.1:4044/ws",
        ssh: "me@studio",
        node_port: 4044,
-       gateway_port: 4044
+       gateway_port: 4044,
+       omp_bin: omp
      ]}
   end
 

@@ -2,7 +2,8 @@
 
 Input: {"op":"run","args":RPC arguments,"policy":node_fs policy}.
 Control: {"op":"cancel"}; control EOF also cancels the entire process group.
-Output: {"ok":final RPC receipt} or {"error":fixed safe classification}.
+Output: {"ok":final RPC receipt} or {"error":fixed safe classification,
+"started":bool}; "started" is false only when the program provably never ran.
 No command strings, PTYs, output events, environment overrides or diagnostics.
 """
 import base64
@@ -21,6 +22,9 @@ import time
 from node_fs import Policy, Failure, DIR_FLAGS
 
 MAX_FRAME = 4 * 1024 * 1024
+# Set once Popen returns: a failure before that point never executed the program
+# (Popen raises the child's exec failure itself).
+STARTED = [False]
 MAX_BYTES = 1048576
 
 
@@ -124,6 +128,7 @@ def execute(request):
             stderr=subprocess.PIPE, shell=False, start_new_session=True,
             close_fds=True, pass_fds=(cwd_fd,), preexec_fn=lambda: os.fchdir(cwd_fd)
         )
+        STARTED[0] = True
         os.close(cwd_fd)
         cwd_fd = None
         os.close(parent)
@@ -279,6 +284,8 @@ def main():
                   errno.E2BIG: "argv_too_large", errno.ELOOP: "path_not_allowed"}.get(exc.errno, "process_failed")}
     except Exception:
         result = {"error": "process_failed"}
+    if "error" in result:
+        result["started"] = STARTED[0]
     payload = json.dumps(result, separators=(",", ":")).encode("utf-8")
     try:
         sys.stdout.buffer.write(struct.pack(">I", len(payload)) + payload)

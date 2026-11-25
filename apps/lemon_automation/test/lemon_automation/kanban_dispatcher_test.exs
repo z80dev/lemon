@@ -603,6 +603,54 @@ defmodule LemonAutomation.KanbanDispatcherTest do
     refute call.("dispatch_status", %{}).details.dispatch.running
   end
 
+  test "control revision is stable across lease-renewal ticks and stop binds to it" do
+    assert {:ok, board} = authorized_board("Stable revision")
+    assert {:ok, task} = KanbanStore.create_task(board.id, "Task")
+
+    name = :"kanban-dispatcher-#{System.unique_integer([:positive])}"
+    start_supervised!({KanbanDispatcher, name: name, worker_mod: KanbanDispatcherBlockingWorker})
+
+    assert {:ok, _} =
+             KanbanDispatcher.start_board(board.id,
+               name: name,
+               interval_ms: 10,
+               lease_ms: 60_000,
+               worker_id: "stable-worker"
+             )
+
+    assert_receive {:worker_ready, task_id, _worker_pid}, 5_000
+    assert task_id == task.id
+    _ = :sys.get_state(name)
+
+    assert {:ok, %{control_revision: preview}} = KanbanDispatcher.status(board.id, name: name)
+    expires = KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"]
+
+    # Several ticks renew the lease (a store write) without any task transition.
+    eventually(fn ->
+      assert KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"] > expires
+    end)
+
+    assert {:ok, %{control_revision: ^preview}} = KanbanDispatcher.status(board.id, name: name)
+
+    # A real status change between preview and confirm is still stale.
+    assert {:ok, _other} = KanbanStore.create_task(board.id, "Other", status: "review")
+
+    assert {:error, :stale} =
+             KanbanDispatcher.stop_board(board.id, name: name, expected_revision: preview)
+
+    assert {:ok, %{control_revision: fresh}} = KanbanDispatcher.status(board.id, name: name)
+    refute fresh == preview
+
+    expires = KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"]
+
+    eventually(fn ->
+      assert KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"] > expires
+    end)
+
+    assert {:ok, %{status: "stopped"}} =
+             KanbanDispatcher.stop_board(board.id, name: name, expected_revision: fresh)
+  end
+
   # Dispatch requires recorded authority; boards here are created by a trusted,
   # unrestricted session rooted at a fresh (non-Git) directory, which an
   # operator allowed workers to use in place.

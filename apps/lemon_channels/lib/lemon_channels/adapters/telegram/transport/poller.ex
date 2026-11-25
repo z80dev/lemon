@@ -48,10 +48,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
             %{state | offset: new_offset, drop_pending_done?: false}
           end
         else
-          {state, max_id} = handle_updates(state, updates, callbacks)
-          new_offset = max(state.offset, max_id + 1)
-          callbacks.persist_offset.(state, new_offset)
-          %{state | offset: new_offset}
+          {state, offset} = handle_updates(state, updates, callbacks)
+          %{state | offset: offset}
         end
 
       {:error, reason} ->
@@ -62,11 +60,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
     end
   end
 
+  # Each update's offset is confirmed as soon as that update is handled, so a
+  # crash mid-batch re-polls only the updates that were never handled.
   defp handle_updates(state, updates, callbacks) do
-    Enum.reduce(updates, {state, state.offset - 1}, fn update, {acc_state, max_id} ->
-      id = update["update_id"] || max_id
+    Enum.reduce(updates, {state, state.offset}, fn update, {acc_state, offset} ->
+      id = update["update_id"] || offset - 1
       acc_state = process_single_update(acc_state, update, id, callbacks)
-      {acc_state, max(max_id, id)}
+
+      if id + 1 > offset do
+        callbacks.persist_offset.(acc_state, id + 1)
+        {acc_state, id + 1}
+      else
+        {acc_state, offset}
+      end
     end)
   end
 

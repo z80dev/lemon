@@ -5,12 +5,15 @@ defmodule LemonSkills.Tools.Recall do
   It searches scoped sources with the same query:
 
     * **Past conversations** — the durable memory documents written after each
-      finished run (`LemonMemory.SessionSearch.search/2`: the local SQLite FTS5
-      store plus any registered provider, gated by `[features] session_search`).
-      Scope `"agent"` (the default) covers every earlier session of the current
-      agent and assistant profile; `"project"` only the current repository.
-      Unscoped legacy documents are excluded. Matching is lexical: any query
-      term may match, ranked by BM25 (see `LemonMemory.Query`).
+      finished run, searched in the local SQLite FTS5 store through
+      `LemonMemory.Project.search_history/4` (gated by `[features]
+      session_search`). Ownership, agent, assistant home, history kind and
+      repository are filtered in SQL before the result limit, so ineligible
+      documents never take a result slot. Scope `"agent"` (the default) covers
+      every earlier session of the current agent and assistant profile;
+      `"project"` only the current repository. Remote memory providers are not
+      searched. Matching is lexical: any query term may match, ranked by BM25
+      (see `LemonMemory.Query`).
     * **Memory notes** — markdown files under the assistant home's `memory/`
       directory (daily notes, topic notes), matched line by line on the same
       terms. At most 200 files of up to 64 KiB each are read.
@@ -21,7 +24,8 @@ defmodule LemonSkills.Tools.Recall do
   preferences plus explicitly shared canonical facts. They never fall back to
   another actor, unproven legacy history, or raw workspace note files. Native
   ownership fields come from trusted runtime options, never tool parameters.
-  Legacy non-context sessions retain file-note search and workspace bootstrap.
+  Legacy non-context sessions search legacy history and retain file-note search
+  and workspace bootstrap; unproven or partial ownership claims fail closed.
   The write-side counterpart is `LemonSkills.Tools.Remember`.
   """
 
@@ -50,8 +54,6 @@ defmodule LemonSkills.Tools.Recall do
   - `:store` - existing owner for scoped preferences/project/history
   - Flat admitted invocation/memory keys and memory proof fix private visibility;
     missing/partial proof never widens to raw legacy notes
-  - `:search_fn` - legacy-only test override for SessionSearch.search/2; private
-    reads always use the owning Store's scoped index before candidate limits
   """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
@@ -65,7 +67,6 @@ defmodule LemonSkills.Tools.Recall do
       memory_context_key: Keyword.get(opts, :memory_context_key),
       memory_context_verified: Keyword.get(opts, :memory_context_verified),
       shared_memory_grant: Keyword.get(opts, :shared_memory_grant, false),
-      search_fn: Keyword.get(opts, :search_fn, &SessionSearch.search/2),
       store_opts: Keyword.take(opts, [:store])
     }
 
@@ -190,9 +191,15 @@ defmodule LemonSkills.Tools.Recall do
          {:ok, scope} <- parse_scope(Map.get(params, "scope", "agent")),
          :ok <- validate_context(context),
          {:ok, memory_scope} <- ContextScope.scope(context),
-         {:ok, search_opts} <- search_opts(scope, context, limit),
+         :ok <- history_identity(scope, context),
          {:ok, notes} <- memory_notes(memory_scope, scope, context, query, limit),
-         {:ok, docs} <- memory_history(memory_scope, scope, context, query, limit, search_opts) do
+         {:ok, docs} <-
+           Project.search_history(
+             context,
+             query,
+             history_scope(scope),
+             Keyword.put(context.store_opts, :limit, limit)
+           ) do
       facts =
         if scope == "project",
           do: Project.search(context, query, Keyword.put(context.store_opts, :limit, limit)),
@@ -214,24 +221,6 @@ defmodule LemonSkills.Tools.Recall do
       {:error, reason} when is_atom(reason) -> {:error, "Scoped memory is unavailable"}
       error -> error
     end
-  end
-
-  defp memory_history(:legacy, scope, context, query, limit, search_opts) do
-    docs =
-      context.search_fn.(query, Keyword.put(search_opts, :memory_scope, :legacy))
-      |> Enum.filter(&Project.history_document?(&1, context, history_scope(scope)))
-      |> Enum.take(limit)
-
-    {:ok, docs}
-  end
-
-  defp memory_history({:private, _key}, scope, context, query, limit, _search_opts) do
-    Project.search_history(
-      context,
-      query,
-      history_scope(scope),
-      Keyword.put(context.store_opts, :limit, limit)
-    )
   end
 
   defp memory_notes(:legacy, "agent", context, query, limit),
@@ -279,15 +268,14 @@ defmodule LemonSkills.Tools.Recall do
   defp history_scope("agent"), do: :agent
   defp history_scope("project"), do: :workspace
 
-  defp search_opts("agent", %{agent_id: agent_id}, limit) when is_binary(agent_id),
-    do: {:ok, [scope: :agent, scope_key: agent_id, limit: limit]}
+  defp history_identity("agent", %{agent_id: agent_id}) when is_binary(agent_id), do: :ok
 
-  defp search_opts("agent", _context, _limit),
+  defp history_identity("agent", _context),
     do: {:error, "recall scope agent needs a current agent; try scope project"}
 
-  defp search_opts("project", context, limit) do
+  defp history_identity("project", context) do
     case Project.scope(context) do
-      {:ok, scope} -> {:ok, [scope: :agent, scope_key: scope.agent_id, limit: limit]}
+      {:ok, _scope} -> :ok
       {:error, _} -> {:error, "recall scope project needs a scoped current project"}
     end
   end

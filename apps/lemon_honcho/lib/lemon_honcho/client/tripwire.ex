@@ -7,8 +7,8 @@ defmodule LemonHoncho.Client.Tripwire do
   `LemonHoncho.Config` resolves *OS environment first*, so a developer with
   `LEMON_HONCHO_ENABLED=true` exported in a shell rc — an entirely reasonable
   thing to have for a real Honcho install — turns the suite back on: the memory
-  provider registers, the context contributor registers, and every memory search
-  in the umbrella fans out to a live workspace carrying the suite's queries.
+  provider registers, the context contributor registers, and every finished run
+  in the umbrella uploads to a live workspace carrying the suite's data.
 
   Configuration cannot stop that on its own, because the variable that would
   stop it is the one being overridden. So the test environment also pins
@@ -35,7 +35,7 @@ defmodule LemonHoncho.Client.Tripwire do
   point: every caller in this app is written to degrade quietly on an error
   tuple, so an error tuple here would hide the very thing the tripwire exists to
   make visible. The raise is still contained — `LemonHoncho.SessionManager`
-  rescues its refresh, `LemonHoncho.MemoryProvider` rescues its search — so a
+  rescues its refresh and uploads — so a
   tripped wire fails the suite loudly where it is asserted and degrades to "no
   memory" everywhere else, rather than taking a test run down.
   """

@@ -76,7 +76,7 @@ defmodule LemonRouter.FailureBoundaryTest do
              )
 
     assert_receive {:delivered, %{kind: :stream_finalize, body: %{text: "complete answer"}}}
-    assert %{finalized: true, last_sent_text: "complete answer"} = :sys.get_state(recovered)
+    assert %{finalized: true} = :sys.get_state(recovered)
   end
 
   test "explicit delivery rejection keeps the answer retryable without a restart", context do

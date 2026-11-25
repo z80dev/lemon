@@ -8,7 +8,7 @@ defmodule LemonAi.Providers.TransportErrorTest do
     OpenAICodexResponses,
     OpenAIResponses,
     OpenAIResponsesShared,
-    SSEParser
+    StreamTransport
   }
 
   alias LemonAi.Types.{AssistantMessage, Context, Model, StreamOptions, UserMessage}
@@ -131,15 +131,16 @@ defmodule LemonAi.Providers.TransportErrorTest do
     send(self(), {ref, :failed})
     {:ok, stream} = EventStream.start_link()
 
-    assert {:error, ^failure} =
+    assert {:error, details} =
              OpenAIResponsesShared.process_stream(
-               SSEParser.events(response, 100),
+               StreamTransport.sse_events(response, 100),
                %AssistantMessage{},
                stream,
                %Model{}
              )
 
-    message = AssistantMessageHelper.error_assistant_message(%AssistantMessage{}, failure)
+    assert details == Error.to_error_details(failure)
+    message = AssistantMessageHelper.error_assistant_message(%AssistantMessage{}, details)
     EventStream.error(stream, message)
     assert {:error, terminal} = EventStream.result(stream, 1_000)
     assert %{category: :transient, retryable: true} = terminal.error_details

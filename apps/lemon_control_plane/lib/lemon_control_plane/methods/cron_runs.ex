@@ -48,64 +48,81 @@ defmodule LemonControlPlane.Methods.CronRuns do
           @max_introspection_limit
         )
 
-      runs =
-        LemonAutomation.CronManager.runs(
-          job_id,
-          limit: limit,
-          status: status,
-          since_ms: since_ms
+      format = fn run ->
+        format_run(
+          run,
+          content?,
+          include_output,
+          include_meta,
+          include_run_record,
+          include_introspection,
+          introspection_limit
         )
-
-      formatted_runs =
-        Enum.reduce_while(runs, [], fn run, acc ->
-          case format_run(
-                 run,
-                 content?,
-                 include_output,
-                 include_meta,
-                 include_run_record,
-                 include_introspection,
-                 introspection_limit
-               ) do
-            {:ok, formatted} -> {:cont, [formatted | acc]}
-            {:error, _} = error -> {:halt, error}
-          end
-        end)
-
-      case formatted_runs do
-        {:error, _} ->
-          {:error, {:unavailable, "Introspection events are unavailable", nil}}
-
-        formatted_runs when is_list(formatted_runs) ->
-          {:ok,
-           %{
-             "jobId" => job_id,
-             "runs" => Enum.reverse(formatted_runs),
-             "total" => length(formatted_runs),
-             "contentWithheld" => not content?,
-             "filters" => %{
-               "limit" => limit,
-               "status" => if(status, do: Atom.to_string(status), else: nil),
-               "sinceMs" => since_ms,
-               "includeOutput" => include_output,
-               "includeMeta" => include_meta,
-               "includeRunRecord" => include_run_record,
-               "includeIntrospection" => include_introspection,
-               "introspectionLimit" => introspection_limit
-             },
-             "summary" =>
-               summary(
-                 runs,
-                 status,
-                 since_ms,
-                 content?,
-                 include_output,
-                 include_meta,
-                 include_run_record,
-                 include_introspection
-               )
-           }}
       end
+
+      with {:ok, runs} <- read_runs(job_id, limit, status, since_ms),
+           {:ok, formatted_runs} <- format_runs(runs, format) do
+        {:ok,
+         %{
+           "jobId" => job_id,
+           "runs" => formatted_runs,
+           "total" => length(formatted_runs),
+           "contentWithheld" => not content?,
+           "filters" => %{
+             "limit" => limit,
+             "status" => if(status, do: Atom.to_string(status), else: nil),
+             "sinceMs" => since_ms,
+             "includeOutput" => include_output,
+             "includeMeta" => include_meta,
+             "includeRunRecord" => include_run_record,
+             "includeIntrospection" => include_introspection,
+             "introspectionLimit" => introspection_limit
+           },
+           "summary" =>
+             summary(
+               runs,
+               status,
+               since_ms,
+               content?,
+               include_output,
+               include_meta,
+               include_run_record,
+               include_introspection
+             )
+         }}
+      end
+    end
+  end
+
+  defp read_runs(job_id, limit, status, since_ms) do
+    case LemonAutomation.CronManager.runs(job_id,
+           limit: limit,
+           status: status,
+           since_ms: since_ms,
+           strict: true
+         ) do
+      {:ok, runs} when is_list(runs) -> {:ok, runs}
+      _unavailable -> {:error, {:unavailable, "Cron run history is unavailable", nil}}
+    end
+  end
+
+  defp format_runs(runs, format) do
+    runs
+    |> Enum.reduce_while({:ok, []}, fn run, {:ok, acc} ->
+      case format.(run) do
+        {:ok, formatted} -> {:cont, {:ok, [formatted | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, formatted} ->
+        {:ok, Enum.reverse(formatted)}
+
+      {:error, :run_record_unavailable} ->
+        {:error, {:unavailable, "Run records are unavailable", nil}}
+
+      {:error, _introspection} ->
+        {:error, {:unavailable, "Introspection events are unavailable", nil}}
     end
   end
 
@@ -145,21 +162,33 @@ defmodule LemonControlPlane.Methods.CronRuns do
       }
       |> maybe_put_text(run, content?, include_output)
       |> maybe_put("meta", LemonCore.Redact.project(run.meta), include_meta)
-      |> maybe_put(
-        "runRecord",
-        fetch_run_record(router_run_id),
-        include_run_record and is_binary(router_run_id)
-      )
 
-    if include_introspection and is_binary(router_run_id) do
-      case fetch_introspection(router_run_id, introspection_limit) do
-        events when is_list(events) -> {:ok, Map.put(base, "introspection", events)}
-        {:error, _} = error -> error
+    with {:ok, base} <- put_run_record(base, router_run_id, include_run_record) do
+      if include_introspection and is_binary(router_run_id) do
+        case fetch_introspection(router_run_id, introspection_limit) do
+          events when is_list(events) -> {:ok, Map.put(base, "introspection", events)}
+          {:error, _} = error -> error
+        end
+      else
+        {:ok, base}
       end
-    else
-      {:ok, base}
     end
   end
+
+  defp put_run_record(base, run_id, true) when is_binary(run_id) do
+    case LemonCore.RunStore.fetch(run_id) do
+      {:ok, record} when is_map(record) ->
+        {:ok, Map.put(base, "runRecord", LemonCore.Redact.project(record))}
+
+      {:ok, _absent} ->
+        {:ok, Map.put(base, "runRecord", nil)}
+
+      {:error, _reason} ->
+        {:error, :run_record_unavailable}
+    end
+  end
+
+  defp put_run_record(base, _run_id, _include), do: {:ok, base}
 
   defp maybe_put_text(map, _run, false, _include_output), do: map
 
@@ -265,18 +294,6 @@ defmodule LemonControlPlane.Methods.CronRuns do
       "includesCredentials" => false,
       "includesSecretValues" => false
     }
-  end
-
-  defp fetch_run_record(run_id) do
-    case LemonCore.RunStore.get(run_id) do
-      nil -> nil
-      record when is_map(record) -> LemonCore.Redact.project(record)
-      _ -> nil
-    end
-  rescue
-    _ -> nil
-  catch
-    :exit, _ -> nil
   end
 
   defp fetch_introspection(run_id, limit) do

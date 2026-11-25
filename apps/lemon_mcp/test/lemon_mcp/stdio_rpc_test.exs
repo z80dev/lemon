@@ -113,29 +113,25 @@ defmodule LemonMCP.StdioRpcTest do
     refute Process.alive?(state.task_supervisor)
   end
 
-  test "blocked sampling runs under the client supervisor without blocking responses or deadlines" do
+  test "a blocked notification callback runs under the client supervisor without blocking responses or deadlines" do
     owner = self()
 
-    handler = fn params ->
-      send(owner, {:sampling, self(), params})
+    handler = fn
+      %{method: "fixture/block"} = notification ->
+        send(owner, {:blocked, self(), notification.params})
 
-      receive do
-        :release -> {:ok, %{role: "assistant", content: %{type: "text", text: "sampled"}}}
-      end
+        receive do
+          :release -> send(owner, :released)
+        end
+
+      notification ->
+        send(owner, {:notification, notification, self()})
     end
 
-    {client, port} = start_client(sampling_handler: handler)
-    assert_receive {:notification, %{method: "fixture/initialize", params: initialize}, _}
-    assert initialize["params"]["capabilities"]["sampling"] == %{}
+    {client, port} = start_client(notification_handler: handler)
+    emit(port, %{jsonrpc: "2.0", method: "fixture/block", params: %{step: 1}})
 
-    emit(port, %{
-      jsonrpc: "2.0",
-      id: "sampling",
-      method: "sampling/createMessage",
-      params: %{maxTokens: 4}
-    })
-
-    assert_receive {:sampling, worker, %{"maxTokens" => 4}}, 5_000
+    assert_receive {:blocked, worker, %{"step" => 1}}, 5_000
     state = :sys.get_state(client)
     assert worker in Task.Supervisor.children(state.task_supervisor)
     assert worker != client
@@ -154,30 +150,28 @@ defmodule LemonMCP.StdioRpcTest do
                    5_000
 
     send(worker, :release)
-
-    assert_receive {:notification,
-                    %{
-                      method: "fixture/reply",
-                      params: %{"id" => "sampling", "result" => %{"role" => "assistant"}}
-                    }, _},
-                   5_000
+    assert_receive :released, 5_000
   end
 
-  test "close fails pending calls and stops supervised sampling, transport, and RPC processes" do
+  test "close fails pending calls and stops supervised callbacks, transport, and RPC processes" do
     owner = self()
 
-    handler = fn _params ->
-      send(owner, {:sampling_worker, self()})
+    handler = fn
+      %{method: "fixture/block"} ->
+        send(owner, {:blocked, self()})
 
-      receive do
-        :release -> {:ok, %{}}
-      end
+        receive do
+          :release -> :ok
+        end
+
+      notification ->
+        send(owner, {:notification, notification, self()})
     end
 
-    {client, port} = start_client(sampling_handler: handler)
+    {client, port} = start_client(notification_handler: handler)
     state = :sys.get_state(client)
-    emit(port, %{jsonrpc: "2.0", id: "sampling", method: "sampling/createMessage"})
-    assert_receive {:sampling_worker, worker}, 5_000
+    emit(port, %{jsonrpc: "2.0", method: "fixture/block"})
+    assert_receive {:blocked, worker}, 5_000
     task = Task.async(fn -> Client.list_tools(client, :infinity) end)
     await_request("tools/list")
 
@@ -192,64 +186,69 @@ defmodule LemonMCP.StdioRpcTest do
     end
   end
 
-  test "sampling callback can make a nested client request without mailbox deadlock" do
+  test "a notification callback can make a nested client request without mailbox deadlock" do
     owner = self()
 
-    handler = fn _params ->
-      send(owner, {:sampling_worker, self()})
+    handler = fn
+      %{method: "fixture/nested"} ->
+        send(owner, {:nested_worker, self()})
 
-      receive do
-        {:client, client} ->
-          {:ok, tools} = Client.list_tools(client)
+        receive do
+          {:client, client} -> send(owner, {:nested_tools, Client.list_tools(client)})
+        end
 
-          {:ok,
-           %{role: "assistant", model: "nested", content: %{type: "text", text: inspect(tools)}}}
-      end
+      notification ->
+        send(owner, {:notification, notification, self()})
     end
 
-    {client, port} = start_client(sampling_handler: handler)
-    emit(port, %{jsonrpc: "2.0", id: "nested", method: "sampling/createMessage"})
-    assert_receive {:sampling_worker, worker}, 5_000
+    {client, port} = start_client(notification_handler: handler)
+    emit(port, %{jsonrpc: "2.0", method: "fixture/nested"})
+    assert_receive {:nested_worker, worker}, 5_000
     send(worker, {:client, client})
     id = await_request("tools/list")
     respond(port, id, %{tools: []})
 
-    assert_receive {:notification,
-                    %{
-                      method: "fixture/reply",
-                      params: %{"id" => "nested", "result" => %{"model" => "nested"}}
-                    }, _},
-                   5_000
-
+    assert_receive {:nested_tools, {:ok, []}}, 5_000
     assert Client.state(client) == :ready
   end
 
-  test "sampling exceptions return a redacted error and do not terminate the connection" do
-    {client, port} = start_client(sampling_handler: fn _ -> raise "private handler contents" end)
-    emit(port, %{jsonrpc: "2.0", id: 17, method: "sampling/createMessage", params: %{}})
+  test "a raising notification callback does not terminate the connection" do
+    owner = self()
 
-    assert_receive {:notification,
-                    %{method: "fixture/reply", params: %{"id" => 17, "error" => error}}, _},
-                   5_000
+    handler = fn
+      %{method: "fixture/raise"} -> raise "private handler contents"
+      notification -> send(owner, {:notification, notification, self()})
+    end
 
-    assert error["code"] == -32_603
-    assert error["message"] == "Sampling handler failed"
-    refute inspect(error) =~ "private handler contents"
+    {client, port} = start_client(notification_handler: handler)
+    emit(port, %{jsonrpc: "2.0", method: "fixture/raise"})
+    emit(port, %{jsonrpc: "2.0", method: "notifications/tools/list_changed"})
+
+    assert_receive {:notification, %{method: "notifications/tools/list_changed"}, _}, 5_000
     assert Client.state(client) == :ready
   end
 
-  test "disabled sampling and unknown peer requests get protocol errors, not notifications" do
-    {client, port} = start_client()
+  test "sampling is never advertised and every server request gets method-not-found" do
+    # A caller-supplied sampling capability is dropped: Lemon cannot answer it.
+    {client, port} = start_client(capabilities: %{"sampling" => %{}, "roots" => %{}})
     assert_receive {:notification, %{method: "fixture/initialize", params: initialize}, _}
-    refute Map.has_key?(initialize["params"]["capabilities"], "sampling")
+    assert initialize["params"]["capabilities"] == %{"roots" => %{}}
 
-    for {method, code} <- [{"sampling/createMessage", -1}, {"unsupported/request", -32_601}] do
-      emit(port, %{jsonrpc: "2.0", id: method, method: method})
+    for method <- ["sampling/createMessage", "unsupported/request"] do
+      emit(port, %{
+        jsonrpc: "2.0",
+        id: method,
+        method: method,
+        params: %{messages: [], maxTokens: 4}
+      })
 
       assert_receive {:notification,
                       %{
                         method: "fixture/reply",
-                        params: %{"id" => ^method, "error" => %{"code" => ^code}}
+                        params: %{
+                          "id" => ^method,
+                          "error" => %{"code" => -32_601, "message" => "Method not found"}
+                        }
                       }, _},
                      5_000
 

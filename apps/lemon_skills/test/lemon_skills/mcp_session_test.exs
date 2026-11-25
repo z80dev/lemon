@@ -54,8 +54,6 @@ defmodule LemonSkills.McpSessionTest do
           Map.put(config, "approval", "maybe"),
           Map.put(config, "tool_approvals", %{"echo" => "maybe"}),
           Map.put(config, "cwd", 42),
-          Map.put(config, "sampling", "invalid"),
-          Map.put(config, "sampling", %{"mode" => "invalid"}),
           %{
             "type" => "http",
             "name" => "http",
@@ -160,7 +158,7 @@ defmodule LemonSkills.McpSessionTest do
     assert McpSession.tools(context.id) == []
   end
 
-  test "preserves configured working directory and sampling policy", context do
+  test "preserves configured working directory and ignores a sampling entry", context do
     cwd = Path.join(context.root, "workspace")
     File.mkdir_p!(cwd)
 
@@ -175,7 +173,7 @@ defmodule LemonSkills.McpSessionTest do
     assert text(result) == "configured|#{cwd}"
     [server] = source(context.id) |> :sys.get_state() |> Map.fetch!(:servers) |> Map.values()
     assert {:stdio, _, _, opts} = server.config
-    assert opts[:sampling_policy] == [mode: "deny"]
+    refute Keyword.has_key?(opts, :sampling_policy)
   end
 
   test "explicit source configurations do not load global servers", context do
@@ -273,7 +271,8 @@ defmodule LemonSkills.McpSessionTest do
     :gen_tcp.close(socket)
   end
 
-  test "source discovery deadlines discard late results without blocking status", context do
+  test "a discovery deadline answers its caller; status stays responsive and the refresh commits",
+       context do
     {listener, port} = gate_listener()
 
     configs =
@@ -284,17 +283,19 @@ defmodule LemonSkills.McpSessionTest do
     source = start_supervised!({McpSource, name: nil, configs: configs})
     discovery = Task.async(fn -> McpSource.discover_ready(source) end)
     socket = await_gate(listener, "tools/list")
-    before = :sys.get_state(source)
-    job = before.active_job
-    refs = monitor_pending(source) |> Enum.reject(fn {_, pid} -> pid == source end)
+    [waiter] = :sys.get_state(source).waiters |> Map.keys()
 
-    send(source, {:job_timeout, job.token})
+    send(source, {:waiter_timeout, waiter})
     assert {:error, :timeout} = Task.await(discovery, 1_000)
-    assert_down(refs)
-    send(source, {job.task.ref, {{:ok, [:stale]}, before}})
-    send(source, {:job_timeout, job.token})
+    # Repeated deadlines and stray worker replies are ignored.
+    send(source, {:waiter_timeout, waiter})
+    send(source, {make_ref(), {:refreshed, {:ok, %{}, %{}}}})
     assert %{cached_tools: 0} = GenServer.call(source, :status, 1_000)
-    assert :sys.get_state(source).active_job == nil
+    assert :sys.get_state(source).waiters == %{}
+
+    # The server's own refresh is not tied to the caller and still commits.
+    assert :ok = :gen_tcp.send(socket, "release\n")
+    eventually(fn -> match?(%{cached_tools: 1}, GenServer.call(source, :status, 1_000)) end)
     :gen_tcp.close(socket)
   end
 
@@ -393,9 +394,23 @@ defmodule LemonSkills.McpSessionTest do
   end
 
   defp monitor_pending(source) do
-    job = :sys.get_state(source).active_job
-    pids = [source, job.task.pid | Map.keys(job.clients)]
+    workers = :sys.get_state(source).workers |> Map.values()
+    pids = [source | Enum.flat_map(workers, &[&1.task.pid | Map.keys(&1.clients)])]
     Enum.map(pids, fn pid -> {Process.monitor(pid), pid} end)
+  end
+
+  defp eventually(fun, attempts \\ 150) do
+    cond do
+      fun.() ->
+        :ok
+
+      attempts == 0 ->
+        flunk("condition not reached")
+
+      true ->
+        Process.sleep(20)
+        eventually(fun, attempts - 1)
+    end
   end
 
   defp config(context, value) do

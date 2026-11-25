@@ -6,6 +6,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   require Logger
 
   alias LemonChannels.Adapters.Xmtp.Bridge
+  alias LemonChannels.Adapters.Xmtp.CursorStore
   alias LemonChannels.{BindingResolver, GatewayConfig, PortBridge, SubmissionOutcome}
   alias LemonChannels.OutboundPayload
   alias LemonCore.ChatScope
@@ -50,8 +51,13 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
 
     cfg = merge_config(config(), config_overrides)
 
+    # The volatile seen set only absorbs duplicates within one runtime; the
+    # durable per-conversation cursors below stop a restart replaying history.
     :ok = Ets.init(@dedupe_table)
     :ets.delete_all_objects(@dedupe_table)
+
+    # Fail closed: an unreadable cursor store must not look like "no history".
+    {:ok, cursors} = CursorStore.load(normalize_account_id(cfg))
 
     {:ok, port_server} = PortBridge.start_link({@bridge_spec, [config: cfg, notify_pid: self()]})
 
@@ -80,7 +86,9 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
       self_inbox_id: normalize_inbox_id(fetch_meta(cfg, :inbox_id)),
       self_wallet_address: normalize_wallet(fetch_meta(cfg, :wallet_address)),
       seen_inbound_order: :queue.new(),
-      seen_inbound_count: 0
+      seen_inbound_count: 0,
+      cursors: cursors,
+      cursor_floors: %{}
     }
 
     log_authorization_mode(authorization_policy(state))
@@ -96,7 +104,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
     state = %{state | poll_timer_ref: nil}
 
     if ready_for_poll?(state) do
-      Bridge.poll(state.port_server)
+      Bridge.poll(state.port_server, effective_cursors(state))
     end
 
     state = maybe_schedule_poll(state)
@@ -324,16 +332,24 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
     if receive_available?(state) do
       normalized = normalize_inbound(event)
       bridge_dedupe_key = normalize_blank(event["bridge_dedupe_key"])
+      sent_at_ns = event_sent_at_ns(event)
 
-      case authorize_inbound(normalized, state) do
-        :ok ->
-          handle_authorized_message(normalized, event, bridge_dedupe_key, state)
+      if at_or_below_cursor?(state, normalized.conversation_id, sent_at_ns) do
+        # Already handled before the persisted high-water mark (for example a
+        # key evicted from the bounded seen set): never submit it again.
+        _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
+        state
+      else
+        case authorize_inbound(normalized, state) do
+          :ok ->
+            handle_authorized_message(normalized, event, bridge_dedupe_key, sent_at_ns, state)
 
-        {:drop, reason} ->
-          log_dropped_inbound(reason, normalized)
-          # Stop the bridge re-emitting it; nothing is deduped, replied or submitted.
-          _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
-          state
+          {:drop, reason} ->
+            log_dropped_inbound(reason, normalized)
+            # Stop the bridge re-emitting it; nothing is deduped, replied or submitted.
+            _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
+            advance_cursor(state, normalized.conversation_id, sent_at_ns, nil)
+        end
       end
     else
       Logger.warning("xmtp inbound ignored because transport is unavailable")
@@ -365,32 +381,122 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
 
   defp handle_bridge_event(_event, state), do: state
 
-  defp handle_authorized_message(normalized, event, bridge_dedupe_key, state) do
+  defp handle_authorized_message(normalized, event, bridge_dedupe_key, sent_at_ns, state) do
     dedupe_key = inbound_dedupe_key(normalized, event)
+    conversation_id = normalized.conversation_id
 
     if Ets.check_and_mark(@dedupe_table, dedupe_key, :infinity) == :seen do
       _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
       Logger.debug("xmtp duplicate inbound ignored")
-      state
+      advance_cursor(state, conversation_id, sent_at_ns, dedupe_key)
     else
-      case handle_inbound(normalized, state) do
+      case handle_inbound(normalized, dedupe_key, state) do
         {:ok, state} ->
           _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
-          remember_new_inbound_key(state, dedupe_key)
+
+          state
+          |> remember_new_inbound_key(dedupe_key)
+          |> advance_cursor(conversation_id, sent_at_ns, dedupe_key)
 
         {{:error, _} = error, state} ->
           state =
             if SubmissionOutcome.uncertain?(error) do
               _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
-              remember_new_inbound_key(state, dedupe_key)
+
+              state
+              |> remember_new_inbound_key(dedupe_key)
+              |> advance_cursor(conversation_id, sent_at_ns, dedupe_key)
             else
               Ets.forget(@dedupe_table, dedupe_key)
-              state
+              hold_cursor(state, conversation_id, sent_at_ns, dedupe_key)
             end
 
           send_submission_failure(normalized, state.port_server, error)
           state
       end
+    end
+  end
+
+  # Per-conversation inbound high-water marks. `cursors` holds the highest
+  # handled `sent_at_ns`; a definitely rejected message pins a floor below it
+  # (`cursor_floors`) so the durable cursor never skips a message that still
+  # has to be redelivered. The effective cursor is persisted and sent to the
+  # bridge, which lists only messages sent after it.
+  defp effective_cursor(state, conversation_id) do
+    case {Map.get(state.cursors, conversation_id), Map.get(state.cursor_floors, conversation_id)} do
+      {nil, _floor} -> nil
+      {hwm, nil} -> hwm
+      {hwm, {floor_ns, _key}} -> min(hwm, floor_ns - 1)
+    end
+  end
+
+  defp effective_cursors(state) do
+    Map.new(state.cursors, fn {conversation_id, _} ->
+      {conversation_id, Integer.to_string(effective_cursor(state, conversation_id))}
+    end)
+  end
+
+  defp at_or_below_cursor?(state, conversation_id, sent_at_ns)
+       when is_binary(conversation_id) and is_integer(sent_at_ns) do
+    case effective_cursor(state, conversation_id) do
+      cursor when is_integer(cursor) -> sent_at_ns <= cursor
+      nil -> false
+    end
+  end
+
+  defp at_or_below_cursor?(_state, _conversation_id, _sent_at_ns), do: false
+
+  defp advance_cursor(state, conversation_id, sent_at_ns, dedupe_key)
+       when is_binary(conversation_id) and is_integer(sent_at_ns) do
+    floors =
+      case Map.get(state.cursor_floors, conversation_id) do
+        {_ns, ^dedupe_key} when is_binary(dedupe_key) ->
+          Map.delete(state.cursor_floors, conversation_id)
+
+        _ ->
+          state.cursor_floors
+      end
+
+    cursors = Map.update(state.cursors, conversation_id, sent_at_ns, &max(&1, sent_at_ns))
+    persist_cursor(state, %{state | cursors: cursors, cursor_floors: floors}, conversation_id)
+  end
+
+  defp advance_cursor(state, _conversation_id, _sent_at_ns, _dedupe_key), do: state
+
+  defp hold_cursor(state, conversation_id, sent_at_ns, dedupe_key)
+       when is_binary(conversation_id) and is_integer(sent_at_ns) do
+    floors =
+      Map.update(state.cursor_floors, conversation_id, {sent_at_ns, dedupe_key}, fn
+        {floor_ns, _} = floor when floor_ns <= sent_at_ns -> floor
+        _ -> {sent_at_ns, dedupe_key}
+      end)
+
+    persist_cursor(state, %{state | cursor_floors: floors}, conversation_id)
+  end
+
+  defp hold_cursor(state, _conversation_id, _sent_at_ns, _dedupe_key), do: state
+
+  defp persist_cursor(previous, state, conversation_id) do
+    cursor = effective_cursor(state, conversation_id)
+
+    if is_integer(cursor) and cursor != effective_cursor(previous, conversation_id) do
+      case CursorStore.put(state.account_id, conversation_id, cursor) do
+        :ok ->
+          :ok
+
+        {:error, _} ->
+          # The router still dedupes a replay by its stable run identity.
+          Logger.warning("xmtp inbound cursor could not be persisted")
+      end
+    end
+
+    state
+  end
+
+  defp event_sent_at_ns(event) do
+    case parse_integer(fetch_nested(event, ["sent_at_ns"]) || fetch_nested(event, ["sentAtNs"])) do
+      ns when is_integer(ns) and ns > 0 -> ns
+      _ -> nil
     end
   end
 
@@ -498,7 +604,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
     end
   end
 
-  defp handle_inbound(normalized, state) do
+  defp handle_inbound(normalized, dedupe_key, state) do
     case inbound_action(normalized) do
       :ignore ->
         {:ok, state}
@@ -508,7 +614,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
         {:ok, state}
 
       :runtime_submit ->
-        {submit_inbound(normalized, state.account_id), state}
+        {submit_inbound(normalized, dedupe_key, state.account_id), state}
     end
   rescue
     _ ->
@@ -516,7 +622,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
       {{:error, :unavailable}, state}
   end
 
-  defp submit_inbound(normalized, account_id) when is_map(normalized) do
+  defp submit_inbound(normalized, dedupe_key, account_id) when is_map(normalized) do
     scope = %ChatScope{transport: :xmtp, chat_id: normalized.wallet_address, topic_id: nil}
     agent_id = BindingResolver.resolve_agent_id(scope)
 
@@ -535,7 +641,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
       "xmtp inbound routed: conversation_id=#{normalized.conversation_id} sender=#{normalized.wallet_address} agent_id=#{agent_id}"
     )
 
-    route_to_router(inbound)
+    route_to_router(inbound, account_id, dedupe_key)
   end
 
   defp inbound_action(normalized) when is_map(normalized) do
@@ -1397,8 +1503,20 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
     |> drop_nil_values()
   end
 
-  defp route_to_router(%InboundMessage{} = inbound) do
-    case LemonChannels.Runtime.submit_inbound(inbound) do
+  # A stable run identity derived from the conversation and message lets the
+  # router admit a replayed message at most once.
+  defp route_to_router(%InboundMessage{} = inbound, account_id, dedupe_key) do
+    digest =
+      {:xmtp, account_id, dedupe_key}
+      |> :erlang.term_to_binary()
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 32)
+
+    case LemonChannels.Runtime.submit_inbound(inbound,
+           run_id: "run_xmtp_" <> digest,
+           replay_identity: "xmtp:" <> digest
+         ) do
       :ok ->
         :ok
 

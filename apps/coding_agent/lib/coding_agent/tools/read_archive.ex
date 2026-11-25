@@ -5,7 +5,7 @@ defmodule CodingAgent.Tools.ReadArchive do
   Record.defrecordp(:zip_file, Record.extract(:zip_file, from_lib: "stdlib/include/zip.hrl"))
   Record.defrecordp(:file_info, Record.extract(:file_info, from_lib: "kernel/include/file.hrl"))
 
-  alias CodingAgent.Tools.{ReadFormats, ReadFormatText}
+  alias CodingAgent.Tools.{BoundedInflate, ReadFormats, ReadFormatText}
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.ImageContent
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
@@ -25,8 +25,11 @@ defmodule CodingAgent.Tools.ReadArchive do
   def read(path, member, params, signal, opts) do
     with :ok <- ReadFormats.check_input(path, opts),
          :ok <- check_abort(signal),
-         {:ok, entries} <- entries(path),
+         {:ok, source} <- open_source(path, signal, opts),
+         {:ok, entries} <- entries(path, source),
+         :ok <- BoundedInflate.check_entries(length(entries), opts),
          :ok <- check_abort(signal) do
+      archive_source = source
       source = if member == "", do: path, else: path <> ":" <> member
       entry = Enum.find(entries, &(&1.name == member))
       prefix = String.trim_trailing(member, "/") <> "/"
@@ -36,7 +39,7 @@ defmodule CodingAgent.Tools.ReadArchive do
           listing(entries, path, source, params, signal, opts)
 
         entry && entry.type == :regular ->
-          read_member(path, entry, source, params, signal, opts)
+          read_member(path, archive_source, entries, entry, source, params, signal, opts)
 
         (entry && entry.type == :directory) ||
             Enum.any?(entries, &String.starts_with?(&1.name, prefix)) ->
@@ -57,16 +60,53 @@ defmodule CodingAgent.Tools.ReadArchive do
     error -> {:error, "Cannot read archive #{path}: #{Exception.message(error)}"}
   end
 
-  defp entries(path) do
+  # ZIP members are inflated straight from the file; a compressed TAR is
+  # gunzipped once under :format_max_decoded_bytes so listing and extraction
+  # never stream an unbounded decompressed archive.
+  defp open_source(path, signal, opts) do
+    cond do
+      zip?(path) ->
+        {:ok, {:file, String.to_charlist(path)}}
+
+      tar_options(path) == [] ->
+        {:ok, {:file, String.to_charlist(path)}}
+
+      true ->
+        limit = BoundedInflate.max_decoded_bytes(opts)
+
+        with {:ok, bytes} <- File.read(path) do
+          case BoundedInflate.gunzip(bytes, limit, signal) do
+            {:ok, raw} ->
+              {:ok, {:binary, raw}}
+
+            {:error, :too_large} ->
+              {:error,
+               "Decompressed archive exceeds the #{limit}-byte limit (:format_max_decoded_bytes): #{path}"}
+
+            {:error, :invalid} ->
+              {:error, "Cannot read archive #{path}: invalid gzip data"}
+
+            {:error, _} = error ->
+              error
+          end
+        end
+    end
+  end
+
+  defp entries(path, source) do
     if zip?(path) do
-      case :zip.list_dir(String.to_charlist(path)) do
+      {:file, name} = source
+
+      case :zip.list_dir(name) do
         {:ok, records} ->
           entries =
-            for zip_file(name: name, info: info) <- records do
+            for zip_file(name: name, info: info, offset: offset, comp_size: comp_size) <- records do
               %{
                 name: List.to_string(name),
                 type: file_info(info, :type),
-                size: file_info(info, :size)
+                size: file_info(info, :size),
+                offset: offset,
+                comp_size: comp_size
               }
             end
 
@@ -76,7 +116,7 @@ defmodule CodingAgent.Tools.ReadArchive do
           {:error, "Cannot list ZIP: #{inspect(reason)}"}
       end
     else
-      case :erl_tar.table(String.to_charlist(path), [:verbose | tar_options(path)]) do
+      case :erl_tar.table(tar_source(source), [:verbose]) do
         {:ok, records} ->
           entries =
             Enum.map(records, fn {name, type, size, _mtime, _mode, _uid, _gid} ->
@@ -90,6 +130,9 @@ defmodule CodingAgent.Tools.ReadArchive do
       end
     end
   end
+
+  defp tar_source({:file, name}), do: name
+  defp tar_source({:binary, _} = binary), do: binary
 
   defp listing(entries, archive, source, params, signal, opts) do
     text =
@@ -115,18 +158,20 @@ defmodule CodingAgent.Tools.ReadArchive do
     })
   end
 
-  defp read_member(path, entry, source, params, signal, opts) do
+  defp read_member(path, archive, entries, entry, source, params, signal, opts) do
     max_bytes = Keyword.get(opts, :format_max_member_bytes, 32 * 1024 * 1024)
 
-    if entry.size > max_bytes do
-      {:error,
-       "Member #{source} is #{entry.size} bytes, exceeding the #{max_bytes}-byte decoded-member limit. Use a streaming archive CLI or raise :format_max_member_bytes."}
-    else
-      with {:ok, bytes} <- extract_memory(path, entry.name),
-           :ok <- check_abort(signal) do
-        if byte_size(bytes) > max_bytes do
-          {:error, "Decoded member exceeds the #{max_bytes}-byte limit: #{source}"}
-        else
+    cond do
+      entry.size > max_bytes ->
+        {:error,
+         "Member #{source} is #{entry.size} bytes, exceeding the #{max_bytes}-byte decoded-member limit. Use a streaming archive CLI or raise :format_max_member_bytes."}
+
+      Enum.count(entries, &(&1.name == entry.name)) > 1 ->
+        {:error, "Archive member #{entry.name} is ambiguous (duplicate entries)"}
+
+      true ->
+        with {:ok, bytes} <- extract_member(path, archive, entry, max_bytes, signal),
+             :ok <- check_abort(signal) do
           details = %{
             format: :archive_member,
             archive_path: path,
@@ -137,25 +182,56 @@ defmodule CodingAgent.Tools.ReadArchive do
 
           member_result(bytes, source, params, signal, opts, details)
         end
-      end
     end
   end
 
-  defp extract_memory(path, member) do
-    name = String.to_charlist(member)
+  defp extract_member(path, {:file, name}, entry, max_bytes, signal) do
+    if zip?(path) do
+      {:ok, fd} = :file.open(name, [:read, :raw, :binary])
 
-    result =
-      if zip?(path) do
-        :zip.extract(String.to_charlist(path), [:memory, {:file_list, [name]}])
-      else
-        :erl_tar.extract(String.to_charlist(path), [:memory, {:files, [name]} | tar_options(path)])
+      try do
+        pread = &:file.pread(fd, &1, &2)
+
+        case BoundedInflate.zip_member(
+               pread,
+               entry.offset,
+               entry.comp_size,
+               entry.size,
+               max_bytes,
+               signal
+             ) do
+          {:ok, bytes} ->
+            {:ok, bytes}
+
+          {:error, :too_large} ->
+            {:error,
+             "Decoded member exceeds its declared size or the #{max_bytes}-byte limit: #{path}:#{entry.name}"}
+
+          {:error, reason} when is_atom(reason) ->
+            {:error, "Cannot read archive member #{entry.name}: #{reason} entry data"}
+
+          {:error, _} = error ->
+            error
+        end
+      after
+        :file.close(fd)
       end
+    else
+      extract_tar(name, entry)
+    end
+  end
 
-    case result do
+  defp extract_member(_path, {:binary, _} = binary, entry, _max_bytes, _signal),
+    do: extract_tar(binary, entry)
+
+  # TAR header sizes are exact payload lengths, so the declared-size check
+  # above already bounds the extracted member.
+  defp extract_tar(source, entry) do
+    case :erl_tar.extract(source, [:memory, {:files, [String.to_charlist(entry.name)]}]) do
       {:ok, [{_name, bytes}]} when is_binary(bytes) -> {:ok, bytes}
-      {:ok, []} -> {:error, "Archive backend did not return member #{member}"}
-      {:ok, _} -> {:error, "Archive member #{member} is ambiguous (duplicate entries)"}
-      {:error, reason} -> {:error, "Cannot read archive member #{member}: #{inspect(reason)}"}
+      {:ok, []} -> {:error, "Archive backend did not return member #{entry.name}"}
+      {:ok, _} -> {:error, "Archive member #{entry.name} is ambiguous (duplicate entries)"}
+      {:error, reason} -> {:error, "Cannot read archive member #{entry.name}: #{inspect(reason)}"}
     end
   end
 

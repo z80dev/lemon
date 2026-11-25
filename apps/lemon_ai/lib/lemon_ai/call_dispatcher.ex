@@ -35,7 +35,7 @@ defmodule LemonAi.CallDispatcher do
 
   Admission fails closed with `{:error, :admission_unavailable}` while a provider's
   slot authority is unavailable. Leases and configured caps survive authority
-  and dispatcher restarts; other providers use independent authorities. The error
+  restarts; other providers use independent authorities. The error
   is classified as transient by `LemonAi.Error`.
 
   ## Configuration
@@ -61,20 +61,13 @@ defmodule LemonAi.CallDispatcher do
 
   Callers may pass `model_call: %{model: id, api: api, call_kind: :stream | :complete}`
   in the dispatch options to label the span; only those keys are read.
+
+  ## Failure summaries
+
+  `last_error/1` returns the latest credential-free failure summary per provider.
+  Summaries live in a public ETS table owned by `LemonAi.Supervisor`, so neither
+  recording nor reading one is a call to a shared process.
   """
-
-  use GenServer
-
-  @impl true
-  def format_status(status) do
-    Map.new(status, fn
-      {:state, _} -> {:state, :redacted}
-      {:message, _} -> {:message, :redacted}
-      {:reason, _} -> {:reason, :redacted}
-      {:log, _} -> {:log, []}
-      pair -> pair
-    end)
-  end
 
   require Logger
 
@@ -93,12 +86,11 @@ defmodule LemonAi.CallDispatcher do
   # Public API
   # ============================================================================
 
-  @doc """
-  Start the call dispatcher.
-  """
-  @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  @doc false
+  # The root supervisor owns this table, like the slot table: summaries survive
+  # child restarts and every caller writes its own result without a process hop.
+  def init_table do
+    :ets.new(__MODULE__, [:named_table, :public, :set, read_concurrency: true])
   end
 
   @doc """
@@ -121,9 +113,6 @@ defmodule LemonAi.CallDispatcher do
       Both limits accept `:infinity`; per-call values override application config.
     * `:model_call` - optional `%{model: id, api: api, call_kind: kind}` labels
       for the `[:lemon_ai, :model_call, _]` telemetry span.
-    * `:hedge_input_tokens` - zero-arity input-token estimate, required for opt-in
-      model hedging. `LemonAi.stream/3` and `complete/3` supply it automatically.
-      Unlabelled callbacks (including tools) never hedge.
 
   ## Examples
 
@@ -170,14 +159,12 @@ defmodule LemonAi.CallDispatcher do
         {:ok, slot_ref} ->
           case LemonAi.RateLimiter.acquire(provider) do
             :ok ->
-              hedge_key = register_model_request(provider, opts)
               span = LemonAi.ModelCallTelemetry.start(provider, opts)
 
               try do
                 callback
                 |> invoke_callback(span)
                 |> handle_dispatch_result(provider, slot_ref, opts, span)
-                |> maybe_hedge(provider, callback, opts, hedge_key, span.start_monotonic)
               rescue
                 error ->
                   record_last_error(provider, error)
@@ -284,26 +271,16 @@ defmodule LemonAi.CallDispatcher do
     end)
   end
 
-  @doc "Returns the bounded latency window and duplicate-input accounting for a model."
-  def hedging_state(provider, model) do
-    GenServer.call(__MODULE__, {:hedge_state, {provider, model}})
-  end
-
-  @doc false
-  def hedge_claim(key), do: hedge_policy_call({:hedge_claim, key}, false)
-
-  @doc false
-  def hedge_refund(key), do: hedge_policy_call({:hedge_refund, key}, :ok)
-
-  @doc false
-  def hedge_charge(key, tokens),
-    do: hedge_policy_call({:hedge_charge, key, tokens}, {:error, :unavailable})
-
   @doc "Last observed provider failure, with a bounded, credential-free summary."
+  @spec last_error(provider()) :: %{String.t() => term()} | nil
   def last_error(provider) do
-    if Process.whereis(__MODULE__) do
-      GenServer.call(__MODULE__, {:last_error, to_string(provider)})
+    case :ets.lookup(__MODULE__, to_string(provider)) do
+      [{_provider, error}] -> error
+      [] -> nil
     end
+  rescue
+    # No table: lemon_ai is not running, so no failure was observed.
+    ArgumentError -> nil
   end
 
   defp record_last_error(provider, reason) do
@@ -319,121 +296,11 @@ defmodule LemonAi.CallDispatcher do
       end
 
     error = %{"message" => message, "atMs" => System.system_time(:millisecond)}
-    GenServer.call(__MODULE__, {:record_last_error, to_string(provider), error})
-  end
-
-  # ============================================================================
-  # GenServer Callbacks
-  # ============================================================================
-
-  @impl true
-  def init(_opts) do
-    state = %{last_errors: %{}, hedging: %{}}
-
-    Logger.debug("CallDispatcher started")
-
-    {:ok, state}
-  end
-
-  @impl true
-  def handle_call({:last_error, provider}, _from, state) do
-    {:reply, Map.get(state.last_errors, provider), state}
-  end
-
-  def handle_call({:record_last_error, provider, error}, _from, state) do
-    {:reply, :ok, %{state | last_errors: Map.put(state.last_errors, provider, error)}}
-  end
-
-  def handle_call({:hedge_state, key}, _from, state) do
-    {:reply, Map.get(state.hedging, key, new_hedge_window()), state}
-  end
-
-  def handle_call({:hedge_request, key, enabled?}, _from, state) do
-    window = Map.get(state.hedging, key, new_hedge_window())
-    window = %{window | requests: window.requests + 1}
-
-    deadline =
-      if enabled? and window.samples != [] do
-        sorted = Enum.sort(window.samples)
-        Enum.at(sorted, div(length(sorted) * 9 + 9, 10) - 1)
-      end
-
-    {:reply, deadline, put_in(state, [:hedging, key], window)}
-  end
-
-  def handle_call({:hedge_sample, key, milliseconds}, _from, state) do
-    window = Map.get(state.hedging, key, new_hedge_window())
-    # Caller policy: retain the latest 100 completed first-event observations.
-    window = %{window | samples: Enum.take([max(milliseconds, 1) | window.samples], 100)}
-    {:reply, :ok, put_in(state, [:hedging, key], window)}
-  end
-
-  def handle_call({:hedge_claim, key}, _from, state) do
-    window = Map.get(state.hedging, key, new_hedge_window())
-    allowed? = (window.hedges + 1) * 10 <= window.requests
-    window = if allowed?, do: %{window | hedges: window.hedges + 1}, else: window
-    {:reply, allowed?, put_in(state, [:hedging, key], window)}
-  end
-
-  def handle_call({:hedge_refund, key}, _from, state) do
-    window = Map.get(state.hedging, key, new_hedge_window())
-    {:reply, :ok, put_in(state, [:hedging, key], %{window | hedges: max(window.hedges - 1, 0)})}
-  end
-
-  def handle_call({:hedge_charge, key, tokens}, _from, state) do
-    case Map.get(state.hedging, key) do
-      %{hedges: hedges} = window when hedges > 0 ->
-        window = %{window | duplicate_input_tokens: window.duplicate_input_tokens + tokens}
-        {:reply, :ok, put_in(state, [:hedging, key], window)}
-
-      _ ->
-        {:reply, {:error, :unavailable}, state}
-    end
-  end
-
-  defp new_hedge_window do
-    %{requests: 0, hedges: 0, samples: [], duplicate_input_tokens: 0}
-  end
-
-  defp register_model_request(provider, opts) do
-    case {Keyword.get(opts, :model_call), Keyword.get(opts, :hedge_attempt, false)} do
-      {%{model: model, call_kind: kind}, false} when kind in [:stream, :complete] ->
-        key = {provider, model}
-        config = Application.get_env(:lemon_ai, __MODULE__, [])
-
-        enabled? =
-          Map.get(Keyword.get(config, :hedging, %{}), provider, false) == true and
-            is_function(Keyword.get(opts, :hedge_input_tokens), 0)
-
-        deadline = hedge_policy_call({:hedge_request, key, enabled?}, nil)
-        {key, deadline}
-
-      _ ->
-        nil
-    end
-  end
-
-  defp maybe_hedge({:ok, stream}, provider, callback, opts, {key, deadline}, started_at)
-       when is_pid(stream) and is_integer(deadline) do
-    elapsed =
-      System.convert_time_unit(System.monotonic_time() - started_at, :native, :millisecond)
-
-    LemonAi.CallDispatcher.Hedge.start(
-      stream,
-      provider,
-      callback,
-      opts,
-      key,
-      max(deadline - elapsed, 0)
-    )
-  end
-
-  defp maybe_hedge(result, _provider, _callback, _opts, _key, _started_at), do: result
-
-  defp hedge_policy_call(message, fallback) do
-    GenServer.call(__MODULE__, message)
-  catch
-    :exit, _ -> fallback
+    :ets.insert(__MODULE__, {to_string(provider), error})
+    :ok
+  rescue
+    # Diagnostics must never fail the model call they describe.
+    ArgumentError -> :ok
   end
 
   # ============================================================================
@@ -529,18 +396,6 @@ defmodule LemonAi.CallDispatcher do
   # breaker bookkeeping), so a failure while recording is still reported once.
   defp track_stream_result(provider, slot_ref, stream_pid, span) do
     {terminal_result, first_event_at, ended_at} = await_stream_terminal_result(stream_pid)
-
-    if is_integer(first_event_at) and is_binary(span.metadata[:model]) do
-      milliseconds =
-        System.convert_time_unit(
-          max(first_event_at - span.start_monotonic, 0),
-          :native,
-          :millisecond
-        )
-
-      hedge_policy_call({:hedge_sample, {provider, span.metadata.model}, milliseconds}, :ok)
-    end
-
     record_stream_terminal_result(provider, terminal_result)
     LemonAi.ModelCallTelemetry.stop_stream(span, terminal_result, first_event_at, ended_at)
   rescue

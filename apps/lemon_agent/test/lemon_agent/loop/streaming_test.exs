@@ -1054,4 +1054,122 @@ defmodule LemonAgent.Loop.StreamingTest do
       refute Enum.any?(EventStream.events(stream), &match?({:provider_retry, _}, &1))
     end
   end
+
+  describe "tool-argument deltas (#639)" do
+    # Replays a provider's recorded tool-call events: start, one or more
+    # argument deltas, end and the terminal message.
+    defp tool_call_stream_fn(tool_call, deltas, opts \\ []) do
+      parent = self()
+      metadata = %{Mocks.assistant_message("") | content: []}
+      final = %{metadata | content: [tool_call], stop_reason: :tool_use}
+
+      fn _model, _context, _options ->
+        send(parent, :provider_call)
+        {:ok, provider} = LemonAi.EventStream.start_link()
+        send(parent, {:provider_stream, provider})
+        :ok = LemonAi.EventStream.push(provider, {:start, metadata})
+
+        :ok =
+          LemonAi.EventStream.push(provider, {:tool_call_start, 0, %{tool_call | arguments: %{}}})
+
+        Enum.each(deltas, &(:ok = LemonAi.EventStream.push(provider, {:tool_call_delta, 0, &1})))
+
+        unless Keyword.get(opts, :open, false) do
+          :ok = LemonAi.EventStream.push(provider, {:tool_call_end, 0, tool_call})
+          LemonAi.EventStream.complete(provider, final)
+        end
+
+        {:ok, provider}
+      end
+    end
+
+    defp tool_rule(pattern),
+      do: %{name: "rule", content: "Do not.", stream_pattern: pattern, injection_limit: 1}
+
+    defp stream_tool_call(tools, stream_fn, hooks \\ %{}) do
+      context = simple_context(messages: [user_message("go")], tools: tools)
+      config = %{simple_config(stream_fn: stream_fn) | hooks: hooks}
+      {:ok, output} = EventStream.start_link(timeout: :infinity)
+      result = Streaming.stream_assistant_response(context, config, nil, stream_fn, output)
+      EventStream.complete(output, [])
+      {result, Enum.to_list(EventStream.events(output))}
+    end
+
+    defp continuation?(events),
+      do: Enum.any?(events, &match?({:provider_retry, %{category: :continuation}}, &1))
+
+    test "an empty argument delta for a no-argument tool completes as {} without a continuation" do
+      tool = %{
+        Mocks.echo_tool()
+        | name: "now",
+          parameters: %{"type" => "object", "properties" => %{}}
+      }
+
+      call = Mocks.tool_call("now", %{}, id: "toolu_now")
+
+      # Anthropic forwards `partial_json: ""` as the call's only argument delta.
+      for tools <- [[tool], [Mocks.echo_tool()]], deltas <- [[""], ["", " "]] do
+        {result, events} = stream_tool_call(tools, tool_call_stream_fn(call, deltas))
+
+        assert {:ok, %{stop_reason: :tool_use} = message, _context} = result
+        assert [%ToolCall{name: "now", arguments: %{}}] = message.content
+        refute continuation?(events)
+        assert_received :provider_call
+        refute_received :provider_call
+      end
+    end
+
+    test "a malformed but complete JSON argument still continues as malformed_tool_arguments" do
+      call = Mocks.tool_call("echo", %{"text" => "hi"}, id: "call_echo")
+      stream_fn = tool_call_stream_fn(call, [~s({"text": "hi"), ~s(, })])
+      {_result, events} = stream_tool_call([Mocks.echo_tool()], stream_fn)
+
+      assert continuation?(events)
+    end
+
+    test "a 64 KB single-delta Google tool call succeeds and stream rules still scan it" do
+      text = :binary.copy("x", 65_536) <> "NEEDLE"
+      call = Mocks.tool_call("echo", %{"text" => text}, id: "call_big")
+      delta = Jason.encode!(%{"text" => text})
+      parent = self()
+
+      on_stream_rule = fn rule ->
+        send(parent, {:rule_matched, rule.name})
+        {:error, :injection_limit}
+      end
+
+      for {pattern, matched?} <- [{"NEEDLE", true}, {"ABSENT", false}] do
+        hooks = %{stream_rules: [tool_rule(pattern)], on_stream_rule: on_stream_rule}
+        stream_fn = tool_call_stream_fn(call, [delta])
+        {result, events} = stream_tool_call([Mocks.echo_tool()], stream_fn, hooks)
+
+        assert {:ok, %{stop_reason: :tool_use} = message, _context} = result
+        assert [%ToolCall{arguments: %{"text" => ^text}}] = message.content
+        refute continuation?(events)
+
+        if matched?,
+          do: assert_received({:rule_matched, "rule"}),
+          else: refute_received({:rule_matched, _})
+      end
+    end
+
+    test "a rule that cannot evaluate the output fails the attempt once and records usage" do
+      call = Mocks.tool_call("echo", %{"text" => "a"}, id: "call_bad")
+      delta = :binary.copy("a", 32) <> "!"
+      rule = tool_rule(~S"(*NO_START_OPT)(*NO_AUTO_POSSESS)\A(a+)+\z")
+      stream_fn = tool_call_stream_fn(call, [delta], open: true)
+      {result, events} = stream_tool_call([Mocks.echo_tool()], stream_fn, %{stream_rules: [rule]})
+
+      assert {:ok, %{stop_reason: :error} = message, _context} = result
+      assert message.error_message =~ "stream rule matching failed"
+      assert %{category: :client, retryable: false} = message.error_details
+      assert [] = Enum.filter(message.content, &match?(%ToolCall{}, &1))
+      assert Enum.any?(events, &match?({:provider_usage, %{stop_reason: :error}}, &1))
+      assert_received {:provider_stream, provider}
+      provider_ref = Process.monitor(provider)
+      assert_receive {:DOWN, ^provider_ref, :process, ^provider, _reason}, 1_000
+      assert_received :provider_call
+      refute_received :provider_call
+    end
+  end
 end

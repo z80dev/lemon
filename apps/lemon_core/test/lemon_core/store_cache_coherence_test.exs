@@ -92,23 +92,38 @@ defmodule LemonCore.StoreCacheCoherenceTest do
     test "a registered cached table does not keep serving swept rows" do
       store = unique(:coherence_sweep)
       # Registered before boot so the store mirrors it from init.
-      :ok = Store.register_cached_table(store, :cron_runs)
-      on_exit(fn -> Store.unregister_cached_table(store, :cron_runs) end)
+      :ok = Store.register_cached_table(store, :idempotency)
+      on_exit(fn -> Store.unregister_cached_table(store, :idempotency) end)
       start_store(store, backend: EtsBackend)
 
       ancient = System.system_time(:millisecond) - 72 * 60 * 60 * 1000
-      :ok = Store.put(store, :cron_runs, "job1", %{started_at_ms: ancient})
-      assert %{started_at_ms: ^ancient} = Store.get(store, :cron_runs, "job1")
+      :ok = Store.put(store, :idempotency, "key1", %{"inserted_at_ms" => ancient})
+      assert %{"inserted_at_ms" => ^ancient} = Store.get(store, :idempotency, "key1")
 
       send(Process.whereis(store), :sweep_expired)
       # The sweep runs in the store process; a call afterwards is the barrier.
       :ok = Store.ping(store)
 
-      assert Store.get(store, :cron_runs, "job1") == nil,
+      assert Store.get(store, :idempotency, "key1") == nil,
              "the sweeper deleted the backend row but the cache kept serving it"
 
-      assert Store.list(store, :cron_runs) == []
-      assert ReadCache.get(store, :cron_runs, "job1") == nil
+      assert Store.list(store, :idempotency) == []
+      assert ReadCache.get(store, :idempotency, "key1") == nil
+    end
+
+    test "the sweep never deletes cron runs; CronStore owns their retention" do
+      store = start_store(unique(:coherence_cron_runs), backend: EtsBackend)
+      ancient = System.system_time(:millisecond) - 72 * 60 * 60 * 1000
+      running = %{status: :running, started_at_ms: ancient}
+      unknown = %{status: :running, started_at_ms: ancient, meta: %{outcome_unknown: true}}
+      :ok = Store.put(store, :cron_runs, "running", running)
+      :ok = Store.put(store, :cron_runs, "unknown", unknown)
+
+      send(Process.whereis(store), :sweep_expired)
+      :ok = Store.ping(store)
+
+      assert Store.get(store, :cron_runs, "running") == running
+      assert Store.get(store, :cron_runs, "unknown") == unknown
     end
 
     test "expired chat state is evicted from the cache, not just the backend" do
