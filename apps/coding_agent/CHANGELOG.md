@@ -105,10 +105,6 @@
   files alongside bounded per-file parse/CLI errors, and exposes session artifact
   handles for complete spilled match results.
 
-- `read file.json?q=filter` supports native jq-subset field/index traversal,
-  iteration, pipes, keys, length and scalar select comparisons, with ordinary
-  read-budget pagination and literal-filename precedence.
-
 - `write archive:member` adds or replaces ZIP/TAR/tar.gz/tgz members atomically,
   preserving unrelated member data and enforcing physical archive mutation guards.
 
@@ -257,9 +253,10 @@
   `Tools.TodoStore`/`TodoStoreOwner`, `Tools.TodoRead`/`TodoWrite`,
   `Tools.ReportIssue`, `Tools.ReadJson`, `Tools.WriteArchive` and
   `Tools.WriteSqlite`; the pure todo views are `Tools.Todo.progress/1`,
-  `actionable/1`, `result_details/1` and `normalize/1`. `read` refuses
-  directories (use `ls`); `extensions_status` drops its `action`/`reload`
-  parameter; `Progress.snapshot/2` drops `features` (#706).
+  `actionable/1`, `result_details/1` and `normalize/1`. `read` no longer supports
+  `file.json?q=` queries and refuses directories (use `ls`); `extensions_status`
+  drops its `action`/`reload` parameter; `Progress.snapshot/2` drops `features`
+  (#706).
 
 - **Breaking:** removed `CodingAgent.SessionIndex`, `SessionManager.list_sessions/1`
   and `SessionEntry.session_info/2`; journal appends, checkpoints and
