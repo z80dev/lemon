@@ -1,4 +1,6 @@
 defmodule LemonGateway.Test.AppIsolation do
+  @moduledoc false
+
   import ExUnit.Assertions
   import ExUnit.Callbacks
 
