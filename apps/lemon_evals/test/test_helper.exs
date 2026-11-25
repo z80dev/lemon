@@ -1,5 +1,9 @@
+# `:slow` boots the offline native runtime for the latency lane; nightly's
+# latency job includes it (`--include slow`).
 excluded =
-  if :os.type() == {:unix, :darwin}, do: [:integration], else: [:integration, :darwin_only]
+  if :os.type() == {:unix, :darwin},
+    do: [:slow],
+    else: [:slow, :darwin_only]
 
 ExUnit.configure(exclude: excluded)
 

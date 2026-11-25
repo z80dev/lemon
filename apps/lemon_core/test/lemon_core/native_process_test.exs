@@ -148,7 +148,7 @@ defmodule LemonCore.NativeProcessTest do
     assert_receive {:opened, ^worker, port}, 5_000
     eventually(fn -> File.exists?(marker) end)
     assert File.read!(marker) == "started"
-    assert true = Port.command(port, "\n")
+    true = Port.command(port, "\n")
     send(worker, :finish)
 
     eventually(fn ->

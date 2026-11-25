@@ -97,7 +97,8 @@ defmodule CodingAgent.BashExecutorTest do
     test "a missing working directory fails without running the command" do
       assert {:ok, result} = BashExecutor.execute("echo ran", "/nonexistent/path/xyz")
       assert result.exit_code != 0
-      refute result.output =~ "ran"
+      assert result.output =~ "/nonexistent/path/xyz"
+      refute result.output =~ ~r/^ran$/m
     end
 
     test "handles output exceeding OS pipe buffer without deadlock" do

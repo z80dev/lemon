@@ -140,6 +140,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   the generated tables, stale `agent_core`/`ai` app names are corrected, and the
   coding_agent guide no longer claims steer/redirect are unsupported on named
   nodes (#90).
+- `mix lemon.quality` fails on an `apps/*/test` assertion that cannot fail
+  (`assert true`, including `else assert true` fallbacks, `assert :ok`,
+  `refute false`/`nil`) (#731).
+- Tests that never ran now run: the deterministic `mix lemon.eval` task tests
+  run in the fast lane; the offline latency-lane test is tagged `:slow` and runs
+  in nightly's latency job; a nightly `integration` job runs the
+  credential-free `:integration` cases; and CI builds
+  `clients/lemon-browser-node` so the real-browser smoke (`:browser_driver`) runs
+  in coding_agent's test shards. Unconfigured live suites fail instead of
+  passing, and missing host prerequisites exclude named tags (#731).
 
 ### Changed
 

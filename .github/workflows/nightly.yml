@@ -8,6 +8,9 @@ name: Nightly
 #     --cover, enforcing each app's test_coverage threshold)
 #   - determinism: repeats prompt/skill/overflow regression files to catch
 #     non-deterministic output, then runs the eval harness for 20 iterations
+#   - latency: offline latency distribution/regression check, then the lane's
+#     `:slow` ExUnit test
+#   - integration: credential-free `:integration` cases (provider error handling)
 #   - report: keeps the `nightly-red` issue open while a nightly job fails
 
 on:
@@ -86,7 +89,7 @@ jobs:
 
   latency:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
       actions: read
@@ -127,10 +130,38 @@ jobs:
           path: latency-results/latency.json
           if-no-files-found: warn
           retention-days: 90
+      # The lane's own end-to-end test (`:slow`, excluded from the fast lane):
+      # one credential-free boot under the test build.
+      - name: Offline latency lane test
+        run: scripts/test path apps/lemon_evals/test/lemon_evals/latency_test.exs --include slow
+
+  # Offline `:integration` cases: invalid-key handling through each provider's
+  # real HTTP path against a loopback fixture. scripts/test scrubs provider
+  # credentials, so this proves the selection needs none. Credentialed live
+  # suites fail rather than pass without keys and stay manual (docs/testing.md).
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: BEAM setup
+        uses: ./.github/actions/beam-setup
+        with:
+          family: test
+
+      - name: Credential-free provider integration
+        run: |
+          scripts/test path \
+            apps/lemon_ai/test/integration_test.exs \
+            apps/lemon_ai/test/provider_integration_test.exs \
+            --only provider:error_handling
 
   report:
     if: ${{ always() && github.ref == 'refs/heads/main' }}
-    needs: [ci, coverage, determinism, latency]
+    needs: [ci, coverage, determinism, latency, integration]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

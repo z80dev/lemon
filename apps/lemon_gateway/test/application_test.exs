@@ -166,16 +166,12 @@ defmodule LemonGateway.ApplicationTest do
       children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
 
       for {id, pid, _type, _modules} <- children do
-        cond do
-          is_pid(pid) ->
-            assert Process.alive?(pid), "Child #{inspect(id)} should be alive"
-
-          pid == :undefined and id == Elixir.LemonGateway.Sms.WebhookServer ->
-            # Webhook server is optional and may return :ignore when disabled.
-            assert true
-
-          true ->
-            flunk("Child #{inspect(id)} should have a pid (got: #{inspect(pid)})")
+        if is_pid(pid) do
+          assert Process.alive?(pid), "Child #{inspect(id)} should be alive"
+        else
+          # Only the optional webhook server may return :ignore when disabled.
+          assert {id, pid} == {Elixir.LemonGateway.Sms.WebhookServer, :undefined},
+                 "Child #{inspect(id)} should have a pid (got: #{inspect(pid)})"
         end
       end
     end

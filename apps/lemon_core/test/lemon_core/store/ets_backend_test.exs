@@ -468,11 +468,11 @@ defmodule LemonCore.Store.EtsBackendTest do
       {:ok, state} = EtsBackend.put(state, :chat, "true_key", true)
       {:ok, state} = EtsBackend.put(state, :chat, "false_key", false)
 
-      {:ok, true_value, _} = EtsBackend.get(state, :chat, "true_key")
-      {:ok, false_value, _} = EtsBackend.get(state, :chat, "false_key")
+      assert {:ok, stored_true, _} = EtsBackend.get(state, :chat, "true_key")
+      assert {:ok, stored_false, _} = EtsBackend.get(state, :chat, "false_key")
 
-      assert true_value == true
-      assert false_value == false
+      assert stored_true === true
+      assert stored_false === false
     end
 
     test "mixed data types in same table", %{state: state} do

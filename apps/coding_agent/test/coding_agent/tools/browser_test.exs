@@ -3,6 +3,7 @@ defmodule CodingAgent.Tools.BrowserTest do
   # Page URL the driver reports with every capture.
   @page_url "https://example.com/"
 
+  alias CodingAgent.TestHostCapabilities
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.ImageContent
   alias LemonBrowser.LocalServer
@@ -1442,169 +1443,170 @@ defmodule CodingAgent.Tools.BrowserTest do
     assert result.details["eventsCleared"] == true
   end
 
+  # Needs node, the built clients/lemon-browser-node driver and Chrome; the
+  # coding_agent test_helper excludes :browser_driver when one is missing.
+  @tag :browser_driver
   test "browser tools drive a deterministic page through the supervised local server", %{
     tmp_dir: tmp_dir
   } do
-    if browser_smoke_available?() do
-      chrome = chrome_executable()
-      server = :"browser_smoke_#{System.unique_integer([:positive])}"
-      port = free_port()
-      profile_dir = Path.join(tmp_dir, "browser-profile")
+    chrome = TestHostCapabilities.isolated_home_chrome(tmp_dir)
+    server = :"browser_smoke_#{System.unique_integer([:positive])}"
+    port = free_port()
+    profile_dir = Path.join(tmp_dir, "browser-profile")
 
-      with_env(
-        %{
-          "LEMON_BROWSER_CDP_PORT" => Integer.to_string(port),
-          "LEMON_BROWSER_DRIVER_PATH" => browser_driver_path(),
-          "LEMON_BROWSER_HEADLESS" => "true",
-          "LEMON_BROWSER_NO_SANDBOX" => "true",
-          "LEMON_BROWSER_USER_DATA_DIR" => profile_dir,
-          "LEMON_BROWSER_EXECUTABLE" => chrome
-        },
-        fn ->
-          {:ok, pid} = LocalServer.start_link(name: server)
-          on_exit(fn -> if Process.alive?(pid), do: LocalServer.stop(server) end)
+    with_env(
+      %{
+        "LEMON_BROWSER_CDP_PORT" => Integer.to_string(port),
+        "LEMON_BROWSER_DRIVER_PATH" => TestHostCapabilities.browser_driver_path(),
+        "LEMON_BROWSER_HEADLESS" => "true",
+        "LEMON_BROWSER_NO_SANDBOX" => "true",
+        "LEMON_BROWSER_USER_DATA_DIR" => profile_dir,
+        "LEMON_BROWSER_EXECUTABLE" => chrome
+      },
+      fn ->
+        {:ok, pid} = LocalServer.start_link(name: server)
+        on_exit(fn -> if Process.alive?(pid), do: LocalServer.stop(server) end)
 
-          request = fn method, args, timeout_ms ->
-            LocalServer.request(server, method, args, timeout_ms)
-          end
-
-          html = """
-          <!doctype html>
-          <html>
-            <head>
-              <meta charset="utf-8">
-              <title>Lemon Browser Proof</title>
-            </head>
-            <body>
-              <main>
-                <h1 id="title">Hermes on BEAM</h1>
-                <div id="menu" aria-label="Menu">Menu</div>
-                <output id="hover-result"></output>
-                <select id="mode" aria-label="Mode">
-                  <option value="classic">Classic</option>
-                  <option value="otp-mode">OTP Mode</option>
-                </select>
-                <input id="message" aria-label="Message" value="">
-                <button id="save" type="button">Save</button>
-                <output id="result"></output>
-              </main>
-              <script>
-                console.log("lemon-browser-proof-ready");
-                document.getElementById("menu").addEventListener("mouseover", () => {
-                  document.getElementById("hover-result").textContent = "hovered";
-                });
-                document.getElementById("save").addEventListener("click", () => {
-                  const value = document.getElementById("message").value;
-                  const mode = document.getElementById("mode").value;
-                  document.getElementById("result").textContent = `saved: ${value} (${mode})`;
-                });
-              </script>
-            </body>
-          </html>
-          """
-
-          url = "data:text/html;base64,#{Base.encode64(html)}"
-
-          navigate =
-            "browser_navigate"
-            |> browser_tool(tmp_dir, browser_request: request)
-            |> run_browser_tool(%{"url" => url, "timeoutMs" => 20_000})
-
-          assert navigate.trust == :untrusted
-          assert navigate.details["title"] == "Lemon Browser Proof"
-
-          snapshot =
-            "browser_snapshot"
-            |> browser_tool(tmp_dir, browser_request: request)
-            |> run_browser_tool(%{"selector" => "main", "maxChars" => 2_000})
-
-          assert snapshot.trust == :untrusted
-          assert snapshot.details["snapshot"] =~ "Hermes on BEAM"
-
-          waited =
-            "browser_wait_for_selector"
-            |> browser_tool(tmp_dir, browser_request: request)
-            |> run_browser_tool(%{"selector" => "#message", "timeoutMs" => 1_000})
-
-          assert waited.details["found"] == true
-
-          evaluated =
-            "browser_evaluate"
-            |> browser_tool(tmp_dir, browser_request: request)
-            |> run_browser_tool(%{
-              "expression" =>
-                "(() => ({title: document.title, hasMessage: !!document.querySelector('#message')}))()",
-              "timeoutMs" => 1_000
-            })
-
-          assert evaluated.details["result"]["title"] == "Lemon Browser Proof"
-          assert evaluated.details["result"]["hasMessage"] == true
-
-          hovered =
-            "browser_hover"
-            |> browser_tool(tmp_dir, browser_request: request)
-            |> run_browser_tool(%{"selector" => "#menu", "timeoutMs" => 1_000})
-
-          assert hovered.details["hovered"] == true
-
-          selected =
-            "browser_select_option"
-            |> browser_tool(tmp_dir, browser_request: request)
-            |> run_browser_tool(%{
-              "selector" => "#mode",
-              "value" => "otp-mode",
-              "timeoutMs" => 1_000
-            })
-
-          assert selected.details["selected"] == ["otp-mode"]
-
-          typed =
-            "browser_type"
-            |> browser_tool(tmp_dir, browser_request: request)
-            |> run_browser_tool(%{
-              "selector" => "#message",
-              "text" => "OTP supervision",
-              "useFill" => true
-            })
-
-          assert typed.details["typed"] == true
-          assert typed.details["length"] == String.length("OTP supervision")
-
-          clicked =
-            "browser_click"
-            |> browser_tool(tmp_dir, browser_request: request)
-            |> run_browser_tool(%{"selector" => "#save"})
-
-          assert clicked.details["clicked"] == true
-
-          content =
-            "browser_get_content"
-            |> browser_tool(tmp_dir, browser_request: request)
-            |> run_browser_tool(%{"includeHtml" => false, "includeText" => true})
-
-          assert content.trust == :untrusted
-          assert content.details["text"] =~ "hovered"
-          assert content.details["text"] =~ "saved: OTP supervision (otp-mode)"
-
-          events =
-            "browser_events"
-            |> browser_tool(tmp_dir, browser_request: request)
-            |> run_browser_tool(%{"limit" => 10, "clear" => true})
-
-          assert Enum.any?(events.details["events"], fn event ->
-                   event["type"] == "console" and event["text"] =~ "lemon-browser-proof-ready"
-                 end)
-
-          status = LocalServer.status(server)
-          assert status.running == true
-          assert status.completed_count >= 6
-          assert status.failed_count == 0
-          assert status.pending_requests == 0
+        request = fn method, args, timeout_ms ->
+          LocalServer.request(server, method, args, timeout_ms)
         end
-      )
-    else
-      assert true
-    end
+
+        html = """
+        <!doctype html>
+        <html>
+          <head>
+            <meta charset="utf-8">
+            <title>Lemon Browser Proof</title>
+          </head>
+          <body>
+            <main>
+              <h1 id="title">Hermes on BEAM</h1>
+              <div id="menu" aria-label="Menu">Menu</div>
+              <output id="hover-result"></output>
+              <select id="mode" aria-label="Mode">
+                <option value="classic">Classic</option>
+                <option value="otp-mode">OTP Mode</option>
+              </select>
+              <input id="message" aria-label="Message" value="">
+              <button id="save" type="button">Save</button>
+              <output id="result"></output>
+            </main>
+            <script>
+              console.log("lemon-browser-proof-ready");
+              document.getElementById("menu").addEventListener("mouseover", () => {
+                document.getElementById("hover-result").textContent = "hovered";
+              });
+              document.getElementById("save").addEventListener("click", () => {
+                const value = document.getElementById("message").value;
+                const mode = document.getElementById("mode").value;
+                document.getElementById("result").textContent = `saved: ${value} (${mode})`;
+              });
+            </script>
+          </body>
+        </html>
+        """
+
+        # A loopback http: page: data:/file: documents are approval-gated and
+        # never evaluable.
+        url = serve_html(html)
+
+        navigate =
+          "browser_navigate"
+          |> browser_tool(tmp_dir, browser_request: request)
+          |> run_browser_tool(%{"url" => url, "timeoutMs" => 20_000})
+
+        assert navigate.trust == :untrusted
+        assert navigate.details["title"] == "Lemon Browser Proof"
+
+        snapshot =
+          "browser_snapshot"
+          |> browser_tool(tmp_dir, browser_request: request)
+          |> run_browser_tool(%{"selector" => "main", "maxChars" => 2_000})
+
+        assert snapshot.trust == :untrusted
+        assert snapshot.details["snapshot"] =~ "Hermes on BEAM"
+
+        waited =
+          "browser_wait_for_selector"
+          |> browser_tool(tmp_dir, browser_request: request)
+          |> run_browser_tool(%{"selector" => "#message", "timeoutMs" => 1_000})
+
+        assert waited.details["found"] == true
+
+        evaluated =
+          "browser_evaluate"
+          |> browser_tool(tmp_dir, browser_request: request)
+          |> run_browser_tool(%{
+            "expression" =>
+              "(() => ({title: document.title, hasMessage: !!document.querySelector('#message')}))()",
+            "timeoutMs" => 1_000
+          })
+
+        assert evaluated.details["result"]["title"] == "Lemon Browser Proof"
+        assert evaluated.details["result"]["hasMessage"] == true
+
+        hovered =
+          "browser_hover"
+          |> browser_tool(tmp_dir, browser_request: request)
+          |> run_browser_tool(%{"selector" => "#menu", "timeoutMs" => 1_000})
+
+        assert hovered.details["hovered"] == true
+
+        selected =
+          "browser_select_option"
+          |> browser_tool(tmp_dir, browser_request: request)
+          |> run_browser_tool(%{
+            "selector" => "#mode",
+            "value" => "otp-mode",
+            "timeoutMs" => 1_000
+          })
+
+        assert selected.details["selected"] == ["otp-mode"]
+
+        typed =
+          "browser_type"
+          |> browser_tool(tmp_dir, browser_request: request)
+          |> run_browser_tool(%{
+            "selector" => "#message",
+            "text" => "OTP supervision",
+            "useFill" => true
+          })
+
+        assert typed.details["typed"] == true
+        assert typed.details["length"] == String.length("OTP supervision")
+
+        clicked =
+          "browser_click"
+          |> browser_tool(tmp_dir, browser_request: request)
+          |> run_browser_tool(%{"selector" => "#save"})
+
+        assert clicked.details["clicked"] == true
+
+        content =
+          "browser_get_content"
+          |> browser_tool(tmp_dir, browser_request: request)
+          |> run_browser_tool(%{"includeHtml" => false, "includeText" => true})
+
+        assert content.trust == :untrusted
+        assert content.details["text"] =~ "hovered"
+        assert content.details["text"] =~ "saved: OTP supervision (otp-mode)"
+
+        events =
+          "browser_events"
+          |> browser_tool(tmp_dir, browser_request: request)
+          |> run_browser_tool(%{"limit" => 10, "clear" => true})
+
+        assert Enum.any?(events.details["events"], fn event ->
+                 event["type"] == "console" and event["text"] =~ "lemon-browser-proof-ready"
+               end)
+
+        status = LocalServer.status(server)
+        assert status.running == true
+        assert status.completed_count >= 6
+        assert status.failed_count == 0
+        assert status.pending_requests == 0
+      end
+    )
   end
 
   test "browser_click validates selector" do
@@ -1616,31 +1618,10 @@ defmodule CodingAgent.Tools.BrowserTest do
 
   defp run_browser_tool(tool, params) do
     result = tool.execute.("call-1", params, nil, nil)
-    refute match?({:error, _}, result)
+    refute match?({:error, _}, result), inspect(result)
+    # An unknown-outcome timeout is an error result, not a success.
+    refute result.is_error, inspect(result)
     result
-  end
-
-  defp browser_smoke_available? do
-    System.find_executable("node") &&
-      File.exists?(browser_driver_path()) &&
-      chrome_executable()
-  end
-
-  defp browser_driver_path do
-    Path.expand("../../../../../clients/lemon-browser-node/dist/local-driver.js", __DIR__)
-  end
-
-  defp chrome_executable do
-    [
-      System.get_env("LEMON_BROWSER_EXECUTABLE"),
-      System.get_env("LEMON_CHROME_EXECUTABLE"),
-      System.get_env("CHROME_EXECUTABLE"),
-      System.find_executable("google-chrome"),
-      System.find_executable("google-chrome-stable"),
-      System.find_executable("chromium"),
-      System.find_executable("chromium-browser")
-    ]
-    |> Enum.find(fn value -> is_binary(value) and String.trim(value) != "" end)
   end
 
   defp free_port do
@@ -1648,6 +1629,47 @@ defmodule CodingAgent.Tools.BrowserTest do
     {:ok, port} = :inet.port(socket)
     :ok = :gen_tcp.close(socket)
     port
+  end
+
+  # Serves `html` to every request on a loopback port until the test exits.
+  defp serve_html(html) do
+    {:ok, listener} =
+      :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+    {:ok, port} = :inet.port(listener)
+    server = spawn(fn -> serve_html_loop(listener, html) end)
+    :ok = :gen_tcp.controlling_process(listener, server)
+    on_exit(fn -> Process.exit(server, :kill) end)
+    "http://127.0.0.1:#{port}/"
+  end
+
+  defp serve_html_loop(listener, html) do
+    case :gen_tcp.accept(listener) do
+      {:ok, socket} ->
+        handler = spawn(fn -> serve_html_response(html) end)
+        :ok = :gen_tcp.controlling_process(socket, handler)
+        send(handler, {:socket, socket})
+        serve_html_loop(listener, html)
+
+      {:error, _reason} ->
+        :ok
+    end
+  end
+
+  # One handler per connection, so an idle preconnect never blocks the page load.
+  defp serve_html_response(html) do
+    receive do
+      {:socket, socket} ->
+        _request = :gen_tcp.recv(socket, 0, 5_000)
+
+        :gen_tcp.send(socket, [
+          "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\n",
+          "content-length: #{byte_size(html)}\r\nconnection: close\r\n\r\n",
+          html
+        ])
+
+        :gen_tcp.close(socket)
+    end
   end
 
   defp with_env(vars, fun) do

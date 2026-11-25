@@ -143,9 +143,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
       run_id = "test_run_#{System.unique_integer()}"
       request = %{request | run_id: run_id}
 
-      if Code.ensure_loaded?(LemonCore.Bus) do
-        LemonCore.Bus.subscribe("run:#{run_id}")
-      end
+      LemonCore.Bus.subscribe("run:#{run_id}")
 
       {:ok, _pid} = start_run_direct(request)
 
@@ -154,11 +152,9 @@ defmodule LemonGateway.RunTransportAgnosticTest do
       # Send deltas
       send(sink_pid, {:send_deltas, ["Hello", " ", "World"]})
 
-      # Should receive delta events on bus
-      if Code.ensure_loaded?(LemonCore.Bus) do
-        # Receive delta events (may be wrapped in LemonCore.Event)
-        received_deltas = collect_delta_events([], 3, 2000)
-        assert received_deltas != []
+      # Each delta reaches the bus, in order.
+      for text <- ["Hello", " ", "World"] do
+        assert_receive %LemonCore.Event{type: :delta, payload: %{text: ^text}}, 2000
       end
 
       # Complete the run
@@ -234,24 +230,11 @@ defmodule LemonGateway.RunTransportAgnosticTest do
         meta: %{notify_pid: self(), user_msg_id: 1}
       }
 
-      # Subscribe to bus
-      if Code.ensure_loaded?(LemonCore.Bus) do
-        LemonCore.Bus.subscribe("run:#{run_id}")
-      end
+      LemonCore.Bus.subscribe("run:#{run_id}")
 
       {:ok, _pid} = start_run_direct(request)
 
-      # Should receive run_started event
-      if Code.ensure_loaded?(LemonCore.Bus) do
-        receive do
-          %LemonCore.Event{type: :run_started} -> :ok
-          _event -> :ok
-        after
-          2000 -> :ok
-        end
-      end
-
-      # Wait for completion
+      assert_receive %LemonCore.Event{type: :run_started, meta: %{run_id: ^run_id}}, 2000
       assert_receive {:lemon_gateway_run_completed, ^request, _}, 2000
     end
 
@@ -267,40 +250,12 @@ defmodule LemonGateway.RunTransportAgnosticTest do
         meta: %{notify_pid: self(), user_msg_id: 1}
       }
 
-      # Subscribe to bus
-      if Code.ensure_loaded?(LemonCore.Bus) do
-        LemonCore.Bus.subscribe("run:#{run_id}")
-      end
+      LemonCore.Bus.subscribe("run:#{run_id}")
 
       {:ok, _pid} = start_run_direct(request)
 
-      # Wait for completion
       assert_receive {:lemon_gateway_run_completed, ^request, _}, 2000
-
-      # Should have received run_completed event on bus
-      if Code.ensure_loaded?(LemonCore.Bus) do
-        # Drain any remaining events
-        Process.sleep(100)
-      end
-    end
-  end
-
-  # Helper to collect delta events with timeout
-  defp collect_delta_events(acc, 0, _timeout), do: Enum.reverse(acc)
-
-  defp collect_delta_events(acc, count, timeout) do
-    receive do
-      %LemonCore.Event{type: :delta} = event ->
-        collect_delta_events([event | acc], count - 1, timeout)
-
-      %{type: :delta} = event ->
-        collect_delta_events([event | acc], count - 1, timeout)
-
-      _ ->
-        collect_delta_events(acc, count, timeout)
-    after
-      timeout ->
-        Enum.reverse(acc)
+      assert_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}, 2000
     end
   end
 end

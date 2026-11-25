@@ -75,7 +75,8 @@ defmodule LemonEvals.LatencyBudgetContractTest do
     """)
   end
 
-  @tag :integration
+  # Boots the offline native runtime (minutes); nightly's latency job runs it.
+  @tag :slow
   @tag timeout: 240_000
   @tag :tmp_dir
   test "native offline lane emits every required distribution without credentials", %{
@@ -107,7 +108,15 @@ defmodule LemonEvals.LatencyBudgetContractTest do
     assert report["baseline_status"] == "bootstrap_no_baseline"
     assert length(report["top_three_session_contributors"]) == 3
 
-    for {_metric, distribution} <- report["metrics"] do
+    metrics = report["metrics"]
+
+    assert Enum.sort(Map.keys(metrics)) ==
+             ~w(boot_to_ready cold_ready completion_to_next_start enter_to_provider
+                gateway_token_to_client provider_to_client provider_to_gateway_token
+                session_environment_capture session_journal_load session_prompt_composition
+                session_tool_registry warm_ready)
+
+    for {_metric, distribution} <- metrics do
       assert distribution["n"] >= 1
       assert distribution["p50_ms"] >= 0
       assert distribution["p99_ms"] >= distribution["p50_ms"]

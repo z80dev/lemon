@@ -1,74 +1,49 @@
 defmodule Mix.Tasks.Lemon.EvalTest do
+  # Deterministic and offline: these run in the fast lane. The task raises when
+  # any check fails, so a broken harness or task turns this file red.
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureIO
 
   alias Mix.Tasks.Lemon.Eval
 
-  # These tests require the app to be started
+  @deterministic_checks ~w(deterministic_contract statistical_stability read_edit_workflow)
+
   setup do
-    # Ensure the app is started for the tests
     Mix.Task.run("app.start", ["--quiet"])
     :ok
   end
 
   describe "run/1" do
-    @tag :integration
-    test "runs eval harness with default options" do
-      output =
-        capture_io(fn ->
-          # Use a short iteration count for faster tests
-          Eval.run(["--iterations", "2"])
-        end)
+    test "with no options passes every deterministic check and prints a human report" do
+      output = capture_io(fn -> Eval.run([]) end)
 
-      assert output =~ "Eval summary:"
-      assert output =~ "passed"
+      assert [_, passed] = Regex.run(~r/^Eval summary: (\d+) passed, 0 failed$/m, output)
+      assert String.to_integer(passed) >= length(@deterministic_checks)
+
+      for name <- @deterministic_checks do
+        assert output =~ "- #{name}: pass"
+      end
     end
 
-    @tag :integration
-    test "accepts --iterations option" do
-      output =
-        capture_io(fn ->
-          Eval.run(["--iterations", "5"])
-        end)
+    test "--json reports every check with details and consistent counts" do
+      report = run_json(["--iterations", "2", "--json"])
 
-      assert output =~ "Eval summary:"
+      assert %{"summary" => %{"passed" => passed, "failed" => 0}, "results" => results} = report
+      assert passed == length(results)
+      assert Enum.all?(results, &(&1["status"] == "pass"))
+      assert Enum.all?(results, &(is_map(&1["details"]) and map_size(&1["details"]) > 0))
+
+      names = Enum.map(results, & &1["name"])
+      assert Enum.all?(@deterministic_checks, &(&1 in names))
+      assert statistical_iterations(report) == 2
     end
 
-    @tag :integration
-    test "accepts -n alias for iterations" do
-      output =
-        capture_io(fn ->
-          Eval.run(["-n", "3"])
-        end)
+    test "-n sets the statistical iteration count and --cwd is accepted" do
+      report = run_json(["-n", "3", "--cwd", File.cwd!(), "--json"])
 
-      assert output =~ "Eval summary:"
-    end
-
-    @tag :integration
-    test "outputs JSON with --json flag" do
-      output =
-        capture_io(fn ->
-          Eval.run(["--iterations", "2", "--json"])
-        end)
-
-      # Should be valid JSON
-      assert {:ok, decoded} = Jason.decode(output)
-      assert is_map(decoded)
-      assert Map.has_key?(decoded, "summary")
-      assert Map.has_key?(decoded, "results")
-    end
-
-    @tag :integration
-    test "accepts --cwd option" do
-      cwd = File.cwd!()
-
-      output =
-        capture_io(fn ->
-          Eval.run(["--iterations", "2", "--cwd", cwd])
-        end)
-
-      assert output =~ "Eval summary:"
+      assert report["summary"]["failed"] == 0
+      assert statistical_iterations(report) == 3
     end
 
     test "raises on real failing checks when live credentials are missing" do
@@ -103,31 +78,18 @@ defmodule Mix.Tasks.Lemon.EvalTest do
   end
 
   describe "command parsing" do
-    @tag :integration
-    test "handles empty args" do
-      output =
-        capture_io(fn ->
-          Eval.run([])
-        end)
-
-      assert output =~ "Eval summary:"
-    end
-
-    @tag :integration
     test "rejects unknown options" do
       assert_raise Mix.Error, ~r/Invalid eval option/, fn ->
         Eval.run(["--iterations", "2", "--unknown-flag"])
       end
     end
 
-    @tag :integration
     test "rejects invalid iteration count" do
       assert_raise Mix.Error, ~r/Invalid eval option/, fn ->
         Eval.run(["--iterations", "not_a_number"])
       end
     end
 
-    @tag :integration
     test "rejects non-positive iteration count" do
       assert_raise Mix.Error, ~r/--iterations must be a positive integer/, fn ->
         Eval.run(["--iterations", "0"])
@@ -135,139 +97,13 @@ defmodule Mix.Tasks.Lemon.EvalTest do
     end
   end
 
-  describe "report output" do
-    @tag :integration
-    test "human-readable report format" do
-      output =
-        capture_io(fn ->
-          Eval.run(["--iterations", "2"])
-        end)
-
-      # Check for expected report format elements
-      assert output =~ ~r/Eval summary: \d+ passed, \d+ failed/
-
-      # Should list individual results
-      lines = String.split(output, "\n")
-      result_lines = Enum.filter(lines, &String.contains?(&1, ":"))
-      assert result_lines != []
-    end
-
-    @tag :integration
-    test "JSON report structure" do
-      output =
-        capture_io(fn ->
-          Eval.run(["--iterations", "2", "--json"])
-        end)
-
-      {:ok, decoded} = Jason.decode(output)
-
-      # Verify structure
-      assert %{
-               "summary" => %{
-                 "passed" => passed,
-                 "failed" => failed
-               },
-               "results" => results
-             } = decoded
-
-      assert is_integer(passed)
-      assert is_integer(failed)
-      assert is_list(results)
-      assert results != []
-
-      # Check result structure
-      first_result = hd(results)
-      assert Map.has_key?(first_result, "name")
-      assert Map.has_key?(first_result, "status")
-      assert Map.has_key?(first_result, "details")
-    end
-
-    @tag :integration
-    test "result statuses are valid" do
-      output =
-        capture_io(fn ->
-          Eval.run(["--iterations", "2", "--json"])
-        end)
-
-      {:ok, decoded} = Jason.decode(output)
-
-      for result <- decoded["results"] do
-        assert result["status"] in ["pass", "fail"]
-      end
-    end
+  defp run_json(args) do
+    Jason.decode!(capture_io(fn -> Eval.run(args) end))
   end
 
-  describe "failure handling" do
-    @tag :integration
-    test "summary counts match results" do
-      output =
-        capture_io(fn ->
-          Eval.run(["--iterations", "2", "--json"])
-        end)
-
-      {:ok, decoded} = Jason.decode(output)
-
-      passed_count = decoded["summary"]["passed"]
-      failed_count = decoded["summary"]["failed"]
-      total_results = length(decoded["results"])
-
-      assert passed_count + failed_count == total_results
-    end
-
-    @tag :integration
-    test "includes details for each check" do
-      output =
-        capture_io(fn ->
-          Eval.run(["--iterations", "2", "--json"])
-        end)
-
-      {:ok, decoded} = Jason.decode(output)
-
-      for result <- decoded["results"] do
-        assert is_map(result["details"])
-        assert map_size(result["details"]) > 0
-      end
-    end
-  end
-
-  describe "integration with Harness" do
-    @tag :integration
-    test "deterministic contract check is included" do
-      output =
-        capture_io(fn ->
-          Eval.run(["--iterations", "2", "--json"])
-        end)
-
-      {:ok, decoded} = Jason.decode(output)
-
-      check_names = Enum.map(decoded["results"], & &1["name"])
-      assert "deterministic_contract" in check_names
-    end
-
-    @tag :integration
-    test "statistical stability check is included" do
-      output =
-        capture_io(fn ->
-          Eval.run(["--iterations", "2", "--json"])
-        end)
-
-      {:ok, decoded} = Jason.decode(output)
-
-      check_names = Enum.map(decoded["results"], & &1["name"])
-      assert "statistical_stability" in check_names
-    end
-
-    @tag :integration
-    test "read edit workflow check is included" do
-      output =
-        capture_io(fn ->
-          Eval.run(["--iterations", "2", "--json"])
-        end)
-
-      {:ok, decoded} = Jason.decode(output)
-
-      check_names = Enum.map(decoded["results"], & &1["name"])
-      assert "read_edit_workflow" in check_names
-    end
+  defp statistical_iterations(report) do
+    report["results"]
+    |> Enum.find(&(&1["name"] == "statistical_stability"))
+    |> get_in(["details", "iterations"])
   end
 end

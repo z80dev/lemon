@@ -68,6 +68,22 @@ exclude_tags =
       [:lldb_dap | exclude_tags]
   end
 
+# CI builds the browser driver and sets LEMON_TEST_REQUIRE_BROWSER_DRIVER=1, so
+# a missing prerequisite there fails the run instead of excluding the smoke.
+exclude_tags =
+  case CodingAgent.TestHostCapabilities.browser_driver() do
+    :ok ->
+      exclude_tags
+
+    {:error, reason} ->
+      if System.get_env("LEMON_TEST_REQUIRE_BROWSER_DRIVER") == "1" do
+        raise "LEMON_TEST_REQUIRE_BROWSER_DRIVER=1 but the :browser_driver smoke is unavailable (#{reason})"
+      end
+
+      IO.puts(:stderr, "Excluding :browser_driver: #{reason}")
+      [:browser_driver | exclude_tags]
+  end
+
 ExUnit.configure(exclude: exclude_tags)
 ExUnit.start(capture_log: true)
 
