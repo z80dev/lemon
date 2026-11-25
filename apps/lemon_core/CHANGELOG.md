@@ -10,10 +10,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 - **Breaking (0.3.0):** `LemonCore.Store` bounds `:runs` (#682). Events are
   buffered per run (first 200 + latest, 2,000 in all; `:events_dropped`) and
-  attached to `get_run/2`/`fetch_run/2` results; finalization moves them into
-  the record and stamps `:finalized_at_ms`/`:expires_at`; the sweep evicts
-  finalized runs after `:runs_retention_ms` (default 24 h) and keeps a
-  durable terminal marker in `:run_terminals`.
+  attached on explicit `get_run_with_events/2` reads. Finalization freezes
+  the buffer and writes summary metadata only; both are evicted after
+  `:runs_retention_ms` (default 24 h), leaving a durable terminal marker
+  in `:run_terminals`.
   `fetch_run/2` returns `{:error, :evicted}` for a finalized, evicted run;
   events for finalized runs are dropped. `list/2`, `fetch_all/2`,
   `fetch_keys/2` and `fetch_range/5` raise `ArgumentError` for `:runs`;

@@ -93,17 +93,19 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - The Store bounds the `:runs` table and keeps full-table reads off its
   process (#682). Run events go into a per-run buffer (first 200 + latest,
-  2,000 in all, `:events_dropped` counts the rest) instead of rewriting the run
-  record per event; finalized runs are evicted `:runs_retention_ms` (default
-  24 h) after finalization, and a durable `:run_terminals` entry makes
+  2,000 in all, `:events_dropped` counts the rest); `:runs` stores only the
+  summary and lifecycle metadata. The summary and frozen buffer expire
+  `:runs_retention_ms` (default 24 h) after finalization; a durable `:run_terminals` entry makes
   `RunStore.fetch/1` return `{:error, :evicted}` so a finished run (also after a
   restart) is never reopened by the gateway. `fetch_all/2`, `list/2`, the new
   `fetch_keys/2` and `fetch_range/5`, and introspection listing read the backend
   in the caller's process (SQLite: a private read-only WAL connection). Usage
   pages read only the window's ledger occurrences, never `:runs`; router
-  session discovery reads session keys only. **Breaking** for `lemon_core`
-  callers: `:runs` cannot be listed whole, `UsageStore.fetch_runs/1` is gone,
-  and introspection listing errors are `{:error, :store_unavailable}`.
+  session discovery reads session keys only, and session-maintenance previews
+  use a bounded metadata index. **Breaking** for `lemon_core` callers:
+  `:runs` cannot be listed whole, event readers must use `RunStore.get_with_events/1`,
+  `UsageStore.fetch_runs/1` is gone, and introspection listing errors are
+  `{:error, :store_unavailable}`.
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14

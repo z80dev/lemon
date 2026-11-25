@@ -348,7 +348,7 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   defp present?(_), do: true
 
   defp fetch_run_record(run_id, opts) when is_binary(run_id) do
-    case LemonCore.RunStore.get(run_id) do
+    case LemonCore.RunStore.get_with_events(run_id) do
       nil ->
         nil
 

@@ -73,14 +73,15 @@ defmodule LemonCore.StoreRunsRetentionTest do
 
       # The record is written once and never grows with its events.
       cached = ReadCache.get(store, :runs, "run-big")
-      assert %{events: [], summary: nil} = cached
+      assert %{summary: nil} = cached
+      refute Map.has_key?(cached, :events)
       assert :erlang.external_size(cached) < 200
 
       buffer = Hooks.published(store, :run_events, nil)
       # 2,000 events plus the run's counter.
       assert :ets.info(buffer, :size) == 2_001
 
-      run = Store.get_run(store, "run-big")
+      run = Store.get_run_with_events(store, "run-big")
       assert length(run.events) == 2_000
       assert run.events_dropped == 500
       # Newest first; the first 200 events survive next to the latest 1,800.
@@ -89,28 +90,54 @@ defmodule LemonCore.StoreRunsRetentionTest do
       assert Enum.at(run.events, 1_799) == %{seq: 701}
       assert Enum.at(run.events, 1_800) == %{seq: 200}
 
-      assert {:ok, %{events: [%{seq: 2_500} | _]}} = Store.fetch_run(store, "run-big")
+      assert {:ok, summary} = Store.fetch_run(store, "run-big")
+      refute Map.has_key?(summary, :events)
 
-      assert {:ok, %{events: [%{seq: 2_500} | _]}} =
-               Store.fetch_run(Process.whereis(store), "run-big")
+      assert %{events: [%{seq: 2_500} | _]} =
+               Store.get_run_with_events(Process.whereis(store), "run-big")
     end
 
-    test "finalization moves the buffered events into the record" do
+    test "finalization freezes events without copying them into the backend or cache" do
       store = start_store([])
 
       for i <- 1..3, do: Store.append_run_event(store, "run-1", %{seq: i})
       :ok = Store.finalize_run(store, "run-1", %{completed: %{ok: true}})
 
       assert %{events: [%{seq: 3}, %{seq: 2}, %{seq: 1}], summary: %{completed: %{ok: true}}} =
-               Store.get_run(store, "run-1")
+               Store.get_run_with_events(store, "run-1")
 
-      assert :ets.info(Hooks.published(store, :run_events, nil), :size) == 0
+      refute Map.has_key?(Store.get_run(store, "run-1"), :events)
+      assert {:ok, backend_record} = Store.fetch(store, :runs, "run-1")
+      refute Map.has_key?(backend_record, :events)
+      refute Map.has_key?(ReadCache.get(store, :runs, "run-1"), :events)
+      assert :ets.info(Hooks.published(store, :run_events, nil), :size) == 4
 
       # Late events neither reopen nor grow a finalized run.
       Store.append_run_event(store, "run-1", %{seq: 4})
       :ok = Store.ping(store)
-      assert length(Store.get_run(store, "run-1").events) == 3
-      assert :ets.info(Hooks.published(store, :run_events, nil), :size) == 0
+      assert length(Store.get_run_with_events(store, "run-1").events) == 3
+      assert :ets.info(Hooks.published(store, :run_events, nil), :size) == 4
+    end
+
+    test "durable session history still has events after the buffer is swept", %{tmp_dir: path} do
+      history = unique(:retained_history)
+      start_supervised!({LemonCore.RunHistoryStore, name: history, path: path})
+
+      store =
+        start_store(
+          runs_retention_ms: 1,
+          finalize_run_hooks: [{LemonCore.RunHistoryStore, :handle_finalize_run, [history]}]
+        )
+
+      Store.append_run_event(store, "run-1", %{seq: 1})
+      :ok = Store.finalize_run(store, "run-1", %{session_key: "agent:test:main"})
+      Process.sleep(5)
+      sweep(store)
+
+      assert Store.get_run_with_events(store, "run-1") == nil
+
+      assert [{"run-1", %{events: [%{seq: 1}]}}] =
+               LemonCore.RunHistoryStore.get(history, "agent:test:main", [])
     end
   end
 
@@ -129,7 +156,8 @@ defmodule LemonCore.StoreRunsRetentionTest do
       sweep(store)
 
       assert :ets.info(ReadCache.tables(store).runs, :size) == 1
-      assert {:ok, %{summary: nil, events: [%{seq: 1}]}} = Store.fetch_run(store, "live")
+      assert :ets.info(Hooks.published(store, :run_events, nil), :size) == 2
+      assert %{summary: nil, events: [%{seq: 1}]} = Store.get_run_with_events(store, "live")
 
       assert {:error, :evicted} = Store.fetch_run(store, "done-1")
       assert Store.get_run(store, "done-1") == nil

@@ -18,8 +18,8 @@ alias LemonCore.Store.ReadCache
   end)
 
 record = ReadCache.get(:bench_retention, :runs, "stream")
-%{events: []} = record
-%{events: events} = Store.get_run(:bench_retention, "stream")
+false = Map.has_key?(record, :events)
+%{events: events} = Store.get_run_with_events(:bench_retention, "stream")
 IO.puts("10k events: #{append_us} µs; #{length(events)} events retained")
 
 IO.puts(

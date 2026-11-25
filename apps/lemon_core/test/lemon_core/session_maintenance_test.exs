@@ -4,6 +4,8 @@ defmodule LemonCore.SessionMaintenanceTest do
   alias LemonCore.{AgentRuntime, SessionLifecycle, Store}
 
   @table :session_maintenance_previews
+  @index_table :session_maintenance_preview_index
+  @index_key :retained
   @cutoff 1_700_000_000_000
 
   defmodule Provider do
@@ -22,6 +24,8 @@ defmodule LemonCore.SessionMaintenanceTest do
     provider = Application.fetch_env(:lemon_core, :agent_runtime_provider)
     {:ok, retained} = Store.fetch_all(@table)
     Enum.each(retained, fn {key, _} -> :ok = Store.delete(@table, key) end)
+    {:ok, saved_index} = Store.fetch(@index_table, @index_key)
+    :ok = Store.delete(@index_table, @index_key)
     :ok = AgentRuntime.register(Provider)
 
     Process.put(:maintenance_plan, %{
@@ -33,6 +37,8 @@ defmodule LemonCore.SessionMaintenanceTest do
       {:ok, current} = Store.fetch_all(@table)
       Enum.each(current, fn {key, _} -> :ok = Store.delete(@table, key) end)
       Enum.each(retained, fn {key, value} -> :ok = Store.put(@table, key, value) end)
+      :ok = Store.delete(@index_table, @index_key)
+      if saved_index, do: Store.put(@index_table, @index_key, saved_index)
 
       case provider do
         {:ok, value} -> Application.put_env(:lemon_core, :agent_runtime_provider, value)
@@ -128,8 +134,23 @@ defmodule LemonCore.SessionMaintenanceTest do
 
     assert {:ok, retained} = Store.fetch_all(@table)
     assert length(retained) == 32
+    assert {:ok, index} = Store.fetch(@index_table, @index_key)
+    assert map_size(index) == 32
+    assert Enum.sort(Map.keys(index)) == retained |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+    assert Enum.all?(index, fn {_, metadata} -> not Map.has_key?(metadata, :plan) end)
     assert Enum.all?(retained, fn {_, entry} -> length(entry.plan.candidates) == 101 end)
     assert {:error, :confirmation_mismatch} = execute(first.confirmation_token)
+  end
+
+  test "indexed retention leaves unindexed rows unread and they cannot authorize execution" do
+    assert {:ok, issued} = SessionLifecycle.maintenance(older_than_ms: @cutoff)
+    assert {:ok, entry} = Store.fetch(@table, issued.confirmation_token)
+    :ok = Store.put(@table, "unindexed", entry)
+
+    assert {:ok, _} = SessionLifecycle.maintenance(older_than_ms: @cutoff)
+    assert {:error, :confirmation_mismatch} = execute("unindexed")
+    assert {:ok, ^entry} = Store.fetch(@table, "unindexed")
+    refute_received {:executed, _}
   end
 
   test "caller death after dispatch cannot replay an already claimed preview" do

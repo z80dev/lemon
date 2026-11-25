@@ -14,6 +14,10 @@ defmodule LemonCore.RunStore do
   @spec get(binary()) :: term()
   def get(run_id), do: Store.get_run(run_id)
 
+  @doc "A display read that attaches the retained live or finalized event buffer."
+  @spec get_with_events(binary()) :: map() | nil
+  def get_with_events(run_id), do: Store.get_run_with_events(run_id)
+
   @doc """
   Fetch a run without treating an unavailable store as a missing record.
 
