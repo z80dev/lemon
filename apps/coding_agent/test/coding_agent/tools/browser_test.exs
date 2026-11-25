@@ -1506,12 +1506,14 @@ defmodule CodingAgent.Tools.BrowserTest do
         </html>
         """
 
-        url = "data:text/html;base64,#{Base.encode64(html)}"
+        # A loopback http: page: data:/file: documents are approval-gated and
+        # never evaluable.
+        url = serve_html(html)
 
         navigate =
           "browser_navigate"
           |> browser_tool(tmp_dir, browser_request: request)
-          |> run_browser_tool(%{"url" => url, "timeoutMs" => 20_000})
+          |> run_browser_tool(%{"url" => url, "timeoutMs" => 60_000})
 
         assert navigate.trust == :untrusted
         assert navigate.details["title"] == "Lemon Browser Proof"
@@ -1616,7 +1618,9 @@ defmodule CodingAgent.Tools.BrowserTest do
 
   defp run_browser_tool(tool, params) do
     result = tool.execute.("call-1", params, nil, nil)
-    refute match?({:error, _}, result)
+    refute match?({:error, _}, result), inspect(result)
+    # An unknown-outcome timeout is an error result, not a success.
+    refute result.is_error, inspect(result)
     result
   end
 
@@ -1625,6 +1629,47 @@ defmodule CodingAgent.Tools.BrowserTest do
     {:ok, port} = :inet.port(socket)
     :ok = :gen_tcp.close(socket)
     port
+  end
+
+  # Serves `html` to every request on a loopback port until the test exits.
+  defp serve_html(html) do
+    {:ok, listener} =
+      :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+    {:ok, port} = :inet.port(listener)
+    server = spawn(fn -> serve_html_loop(listener, html) end)
+    :ok = :gen_tcp.controlling_process(listener, server)
+    on_exit(fn -> Process.exit(server, :kill) end)
+    "http://127.0.0.1:#{port}/"
+  end
+
+  defp serve_html_loop(listener, html) do
+    case :gen_tcp.accept(listener) do
+      {:ok, socket} ->
+        handler = spawn(fn -> serve_html_response(html) end)
+        :ok = :gen_tcp.controlling_process(socket, handler)
+        send(handler, {:socket, socket})
+        serve_html_loop(listener, html)
+
+      {:error, _reason} ->
+        :ok
+    end
+  end
+
+  # One handler per connection, so an idle preconnect never blocks the page load.
+  defp serve_html_response(html) do
+    receive do
+      {:socket, socket} ->
+        _request = :gen_tcp.recv(socket, 0, 5_000)
+
+        :gen_tcp.send(socket, [
+          "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\n",
+          "content-length: #{byte_size(html)}\r\nconnection: close\r\n\r\n",
+          html
+        ])
+
+        :gen_tcp.close(socket)
+    end
   end
 
   defp with_env(vars, fun) do

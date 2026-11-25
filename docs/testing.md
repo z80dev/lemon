@@ -481,7 +481,8 @@ is missing fails in setup. Select only configured providers, for example
 `apps/lemon_ai/test/provider_integration_test.exs` and
 `apps/coding_agent/test/coding_agent/agent_loop_integration_test.exs` need the
 `INTEGRATION_*` variables of `LemonAi.Test.IntegrationConfig`. The
-`provider:error_handling` cases need network but no credentials and run nightly.
+`provider:error_handling` cases use a loopback provider fixture (no network or
+credentials) and run nightly.
 
 The provider-backed automation proofs (`:automation_live`, `lemon_automation`)
 and the omp smoke (`:omp_live`) have no CI runner; they need operator

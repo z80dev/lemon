@@ -5,7 +5,7 @@ defmodule LemonAi.ProviderIntegrationTest do
   These tests make real API calls to whatever provider is configured.
   Configuration is done via environment variables - see LemonAi.Test.IntegrationConfig.
   Without that configuration the provider tests fail; only the invalid-key case
-  (`provider: :error_handling`, network but no credentials) runs unconfigured.
+  (`provider: :error_handling`, a loopback fixture) runs unconfigured.
 
   ## Running Tests
 
@@ -31,6 +31,7 @@ defmodule LemonAi.ProviderIntegrationTest do
   alias LemonAi.Types.{AssistantMessage, Context, Tool, ToolCall, Usage}
   alias LemonAi.EventStream
   alias LemonAi.Test.IntegrationConfig
+  alias LemonAi.Test.StreamServer
 
   # ============================================================================
   # Test Setup
@@ -268,12 +269,19 @@ defmodule LemonAi.ProviderIntegrationTest do
   # Error Handling Tests
   # ============================================================================
 
+  # Offline: a loopback fixture rejects the key with 401, so this needs neither
+  # network nor credentials (nightly `integration` job).
   describe "Error Handling" do
     @describetag provider: :error_handling
 
-    test "handles invalid API key gracefully" do
-      # This test doesn't need configuration - we use an invalid key intentionally
-      model = %{IntegrationConfig.model() | provider: :test_invalid}
+    test "reports a rejected API key as an error" do
+      server =
+        StreamServer.start(fn _n ->
+          [{:status, 401, ~s({"error":{"message":"invalid api key"}})}]
+        end)
+
+      on_exit(fn -> StreamServer.stop(server) end)
+      model = %{IntegrationConfig.model() | provider: :test_invalid, base_url: server.url}
 
       context =
         Context.new(system_prompt: "Test")
@@ -281,12 +289,11 @@ defmodule LemonAi.ProviderIntegrationTest do
 
       {:ok, stream} = LemonAi.stream(model, context, %{api_key: "invalid-key", max_tokens: 10})
 
-      result = EventStream.result(stream, 10_000)
-
-      assert {:error, message} = result
-      assert %AssistantMessage{} = message
+      assert {:error, %AssistantMessage{} = message} = EventStream.result(stream, 10_000)
       assert message.stop_reason == :error
-      assert message.error_message != nil
+      assert message.error_message =~ ~r/401|invalid api key/i
+      assert_received {:stream_server, :request, 0, %{body: body}}
+      assert body =~ "Hello"
     end
   end
 end

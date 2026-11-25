@@ -15,7 +15,7 @@ defmodule LemonAi.IntegrationTest do
       # Two or more configured providers
       scripts/test path apps/lemon_ai/test/integration_test.exs --only provider:all
 
-      # Invalid-key handling; needs network, no credentials
+      # Invalid-key handling against a loopback fixture; no network or credentials
       scripts/test path apps/lemon_ai/test/integration_test.exs --only provider:error_handling
 
   `scripts/test` scrubs provider credentials unless
@@ -43,6 +43,7 @@ defmodule LemonAi.IntegrationTest do
   }
 
   alias LemonAi.EventStream
+  alias LemonAi.Test.StreamServer
 
   # ============================================================================
   # Helper Functions
@@ -767,101 +768,47 @@ defmodule LemonAi.IntegrationTest do
   # Error Handling Tests
   # ============================================================================
 
+  # Offline: each provider sends a real HTTP request to a loopback fixture that
+  # rejects the key with 401, so these need neither network nor credentials.
+  # Nightly's `integration` job runs them (`--only provider:error_handling`).
   describe "Error handling" do
     @describetag provider: :error_handling
 
-    @tag :error_handling
-    test "handles invalid API key gracefully for Anthropic" do
-      model = %Model{
-        id: "claude-3-5-haiku-20241022",
-        name: "Claude 3.5 Haiku",
-        api: :anthropic_messages,
-        provider: :anthropic,
-        base_url: "https://api.anthropic.com",
-        reasoning: false,
-        input: [:text],
-        cost: %ModelCost{},
-        context_window: 200_000,
-        max_tokens: 8192,
-        headers: %{}
-      }
+    setup do
+      server =
+        StreamServer.start(fn _n ->
+          [
+            {:status, 401,
+             ~s({"error":{"type":"authentication_error","message":"invalid api key"}})}
+          ]
+        end)
 
-      context =
-        Context.new(system_prompt: "Test")
-        |> Context.add_user_message("Hello")
-
-      {:ok, stream} = LemonAi.stream(model, context, %{api_key: "invalid-key", max_tokens: 10})
-
-      # Wait for the request to complete and get result
-      # Use a longer timeout to ensure the API call completes
-      result = EventStream.result(stream, 10_000)
-
-      assert {:error, message} = result
-      assert %AssistantMessage{} = message
-      assert message.stop_reason == :error
-      assert message.error_message != nil
+      on_exit(fn -> StreamServer.stop(server) end)
+      {:ok, server: server}
     end
 
-    @tag :error_handling
-    test "handles invalid API key gracefully for OpenAI" do
-      model = %Model{
-        id: "gpt-4o-mini",
-        name: "GPT-4o Mini",
-        api: :openai_completions,
-        provider: :openai,
-        base_url: "https://api.openai.com/v1",
-        reasoning: false,
-        input: [:text],
-        cost: %ModelCost{},
-        context_window: 128_000,
-        max_tokens: 16_384,
-        headers: %{}
-      }
+    for {name, model_fun, path} <- [
+          {"Anthropic", :anthropic_model, ""},
+          {"OpenAI", :openai_model, "/v1"},
+          {"Google", :google_model, "/v1beta"}
+        ] do
+      @tag :error_handling
+      test "reports a rejected API key as an error for #{name}", %{server: server} do
+        model = %{unquote(model_fun)() | base_url: server.url <> unquote(path)}
 
-      context =
-        Context.new(system_prompt: "Test")
-        |> Context.add_user_message("Hello")
+        context =
+          Context.new(system_prompt: "Test")
+          |> Context.add_user_message("Hello")
 
-      {:ok, stream} = LemonAi.stream(model, context, %{api_key: "invalid-key", max_tokens: 10})
+        {:ok, stream} =
+          LemonAi.stream(model, context, %{api_key: "invalid-key", max_tokens: 10})
 
-      # Wait for the request to complete and get result
-      result = EventStream.result(stream, 10_000)
-
-      assert {:error, message} = result
-      assert %AssistantMessage{} = message
-      assert message.stop_reason == :error
-      assert message.error_message != nil
-    end
-
-    @tag :error_handling
-    test "handles invalid API key gracefully for Google" do
-      model = %Model{
-        id: "gemini-2.0-flash",
-        name: "Gemini 2.0 Flash",
-        api: :google_generative_ai,
-        provider: :google,
-        base_url: "https://generativelanguage.googleapis.com/v1beta",
-        reasoning: false,
-        input: [:text],
-        cost: %ModelCost{},
-        context_window: 1_000_000,
-        max_tokens: 8192,
-        headers: %{}
-      }
-
-      context =
-        Context.new(system_prompt: "Test")
-        |> Context.add_user_message("Hello")
-
-      {:ok, stream} = LemonAi.stream(model, context, %{api_key: "invalid-key", max_tokens: 10})
-
-      # Wait for the request to complete and get result
-      result = EventStream.result(stream, 10_000)
-
-      assert {:error, message} = result
-      assert %AssistantMessage{} = message
-      assert message.stop_reason == :error
-      assert message.error_message != nil
+        assert {:error, %AssistantMessage{} = message} = EventStream.result(stream, 10_000)
+        assert message.stop_reason == :error
+        assert message.error_message =~ ~r/401|invalid api key/i
+        assert_received {:stream_server, :request, 0, %{body: body}}
+        assert body =~ "Hello"
+      end
     end
   end
 end

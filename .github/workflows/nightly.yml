@@ -135,10 +135,10 @@ jobs:
       - name: Offline latency lane test
         run: scripts/test path apps/lemon_evals/test/lemon_evals/latency_test.exs --include slow
 
-  # Credential-free `:integration` cases. scripts/test scrubs provider
-  # credentials, so this proves the selection needs none: invalid-key handling
-  # against the real provider endpoints. Credentialed live suites fail rather
-  # than pass without keys and stay manual (docs/testing.md).
+  # Offline `:integration` cases: invalid-key handling through each provider's
+  # real HTTP path against a loopback fixture. scripts/test scrubs provider
+  # credentials, so this proves the selection needs none. Credentialed live
+  # suites fail rather than pass without keys and stay manual (docs/testing.md).
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 30
