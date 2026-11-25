@@ -7,6 +7,8 @@
 - Prompt skill discovery can use shorter descriptions for coding sessions without
   hiding skill keys or truncating the metadata/instructions loaded by `read_skill`.
 - Route MCP stdio launches through the native-process seam and record unsupported whole-workload ownership before client startup and protocol dispatch. Preserve uncertainty after failures while leaving cached reads and proven pre-dispatch refusals unrecorded.
+- MCP stdio clients can inject an arity-two `:port_open` callback. Invalid
+  callbacks and results are rejected; launch refusals never fall back.
 - `LemonSkills.Frontmatter.parse_yaml/2`: the shared YAML frontmatter parser
   (direct `:yamerl`, no `Application.start/1`; duplicate-key rejection and a
   size cap) used by skill manifests, subagent definitions and rules (#671).
@@ -15,8 +17,9 @@
 
 - **Breaking:** the MCP client library (`LemonMCP.*`, formerly the `lemon_mcp`
   app) lives in lemon_skills; `McpSource`/`McpSession` call it directly and the
-  `:mcp_*_client_not_available` errors are gone. `mix lemon.update` moved here
-  from lemon_core (#725).
+  `:mcp_*_client_not_available` errors are gone (#725).
+- MCP HTTP transports share SSE event parsing; callers use
+  `LemonMCP.Protocol` directly instead of the removed wrappers.
 - **Breaking:** `skills.json` is skill state only. `Config.load_config/1`,
   `save_config/3`, `get_skill_config/1` and `set_skill_config/2` were removed;
   `Config.disabled_keys/1` (global ∪ project) and `Config.read_state/1` return
@@ -57,6 +60,11 @@
 
 ### Fixed
 
+- MCP HTTP transports reject out-of-range destination ports rather than
+  authorizing a default origin.
+- Legacy MCP SSE handles endpoint and response fields split or coalesced
+  across chunks, and reports disconnects from Mint socket events. Stray client
+  messages are ignored and logged without their contents.
 - `Config.enable/2` returns `{:error, :archived}` for an archived skill and, at
   project scope, `{:error, :disabled_globally}` instead of lifting a global
   disable; it writes nothing when the key is not listed. Writes are atomic and

@@ -359,8 +359,6 @@
   `BranchSummaryMessage` remain. `Messages.to_llm/1` reads journal maps through
   `MessageSerialization.deserialize_message/1` and drops unknown roles.
 
-### Fixed
-
 - Compaction no longer fails permanently after a checkpoint/rewind or branch
   summary: journal entries are deserialized by the canonical serializer
   (`branch_summary` included), and compaction summaries keep tool names.
