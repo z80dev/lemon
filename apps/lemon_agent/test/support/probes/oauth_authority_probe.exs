@@ -1,4 +1,4 @@
-defmodule LemonScripts.OAuthAuthorityProbe do
+defmodule LemonAgent.TestSupport.OAuthAuthorityProbe do
   @moduledoc false
   alias LemonAgent.ModelRuntime.{Credentials, StreamOptions}
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig}

@@ -900,6 +900,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `Messages.get_text/1`, `get_tool_calls/1` and `total_tokens/1`; coding
   messages are `LemonAi.Types` structs plus `CustomMessage` and
   `BranchSummaryMessage` (#629).
+- Uninvoked and broken proof scripts under `scripts/`: the offline named-agent,
+  approval-recovery, multimodal-retry, task-worktree, provider-auth,
+  stopped-plan and four duplicate probe-wrapper smokes,
+  `scripts/verify_github_release_artifacts` and unused LSP fixtures. Their
+  probes now live in the consuming apps' `test/support/probes`; ExUnit covers
+  their scenarios. The manual, loopback-only
+  `scripts/live_provider_ownership_smoke.exs` stays and loads its probe from there.
+  `scripts/test quality` now runs every retained script self-test, the
+  crash-model mutation-anchor check and a check that each umbrella module
+  named by `scripts/*.exs` exists (#704).
 
 ### Security
 

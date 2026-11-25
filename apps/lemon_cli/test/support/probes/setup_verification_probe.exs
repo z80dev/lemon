@@ -1,4 +1,4 @@
-defmodule LemonScripts.SetupVerificationProbe do
+defmodule LemonCli.TestSupport.SetupVerificationProbe do
   @moduledoc false
   alias LemonCli.Setup.Verification
   alias LemonCore.Secrets
