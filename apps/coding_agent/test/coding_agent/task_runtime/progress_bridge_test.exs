@@ -1,4 +1,4 @@
-defmodule CodingAgent.Tools.Task.LiveBridgeTest do
+defmodule CodingAgent.TaskRuntime.ProgressBridgeTest do
   use ExUnit.Case, async: false
 
   import CodingAgent.AsyncHelpers

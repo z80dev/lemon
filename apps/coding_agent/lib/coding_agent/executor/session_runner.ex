@@ -303,7 +303,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         # Restored children launch before the prompt; subscription stays atomic
         # with the prompt (or the follow-up submission) below.
         :ok =
-          CodingAgent.Tools.Task.Restore.restore_parent(run_id, meta,
+          CodingAgent.TaskRuntime.Restore.restore_parent(run_id, meta,
             parent_session: session_id,
             session_pid: session,
             agent_id: agent_id,
@@ -533,7 +533,7 @@ defmodule CodingAgent.Executor.SessionRunner do
   defp checkpoint_native_resume(_session, _session_id, nil, _meta), do: :ok
 
   defp checkpoint_native_resume(session, session_id, run_id, meta) do
-    if CodingAgent.Tools.Task.Restore.enabled?(),
+    if CodingAgent.TaskRuntime.Restore.enabled?(),
       do: persist_native_resume(session, session_id, run_id, meta),
       else: :ok
   end

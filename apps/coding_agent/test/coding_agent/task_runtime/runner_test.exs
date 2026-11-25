@@ -1,9 +1,9 @@
-defmodule CodingAgent.Tools.Task.RunnerTest do
+defmodule CodingAgent.TaskRuntime.RunnerTest do
   use ExUnit.Case, async: false
 
   alias LemonAgent.AbortSignal
   alias LemonAgent.Test.Mocks
-  alias CodingAgent.Tools.Task.Runner
+  alias CodingAgent.TaskRuntime.Runner
 
   @tag :tmp_dir
   test "child progress carries deltas and terminal output retains the complete answer", %{

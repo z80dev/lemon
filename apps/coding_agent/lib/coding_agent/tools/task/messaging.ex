@@ -10,8 +10,9 @@ defmodule CodingAgent.Tools.Task.Messaging do
   Managed Bot invocations use product MCP for named messaging, retaining task-family access.
   """
 
+  alias CodingAgent.TaskRuntime.Control
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Control, InvocationAuthority, Result}
+  alias CodingAgent.Tools.Task.{InvocationAuthority, Result}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent

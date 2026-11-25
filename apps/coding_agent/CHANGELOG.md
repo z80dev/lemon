@@ -13,6 +13,13 @@
   pending messages and bridges its progress to the parent run. `Control` remains
   the authenticated API; `register/6`, `attach_worker/1` and `complete/1` are
   replaced by `register/2` and `launch/3` (#634).
+- **Breaking:** the task runtime moved from `CodingAgent.Tools.Task.*` to
+  `CodingAgent.TaskRuntime.*` (`Control`, `Async`, `Runner`, `Restore`,
+  `Followup`, `Hub`); invocation-authority inheritance and parent narrowing
+  moved from `Tools.Task.Params` to `Tools.Task.InvocationAuthority`
+  (`inherited_execution_context/2`, `restrict_to_parent/3`,
+  `child_execution_context/3`, `parent_session_state/1`). No aliases remain
+  (#634).
 
 ### Fixed
 
@@ -45,7 +52,12 @@
   (failure reasons bounded to 1,000 characters) and are skipped for
   parent-abort cancellations; joins and `wait` suppress every returned task's
   notice. A completed but unresumable child has a `:completed` owner phase, and
-  `Tools.Task.Hub` prefers a terminal stored status (#673).
+  the Agent Hub prefers a terminal stored status (#673).
+- `TaskRuntime.status/2`, `TaskRuntime.Hub` and task joins take a task's
+  status, output and error from its `TaskStore` record; owner phases and
+  `RunGraph` rows only report liveness and coordinate joins. Task records are
+  written before their run rows on launch failure and delegated completion
+  (#634).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller

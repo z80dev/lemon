@@ -1,8 +1,9 @@
 defmodule CodingAgent.Tools.TaskSwarmTest do
   use ExUnit.Case, async: false
 
+  alias CodingAgent.TaskRuntime.Control
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Control, Result}
+  alias CodingAgent.Tools.Task.Result
   alias LemonAgent.AbortSignal
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.AgentToolResult

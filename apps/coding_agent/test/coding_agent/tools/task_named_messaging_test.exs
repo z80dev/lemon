@@ -1,8 +1,9 @@
 defmodule CodingAgent.Tools.TaskNamedMessagingTest do
   use ExUnit.Case, async: false
 
+  alias CodingAgent.TaskRuntime.Control
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Control, Messaging}
+  alias CodingAgent.Tools.Task.Messaging
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
   alias LemonCore.AgentMessaging

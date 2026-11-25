@@ -56,8 +56,8 @@ The current codebase already provides most of the primitives needed for this fea
 ### Existing capabilities
 
 - `CodingAgent.Tools.Task.Execution` creates child task context including `run_id`, `task_id`, `parent_run_id`, `session_key`, and `agent_id`.
-- `CodingAgent.Tools.Task.Async` emits task lifecycle events to `LemonCore.Bus` and `LemonCore.Introspection`, and already broadcasts to both child and parent run topics.
-- `CodingAgent.Tools.Task.Followup` can route async completion text back into the live parent session or through router fallback.
+- `CodingAgent.TaskRuntime.Async` emits task lifecycle events to `LemonCore.Bus` and `LemonCore.Introspection`, and already broadcasts to both child and parent run topics.
+- `CodingAgent.TaskRuntime.Followup` can route async completion text back into the live parent session or through router fallback.
 - `CodingAgent.Session.follow_up/2` can queue a message into the parent session.
 - `CodingAgent.Session` already accepts `extra_tools`, so child-only tooling can be injected without exposing it globally.
 - `CodingAgent.TaskStore` and `CodingAgent.RunGraph` already persist bounded task/run state with DETS-backed recovery.
@@ -65,8 +65,8 @@ The current codebase already provides most of the primitives needed for this fea
 ### Relevant files
 
 - `apps/coding_agent/lib/coding_agent/tools/task/execution.ex`
-- `apps/coding_agent/lib/coding_agent/tools/task/async.ex`
-- `apps/coding_agent/lib/coding_agent/tools/task/followup.ex`
+- `apps/coding_agent/lib/coding_agent/task_runtime/async.ex`
+- `apps/coding_agent/lib/coding_agent/task_runtime/followup.ex`
 - `apps/coding_agent/lib/coding_agent/tools/task/params.ex`
 - `apps/coding_agent/lib/coding_agent/session.ex`
 - `apps/coding_agent/lib/coding_agent/session/state.ex`
@@ -447,7 +447,7 @@ The coordinator layer is optional but likely useful for keeping store, bus, and 
 ## Suggested Phase 1 Implementation Steps
 
 1. Add `CodingAgent.ParentQuestions` plus its owning server if separate ETS/DETS ownership is needed.
-2. Add lifecycle event emission helpers parallel to `CodingAgent.Tools.Task.Async`.
+2. Add lifecycle event emission helpers parallel to `CodingAgent.TaskRuntime.Async`.
 3. Add `CodingAgent.Tools.AskParent`.
 4. Inject the tool into eligible internal child sessions using `extra_tools`.
 5. Add internal answer API.

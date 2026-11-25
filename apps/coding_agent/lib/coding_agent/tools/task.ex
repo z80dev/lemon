@@ -6,9 +6,11 @@ defmodule CodingAgent.Tools.Task do
   final assistant response.
   """
 
+  alias CodingAgent.TaskRuntime.Control
+
   alias CodingAgent.Tools.Task.{
-    Control,
     Execution,
+    InvocationAuthority,
     Messaging,
     Params,
     Result,
@@ -255,7 +257,7 @@ defmodule CodingAgent.Tools.Task do
 
   defp do_execute(tool_call_id, params, signal, on_update, cwd, opts) do
     with {:ok, validated} <- Params.validate_run_params(params, cwd, opts),
-         {:ok, validated} <- Params.restrict_to_parent(validated, cwd, opts),
+         {:ok, validated} <- InvocationAuthority.restrict_to_parent(validated, cwd, opts),
          :ok <- Params.check_budget_and_policy(validated, opts) do
       Execution.run(tool_call_id, validated, signal, on_update, cwd, opts)
     end
@@ -364,7 +366,7 @@ defmodule CodingAgent.Tools.Task do
         |> Enum.with_index()
         |> Enum.map(fn {{:ok, child}, index} ->
           Map.get_lazy(adopted, index, fn ->
-            with {:ok, child} <- Params.restrict_to_parent(child, cwd, opts),
+            with {:ok, child} <- InvocationAuthority.restrict_to_parent(child, cwd, opts),
                  :ok <- Params.check_budget_and_policy(child, opts) do
               Execution.run(tool_call_id, %{child | async: true}, signal, on_update, cwd, opts)
             end

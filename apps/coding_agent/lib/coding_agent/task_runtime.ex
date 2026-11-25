@@ -1,12 +1,20 @@
 defmodule CodingAgent.TaskRuntime do
   @moduledoc """
-  Supervision and lookup for native task children.
+  Supervision, lookup and status of native task children.
 
-  Every child has its own supervised owner, `CodingAgent.TaskRuntime.Child`.
-  The owner is the one live authority for its child's lifecycle phase, worker,
-  session, pending messages and cancellation; it does all blocking work (session
-  shutdown, store writes) itself, so one slow child cannot stall another. The
-  durable authority for results is the `CodingAgent.TaskStore` record.
+  The runtime is `TaskRuntime.Control` (invocation-bound commands), `Async`
+  (launch and the turn finalizer), `Runner` (child session steps), `Restore`
+  (crash continuation), `Followup` (completion notices) and `Hub` (the operator
+  Agent Hub). Every child has its own supervised owner,
+  `CodingAgent.TaskRuntime.Child`, which holds its live lifecycle phase, worker,
+  session, pending messages and cancellation and does all blocking work
+  (session shutdown, store writes) itself, so one slow child cannot stall
+  another.
+
+  The `CodingAgent.TaskStore` record is the one status authority: results,
+  cancellation and the owner's recorded agent state (`idle`, `parked`,
+  `killed`, `aborted`). Owner phases and `RunGraph` rows are projections used
+  for liveness and join coordination; neither decides a terminal status.
 
   Owners publish a small projection (phase, signal references, session and
   worker handles, public metadata) as their registry value. Lookups, family
@@ -25,6 +33,7 @@ defmodule CodingAgent.TaskRuntime do
   @registry __MODULE__.Registry
   @parents __MODULE__.Parents
   @supervisor __MODULE__.Supervisor
+  @failed_statuses [:error, :cancelled, :killed, :lost, :timeout]
 
   @doc false
   def child_spec(_opts) do
@@ -124,44 +133,45 @@ defmodule CodingAgent.TaskRuntime do
   end
 
   @doc """
-  Effective status of a child from its projection and stored record. A pending
-  cancellation, an aborted signal and a terminal record win over the live phase.
+  Effective status of a child. The stored record is the authority: a failed or
+  cancelled result, or a cancellation the owner recorded (`agent_state:
+  :killed`), wins; a completed result stays completed (whatever else the owner
+  recorded) unless it is resumable (`idle`/`parked`). The projection only adds
+  what the store cannot know yet: a cancellation in flight (which refuses a
+  resumable child's wakeup), a session that died, or a turn still starting.
   """
   @spec status(map(), String.t() | nil) :: atom()
   def status(projection, id) do
-    stored =
+    record =
       if id do
         case TaskStore.get_record(id) do
-          {:ok, record} -> record[:status]
-          _ -> :missing
+          {:ok, record} -> record
+          _ -> nil
         end
       end
 
+    stored = record[:status]
+    agent_state = record[:agent_state]
+
     cond do
-      projection.phase in [:cancelling, :killed] or AbortSignal.aborted?(projection.signal) or
-          AbortSignal.aborted?(projection.parent_signal) ->
-        :cancelled
-
-      stored in [:error, :cancelled, :killed, :aborted, :lost, :missing] ->
-        stored
-
-      projection.phase in [:idle, :parked, :aborted, :killed, :completed] ->
-        projection.phase
-
-      stored == :completed ->
-        stored
-
-      projection.phase == :dead ->
-        :dead
-
-      is_pid(projection.session) ->
-        :running
-
-      is_nil(id) ->
-        :dead
-
-      true ->
-        :queued
+      id && is_nil(record) -> :missing
+      stored in @failed_statuses -> stored
+      agent_state == :killed -> :cancelled
+      stored == :completed and agent_state not in [:idle, :parked] -> :completed
+      # A cancellation in flight ends a live or resumable child before the
+      # owner records it.
+      cancelling?(projection) -> :cancelled
+      stored == :completed -> agent_state
+      agent_state == :aborted -> :aborted
+      projection.phase == :dead -> :dead
+      is_pid(projection.session) -> :running
+      is_nil(id) -> :dead
+      true -> :queued
     end
+  end
+
+  defp cancelling?(projection) do
+    projection.phase in [:cancelling, :killed] or AbortSignal.aborted?(projection.signal) or
+      AbortSignal.aborted?(projection.parent_signal)
   end
 end

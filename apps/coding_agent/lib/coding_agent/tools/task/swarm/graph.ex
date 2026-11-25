@@ -15,6 +15,7 @@ defmodule CodingAgent.Tools.Task.Swarm.Graph do
   remain available through task get.
   """
 
+  alias CodingAgent.Tools.Task.InvocationAuthority
   alias CodingAgent.Tools.Task.Params
   alias CodingAgent.Tools.Task.Result
   alias LemonAgent.Security.ExternalContent
@@ -167,7 +168,7 @@ defmodule CodingAgent.Tools.Task.Swarm.Graph do
           |> Map.put("name", name)
 
         with {:ok, validated} <- Params.validate_run_params(params, cwd, opts),
-             {:ok, validated} <- Params.restrict_to_parent(validated, cwd, opts) do
+             {:ok, validated} <- InvocationAuthority.restrict_to_parent(validated, cwd, opts) do
           {:ok,
            %{
              name: validated.name,

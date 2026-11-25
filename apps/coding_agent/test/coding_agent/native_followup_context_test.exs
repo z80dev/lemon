@@ -1,8 +1,9 @@
 defmodule CodingAgent.NativeFollowupContextTest do
   use ExUnit.Case, async: false
 
+  alias CodingAgent.TaskRuntime.Followup
   alias CodingAgent.Tools.Agent, as: AgentTool
-  alias CodingAgent.Tools.Task.{Followup, Params}
+  alias CodingAgent.Tools.Task.InvocationAuthority
   alias LemonCore.{InvocationProof, ProfileStore, Secrets, Store}
   alias LemonRouter.{NativeFollowupAdmission, NativeLineage, RunOrchestrator}
 
@@ -373,7 +374,7 @@ defmodule CodingAgent.NativeFollowupContextTest do
   end
 
   test "Task returning followup renews source authority instead of steering old session", ctx do
-    context = Params.inherited_execution_context(ctx.opts)
+    context = InvocationAuthority.inherited_execution_context(ctx.opts)
 
     context =
       Map.merge(context, %{
@@ -408,7 +409,7 @@ defmodule CodingAgent.NativeFollowupContextTest do
       Keyword.merge(ctx.opts,
         cwd: ctx.root,
         runner: fn session_opts, _prompt, _signal, _timeout ->
-          inherited = Params.inherited_execution_context(session_opts)
+          inherited = InvocationAuthority.inherited_execution_context(session_opts)
 
           result =
             AgentTool.execute(
@@ -475,7 +476,7 @@ defmodule CodingAgent.NativeFollowupContextTest do
 
     assert :ok =
              Followup.maybe_send_async_followup(
-               Params.inherited_execution_context(ctx.opts)
+               InvocationAuthority.inherited_execution_context(ctx.opts)
                |> Map.merge(%{
                  parent_session_key: ctx.opts[:session_key],
                  parent_agent_id: ctx.profile

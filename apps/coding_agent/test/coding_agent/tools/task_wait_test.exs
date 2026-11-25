@@ -2,7 +2,8 @@ defmodule CodingAgent.Tools.Task.WaitTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.{ParentQuestions, RunGraph, TaskStore}
-  alias CodingAgent.Tools.Task.{Control, Wait}
+  alias CodingAgent.TaskRuntime.Control
+  alias CodingAgent.Tools.Task.Wait
   alias LemonAgent.AbortSignal
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.{AgentTool, AgentToolResult}

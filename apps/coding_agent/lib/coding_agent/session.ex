@@ -139,7 +139,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Session.WasmBridge
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
-  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.TaskRuntime.Control
   alias CodingAgent.Wasm.SidecarSupervisor
   alias CodingAgent.WorkspaceReads
   alias LemonAgent.ContextRegistry

@@ -475,6 +475,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   restarted owner can neither lose nor repeat it), a crashed owner adopts its
   live worker and session (a second crash terminalizes the child), and terminal
   children are pruned after five minutes (#634).
+- A joined task's status, output and error, the Agent Hub and child
+  messaging now all read the task's stored record; a run-graph row or owner
+  phase can no longer report a task differently from its stored result. A
+  completed child that is later cancelled or whose owner gave up stays
+  "completed" (#634).
 - Task slots are re-entrant per lineage, so a child that waits on its own
   descendants no longer deadlocks the eight-slot pool; `/bg` sessions use their
   own `background_run_max_concurrency` pool; joins without a timeout yield after

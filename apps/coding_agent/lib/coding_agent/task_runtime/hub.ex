@@ -1,4 +1,4 @@
-defmodule CodingAgent.Tools.Task.Hub do
+defmodule CodingAgent.TaskRuntime.Hub do
   @moduledoc """
   Operator view and control of one root session's native task children: the
   TUI Agent Hub, served through the control plane.
@@ -16,7 +16,7 @@ defmodule CodingAgent.Tools.Task.Hub do
 
   alias CodingAgent.{Session, TaskStore}
   alias CodingAgent.InternalUrls.HistoryProtocol
-  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.TaskRuntime.Control
   alias LemonAgent.Types.AgentToolResult
 
   @max_depth 8
@@ -183,44 +183,30 @@ defmodule CodingAgent.Tools.Task.Hub do
     }
   end
 
-  # A live messageable phase or pending cancellation wins. Otherwise the stored
-  # terminal record is authoritative: an owner that exited, restarted or kept a
-  # completed but unresumable child never turns a completed result into "failed".
-  defp status(record, live) do
-    case live && live.status do
-      phase when phase in [:queued, :running, :idle, :parked] ->
-        Atom.to_string(phase)
+  # A live owner's status already lets the stored record decide
+  # (`TaskRuntime.status/2`); without one (pruned owner, restarted runtime) the
+  # stored record alone answers, so a completed result never reads as "failed".
+  defp status(_record, %{status: status}), do: status_label(status)
+  defp status(record, nil), do: record |> stored_status() |> status_label()
 
-      phase when phase in [:cancelled, :killed] ->
-        "cancelled"
-
-      phase ->
-        terminal_status(record) ||
-          if(phase in [:error, :aborted, :dead, :lost, :missing, :timeout],
-            do: "failed",
-            else: record_status(record)
-          )
-    end
-  end
-
-  defp terminal_status(record) do
-    case record[:status] do
-      :completed -> "completed"
-      :cancelled -> "cancelled"
-      status when status in [:error, :lost, :timeout] -> "failed"
-      _ -> nil
-    end
-  end
-
-  defp record_status(record) do
+  # Mirrors `TaskRuntime.status/2` for a child with no live owner.
+  defp stored_status(record) do
     case {record[:status], record[:agent_state]} do
-      {_, :killed} -> "cancelled"
-      {_, :aborted} -> "failed"
-      {:running, _} -> "running"
-      {:queued, _} -> "queued"
-      _ -> "failed"
+      {status, _} when status in [:error, :killed, :lost, :timeout] -> :error
+      {:cancelled, _} -> :cancelled
+      {_, :killed} -> :cancelled
+      {:completed, _} -> :completed
+      {_, :aborted} -> :aborted
+      {status, _} when status in [:running, :queued] -> status
+      _ -> :error
     end
   end
+
+  defp status_label(status)
+       when status in [:queued, :running, :idle, :parked, :completed, :cancelled],
+       do: Atom.to_string(status)
+
+  defp status_label(_status), do: "failed"
 
   defp messageable(record, live) do
     cond do

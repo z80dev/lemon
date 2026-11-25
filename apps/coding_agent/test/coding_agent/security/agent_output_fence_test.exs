@@ -8,7 +8,7 @@ defmodule CodingAgent.Security.AgentOutputFenceTest do
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.ParentQuestions
   alias CodingAgent.Tools.AskParent
-  alias CodingAgent.Tools.Task.Followup
+  alias CodingAgent.TaskRuntime.Followup
   alias LemonAgent.Security.{ExternalContent, UntrustedToolBoundary}
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{TextContent, ToolResultMessage}

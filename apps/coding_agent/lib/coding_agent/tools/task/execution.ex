@@ -5,16 +5,13 @@ defmodule CodingAgent.Tools.Task.Execution do
   alias CodingAgent.RunGraph
   alias CodingAgent.Session
   alias CodingAgent.TaskProgressBindingStore
+  alias CodingAgent.TaskRuntime.{Async, Control, Followup, Runner}
   alias CodingAgent.TaskStore
 
   alias CodingAgent.Tools.Task.{
-    Async,
-    Control,
-    Followup,
     InvocationAuthority,
     Params,
     Result,
-    Runner,
     Seance,
     StructuredOutput,
     Worktree
@@ -30,7 +27,7 @@ defmodule CodingAgent.Tools.Task.Execution do
         ) ::
           term()
   def run(tool_call_id, validated, signal, on_update, cwd, opts) do
-    opts = Keyword.merge(opts, Map.to_list(Params.inherited_execution_context(opts)))
+    opts = Keyword.merge(opts, Map.to_list(InvocationAuthority.inherited_execution_context(opts)))
 
     opts =
       if scope = Keyword.get(opts, :budget_scope) do

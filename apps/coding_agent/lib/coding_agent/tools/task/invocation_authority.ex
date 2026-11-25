@@ -228,4 +228,211 @@ defmodule CodingAgent.Tools.Task.InvocationAuthority do
     do: Enum.any?(value, fn {_key, item} -> reserved_invocation_reference?(item) end)
 
   defp reserved_invocation_reference?(_), do: false
+
+  # -- inheritance and narrowing ---------------------------------------------------
+
+  @doc """
+  Narrows the caller's execution context to a child's: its cwd (canonicalised
+  inside the parent workspace) and tool policy can only shrink.
+  """
+  def restrict_to_parent(validated, cwd, opts) do
+    inherited = inherited_execution_context(opts)
+
+    parent =
+      case inherited.execution_context do
+        nil ->
+          LemonCore.ExecutionContext.new(
+            run_id: Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id),
+            agent_id: Keyword.get(opts, :agent_id),
+            cwd: cwd,
+            tool_policy: inherited.tool_policy
+          )
+
+        context ->
+          LemonCore.ExecutionContext.validate(context)
+      end
+
+    with {:ok, parent} <- parent,
+         {:ok, child} <-
+           LemonCore.ExecutionContext.child(parent,
+             cwd: validated[:cwd] || cwd,
+             tool_policy: validated[:tool_policy],
+             provenance: %{
+               origin: "task",
+               delegated_by: LemonCore.ExecutionContext.identity(parent)
+             }
+           ),
+         {:ok, child_cwd} <- canonical_child_cwd(child, validated[:cwd]) do
+      # The child runs in the resolved directory that was checked against the
+      # parent's canonical workspace, never the caller's spelling of it.
+      {:ok,
+       validated
+       |> Map.put(:cwd, child_cwd)
+       |> Map.put(:tool_policy, child.tool_policy)
+       |> Map.put(:execution_context, child)}
+    else
+      {:error, reason} -> {:error, "Task execution authority is invalid: #{inspect(reason)}"}
+    end
+  end
+
+  defp canonical_child_cwd(_child, nil), do: {:ok, nil}
+
+  defp canonical_child_cwd(child, cwd),
+    do: LemonCore.ExecutionContext.canonical_cwd(child, cwd)
+
+  @doc "The child's narrowed execution context, reidentified to its run."
+  def child_execution_context(cwd, validated, opts) do
+    case {validated[:execution_context], Keyword.get(opts, :child_run_id)} do
+      {nil, _} ->
+        case restrict_to_parent(validated, cwd, opts) do
+          {:ok, child} -> child_execution_context(cwd, child, opts)
+          {:error, reason} -> raise ArgumentError, reason
+        end
+
+      {context, nil} ->
+        context
+
+      {context, run_id} ->
+        case LemonCore.ExecutionContext.reidentify(context, run_id) do
+          {:ok, context} ->
+            context
+
+          {:error, reason} ->
+            raise ArgumentError, "Invalid child execution identity: #{inspect(reason)}"
+        end
+    end
+  end
+
+  @doc """
+  The invocation authority a launch inherits: execution context, tool policy,
+  memory and MCP grants and the private native fields, taken from the launch
+  options, else from the live parent session's state (`parent_state`, read from
+  the parent session when nil and the options are incomplete).
+  """
+  def inherited_execution_context(opts, parent_state \\ nil) do
+    approval_context = Keyword.get(opts, :approval_context) || %{}
+
+    complete? =
+      not is_nil(Keyword.get(opts, :execution_context)) &&
+        Keyword.has_key?(opts, :tool_policy) &&
+        Keyword.has_key?(opts, :invocation_mcp_servers) &&
+        (Keyword.has_key?(opts, :invocation_context_key) ||
+           Map.has_key?(approval_context, :invocation_context_key)) &&
+        (Keyword.has_key?(opts, :memory_context_key) ||
+           Map.has_key?(approval_context, :memory_context_key)) &&
+        (Keyword.has_key?(opts, :memory_context_verified) ||
+           Map.has_key?(approval_context, :memory_context_verified)) &&
+        (Keyword.has_key?(opts, :shared_memory_grant) ||
+           Map.has_key?(approval_context, :shared_memory_grant))
+
+    parent_state =
+      parent_state || if(complete?, do: %{}, else: parent_session_state(opts)) || %{}
+
+    parent_approval_context = Map.get(parent_state, :approval_context) || %{}
+
+    %{
+      execution_context:
+        Keyword.get(opts, :execution_context) || Map.get(parent_state, :execution_context),
+      invocation_context_key:
+        LemonCore.MapHelpers.get_key(approval_context, :invocation_context_key) ||
+          Keyword.get(
+            opts,
+            :invocation_context_key,
+            LemonCore.MapHelpers.get_key(parent_approval_context, :invocation_context_key)
+          ),
+      memory_context_key:
+        LemonCore.MapHelpers.get_key(approval_context, :memory_context_key) ||
+          Keyword.get(
+            opts,
+            :memory_context_key,
+            LemonCore.MapHelpers.get_key(parent_approval_context, :memory_context_key)
+          ),
+      memory_context_verified:
+        Keyword.get(
+          opts,
+          :memory_context_verified,
+          Map.get(
+            approval_context,
+            :memory_context_verified,
+            Map.get(
+              approval_context,
+              "memory_context_verified",
+              Map.get(
+                parent_approval_context,
+                :memory_context_verified,
+                Map.get(parent_approval_context, "memory_context_verified", false)
+              )
+            )
+          )
+        ) == true,
+      shared_memory_grant:
+        Keyword.get(
+          opts,
+          :shared_memory_grant,
+          Map.get(
+            approval_context,
+            :shared_memory_grant,
+            Map.get(
+              approval_context,
+              "shared_memory_grant",
+              Map.get(
+                parent_approval_context,
+                :shared_memory_grant,
+                Map.get(parent_approval_context, "shared_memory_grant", false)
+              )
+            )
+          )
+        ) == true,
+      tool_policy: Keyword.get(opts, :tool_policy, Map.get(parent_state, :tool_policy)),
+      invocation_mcp_servers:
+        Keyword.get(
+          opts,
+          :invocation_mcp_servers,
+          Map.get(
+            approval_context,
+            :invocation_mcp_servers,
+            Map.get(parent_approval_context, :invocation_mcp_servers)
+          )
+        )
+    }
+    |> Map.merge(
+      Map.new(private_native_fields(), fn key ->
+        {key,
+         Map.get(
+           approval_context,
+           key,
+           Keyword.get(opts, key, Map.get(parent_approval_context, key))
+         )}
+      end)
+    )
+    |> Map.put(
+      :native_managed_context,
+      inherited_managed_context(opts, approval_context, parent_approval_context)
+    )
+  end
+
+  defp inherited_managed_context(opts, context, parent_context) do
+    sources = [context, Map.new(opts), parent_context]
+
+    case Enum.find(sources, &is_boolean(&1[:native_managed_context])) do
+      nil -> Enum.any?(sources, &managed_metadata?/1)
+      source -> source.native_managed_context
+    end
+  end
+
+  @doc "The live parent session's state, or nil when it is unavailable."
+  def parent_session_state(opts) do
+    session_pid = Keyword.get(opts, :session_pid) || Keyword.get(opts, :parent_session)
+    session_module = Keyword.get(opts, :session_module, CodingAgent.Session)
+
+    with true <- is_pid(session_pid) && Process.alive?(session_pid),
+         true <- function_exported?(session_module, :get_state, 1),
+         state when is_map(state) <- session_module.get_state(session_pid) do
+      state
+    else
+      _ -> nil
+    end
+  catch
+    _, _ -> nil
+  end
 end

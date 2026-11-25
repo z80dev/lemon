@@ -897,7 +897,7 @@ shell history.
 
 ### Native Task Execution
 
-`CodingAgent.Tools.Task.Runner` starts and monitors native task sessions directly.
+`CodingAgent.TaskRuntime.Runner` starts and monitors native task sessions directly; the rest of the task runtime (`Control`, `Async`, `Restore`, `Followup`, `Hub` and the per-child owner `Child`) lives under `CodingAgent.TaskRuntime`. The task record in `CodingAgent.TaskStore` is the one status authority; owner phases and `RunGraph` rows only report liveness and coordinate joins.
 
 ## Key Concepts
 

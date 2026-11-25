@@ -6,7 +6,6 @@ defmodule CodingAgent.Tools.Task.Params do
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.BudgetEnforcer
   alias CodingAgent.ModelProvenance
-  alias CodingAgent.Session
   alias CodingAgent.SettingsManager
   alias CodingAgent.Subagents
   alias CodingAgent.ToolPolicy
@@ -287,52 +286,6 @@ defmodule CodingAgent.Tools.Task.Params do
         end
     end
   end
-
-  @doc false
-  def restrict_to_parent(validated, cwd, opts) do
-    inherited = inherited_execution_context(opts)
-
-    parent =
-      case inherited.execution_context do
-        nil ->
-          LemonCore.ExecutionContext.new(
-            run_id: Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id),
-            agent_id: Keyword.get(opts, :agent_id),
-            cwd: cwd,
-            tool_policy: inherited.tool_policy
-          )
-
-        context ->
-          LemonCore.ExecutionContext.validate(context)
-      end
-
-    with {:ok, parent} <- parent,
-         {:ok, child} <-
-           LemonCore.ExecutionContext.child(parent,
-             cwd: validated[:cwd] || cwd,
-             tool_policy: validated[:tool_policy],
-             provenance: %{
-               origin: "task",
-               delegated_by: LemonCore.ExecutionContext.identity(parent)
-             }
-           ),
-         {:ok, child_cwd} <- canonical_child_cwd(child, validated[:cwd]) do
-      # The child runs in the resolved directory that was checked against the
-      # parent's canonical workspace, never the caller's spelling of it.
-      {:ok,
-       validated
-       |> Map.put(:cwd, child_cwd)
-       |> Map.put(:tool_policy, child.tool_policy)
-       |> Map.put(:execution_context, child)}
-    else
-      {:error, reason} -> {:error, "Task execution authority is invalid: #{inspect(reason)}"}
-    end
-  end
-
-  defp canonical_child_cwd(_child, nil), do: {:ok, nil}
-
-  defp canonical_child_cwd(child, cwd),
-    do: LemonCore.ExecutionContext.canonical_cwd(child, cwd)
 
   @doc """
   Resolves a child's model, thinking level, output schema, tool policy and spawn
@@ -925,8 +878,8 @@ defmodule CodingAgent.Tools.Task.Params do
 
     {task_model, settings, model_origin} = resolve_task_model(cwd, opts, validated)
     parent_session = Keyword.get(opts, :parent_session)
-    parent_state = if is_pid(parent_session), do: inherited_session_state(opts)
-    inherited_context = inherited_execution_context(opts, parent_state)
+    parent_state = if is_pid(parent_session), do: InvocationAuthority.parent_session_state(opts)
+    inherited_context = InvocationAuthority.inherited_execution_context(opts, parent_state)
 
     # A child spawned after the parent made an unreviewed folder read starts
     # fenced, so the egress gate cannot be escaped through delegation.
@@ -1014,7 +967,10 @@ defmodule CodingAgent.Tools.Task.Params do
       |> Keyword.put(:task_child, true)
       |> maybe_put_kw(:task_allowed_agents, validated[:task_allowed_agents])
       |> maybe_put_kw(:tool_policy, child_policy)
-      |> maybe_put_kw(:execution_context, child_execution_context(cwd, validated, opts))
+      |> maybe_put_kw(
+        :execution_context,
+        InvocationAuthority.child_execution_context(cwd, validated, opts)
+      )
       |> maybe_put_kw(:extra_tools, child_extra_tools_if_present(child_extra_tools))
       |> maybe_put_kw(:workspace_read_fenced, if(parent_fenced?, do: true, else: nil))
       |> maybe_put_kw(:session_file, validated[:seance_session_file])
@@ -1029,7 +985,7 @@ defmodule CodingAgent.Tools.Task.Params do
 
   @doc false
   def inherited_model_explicit(opts, parent_state \\ nil) do
-    case parent_state || inherited_session_state(opts) do
+    case parent_state || InvocationAuthority.parent_session_state(opts) do
       %{session_manager: manager} ->
         CodingAgent.SessionManager.build_session_context(manager).model_explicit
 
@@ -1054,178 +1010,20 @@ defmodule CodingAgent.Tools.Task.Params do
     end
   end
 
-  defp child_execution_context(cwd, validated, opts) do
-    case {validated[:execution_context], Keyword.get(opts, :child_run_id)} do
-      {nil, _} ->
-        case restrict_to_parent(validated, cwd, opts) do
-          {:ok, child} -> child_execution_context(cwd, child, opts)
-          {:error, reason} -> raise ArgumentError, reason
-        end
-
-      {context, nil} ->
-        context
-
-      {context, run_id} ->
-        case LemonCore.ExecutionContext.reidentify(context, run_id) do
-          {:ok, context} ->
-            context
-
-          {:error, reason} ->
-            raise ArgumentError, "Invalid child execution identity: #{inspect(reason)}"
-        end
-    end
-  end
-
-  @doc false
-  def inherited_execution_context(opts), do: inherited_execution_context(opts, nil)
-
-  defp inherited_execution_context(opts, parent_state) do
-    approval_context = Keyword.get(opts, :approval_context) || %{}
-
-    complete? =
-      not is_nil(Keyword.get(opts, :execution_context)) &&
-        Keyword.has_key?(opts, :tool_policy) &&
-        Keyword.has_key?(opts, :invocation_mcp_servers) &&
-        (Keyword.has_key?(opts, :invocation_context_key) ||
-           Map.has_key?(approval_context, :invocation_context_key)) &&
-        (Keyword.has_key?(opts, :memory_context_key) ||
-           Map.has_key?(approval_context, :memory_context_key)) &&
-        (Keyword.has_key?(opts, :memory_context_verified) ||
-           Map.has_key?(approval_context, :memory_context_verified)) &&
-        (Keyword.has_key?(opts, :shared_memory_grant) ||
-           Map.has_key?(approval_context, :shared_memory_grant))
-
-    parent_state =
-      parent_state || if(complete?, do: %{}, else: inherited_session_state(opts)) || %{}
-
-    parent_approval_context = Map.get(parent_state, :approval_context) || %{}
-
-    %{
-      execution_context:
-        Keyword.get(opts, :execution_context) || Map.get(parent_state, :execution_context),
-      invocation_context_key:
-        LemonCore.MapHelpers.get_key(approval_context, :invocation_context_key) ||
-          Keyword.get(
-            opts,
-            :invocation_context_key,
-            LemonCore.MapHelpers.get_key(parent_approval_context, :invocation_context_key)
-          ),
-      memory_context_key:
-        LemonCore.MapHelpers.get_key(approval_context, :memory_context_key) ||
-          Keyword.get(
-            opts,
-            :memory_context_key,
-            LemonCore.MapHelpers.get_key(parent_approval_context, :memory_context_key)
-          ),
-      memory_context_verified:
-        Keyword.get(
-          opts,
-          :memory_context_verified,
-          Map.get(
-            approval_context,
-            :memory_context_verified,
-            Map.get(
-              approval_context,
-              "memory_context_verified",
-              Map.get(
-                parent_approval_context,
-                :memory_context_verified,
-                Map.get(parent_approval_context, "memory_context_verified", false)
-              )
-            )
-          )
-        ) == true,
-      shared_memory_grant:
-        Keyword.get(
-          opts,
-          :shared_memory_grant,
-          Map.get(
-            approval_context,
-            :shared_memory_grant,
-            Map.get(
-              approval_context,
-              "shared_memory_grant",
-              Map.get(
-                parent_approval_context,
-                :shared_memory_grant,
-                Map.get(parent_approval_context, "shared_memory_grant", false)
-              )
-            )
-          )
-        ) == true,
-      tool_policy: Keyword.get(opts, :tool_policy, Map.get(parent_state, :tool_policy)),
-      invocation_mcp_servers:
-        Keyword.get(
-          opts,
-          :invocation_mcp_servers,
-          Map.get(
-            approval_context,
-            :invocation_mcp_servers,
-            Map.get(parent_approval_context, :invocation_mcp_servers)
-          )
-        )
-    }
-    |> Map.merge(
-      Map.new(InvocationAuthority.private_native_fields(), fn key ->
-        {key,
-         Map.get(
-           approval_context,
-           key,
-           Keyword.get(opts, key, Map.get(parent_approval_context, key))
-         )}
-      end)
-    )
-    |> Map.put(
-      :native_managed_context,
-      inherited_managed_context(opts, approval_context, parent_approval_context)
-    )
-  end
-
-  defp inherited_managed_context(opts, context, parent_context) do
-    sources = [context, Map.new(opts), parent_context]
-
-    case Enum.find(sources, &is_boolean(&1[:native_managed_context])) do
-      nil -> Enum.any?(sources, &InvocationAuthority.managed_metadata?/1)
-      source -> source.native_managed_context
-    end
-  end
-
-  defp inherited_session_state(opts) do
-    session_pid = Keyword.get(opts, :session_pid) || Keyword.get(opts, :parent_session)
-    session_module = Keyword.get(opts, :session_module, Session)
-
-    with true <- is_pid(session_pid) && Process.alive?(session_pid),
-         true <- function_exported?(session_module, :get_state, 1),
-         state when is_map(state) <- safe_get_session_state(session_module, session_pid) do
-      state
-    else
-      _ -> nil
-    end
-  end
-
   # The parent's model and its recorded origin, always taken together from the
   # same source: the launch options, else the live parent session.
   defp resolve_inherited_model(opts) do
     with nil <- Keyword.get(opts, :model),
-         session_pid when is_pid(session_pid) <- Keyword.get(opts, :session_pid),
-         true <- Process.alive?(session_pid),
-         session_module <- Keyword.get(opts, :session_module, Session),
-         true <- function_exported?(session_module, :get_state, 1),
-         state when is_map(state) <- safe_get_session_state(session_module, session_pid),
+         state when is_map(state) <-
+           InvocationAuthority.parent_session_state(
+             Keyword.take(opts, [:session_pid, :session_module])
+           ),
          model when (is_binary(model) and model != "") or is_struct(model, LemonAi.Types.Model) <-
            Map.get(state, :model) do
       {model, Map.get(state, :model_origin)}
     else
       _ -> {Keyword.get(opts, :model), Keyword.get(opts, :model_origin)}
     end
-  end
-
-  defp safe_get_session_state(session_module, session_pid) do
-    session_module.get_state(session_pid)
-  rescue
-    _ -> nil
-  catch
-    _, _ -> nil
   end
 
   @spec normalize_queue_mode(term()) ::

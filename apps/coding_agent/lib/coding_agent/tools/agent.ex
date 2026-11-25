@@ -44,7 +44,8 @@ defmodule CodingAgent.Tools.Agent do
     TaskStore
   }
 
-  alias CodingAgent.Tools.Task.{Control, InvocationAuthority, Params, Result}
+  alias CodingAgent.TaskRuntime.Control
+  alias CodingAgent.Tools.Task.{InvocationAuthority, Params, Result}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -200,7 +201,7 @@ defmodule CodingAgent.Tools.Agent do
     opts =
       Keyword.merge(
         opts,
-        Map.to_list(Params.inherited_execution_context(opts))
+        Map.to_list(InvocationAuthority.inherited_execution_context(opts))
       )
 
     with :ok <- Params.check_per_call_model(Map.take(params, ["model"]), cwd, opts),
@@ -494,8 +495,9 @@ defmodule CodingAgent.Tools.Agent do
          delegated_session_key
        ) do
     tracking_error = {:completion_watcher_start_failed, reason}
-    mark_delegated_run_failed(run_id, tracking_error)
+    # The task record is the status authority; the run row follows it.
     TaskStore.fail(task_id, tracking_error)
+    mark_delegated_run_failed(run_id, tracking_error)
 
     Logger.warning(
       "Agent tool submitted run but failed to start completion watcher " <>
@@ -1320,8 +1322,8 @@ defmodule CodingAgent.Tools.Agent do
           |> Map.put(:duration_ms, completion.duration_ms)
       }
 
-      mark_delegated_run_finished(Map.get(details, :run_id), result)
       TaskStore.finish(task_id, result)
+      mark_delegated_run_finished(Map.get(details, :run_id), result)
     else
       error = %{
         status: "error",
@@ -1330,8 +1332,8 @@ defmodule CodingAgent.Tools.Agent do
         details: details
       }
 
-      mark_delegated_run_failed(Map.get(details, :run_id), error)
       TaskStore.fail(task_id, error)
+      mark_delegated_run_failed(Map.get(details, :run_id), error)
     end
   end
 
