@@ -92,7 +92,7 @@ defmodule LemonCore.Update.ReceiptStore do
           {:ok, entries} <- [File.ls(dir)],
           entry <- entries,
           String.ends_with?(entry, ".partial") do
-        File.rm_rf(Path.join(dir, entry))
+        _ = File.rm_rf(Path.join(dir, entry))
       end
 
     :ok

@@ -730,6 +730,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   shipped lockfile including `apps/lemon_web/assets` and `products/lemon_bot`,
   and fails on any finding not accepted, with a reason and expiry, in
   `osv-scanner.toml` (#734).
+- db_connection 2.10.2 → 2.10.3 (EEF-CVE-2026-133555: code execution through
+  the `:log` option of a forged `DBConnection.Stream`), found by the OSV gate.
 - Archive reads and in-place archive writes (`read`/`write` on `x.zip:member`,
   `.tar`, `.tar.gz`, `.tgz`) and SVGZ decoding now inflate through one
   streaming, abort-aware bound: members are rejected as soon as decoded bytes

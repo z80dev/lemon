@@ -754,7 +754,7 @@ defmodule LemonCore.Store do
 
         # Schedule periodic sweep for expired entries (client VMs leave it to
         # the runtime that owns the store).
-        if Keyword.get(config, :sweep, true), do: schedule_sweep()
+        _ = if Keyword.get(config, :sweep, true), do: schedule_sweep()
 
         {:ok,
          %{
