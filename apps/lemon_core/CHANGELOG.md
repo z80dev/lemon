@@ -98,6 +98,17 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   only for Darwin full-sync of file contents (#561).
 
 - Removed unused `RunPhaseEvent`, `Retry.exponential_backoff/3`, and `Telemetry.span/3` APIs.
+- **Breaking (0.3.0):** `LemonCore.SessionLifecycle.reset/2` now defaults to a
+  non-mutating dry-run preview (`dry_run: true`) returning a state digest and
+  single-use server-side `:confirm_token`; execution requires `dry_run: false`
+  (or `:confirm_token`) with a matching live digest and `:fence_generation`
+  (#615).
+- Added `LemonCore.RunHistoryStore.fetch_count/1,2`,
+  `LemonCore.RunStore.fetch_history_count/1`, and ACP metadata helpers on
+  `LemonCore.SessionMetadataStore` (`fetch_acp/1`, `fetch_acp_by_id/1`,
+  `list_acp/0`, `put_acp/2`, `clear_acp_run_state/1`) so ACP metadata shares the
+  canonical session lifecycle store; ACP reads fail closed with
+  `{:error, :store_unavailable}`, never an empty list (#615, #652).
 - Consolidated Mix task startup and simplified service identity matching.
 - Fixed task projection fallback action IDs to include their action kind.
 

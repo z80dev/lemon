@@ -259,7 +259,7 @@ defmodule LemonControlPlane.HTTP.APIPrincipalTest do
       assert response.status == 200
       assert %{"error" => %{"message" => message}} = response.body
       assert message =~ "approval"
-      refute LemonCore.Store.get(:acp_sessions, session_id)[:approval_mode] == "auto"
+      refute get_acp_session(session_id)[:approval_mode] == "auto"
     end
 
     test "session/new cwd is confined to the API workspace", %{
@@ -277,7 +277,7 @@ defmodule LemonControlPlane.HTTP.APIPrincipalTest do
 
       session_id = acp_session!(Path.join(workspace, "project"))
 
-      assert LemonCore.Store.get(:acp_sessions, session_id).cwd ==
+      assert get_acp_session(session_id).cwd ==
                real(Path.join(workspace, "project"))
 
       response =
@@ -295,7 +295,7 @@ defmodule LemonControlPlane.HTTP.APIPrincipalTest do
       {:ok, %{"result" => %{"sessionId" => foreign}}} =
         LemonControlPlane.ACP.handle_jsonrpc(new_session_request(workspace))
 
-      on_exit(fn -> LemonCore.Store.delete(:acp_sessions, foreign) end)
+      on_exit(fn -> delete_acp_session(foreign) end)
       own = acp_session!(workspace)
 
       for {method, params} <- [
@@ -319,7 +319,7 @@ defmodule LemonControlPlane.HTTP.APIPrincipalTest do
                "#{method} reached a foreign session: #{inspect(response.body)}"
       end
 
-      assert LemonCore.Store.get(:acp_sessions, foreign)[:closed] == false
+      assert get_acp_session(foreign)[:closed] == false
 
       listed =
         acp(%{"jsonrpc" => "2.0", "id" => "list", "method" => "session/list", "params" => %{}})
@@ -354,8 +354,8 @@ defmodule LemonControlPlane.HTTP.APIPrincipalTest do
           principal: "operator"
         )
 
-      on_exit(fn -> LemonCore.Store.delete(:acp_sessions, fork) end)
-      assert LemonCore.Store.get(:acp_sessions, fork).owner == "operator"
+      on_exit(fn -> delete_acp_session(fork) end)
+      assert get_acp_session(fork).owner == "operator"
 
       listed =
         acp(%{"jsonrpc" => "2.0", "id" => "list", "method" => "session/list", "params" => %{}})
@@ -379,7 +379,7 @@ defmodule LemonControlPlane.HTTP.APIPrincipalTest do
                "#{method} reached the operator's fork: #{inspect(response.body)}"
       end
 
-      assert LemonCore.Store.get(:acp_sessions, fork)[:closed] == false
+      assert get_acp_session(fork)[:closed] == false
     end
   end
 
@@ -502,8 +502,20 @@ defmodule LemonControlPlane.HTTP.APIPrincipalTest do
     created = acp(new_session_request(cwd))
     assert created.status == 200
     assert %{"result" => %{"sessionId" => session_id}} = created.body
-    on_exit(fn -> LemonCore.Store.delete(:acp_sessions, session_id) end)
+    on_exit(fn -> delete_acp_session(session_id) end)
     session_id
+  end
+
+  defp get_acp_session(session_id) do
+    {:ok, session} = LemonCore.SessionMetadataStore.fetch_acp_by_id(session_id)
+    session
+  end
+
+  defp delete_acp_session(session_id) do
+    case LemonCore.SessionMetadataStore.fetch_acp_by_id(session_id) do
+      {:ok, %{session_key: session_key}} -> LemonCore.SessionMetadataStore.delete(session_key)
+      _ -> :ok
+    end
   end
 
   defp acp(body) do

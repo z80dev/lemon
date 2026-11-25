@@ -38,6 +38,8 @@ export interface PickerSpec {
 	footer?: string;
 	/** Preview lines above the choices, visible while the modal is open. */
 	detail?: readonly string[];
+	/** Disable filter-by-typing so stray keys or pastes cannot move destructive choices. */
+	filterable?: boolean;
 	onSelect: (choice: PickerChoice) => void | Promise<void>;
 	onCancel?: () => void;
 }

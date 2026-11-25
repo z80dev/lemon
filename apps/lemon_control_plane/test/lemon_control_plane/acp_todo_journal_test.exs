@@ -5,7 +5,6 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
   alias CodingAgent.SessionManager.SessionEntry
   alias CodingAgent.Tools.{TodoStore, TodoWrite}
   alias LemonControlPlane.ACP
-  alias LemonCore.Store
   alias LemonAi.Types.{Model, ModelCost}
 
   @tag :tmp_dir
@@ -23,7 +22,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
 
     assert {:ok, created} = ACP.new_session(%{"cwd" => cwd})
     id = created["sessionId"]
-    session = Store.get(:acp_sessions, id)
+    {:ok, session} = LemonCore.SessionMetadataStore.fetch_acp_by_id(id)
     # ACP owns its session identity; create the native journal through the
     # supported /plan lifecycle rather than the canonical-key creation RPC.
     for _ <- 1..2 do
@@ -42,7 +41,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
     target = manager.leaf_id
 
     on_exit(fn ->
-      Store.delete(:acp_sessions, id)
+      LemonCore.SessionMetadataStore.delete(session.session_key)
       LemonCore.ChatStateStore.delete(session.session_key)
       LemonCore.RunStore.delete_session(session.session_key)
       TodoStore.delete(native_id)
@@ -127,10 +126,10 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
     assert plans(fork_updates) == [entries(first)]
     child = Enum.find(sessions, &(&1["sessionId"] != id))
     child_id = child["sessionId"]
-    child_session = Store.get(:acp_sessions, child_id)
+    {:ok, child_session} = LemonCore.SessionMetadataStore.fetch_acp_by_id(child_id)
 
     on_exit(fn ->
-      Store.delete(:acp_sessions, child_id)
+      LemonCore.SessionMetadataStore.delete(child_session.session_key)
       LemonCore.ChatStateStore.delete(child_session.session_key)
       LemonCore.RunStore.delete_session(child_session.session_key)
     end)

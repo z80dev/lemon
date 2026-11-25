@@ -540,6 +540,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "sessions.reset" => %{
       required: %{
         "sessionKey" => :string
+      },
+      optional: %{
+        "dryRun" => :boolean,
+        "confirmToken" => :string
       }
     },
     "sessions.delete" => %{
