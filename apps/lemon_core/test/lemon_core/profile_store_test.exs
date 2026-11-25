@@ -4,6 +4,50 @@ defmodule LemonCore.ProfileStoreTest do
   alias LemonCore.ProfileStore
 
   @tag :tmp_dir
+  test "profile IDs with numeric-looking segments survive the full lifecycle", %{tmp_dir: root} do
+    opts = opts(root)
+    config = Keyword.fetch!(opts, :config_path)
+    id = "lineage-83714-0b101234-profile"
+    header = ~s([profiles."#{id}"])
+
+    assert {:ok, %{"id" => ^id}} = ProfileStore.create(%{id: id, name: "Original"}, opts)
+    assert File.read!(config) =~ header
+    assert {:ok, %{"name" => "Original"}} = ProfileStore.get(id, opts)
+    assert {:ok, %{"name" => "Updated"}} = ProfileStore.update(id, %{name: "Updated"}, opts)
+    assert {:ok, %{"name" => "Updated"}} = ProfileStore.get(id, opts)
+    assert {:ok, _} = ProfileStore.delete(id, Keyword.put(opts, :confirm, id))
+    assert {:error, :not_found} = ProfileStore.get(id, opts)
+    refute File.read!(config) =~ header
+  end
+
+  @tag :tmp_dir
+  test "existing bare profile declarations are updated in place and can be deleted", %{
+    tmp_dir: root
+  } do
+    opts = opts(root)
+    config = Keyword.fetch!(opts, :config_path)
+    id = "legacy-profile"
+    quoted = ~s([profiles."#{id}"])
+    bare = "[profiles.#{id}] # existing declaration"
+    neighbor = "[custom]\nkeep = true\n"
+
+    assert {:ok, _} = ProfileStore.create(%{id: id, name: "Original"}, opts)
+    File.write!(config, String.replace(File.read!(config), quoted, bare) <> "\n" <> neighbor)
+
+    assert {:ok, %{"name" => "Updated"}} = ProfileStore.update(id, %{name: "Updated"}, opts)
+    updated = File.read!(config)
+    assert updated =~ bare
+    assert updated =~ neighbor
+    refute updated =~ quoted
+    assert {:ok, %{"name" => "Updated"}} = ProfileStore.get(id, opts)
+
+    assert {:ok, _} = ProfileStore.delete(id, Keyword.put(opts, :confirm, id))
+    assert {:error, :not_found} = ProfileStore.get(id, opts)
+    assert File.read!(config) =~ neighbor
+    refute File.read!(config) =~ bare
+  end
+
+  @tag :tmp_dir
   test "all managed profile strings safely persist accepted newlines and controls", %{
     tmp_dir: root
   } do
@@ -544,7 +588,7 @@ defmodule LemonCore.ProfileStoreTest do
     final_config = File.read!(config)
     assert final_config =~ "# user comment must survive lifecycle edits"
     assert final_config =~ ~s([custom]\nunknown = "keep-me")
-    refute final_config =~ "[profiles.research-bot]"
+    refute final_config =~ ~s([profiles."research-bot"])
   end
 
   @tag :tmp_dir

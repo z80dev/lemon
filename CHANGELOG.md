@@ -395,6 +395,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Quote newly written profile IDs in TOML so numeric-looking IDs remain readable,
+  while continuing to edit existing bare profile declarations in place (#728).
 - `agent.wait` returns `UNAVAILABLE` when the run store cannot be read instead
   of reporting a timeout, and no longer copies a raw exception message into its
   error details (#620).

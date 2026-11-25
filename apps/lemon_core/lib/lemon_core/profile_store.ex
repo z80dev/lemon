@@ -1369,7 +1369,8 @@ defmodule LemonCore.ProfileStore do
     :ok
   end
 
-  defp profile_table(id), do: "profiles.#{id}"
+  # The TOML lexer can mistake bare IDs for numeric literals.
+  defp profile_table(id), do: "profiles." <> Jason.encode!(id)
   defp now_ms, do: System.system_time(:millisecond)
 
   defp path_opts(opts) do
