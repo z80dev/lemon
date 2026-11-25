@@ -569,8 +569,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   transport for the whole judge and continuation (or crash it on a call
   timeout): the chat gets an immediate acknowledgement and the verdict and run ID
   as a follow-up; a timeout is reported as an unknown outcome (#659).
-- Media jobs never outlive their tool call: a timeout, abort or caller exit kills
-  the job (cancelling its provider request) and records it `cancelled` instead
+- Media jobs never outlive their tool call: on timeout, abort or caller exit the
+  supervised job owner kills the provider task and records it `cancelled` instead
   of leaving it `running` and billing after the tool reported failure; the wait
   uses one fixed deadline that unrelated messages cannot extend, and the
   timeout error names the job id (#664).

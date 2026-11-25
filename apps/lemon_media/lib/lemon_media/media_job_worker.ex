@@ -6,18 +6,77 @@ defmodule LemonMedia.MediaJobWorker do
   alias LemonMedia.MediaJobs
 
   @doc false
-  @spec run(keyword()) :: {:ok, map()} | {:error, {:failed, map()}}
-  def run(opts) do
-    attrs = opts |> Keyword.fetch!(:attrs) |> attrs_map()
-    job_opts = Keyword.get(opts, :opts, [])
-    record_opts = record_opts(job_opts)
-    job_id = Map.fetch!(attrs, :job_id)
+  @spec run(pid(), pid(), map(), keyword(), integer()) :: LemonMedia.MediaJobSupervisor.outcome()
+  def run(caller, supervisor, attrs, opts, deadline) do
+    # The supervised owner stays responsive while its linked runner blocks in
+    # provider I/O. It must be able to kill the runner even if it traps exits.
+    Process.flag(:trap_exit, true)
+    caller_ref = Process.monitor(caller)
+    record_opts = record_opts(opts)
 
-    running_attrs =
-      attrs
-      |> Map.put(:job_id, job_id)
-      |> Map.put(:status, :running)
+    receive do
+      {:DOWN, ^caller_ref, :process, ^caller, _reason} ->
+        cancelled(attrs, record_opts, :caller_exited)
 
+      {:abort, ^caller} ->
+        cancelled(attrs, record_opts, :aborted)
+
+      {:EXIT, ^supervisor, reason} ->
+        exit(reason)
+    after
+      0 ->
+        if deadline <= System.monotonic_time(:millisecond) do
+          cancelled(attrs, record_opts, :timeout)
+        else
+          task = Task.async(fn -> execute(attrs, opts, record_opts) end)
+          await_runner(task, caller, caller_ref, supervisor, attrs, record_opts, deadline)
+        end
+    end
+  end
+
+  defp await_runner(task, caller, caller_ref, supervisor, attrs, record_opts, deadline) do
+    %Task{ref: runner_ref, pid: runner} = task
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {^runner_ref, result} ->
+        Process.demonitor(runner_ref, [:flush])
+        result
+
+      {:DOWN, ^runner_ref, :process, ^runner, _reason} ->
+        exit(:job_exited)
+
+      {:DOWN, ^caller_ref, :process, ^caller, _reason} ->
+        cancel_runner(task, attrs, record_opts, :caller_exited)
+
+      {:abort, ^caller} ->
+        cancel_runner(task, attrs, record_opts, :aborted)
+
+      {:EXIT, ^supervisor, reason} ->
+        Task.shutdown(task, :brutal_kill)
+        exit(reason)
+    after
+      remaining -> cancel_runner(task, attrs, record_opts, :timeout)
+    end
+  end
+
+  defp cancel_runner(task, attrs, record_opts, reason) do
+    case Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      {:exit, _reason} -> exit(:job_exited)
+      nil -> cancelled(attrs, record_opts, reason)
+    end
+  end
+
+  defp cancelled(attrs, record_opts, reason) do
+    kind = Atom.to_string(reason)
+    cancelled_attrs = Map.merge(attrs, %{status: :cancelled, error: kind, error_kind: kind})
+    {:ok, job} = MediaJobs.record(cancelled_attrs, record_opts)
+    {:error, {:cancelled, reason, job}}
+  end
+
+  defp execute(attrs, job_opts, record_opts) do
+    running_attrs = Map.put(attrs, :status, :running)
     {:ok, _running_job} = MediaJobs.record(running_attrs, record_opts)
 
     case run_media_job(Keyword.get(job_opts, :runner), running_attrs) do
@@ -64,7 +123,6 @@ defmodule LemonMedia.MediaJobWorker do
 
   defp attrs_map(attrs) when is_map(attrs), do: attrs
   defp attrs_map(attrs) when is_list(attrs), do: Map.new(attrs)
-  defp attrs_map(_), do: %{}
 
   defp error_kind(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp error_kind(reason) when is_binary(reason), do: safe_error_label(reason)
