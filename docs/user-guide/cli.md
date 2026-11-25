@@ -351,6 +351,13 @@ through `RELEASE_COOKIE` or `LEMON_GATEWAY_NODE_COOKIE`; the `--cookie` option
 is removed because its value is visible in process argv. See
 [distribution cookie security](../security/threat-model.md#distribution-cookie).
 
+`./bin/lemon-gateway [runtime options]` is `./bin/lemon start` with the node
+name defaulting to `lemon_gateway` (`LEMON_GATEWAY_NODE_NAME`). It shares the
+health probe and start lock, so it reuses a healthy runtime instead of starting
+a second router and channel adapters. It never fetches dependencies; run
+`mix deps.get` yourself after dependency changes. `bin/lemon-control-plane` is
+removed: use `./bin/lemon start` or `./bin/lemon daemon`.
+
 Both ports must be integers from 1 through 65535. Environment defaults are
 `LEMON_CONTROL_PLANE_PORT=4040` and `LEMON_WEB_PORT=4080`; source `status` and
 `stop` also accept the port flags.

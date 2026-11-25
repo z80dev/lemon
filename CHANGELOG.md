@@ -663,6 +663,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** `bin/lemon-control-plane` is removed; use `./bin/lemon start`
+  or `./bin/lemon daemon`. `./bin/lemon-gateway` now runs `./bin/lemon start`
+  (node name `lemon_gateway` by default): it reuses a healthy runtime on the
+  control port instead of starting a second router and duplicate Telegram and
+  Discord adapters, starts the full runtime when none is running, and no longer
+  runs `mix deps.get` (#701).
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.
