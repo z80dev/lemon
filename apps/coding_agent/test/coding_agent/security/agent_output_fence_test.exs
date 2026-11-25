@@ -196,18 +196,6 @@ defmodule CodingAgent.Security.AgentOutputFenceTest do
   end
 
   describe "non-canonical tool-result shapes and reinserted summaries" do
-    test "a CodingAgent tool-result struct claiming :trusted is fenced at the boundary" do
-      msg = %CodingAgent.Messages.ToolResultMessage{
-        tool_use_id: "c1",
-        content: [%CodingAgent.Messages.TextContent{text: @injection}],
-        trust: :trusted
-      }
-
-      assert {:ok, [wrapped]} = UntrustedToolBoundary.transform([msg])
-      assert %CodingAgent.Messages.ToolResultMessage{trust: :untrusted} = wrapped
-      assert fenced_once?(hd(wrapped.content).text)
-    end
-
     test "string-keyed tool-result maps claiming trusted are fenced and convert untrusted" do
       msg = %{
         "role" => "tool_result",

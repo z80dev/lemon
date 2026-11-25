@@ -419,7 +419,8 @@ defmodule LemonCore.ConfigTest do
     config = Config.load()
 
     [binding] = config.gateway.bindings
-    assert binding.transport == :demo
+    # Not a registered channel: kept as a string rather than minted as an atom.
+    assert binding.transport == "demo"
     assert binding.chat_id == 123
     assert binding.agent_id == "daily"
   end

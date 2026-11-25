@@ -74,11 +74,7 @@ defmodule LemonCore.Cwd do
     end
   end
 
-  defp configured_default_cwd do
-    LemonCore.GatewayConfig.get(:default_cwd)
-  rescue
-    _ -> nil
-  end
+  defp configured_default_cwd, do: LemonCore.GatewayConfig.get(:default_cwd)
 
   defp home_or_process_cwd do
     case System.user_home() |> normalize_existing_dir() do

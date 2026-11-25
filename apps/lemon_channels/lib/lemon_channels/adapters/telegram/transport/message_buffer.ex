@@ -38,7 +38,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MessageBuffer do
         debounce_ref = make_ref()
 
         timer_ref =
-          Process.send_after(self(), {:debounce_flush, key, debounce_ref}, state.debounce_ms)
+          Process.send_after(
+            LemonChannels.Adapters.Telegram.Transport.Owner.pid(),
+            {:debounce_flush, key, debounce_ref},
+            state.debounce_ms
+          )
 
         buffer = %{
           inbound: inbound,
@@ -54,7 +58,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MessageBuffer do
         debounce_ref = make_ref()
 
         timer_ref =
-          Process.send_after(self(), {:debounce_flush, key, debounce_ref}, state.debounce_ms)
+          Process.send_after(
+            LemonChannels.Adapters.Telegram.Transport.Owner.pid(),
+            {:debounce_flush, key, debounce_ref},
+            state.debounce_ms
+          )
 
         inbound = ImageDownload.merge(inbound, buffer.inbound)
         messages = [Commands.message_entry(inbound) | buffer.messages]

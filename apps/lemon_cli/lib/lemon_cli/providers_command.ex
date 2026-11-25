@@ -295,8 +295,8 @@ defmodule LemonCli.ProvidersCommand do
   end
 
   defp ensure_started! do
-    case Application.ensure_all_started(:lemon_agent) do
-      {:ok, _} -> :ok
+    case LemonCore.CLI.start(:lemon_agent) do
+      :ok -> :ok
       {:error, _} -> raise "provider runtime unavailable"
     end
   end

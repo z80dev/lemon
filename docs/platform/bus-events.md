@@ -316,6 +316,11 @@ finalize-run hook and `CodingAgent.Session.terminate/2` through
 `LemonCore.ExecApprovalExpiry`). It is immediate and grants nothing; `:timeout` stays
 the clock deadline. Channel prompts and TUI records are edited to say the run ended.
 
+Terminal approval records (resolved, denied, expired, cancelled, unknown) are
+retained for 24 hours (`config :lemon_core, :exec_approval_receipt_retention_ms`)
+and then swept. Within that window a verified resolver gets the replayed receipt;
+afterwards resolving the ID returns `not_found`.
+
 `decision: :outcome_unknown` means a store write timed out while resolving: the
 completion receipt or the standing grant may still apply. The waiting request
 gets `{:error, :outcome_unknown}` and the gated call does not run; it is never

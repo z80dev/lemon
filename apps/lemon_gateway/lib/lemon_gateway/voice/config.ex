@@ -5,8 +5,8 @@ defmodule LemonGateway.Voice.Config do
   Reads from the canonical gateway config (`[gateway.voice]` TOML section)
   via `LemonCore.GatewayConfig`.
 
-  Temporary compatibility fallbacks to legacy app env and direct env are kept
-  only where needed while tests and deployments finish migrating.
+  Credentials may also come from the secret store or their documented
+  environment variables; there is no application-env fallback.
   """
 
   require Logger
@@ -16,7 +16,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec enabled?() :: boolean()
   def enabled? do
-    voice_cfg(:enabled, Application.get_env(:lemon_gateway, :voice_enabled, false))
+    voice_cfg(:enabled, false)
     |> to_bool(false)
   end
 
@@ -28,7 +28,7 @@ defmodule LemonGateway.Voice.Config do
     resolve_secret(
       voice_cfg(:twilio_account_sid_secret),
       "twilio_account_sid",
-      voice_cfg(:twilio_account_sid, Application.get_env(:lemon_gateway, :twilio_account_sid)),
+      voice_cfg(:twilio_account_sid),
       "TWILIO_ACCOUNT_SID"
     )
   end
@@ -41,7 +41,7 @@ defmodule LemonGateway.Voice.Config do
     resolve_secret(
       voice_cfg(:twilio_auth_token_secret),
       "twilio_auth_token",
-      voice_cfg(:twilio_auth_token, Application.get_env(:lemon_gateway, :twilio_auth_token)),
+      voice_cfg(:twilio_auth_token),
       "TWILIO_AUTH_TOKEN"
     )
   end
@@ -51,9 +51,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec twilio_phone_number() :: String.t() | nil
   def twilio_phone_number do
-    voice_cfg(:twilio_phone_number) ||
-      Application.get_env(:lemon_gateway, :twilio_phone_number) ||
-      System.get_env("TWILIO_PHONE_NUMBER")
+    voice_cfg(:twilio_phone_number) || System.get_env("TWILIO_PHONE_NUMBER")
   end
 
   @doc """
@@ -64,7 +62,7 @@ defmodule LemonGateway.Voice.Config do
     resolve_secret(
       voice_cfg(:deepgram_api_key_secret),
       "deepgram_api_key",
-      voice_cfg(:deepgram_api_key, Application.get_env(:lemon_gateway, :deepgram_api_key)),
+      voice_cfg(:deepgram_api_key),
       "DEEPGRAM_API_KEY"
     )
   end
@@ -77,7 +75,7 @@ defmodule LemonGateway.Voice.Config do
     resolve_secret(
       voice_cfg(:elevenlabs_api_key_secret),
       "elevenlabs_api_key",
-      voice_cfg(:elevenlabs_api_key, Application.get_env(:lemon_gateway, :elevenlabs_api_key)),
+      voice_cfg(:elevenlabs_api_key),
       "ELEVENLABS_API_KEY"
     )
   end
@@ -87,8 +85,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec elevenlabs_voice_id() :: String.t()
   def elevenlabs_voice_id do
-    voice_cfg(:elevenlabs_voice_id) ||
-      Application.get_env(:lemon_gateway, :elevenlabs_voice_id, "21m00Tcm4TlvDq8ikWAM")
+    voice_cfg(:elevenlabs_voice_id, "21m00Tcm4TlvDq8ikWAM")
   end
 
   @doc """
@@ -98,8 +95,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec elevenlabs_output_format() :: String.t()
   def elevenlabs_output_format do
-    voice_cfg(:elevenlabs_output_format) ||
-      Application.get_env(:lemon_gateway, :elevenlabs_output_format, "ulaw_8000")
+    voice_cfg(:elevenlabs_output_format, "ulaw_8000")
   end
 
   @doc """
@@ -107,8 +103,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec websocket_port() :: integer()
   def websocket_port do
-    voice_cfg(:websocket_port) ||
-      Application.get_env(:lemon_gateway, :voice_websocket_port, 4047)
+    voice_cfg(:websocket_port, 4047)
   end
 
   @doc """
@@ -116,9 +111,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec public_url() :: String.t() | nil
   def public_url do
-    voice_cfg(:public_url) ||
-      Application.get_env(:lemon_gateway, :voice_public_url) ||
-      System.get_env("VOICE_PUBLIC_URL")
+    voice_cfg(:public_url) || System.get_env("VOICE_PUBLIC_URL")
   end
 
   @doc """
@@ -126,8 +119,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec llm_model() :: String.t()
   def llm_model do
-    voice_cfg(:llm_model) ||
-      Application.get_env(:lemon_gateway, :voice_llm_model, "gpt-4o-mini")
+    voice_cfg(:llm_model, "gpt-4o-mini")
   end
 
   @doc """
@@ -135,8 +127,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec system_prompt() :: String.t()
   def system_prompt do
-    voice_cfg(:system_prompt) ||
-      Application.get_env(:lemon_gateway, :voice_system_prompt, default_system_prompt())
+    voice_cfg(:system_prompt) || default_system_prompt()
   end
 
   @doc """
@@ -144,8 +135,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec max_call_duration_seconds() :: integer()
   def max_call_duration_seconds do
-    voice_cfg(:max_call_duration_seconds) ||
-      Application.get_env(:lemon_gateway, :voice_max_call_duration_seconds, 600)
+    voice_cfg(:max_call_duration_seconds, 600)
   end
 
   @doc """
@@ -153,8 +143,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec silence_timeout_ms() :: integer()
   def silence_timeout_ms do
-    voice_cfg(:silence_timeout_ms) ||
-      Application.get_env(:lemon_gateway, :voice_silence_timeout_ms, 5000)
+    voice_cfg(:silence_timeout_ms, 5000)
   end
 
   # ---------------------------------------------------------------------------
@@ -166,15 +155,13 @@ defmodule LemonGateway.Voice.Config do
     voice = LemonCore.GatewayConfig.fetch(gateway, :voice, %{})
 
     # Fall back only when the key is missing or nil: an explicit `false`
-    # (e.g. `enabled = false`) must not be overridden by a legacy default.
+    # (e.g. `enabled = false`) must not be overridden by the default.
     with true <- is_map(voice) and is_atom(key),
          value when not is_nil(value) <- LemonCore.GatewayConfig.fetch(voice, key, nil) do
       value
     else
       _ -> default
     end
-  rescue
-    _ -> default
   end
 
   defp default_system_prompt do

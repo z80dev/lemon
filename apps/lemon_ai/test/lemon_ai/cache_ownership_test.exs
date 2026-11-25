@@ -19,6 +19,9 @@ defmodule LemonAi.CacheOwnershipTest do
 
     assert :ets.info(LemonAi.CallDispatcher.Slots, :owner) ==
              Process.whereis(LemonAi.Supervisor)
+
+    assert :ets.info(LemonAi.CallDispatcher, :owner) == Process.whereis(LemonAi.Supervisor)
+    refute Process.whereis(LemonAi.CallDispatcher)
   end
 
   test "auth reads and writes bypass the owner mailbox and survive caller exit" do

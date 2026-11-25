@@ -35,6 +35,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   instead of `:not_found` in that case. New strict readers:
   `A2AStore.fetch_task/2`, `ExecApprovalStore.fetch_global_policies/0` and
   `fetch_global_policy_map/0`, which replaces `get_global_policy_map/0` (#619).
+  router monitors from acceptance (#641). `{:error, :session_in_use}` is
+  retried like runtime unavailability, and the documented cancellation reasons
+  are `:run_idle_watchdog_timeout` (was `:run_watchdog_timeout`),
+  `:user_requested`, `:runtime_restart` and `:run_process_terminated` (#643).
 - `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
   OS processes (#586).
 - **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,
@@ -237,6 +241,39 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `config :lemon_core, :boot_mode` (`:runtime` default, `:client`,
+  `:read_only_client`; `LemonCore.Application.boot_mode/0`) selects a client
+  tree for one-shot commands without approval recovery, Store sweeps,
+  `RunHistoryStore`, `ConfigReloader`/`Watcher` or `Drain` (no SIGTERM trap).
+  `LemonCore.CLI.start/2` and `start!/2` (`store: :read_only`) boot it.
+  `LemonCore.Store` accepts `sweep: false` and `read_only: true` (mutations
+  return `{:error, :read_only}`). New `LemonCore.RuntimeOwner` holds a
+  `<database>.runtime.lock` for a file-backed store; `ExecApprovalExpiry`
+  reconciles other runtimes' approvals only while it owns the store, and
+  starts with `recover: false` in client mode (#667).
+- `LemonCore.ExecApprovals.expire_owner/1` reads only the owner's approvals
+  through a new run/session owner index (`ExecApprovalStore.index_owner/2`,
+  `fetch_owner_index/1`, `unindex_owner/2`). Terminal records carry an
+  `:expires_at` stamp (`ExecApprovalStore.terminal_record/1`,
+  `receipt_retention_ms/0`, default 24 hours) and are removed by the Store sweep;
+  recovery stamps older terminal records. `LemonCore.ExecApprovalExpiry`
+  recovers in `handle_continue/2` with backoff instead of stopping on a store
+  error, and `watch_session/3` takes a timeout (default 2 s) and returns
+  `{:error, :timeout}` instead of exiting (#694).
+- `Validator.validate_tui/2` accepts any non-blank `[tui] theme` (including
+  `auto` and `system`); the terminal client owns theme names (#640).
+- `LemonCore.ConfigCache.get/2` serves the last good config when an implicit
+  reload fails, records the failure (`last_error/1`), reports it once
+  (`[:lemon, :config_cache, :reload_failed]`) and does not reload again until
+  the file fingerprint changes. `reload/2` still raises (#617).
+- `LemonCore.GatewayConfig.get/2` and `LemonCore.Cwd` no longer turn a config
+  load failure into defaults; `LemonCore.Config.ValidationError` propagates (#617).
+- Invalid `[features]` states, `[runtime] max_tool_turns` and profile tool
+  policies are kept raw and reported by validation (`Validator.profile_errors/1`)
+  instead of becoming `:off`, `:infinity` or deny-all (#617).
+- `LemonCore.BindingResolver` matches string binding transports by name and
+  reads string-keyed project roots; `[[gateway.bindings]] transport` no longer
+  creates atoms (#697).
 - `LemonCore.Update.ReceiptStore.with_lock/2` uses `LemonCore.Service.Lock`:
   a holder killed without cleanup is recovered by the next operation instead of
   returning `{:error, :update_locked}` forever, stale `.partial` staging is
@@ -348,6 +385,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Removed
 
+- **Breaking (0.3.0):** `[gateway.queue]` (`Config.Gateway` `:queue`,
+  `Validator.validate_queue_config/2`); the section is ignored with a
+  deprecation warning (#697).
+- **Breaking (0.3.0):** `LemonCore.EngineInfoBridge.gateway_config/0` and the
+  `:gateway_config` capability (#697).
 - **Breaking (0.3.0):** `LemonCore.Store.JsonlBackend`. The
   `mix lemon.store.migrate_jsonl_to_sqlite` task keeps a private legacy reader;
   run it before upgrading a JSONL store (#608).

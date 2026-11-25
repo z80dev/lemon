@@ -3,7 +3,26 @@ defmodule LemonCore.ExecApprovalStore do
   Typed wrapper for execution approval policy and lifecycle records.
 
   Terminal records retain only identity, a snapshot digest and the verified
-  decision. Pending accessors exclude them; a completed ID cannot be reused.
+  decision. Pending accessors exclude them; a completed ID cannot be reused
+  while its receipt is retained.
+
+  ## Receipt retention
+
+  A terminal record replaces its pending record under the same key in one
+  compare-and-swap, so an approval is never both unrecorded and unresolved.
+  Every terminal record built by `terminal_record/1` carries an `:expires_at`
+  stamp `receipt_retention_ms/0` in the future (24 hours unless
+  `config :lemon_core, :exec_approval_receipt_retention_ms` sets another
+  positive value), and the `LemonCore.Store` periodic sweep deletes it once that
+  passes. After that, resolving the ID returns `{:error, :not_found}`, never a
+  replayed receipt.
+
+  ## Owner index
+
+  `index_owner/2` records which approval IDs a run (`{:run, run_id}`) or native
+  session (`{:session, session_id}`) requested, before the pending record is
+  written. Run and session end read only that owner's entry, so their cost
+  does not grow with unrelated approvals or retained receipts.
   """
 
   alias LemonCore.Store
@@ -17,6 +36,12 @@ defmodule LemonCore.ExecApprovalStore do
   @pending_table :exec_approvals_pending
 
   @session_owners_table :exec_approval_session_owners
+  @owner_index_table :exec_approval_owner_index
+
+  @default_receipt_retention_ms 24 * 60 * 60 * 1000
+  # Concurrent requests of one owner race on its index entry; each lost
+  # compare-and-swap rereads it. Exhaustion fails closed.
+  @index_attempts 16
 
   @doc false
   def put_session_owner(id, owner), do: Store.put(@session_owners_table, id, owner)
@@ -129,6 +154,84 @@ defmodule LemonCore.ExecApprovalStore do
   @spec delete_pending(binary()) :: :ok
   def delete_pending(approval_id) when is_binary(approval_id),
     do: Store.delete(@pending_table, approval_id)
+
+  @doc "How long terminal approval records are retained before the Store sweep deletes them."
+  @spec receipt_retention_ms() :: pos_integer()
+  def receipt_retention_ms do
+    case Application.get_env(:lemon_core, :exec_approval_receipt_retention_ms) do
+      ms when is_integer(ms) and ms > 0 -> ms
+      _ -> @default_receipt_retention_ms
+    end
+  end
+
+  @doc "Wrap a resolution receipt as a terminal record with its retention stamp."
+  @spec terminal_record(map()) :: %{resolution: map(), expires_at: integer()}
+  def terminal_record(receipt) when is_map(receipt),
+    do: %{resolution: receipt, expires_at: LemonCore.Clock.now_ms() + receipt_retention_ms()}
+
+  @doc "Record that `owner` requested `approval_id`."
+  @spec index_owner({:run | :session, binary()}, binary()) :: :ok | {:error, term()}
+  def index_owner({kind, id} = owner, approval_id)
+      when kind in [:run, :session] and is_binary(id) and is_binary(approval_id) do
+    update_owner_index(owner, fn ids ->
+      if approval_id in ids, do: ids, else: [approval_id | ids]
+    end)
+  end
+
+  @doc "Strict read of the approval IDs indexed for `owner`."
+  @spec fetch_owner_index({:run | :session, binary()}) ::
+          {:ok, [binary()]} | {:error, :store_unavailable}
+  def fetch_owner_index({kind, id} = owner) when kind in [:run, :session] and is_binary(id) do
+    case Store.fetch(@owner_index_table, owner) do
+      {:ok, nil} -> {:ok, []}
+      {:ok, ids} when is_list(ids) -> {:ok, ids}
+      {:ok, _malformed} -> {:error, :store_unavailable}
+      {:error, _} -> {:error, :store_unavailable}
+    end
+  end
+
+  @doc "Remove `approval_ids` from `owner`'s index, deleting the entry once empty."
+  @spec unindex_owner({:run | :session, binary()}, [binary()]) :: :ok | {:error, term()}
+  def unindex_owner(_owner, []), do: :ok
+
+  def unindex_owner({kind, id} = owner, approval_ids)
+      when kind in [:run, :session] and is_binary(id) and is_list(approval_ids) do
+    update_owner_index(owner, &(&1 -- approval_ids))
+  end
+
+  defp update_owner_index(owner, fun, attempts \\ @index_attempts)
+  defp update_owner_index(_owner, _fun, 0), do: {:error, :conflict}
+
+  defp update_owner_index(owner, fun, attempts) do
+    with {:ok, current} <- Store.fetch(@owner_index_table, owner) do
+      ids = if is_list(current), do: current, else: []
+
+      result =
+        case {current, fun.(ids)} do
+          {_current, ^ids} when is_list(current) or ids == [] -> :ok
+          {nil, next} -> Store.put_new(@owner_index_table, owner, next)
+          {current, []} -> Store.compare_and_delete(@owner_index_table, owner, current)
+          {current, next} -> Store.compare_and_swap(@owner_index_table, owner, current, next)
+        end
+
+      case result do
+        {:error, lost} when lost in [:exists, :mismatch] ->
+          update_owner_index(owner, fun, attempts - 1)
+
+        other ->
+          other
+      end
+    end
+  end
+
+  @doc "Strict read of every record, terminal ones included (startup reconciliation)."
+  @spec fetch_records() :: {:ok, list()} | {:error, :store_unavailable}
+  def fetch_records do
+    case Store.fetch_all(@pending_table) do
+      {:ok, rows} -> {:ok, rows}
+      {:error, _} -> {:error, :store_unavailable}
+    end
+  end
 
   @spec list_pending() :: list()
   def list_pending do

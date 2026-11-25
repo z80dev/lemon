@@ -86,13 +86,19 @@ admission reply does not prove that a task's side effects never began.
 | 6 | `LemonCore.NodeRegistry` | Socket-owned unique Registry, retained generation floors and temporary per-invocation processes |
 | 7 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
 | 8 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends and owned read-cache tables |
-| 9 | `LemonCore.UsageLedger` | Finished-run usage aggregation |
-| 10 | `LemonCore.ExecApprovalExpiry` | Expiry for approvals whose run or session ended |
-| 11 | `LemonCore.Secrets.SourceTaskSupervisor` | Owns bounded external-source tasks |
-| 12 | `LemonCore.Secrets.SourceCache` | Bounded optional process-local source cache |
-| 13 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
-| 14 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
-| 15 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
+| 9 | `LemonCore.RuntimeOwner` | Cross-VM ownership lock of a file-backed store; only its holder reconciles other runtimes' records |
+| 10 | `LemonCore.UsageLedger` | Finished-run usage aggregation |
+| 11 | `LemonCore.ExecApprovalExpiry` | Expiry for approvals whose run or session ended |
+| 12 | `LemonCore.Secrets.SourceTaskSupervisor` | Owns bounded external-source tasks |
+| 13 | `LemonCore.Secrets.SourceCache` | Bounded optional process-local source cache |
+| 14 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
+| 15 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
+| 16 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
+
+One-shot commands boot a client tree instead (`config :lemon_core, :boot_mode`,
+set by `LemonCore.CLI.start/2`): no `RuntimeOwner`, `RunHistoryStore`,
+`ConfigReloader`, `Watcher` or `Drain` (no SIGTERM trap), Store sweeps off, and
+`ExecApprovalExpiry` with `recover: false`; see `LemonCore.Application`.
 
 Named-node sockets register themselves, so Registry removes dead connections
 without node-monitor bookkeeping. Each temporary `LemonCore.NodeInvocation` owns
@@ -805,7 +811,12 @@ including runs without a session-history key, and monitors native session
 processes independently of `terminate/2`, including forced shutdown. Store hooks
 only cast asynchronously, avoiding recursive Store calls. Retained SQLite
 requests from an earlier daemon incarnation expire during recovery before they
-can be resolved. Restarting only the expiry worker preserves live owners and
+can be resolved, but only in the VM that owns the store (`LemonCore.RuntimeOwner`):
+a second runtime on the same database leaves them alone, and one-shot client VMs
+never recover. Recovery runs in `handle_continue/2` and retries with backoff when
+the store is unavailable. Run and session end read only that owner's approvals
+through `ExecApprovalStore`'s owner index, and terminal receipts are swept after
+24 hours. Restarting only the expiry worker preserves live owners and
 restores session monitors; it does not start a new daemon incarnation.
 
 ## Idempotency

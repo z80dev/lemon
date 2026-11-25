@@ -1459,6 +1459,10 @@ defmodule LemonCore.Backup do
       Enum.any?(parts, &String.starts_with?(&1, KeyLock.lock_name())) ->
         "runtime_lock"
 
+      # `LemonCore.RuntimeOwner` locks a store while its runtime lives.
+      Enum.any?(parts, &String.ends_with?(&1, ".runtime.lock")) ->
+        "runtime_lock"
+
       String.starts_with?(base, "support-bundle-") ->
         "support_bundle"
 

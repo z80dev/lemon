@@ -67,9 +67,10 @@ defmodule LemonCore.EngineRuntime do
   Persistent unavailability is bounded by the run's pre-start admission
   deadline and then surfaced through its structured completion path.
 
-  The same backoff handles `{:error, :runtime_unavailable}` from
-  `c:submit_execution/1`, bounded by that same deadline. Any other
-  `{:error, reason}` is a definite rejection that completes the run once.
+  The same backoff handles `{:error, :runtime_unavailable}` and
+  `{:error, :session_in_use}` (the engine session is still held by a run that
+  is draining) from `c:submit_execution/1`, bounded by that same deadline. Any
+  other `{:error, reason}` is a definite rejection that completes the run once.
   `{:error, :outcome_unknown}` means the run may have been accepted: the router
   keeps waiting for its events under the same fixed run ID, never resubmits it,
   and completes it as missing only if no run appears within a short grace.
@@ -81,10 +82,13 @@ defmodule LemonCore.EngineRuntime do
   ## Cancellation reasons
 
   The router passes an atom describing why it is cancelling; runtimes are free
-  to ignore it, but it is worth logging. The ones it emits are
-  `:user_requested`, `:run_watchdog_timeout` (the run exceeded its wall clock
-  budget) and `:run_process_terminated` (the router-side run process is going
-  away, so nothing is left to receive the output).
+  to ignore it, but it is worth logging and reporting as the completion's
+  `meta.cancel_reason`. The ones it emits include `:user_requested`,
+  `:run_idle_watchdog_timeout` (the run produced no output within its idle
+  budget), `:runtime_restart` and `:run_process_terminated` (the router-side
+  run process is going away, so nothing is left to receive the output). After a
+  cancel the router waits for the run's own completion or its process exit
+  before it releases the conversation.
 
   ## The reference implementation
 
@@ -152,7 +156,8 @@ defmodule LemonCore.EngineRuntime do
   Accept a command for execution.
 
   `:ok` (or `{:ok, term}`, which the router treats identically) means the
-  command has been accepted. `{:error, :runtime_unavailable}` is retried with
+  command has been accepted. `{:error, :runtime_unavailable}` and
+  `{:error, :session_in_use}` are retried with
   backoff, `{:error, :outcome_unknown}` is adopted without resubmission, and
   any other error completes the run once (see Degradation). Results are not
   returned here — publish them as bus events under the command's `run_id`.

@@ -4,7 +4,7 @@ defmodule LemonAi.CallDispatcher.Slots do
 
   @default_cap 10
 
-  # The root supervisor owns this table: authority/dispatcher restarts must not
+  # The root supervisor owns this table: authority restarts must not
   # erase leases for callbacks or streams that are still running.
   def init_table do
     :ets.new(__MODULE__, [:named_table, :public, :set, read_concurrency: true])

@@ -231,6 +231,10 @@ defmodule CodingAgent.Session do
     auto_compaction: %CompactionLifecycle.State{},
     manual_operation: nil,
     overflow_recovery: %OverflowRecovery.State{},
+    # True from accepting a prompt until the agent starts its run: every agent
+    # event before that `{:agent_start}` belongs to an earlier run and must not
+    # end the accepted prompt.
+    awaiting_agent_start: false,
     root_idle_token: nil,
     root_idle_timer: nil,
     root_retention_ttl: nil,
@@ -325,7 +329,8 @@ defmodule CodingAgent.Session do
           wasm_host_calls: %{reference() => map()},
           auto_compaction: CompactionLifecycle.State.t(),
           manual_operation: ManualOperation.State.t() | nil,
-          overflow_recovery: OverflowRecovery.State.t()
+          overflow_recovery: OverflowRecovery.State.t(),
+          awaiting_agent_start: boolean()
         }
 
   @type event_handler_callbacks :: %{
@@ -1217,15 +1222,21 @@ defmodule CodingAgent.Session do
 
     maybe_subscribe_exec_approvals(state)
 
-    :ok = LemonCore.ExecApprovalExpiry.watch_session(state.session_manager.header.id, self())
-    advisor = Keyword.get(opts, :advisor, false)
+    # Without a recorded owner, approvals of this session could outlive it.
+    case LemonCore.ExecApprovalExpiry.watch_session(state.session_manager.header.id, self()) do
+      :ok ->
+        advisor = Keyword.get(opts, :advisor, false)
 
-    if is_list(advisor) do
-      cursor = CodingAgent.Session.EventLog.cursor(state.event_log)
-      send(self(), {:start_advisor, Keyword.put(advisor, :initial_cursor, cursor)})
+        if is_list(advisor) do
+          cursor = CodingAgent.Session.EventLog.cursor(state.event_log)
+          send(self(), {:start_advisor, Keyword.put(advisor, :initial_cursor, cursor)})
+        end
+
+        {:ok, state}
+
+      {:error, reason} ->
+        {:stop, {:exec_approval_watch_failed, reason}}
     end
-
-    {:ok, state}
   end
 
   @spec handle_call(term(), GenServer.from(), t()) ::
@@ -1851,15 +1862,17 @@ defmodule CodingAgent.Session do
   end
 
   def handle_cast(:abort, state) do
-    had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
+    # No agent run reports the end of a prompt that was never dispatched, nor of
+    # a run parked in overflow recovery (the agent is idle while it summarizes),
+    # so the session ends those itself.
+    ends_locally =
+      not is_nil(state.pending_prompt_timer_ref) or state.overflow_recovery.in_progress
 
     state =
       state
       |> ManualOperation.cancel(:aborted)
       |> WasmBridge.cancel_host_calls(:aborted)
-      |> cancel_pending_prompt()
-      |> CompactionLifecycle.cancel_for_new_prompt()
-      |> CompactionManager.clear_overflow_recovery_state()
+      |> CompactionManager.cancel_overflow_recovery(:aborted)
 
     Control.cancel_parent(self())
 
@@ -1869,17 +1882,13 @@ defmodule CodingAgent.Session do
     # instead of holding abort until the resource's supervisor shutdown timeout.
     CodingAgent.ToolResources.stop(state.session_manager.header.id)
 
-    if had_pending_prompt do
-      # If abort lands before deferred prompt dispatch, emit a terminal canceled
-      # event so subscribers don't wait for a lifecycle event that never comes.
-      state = %{state | terminal_event: {:canceled, :assistant_aborted}}
-      Notifier.broadcast_event(state, {:canceled, :assistant_aborted})
-      Notifier.complete_event_streams(state, {:canceled, :assistant_aborted})
+    state = if ends_locally, do: terminalize(state, {:canceled, :assistant_aborted}), else: state
 
-      {:noreply, settle_lifecycle_activity(%{state | event_streams: %{}})}
-    else
-      {:noreply, settle_lifecycle_activity(state)}
-    end
+    {:noreply,
+     state
+     |> cancel_pending_prompt()
+     |> CompactionLifecycle.cancel_for_new_prompt()
+     |> settle_lifecycle_activity()}
   end
 
   def handle_cast({:unsubscribe, pid, ref}, state) do
@@ -1904,7 +1913,8 @@ defmodule CodingAgent.Session do
   end
 
   defp accept_prompt(state, text, opts) do
-    if state.is_streaming or ManualOperation.in_flight?(state) do
+    if state.is_streaming or not is_nil(state.pending_prompt_timer_ref) or
+         ManualOperation.in_flight?(state) do
       {:error, :busy}
     else
       state = CompactionLifecycle.cancel_for_new_prompt(state)
@@ -1917,7 +1927,7 @@ defmodule CodingAgent.Session do
   defp schedule_prompt(state, message) do
     ref = make_ref()
     send(self(), {:do_prompt, ref, message, state.system_prompt})
-    State.begin_prompt(state, ref)
+    state |> State.begin_prompt(ref) |> Map.put(:awaiting_agent_start, true)
   end
 
   defp subscribe_client(state, pid, opts) do
@@ -1951,7 +1961,10 @@ defmodule CodingAgent.Session do
             agent_opts = [
               system_prompt: CodingAgent.Session.PromptJournal.blocks(state),
               preempt: Keyword.get(opts, :preempt, true),
-              defer_start: not is_nil(state.pending_prompt_timer_ref)
+              # Overflow recovery resumes the agent itself once compaction lands.
+              defer_start:
+                not is_nil(state.pending_prompt_timer_ref) or
+                  state.overflow_recovery.in_progress
             ]
 
             state =
@@ -2097,6 +2110,14 @@ defmodule CodingAgent.Session do
     state = SteeringJournal.bind(state, ids)
     Notifier.broadcast_event(state, event)
     {:noreply, state}
+  end
+
+  # Until the accepted prompt's run starts, every agent event is an earlier
+  # run's: its messages are still journaled and its budget counted, but none of
+  # it may end, stream to or clear the accepted prompt.
+  def handle_info({:agent_event, event}, %{awaiting_agent_start: true} = state)
+      when event != {:agent_start} do
+    {:noreply, handle_stale_agent_event(event, state)}
   end
 
   def handle_info({:agent_event, {:turn_start} = event}, state) do
@@ -2335,7 +2356,8 @@ defmodule CodingAgent.Session do
 
   def handle_info({:do_prompt, ref, message, system_prompt}, state) do
     if state.pending_prompt_timer_ref == ref do
-      {:noreply, CompactionLifecycle.before_prompt(state, message, system_prompt)}
+      {:noreply,
+       CompactionLifecycle.before_prompt(state, message, system_prompt, session_callbacks())}
     else
       {:noreply, state}
     end
@@ -2353,8 +2375,12 @@ defmodule CodingAgent.Session do
 
       state =
         case LemonAgent.Agent.prompt(state.agent, message) do
-          :ok -> state
-          {:error, :already_streaming} -> queue_reserved_prompt(state, message)
+          :ok ->
+            state
+
+          # The running loop carries the prompt; its events are this prompt's.
+          {:error, :already_streaming} ->
+            queue_reserved_prompt(%{state | awaiting_agent_start: false}, message)
         end
 
       {:noreply, settle_lifecycle_activity(state)}
@@ -2706,12 +2732,12 @@ defmodule CodingAgent.Session do
 
   def attach_recalled_context(%LemonAi.Types.UserMessage{content: content} = message, sections)
       when is_list(sections) do
-    %{message | content: append_recalled(content, sections, LemonAi.Types.TextContent)}
+    %{message | content: append_recalled(content, sections)}
   end
 
   def attach_recalled_context(%CustomMessage{content: content} = message, sections)
       when is_list(sections) do
-    %{message | content: append_recalled(content, sections, CodingAgent.Messages.TextContent)}
+    %{message | content: append_recalled(content, sections)}
   end
 
   def attach_recalled_context(message, _sections), do: message
@@ -3058,18 +3084,18 @@ defmodule CodingAgent.Session do
   defp recalled_begin(marker), do: "[lemon:recalled-context id=#{marker}]"
   defp recalled_end(marker), do: "[/lemon:recalled-context id=#{marker}]"
 
-  defp append_recalled(content, sections, _text_module) when is_binary(content) do
+  defp append_recalled(content, sections) when is_binary(content) do
     content <> @recalled_separator <> recalled_block(sections)
   end
 
-  defp append_recalled(content, sections, text_module) when is_list(content) do
-    content ++ [struct(text_module, type: :text, text: recalled_block(sections))]
+  defp append_recalled(content, sections) when is_list(content) do
+    content ++ [%LemonAi.Types.TextContent{type: :text, text: recalled_block(sections)}]
   end
 
   # Content that is neither a binary nor a list of blocks is a shape this module
   # did not build and cannot safely extend, so the turn goes out without the
   # attachment rather than with a message the provider will reject.
-  defp append_recalled(content, _sections, _text_module), do: content
+  defp append_recalled(content, _sections), do: content
 
   # Sections are rendered under their own headings, in the order the registry
   # returned them, inside one wrapper. One wrapper rather than one per section:
@@ -3223,9 +3249,44 @@ defmodule CodingAgent.Session do
 
   @spec handle_agent_event(LemonAgent.Types.agent_event(), t()) :: t()
   defp handle_agent_event(event, state) do
+    state = if event == {:agent_start}, do: %{state | awaiting_agent_start: false}, else: state
     state = record_terminal_event(state, event)
     state = EventHandler.handle(event, state, event_handler_callbacks())
     if event == {:agent_start}, do: maybe_watch_root_idle(state), else: state
+  end
+
+  defp handle_stale_agent_event({:message_end, _message} = raw_event, state) do
+    {:message_end, message} = strip_recalled_context_from_event(raw_event)
+
+    state
+    |> persist_message(message)
+    |> CodingAgent.Session.ToolIntentGate.flush()
+  end
+
+  defp handle_stale_agent_event({:usage_budget_updated, usage}, state),
+    do: BudgetLedger.update(state, usage)
+
+  defp handle_stale_agent_event(_event, state), do: state
+
+  # The one terminal path for a run the agent will not end itself: an aborted
+  # prompt that never reached the agent or a run parked in overflow recovery, a
+  # failed or stale overflow recovery, and a recovery-band block. A run that is
+  # no longer live (not streaming, no pending prompt) already had its terminal
+  # event, so this is a no-op and the event is broadcast and streams complete
+  # exactly once.
+  @spec terminalize(t(), {:error, term(), term()} | {:canceled, term()}) :: t()
+  defp terminalize(state, event) do
+    if state.is_streaming or not is_nil(state.pending_prompt_timer_ref) do
+      state = cancel_pending_prompt(state)
+      Notifier.broadcast_event(state, event)
+
+      event
+      |> handle_agent_event(state)
+      |> then(&CompactionManager.clear_overflow_recovery_state_on_terminal(event, &1))
+      |> settle_lifecycle_activity()
+    else
+      state
+    end
   end
 
   defp record_terminal_event(state, event) do
@@ -3283,7 +3344,7 @@ defmodule CodingAgent.Session do
     %{
       restore_messages_from_session: &restore_messages_from_session/1,
       broadcast_event: &broadcast_event/2,
-      handle_agent_event: &handle_agent_event/2
+      terminalize: &terminalize/2
     }
   end
 

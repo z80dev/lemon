@@ -23,7 +23,7 @@ defmodule LemonCore.Usage.CLI do
   def run(args) do
     {opts, params} = parse_args!(args)
 
-    LemonCore.CLI.start!(:lemon_core)
+    LemonCore.CLI.start!(:lemon_core, store: :read_only)
 
     report =
       case LemonCore.UsageReport.query(params) do

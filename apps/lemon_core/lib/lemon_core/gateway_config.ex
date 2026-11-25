@@ -2,10 +2,15 @@ defmodule LemonCore.GatewayConfig do
   @moduledoc """
   Unified gateway configuration access.
 
-  Gateway config comes from the canonical TOML `[gateway]` section only.
+  Gateway config comes from the canonical TOML `[gateway]` section only, read
+  through `LemonCore.Config.cached/1`: reads are ETS lookups, see config
+  reloads without a restart, and keep serving the last good config when a
+  reload fails (`LemonCore.ConfigCache`). A config that cannot be loaded at all
+  raises `LemonCore.Config.ValidationError`; it is never read as empty.
+
   In test mode (`config_test_mode`), a full-replacement app env layer
-  (`Application.get_env(:lemon_gateway, LemonGateway.Config)`) is supported
-  for test isolation.
+  (`Application.get_env(:lemon_gateway, :"Elixir.LemonGateway.Config")`, a
+  test-only key) replaces the TOML section for test isolation.
   """
 
   @doc """
@@ -33,19 +38,13 @@ defmodule LemonCore.GatewayConfig do
   def get(key, default \\ nil) when is_atom(key) do
     gateway = load()
     fetch(gateway, key, default)
-  rescue
-    _ -> default
   end
 
   # ---------------------------------------------------------------------------
   # Config sources
   # ---------------------------------------------------------------------------
 
-  defp toml_base(cwd) do
-    LemonCore.Config.cached(cwd).gateway
-  rescue
-    _ -> %{}
-  end
+  defp toml_base(cwd), do: LemonCore.Config.cached(cwd).gateway
 
   defp full_replacement_config do
     case Application.get_env(:lemon_gateway, :"Elixir.LemonGateway.Config") do

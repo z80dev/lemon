@@ -175,7 +175,7 @@ defmodule CodingAgent.Session.CompactionModelRolesTest do
     selected = %{opts[:model] | api: :compaction_model_roles_test}
     opts = Keyword.put(opts, :model, selected)
     unused_active = %{state.model | api: :unused_compaction_active_api}
-    messages = [%CodingAgent.Messages.UserMessage{content: "Summarize the selected provider"}]
+    messages = [%LemonAi.Types.UserMessage{content: "Summarize the selected provider"}]
 
     assert {:ok, summary} = Compaction.generate_summary(messages, unused_active, opts)
     assert_selected_summary(summary)

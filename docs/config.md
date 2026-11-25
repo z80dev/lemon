@@ -1253,6 +1253,11 @@ Tern's settings; `bell` explicitly rings there too. Non-TTY, `TERM=dumb`, or
 `LEMON_TUI_TERMINAL_INTEGRATION=0` suppresses these side channels entirely.
 See `clients/tui/README.md` for copy commands and keyboard access.
 
+`theme` is owned by the terminal client: `/theme dark|light|auto` writes it,
+and the client also reads `system` (same as `auto`) and the palette names
+`lemon-dark`/`lemon-light`. Core config validation only requires a non-blank
+string, so any value the client writes loads.
+
 ### TUI keybindings
 
 Use `[tui.keys]` to replace any action's default keys. Quote action IDs (otherwise
@@ -1631,6 +1636,15 @@ failure. Fix syntax errors in the named file, then run
 `lemon config validate --verbose`. For removed settings, run
 `lemon config migrate`. Doctor records invalid configuration as failing checks
 and continues with the remaining diagnostics.
+
+A running Lemon keeps serving its last good configuration when an edit makes
+the file invalid: the failure is logged once (`Config reload failed …; serving
+the last good config`) and no further load is attempted until the file changes
+again, so fixing the file is picked up on the next check. Only a start with no
+previously loaded config fails. Invalid values are reported, never replaced by
+a default: a misspelled `[features]` state, a `[runtime] max_tool_turns` that is
+not a non-negative integer (`0` or unset means unlimited) and a profile
+`tool_policy`/`tool_policy_json` that does not parse are validation errors.
 
 Normal configuration loads, including `lemon config show` and
 `mix lemon.config show`, also validate and reject invalid resolved values rather
@@ -3274,9 +3288,10 @@ suppresses bootstrap even when resuming an assistant session.
   (the omp #2275 dead-loop recovery band). `keep_recent_tokens` is an upper
   target, reduced to fit that band including request overhead. A pass that
   misses the band escalates once through overflow compaction with a minimal
-  valid tail. If that still cannot fit, `compaction_recovery_band` is reported
-  and unchanged history is not compacted again each turn; reduce request
-  overhead, manually compact, or start a new session.
+  valid tail. If that still cannot fit, `compaction_recovery_band` ends the
+  prompt and unchanged history is not compacted again each turn; the session
+  stays free for `/compact` and new turns. Reduce request overhead, manually
+  compact, or start a new session.
   Before calling the summary model, Lemon spills old tool-result bodies to
   session-scoped `artifact://` handles. It protects the newest 40,000 estimated
   tokens and skips results below 50 tokens (omp's `docs/compaction.md` policy).
@@ -3290,7 +3305,7 @@ suppresses bootstrap even when resuming an assistant session.
 - `runtime.max_tool_turns`: optional per-prompt cap on tool-using turns (default unlimited).
 - `runtime.secret_obfuscation`: opt-in placeholder obfuscation of secrets in provider-visible text ([details](security/secret-obfuscation.md)).
 - `tui`: terminal UI settings.
-- `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
+- `gateway`: Lemon gateway settings, including `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.
 - `automation`: cron catch-up and run-history retention.
 - `cron`: cron failure-alert cooldown settings.
@@ -3349,6 +3364,14 @@ Top-level `[gateway]` keys (defaults from `LemonCore.Config.Gateway`):
 `enable_webhook` is validated as a boolean. Invalid execution capacity fails
 startup; there is no fallback to 10. Engine-session ownership is always a
 fail-fast claim, not a configurable lock or timeout.
+
+The gateway reads `[gateway]` live from the canonical config; there is no
+second, boot-time copy. A config reload applies `max_concurrent_runs` to the
+running gateway (a lower limit stops new grants until running work drains) and
+is visible to every gateway and channel reader without a restart. A config that
+cannot be loaded at startup fails startup instead of starting with every
+channel disabled. `[gateway.queue]` was never read and has been removed: it is
+ignored with a warning (`lemon config validate`, `lemon doctor`).
 
 This execution cap does not bound queued Runs or coordinator population.
 Router's `config :lemon_router, run_process_limit: 500` bounds live router

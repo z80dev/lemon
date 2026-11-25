@@ -20,10 +20,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   config. `lemon setup` offers it when omp is installed; `lemon setup omp
   status` and `disconnect` inspect and undo it.
 - Epic #543 wave 3 (additive, unless marked **Breaking**):
-  - Providers preconnect and offer opt-in request hedging, with
-    `hedge_started`/`hedge_skipped` dispatcher telemetry (#567); OpenAI
-    Responses over WebSocket with `previous_response_id` chaining is opt-in via
-    `responses_websocket = true` (#566).
+  - Providers preconnect (#567); OpenAI Responses over WebSocket with
+    `previous_response_id` chaining is opt-in via `responses_websocket = true`
+    (#566).
   - Subagents return structured results through a `submit_result` tool (#602);
     task-tool action usage is measured by telemetry only, with no behavior
     change (#604); idle subagent processes hibernate and completions are
@@ -229,6 +228,43 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   have zero findings; fixes include `Lemon.Reload` treating a successful code
   change as an error and extension manifests reporting non-object JSON as
   oversized (#499, #734).
+- One-shot CLI commands (`lemon doctor`, `config`, `secrets`, `usage`, `context`,
+  `learn`, `learning`, `mcp`, `update`, `migrate`, `providers`, `setup`, and the
+  `mix lemon.secrets*`/`lemon.config`/`lemon.usage` tasks) boot the core in a
+  client mode that no longer expires a running daemon's pending approvals, sweeps
+  its store, starts a second config reloader or run-history store, or installs a
+  SIGTERM trap; read-only commands also open the store read-only. A runtime only
+  reconciles approvals while it holds the store's ownership lock
+  (`<store>.runtime.lock`), so a second runtime on the same store (for example a
+  node worker) leaves the owner's approvals alone. `lemon migrate hermes` confirms
+  every imported session document and reports unconfirmed writes as
+  `outcome_unknown` (#667).
+- Exec approvals are indexed by run and session, so run and session end read
+  only that owner's approvals instead of the whole approval table. Terminal
+  approval receipts are swept after 24 hours
+  (`:exec_approval_receipt_retention_ms`); resolving a swept ID returns
+  `not_found`. Approval recovery at boot no longer stops `:lemon_core` when the
+  store is unavailable (it retries with backoff and refuses resolution
+  meanwhile), and native session start gets an error instead of a crash when
+  the approval worker does not answer within 2 seconds (#694).
+- Config: `[tui] theme = "auto"` (what `/theme auto` writes) and `"system"` no
+  longer fail config validation and break every config read and the next
+  daemon start; the terminal client owns theme names and core only requires a
+  non-blank string (#640).
+- Config: after an invalid edit a running Lemon serves the last good config,
+  logs the failure once and stops re-reading the file until it changes, instead
+  of re-parsing and raising on every config read. Invalid `[features]` states,
+  `[runtime] max_tool_turns` values and profile tool policies are validation
+  errors instead of silently becoming `off`, unlimited or deny-all. An
+  unloadable config fails gateway and channel startup instead of starting with
+  every channel disabled (#617).
+- Gateway: `[gateway]` is read live from the canonical config, so a reload
+  reaches every gateway reader (including `max_concurrent_runs` for the running
+  gateway) without a restart. `[gateway.queue] mode = "fifo"` (or any other
+  value `lemon config validate` accepted) no longer crashes boot: the section
+  was never read and is now ignored with a warning. Binding transports from
+  config no longer create atoms, and TOML project roots resolve for channel
+  bindings (#697).
 - Discord boots again: `lemon_channels` now starts `:gun`, which Nostrum needs
   for its gateway and REST connections; previously a configured bot token
   failed with `:noproc` and no Discord service started (#670).
@@ -239,6 +275,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   preferences act on the session the thread's runs use. Reactions and
   system replies land in the thread. A channel that cannot be looked up is
   not routed under a guessed key (#649).
+- One voice note or file transfer no longer stalls every chat on a channel
+  account. Telegram transcribes voice notes and downloads images in the poll
+  task and applies updates in a supervised worker, so pairing allowlist
+  updates and runtime drains are answered while a note transcribes. Discord
+  acknowledges slash commands and buttons on arrival (replies follow as edits
+  or follow-ups), so a queued command no longer misses the 3 s window, and
+  file transfers, thread creation and media preparation run beside the event
+  queue (#650).
 - Skill lockfile and audit-state writes wait up to ten seconds for their file
   lock instead of one, so concurrent skill installs in one runtime are no
   longer refused with `lock_timeout` while the lock is merely busy (#499).
@@ -609,6 +653,27 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   10 seconds (`:mcp_discovery_wait_ms`) for servers still connecting, which now
   connect in parallel; failed startups use the same jittered backoff and crash
   breaker as lost connections instead of retrying on every tick (#688).
+- A watchdog stop or keep-alive cancel no longer lets the next queued message
+  fail with `:session_in_use` while the cancelled run's executor is still
+  draining: watchdog and keep-alive cancels take the normal abort path and wait
+  for the gateway's real completion, which reports the real reason in
+  `meta.cancel_reason` (`:run_idle_watchdog_timeout`, `:user_requested`) instead
+  of `:run_watchdog_timeout`. A busy engine session refuses the gateway start
+  synchronously and the router retries it within its pre-start deadline.
+  Gateway cancellation is an asynchronous request that holds the permit and
+  claim until the executor exits or the 15-second drain deadline passes, and
+  completion persists before releasing them exactly once (#643).
+- Compaction (auto, manual and overflow recovery) works again after a
+  checkpoint/rewind or branch summary: journal entries are read through the
+  canonical message deserializer, so a `branch_summary` entry no longer crashes
+  token estimation, and compaction summaries keep each tool result's tool
+  name (#629).
+- Sessions no longer stay busy after overflow recovery or a compaction
+  recovery-band block: abort during recovery ends the run with `canceled`,
+  steering or follow-ups journaled while the summary runs no longer strand the
+  run, a recovery-band block releases the session for `/compact` and the next
+  executor turn, and a late terminal event from an earlier agent run can no
+  longer end (or let a second prompt overwrite) a newly accepted prompt (#630).
 
 ### Removed
 
@@ -633,11 +698,30 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `LemonCore.Store.JsonlBackend` (lemon_core 0.3.0). Run
   `mix lemon.store.migrate_jsonl_to_sqlite` before upgrading a JSONL store (#608).
 - Obsolete Telegram `outbound_send_delay_ms` and poller stale-time settings (#580).
+- **Breaking:** `[gateway.queue]` (never read; now ignored with a warning) and the gateway's
+  second config plane: `LemonGateway.Config`, `LemonGateway.ConfigLoader`,
+  `LemonGateway.Cwd`, `LemonGateway.BindingResolver`/`Binding`,
+  `LemonGateway.Project`, `LemonChannels.GatewayConfig` and
+  `LemonCore.EngineInfoBridge.gateway_config/0`. Read `LemonCore.GatewayConfig`
+  and `LemonCore.Cwd`. The voice config no longer falls back to
+  `:lemon_gateway` application env keys (#617, #697).
 - **Breaking:** MCP sampling, which could never produce a result. `LemonMCP.Sampling`
   and the `:sampling_policy`/`:sampling_handler` client options are gone, a
   server `sampling` config entry is ignored, no client handshake advertises
   `sampling`, and a server's `sampling/createMessage` receives method-not-found
   (#703).
+- **Breaking (`lemon_ai` 0.3.0):** opt-in request hedging (#567) is retired
+  (#696, decided under epic #543): its bounded live measurement showed no
+  tail-latency win and nothing enabled it. `config :lemon_ai,
+  LemonAi.CallDispatcher, hedging: ...` is no longer read and the
+  `hedge_started`/`hedge_skipped` dispatcher telemetry is gone; delete the key.
+  Model calls no longer make a synchronous call to a shared dispatcher process:
+  provider failure summaries live in ETS.
+- **Breaking** (coding_agent): the compaction-only `CodingAgent.Messages`
+  user/assistant/tool-result/bash/compaction-summary and content structs,
+  `Messages.get_text/1`, `get_tool_calls/1` and `total_tokens/1`; coding
+  messages are `LemonAi.Types` structs plus `CustomMessage` and
+  `BranchSummaryMessage` (#629).
 
 ### Security
 
