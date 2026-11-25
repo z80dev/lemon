@@ -643,7 +643,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
     for method <-
           ~w(memory.list memory.search memory.get memory.add memory.delete
-      memory.transfer.prepare memory.transfer.snapshot memory.transfer.validate
+      memory.transfer.prepare memory.transfer.snapshot memory.transfer.validate memory.transfer.release
       memory.transfer.preview memory.transfer.apply memory.transfer.status memory.transfer.inspect) do
       assert pair_params["capabilities"][method] == %{"version" => 1, "contextVersion" => 1}
     end

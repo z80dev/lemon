@@ -14,6 +14,7 @@ defmodule LemonControlPlane.MemoryTransfer do
 
   @table :control_memory_transfers
   @timeout_ms 60_000
+  @release_timeout_ms 5_000
   @max_payload_bytes 4 * 1_024 * 1_024
   @max_snapshot_bytes 2 * 1_024 * 1_024
   @identity_keys ~w(profileId mutationId sourceNodeId nodeId)
@@ -318,9 +319,11 @@ defmodule LemonControlPlane.MemoryTransfer do
   end
 
   # The frozen source snapshot holds the copied memory content and is no longer
-  # needed once the receipt is recorded. A local source drops it now; a remote
-  # source node's copy expires with that node's Store TTL. Best effort: the
-  # copy itself has already completed.
+  # needed once the receipt is recorded. A local source drops it directly; a
+  # remote source node drops it through `memory.transfer.release` when it
+  # advertises that method. Otherwise, or if that call fails, the source Store
+  # TTL, scope erasure and retention still bound it. Best effort: the copy has
+  # already completed, so a release failure never changes the receipt.
   defp release_source(%{"sourceNodeId" => "local"} = operation, ctx) do
     opts = Map.get(ctx, :memory_transfer_opts, Map.get(ctx, :memory_opts, []))
 
@@ -336,7 +339,10 @@ defmodule LemonControlPlane.MemoryTransfer do
     :ok
   end
 
-  defp release_source(_operation, _ctx), do: :ok
+  defp release_source(operation, _ctx) do
+    _ = node_call(operation["sourceNodeId"], "release", identity(operation), @release_timeout_ms)
+    :ok
+  end
 
   defp fail(operation, reason, ctx) do
     _ = persist(operation, %{"state" => "failed", "error" => safe_reason(reason)}, ctx)
@@ -395,14 +401,14 @@ defmodule LemonControlPlane.MemoryTransfer do
   defp source_call(operation, method, args, _ctx),
     do: node_call(operation["sourceNodeId"], method, args)
 
-  defp node_call(node_id, operation, args) do
+  defp node_call(node_id, operation, args, timeout_ms \\ @timeout_ms) do
     with {:ok, node} <- destination_node(node_id),
          :ok <- memory_context_capability(node, "memory.transfer." <> operation),
          {:ok, invoke_id} <-
            NodeRegistry.invoke_node(node_id, "memory.transfer." <> operation, args,
              expected_pid: node.pid,
              recipient: self(),
-             timeout_ms: @timeout_ms,
+             timeout_ms: timeout_ms,
              max_payload_bytes: @max_payload_bytes
            ) do
       receive do
@@ -415,7 +421,7 @@ defmodule LemonControlPlane.MemoryTransfer do
         {:lemon_node_result, ^invoke_id, _result} ->
           {:uncertain, invoke_id}
       after
-        @timeout_ms + 1_000 ->
+        timeout_ms + 1_000 ->
           NodeRegistry.cancel(invoke_id, :timeout)
           {:uncertain, invoke_id}
       end

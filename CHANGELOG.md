@@ -185,9 +185,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   previewed and applied again; only genuinely uncertain outcomes stay pending.
   The transfer journal no longer keeps memory after it is gone: a frozen source
   snapshot (summaries, preference facts, `USER.md`/`MEMORY.md` bytes) is deleted
-  once the receipt is recorded, when any document it captured is deleted, erased
-  by scope or aged out, and after the new `transfer_ttl_ms` Store setting
-  (default 24 hours, capped at `retention_ms`) (#623).
+  once the receipt is recorded (on a remote source node through its new
+  `memory.transfer.release` worker method), when any document it captured is
+  deleted, erased by scope or aged out, and after the new `transfer_ttl_ms`
+  Store setting (default 24 hours, capped at `retention_ms`) (#623).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

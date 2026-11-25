@@ -55,8 +55,10 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Fixed
 
-- `memory.transfer` releases a local source's frozen memory snapshot as soon
-  as the destination receipt is recorded instead of keeping it indefinitely (#623).
+- `memory.transfer` releases the source's frozen memory snapshot as soon as the
+  destination receipt is recorded instead of keeping it indefinitely: directly
+  for a local source, and through `memory.transfer.release` (best effort, five
+  seconds) for a remote source worker that advertises it (#623).
 - Timeouts, closed openers and unclassified failures of passive node inspections
   (`node.capabilities.get`, `node.runtime.features`, `node.host.info`) are
   retry-safe unavailable reads, not uncertain mutations.

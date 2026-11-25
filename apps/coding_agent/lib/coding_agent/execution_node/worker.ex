@@ -127,6 +127,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     "memory.transfer.apply" => %{"version" => @protocol_version, "contextVersion" => 1},
     "memory.transfer.status" => %{"version" => @protocol_version, "contextVersion" => 1},
     "memory.transfer.inspect" => %{"version" => @protocol_version, "contextVersion" => 1},
+    "memory.transfer.release" => %{"version" => @protocol_version, "contextVersion" => 1},
     "node.invoke.control" => %{
       "version" => @protocol_version,
       "operations" => ["steer", "redirect"],
