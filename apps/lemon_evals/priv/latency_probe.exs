@@ -143,15 +143,15 @@ defmodule LemonEvals.LatencyProbe do
     params = %{
       "prompt" => "Reply with the fixture text.",
       "model" => "zai:glm-5.3",
-      "session_key" => "agent:default:latency-#{n}",
-      "queue_mode" => "followup",
+      "sessionKey" => "agent:default:latency-#{n}",
+      "queueMode" => "followup",
       "cwd" => File.cwd!(),
       "project_memory_capture" => false
     }
 
     enter = now()
     Socket.request(socket, "agent", params, :first)
-    first = response(socket, :first)["run_id"]
+    first = response(socket, :first)["runId"]
 
     {provider, requested} =
       receive do
@@ -164,8 +164,12 @@ defmodule LemonEvals.LatencyProbe do
     :sys.get_state(LemonControlPlane.EventBridge)
     # Admission of the second turn is acknowledged before the first can finish.
     Socket.request(socket, "agent", params, :second)
-    second = response(socket, :second)["run_id"]
-    if first == second, do: raise("latency queue did not acquire two runs")
+    second = response(socket, :second)["runId"]
+
+    unless is_binary(first) and first != "" and is_binary(second) and second != "" and
+             first != second,
+           do: raise("latency queue did not acquire two runs")
+
     LemonControlPlane.EventBridge.subscribe_run(second)
     :sys.get_state(LemonControlPlane.EventBridge)
     send(provider, :release)
