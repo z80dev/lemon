@@ -3,7 +3,7 @@ defmodule Mix.Tasks.Lemon.Quality do
 
   alias LemonCore.Config.Modular
 
-  alias LemonCore.Quality.{ArchitectureCheck, ArchitectureDocs, DocsCheck}
+  alias LemonCore.Quality.{ArchitectureCheck, ArchitectureDocs, DocsCheck, VacuousAssertionCheck}
 
   @shortdoc "Run docs link and architecture boundary checks"
   @moduledoc """
@@ -15,6 +15,8 @@ defmodule Mix.Tasks.Lemon.Quality do
       publish set in `apps/*/mix.exs` equals `scripts/verify_packages`
     * architecture - every umbrella app's `deps/0` matches the direct
       dependency policy
+    * vacuous_assertions - no tracked `apps/*/test` file asserts a literal
+      (`assert true`, `refute false`) that cannot fail
     * duplicate test module guard (`mix lemon.check_duplicate_tests`)
 
   Usage:
@@ -50,6 +52,7 @@ defmodule Mix.Tasks.Lemon.Quality do
 
     checks = [
       {:docs, fn -> DocsCheck.run(root: root) end},
+      {:vacuous_assertions, fn -> VacuousAssertionCheck.run(root: root) end},
       {:architecture_docs, fn -> ArchitectureDocs.check(root) end},
       {:architecture, fn -> ArchitectureCheck.run(root: root) end}
     ]

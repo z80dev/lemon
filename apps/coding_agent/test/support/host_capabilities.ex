@@ -1,6 +1,38 @@
 defmodule CodingAgent.TestHostCapabilities do
   @moduledoc false
 
+  @browser_driver Path.expand(
+                    "../../../../clients/lemon-browser-node/dist/local-driver.js",
+                    __DIR__
+                  )
+
+  # The real-browser smoke drives the built lemon-browser-node local driver
+  # (`npm ci && npm run build` in clients/lemon-browser-node; dist/ is ignored)
+  # against a Chrome/Chromium executable.
+  def browser_driver do
+    cond do
+      is_nil(System.find_executable("node")) -> {:error, :node_missing}
+      not File.regular?(@browser_driver) -> {:error, :driver_not_built}
+      is_nil(chrome_executable()) -> {:error, :chrome_missing}
+      true -> :ok
+    end
+  end
+
+  def browser_driver_path, do: @browser_driver
+
+  def chrome_executable do
+    [
+      System.get_env("LEMON_BROWSER_EXECUTABLE"),
+      System.get_env("LEMON_CHROME_EXECUTABLE"),
+      System.get_env("CHROME_EXECUTABLE"),
+      System.find_executable("google-chrome"),
+      System.find_executable("google-chrome-stable"),
+      System.find_executable("chromium"),
+      System.find_executable("chromium-browser")
+    ]
+    |> Enum.find(fn value -> is_binary(value) and String.trim(value) != "" end)
+  end
+
   # Finding lldb-dap is insufficient on macOS: task_for_pid permission may be
   # denied specifically to non-interactive sessions. Exercise a real launch once
   # before choosing the integration exclusions, not in each individual test.

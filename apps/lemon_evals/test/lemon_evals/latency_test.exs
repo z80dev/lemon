@@ -55,7 +55,8 @@ defmodule LemonEvals.LatencyBudgetContractTest do
     """)
   end
 
-  @tag :integration
+  # Boots the offline native runtime (minutes); nightly's latency job runs it.
+  @tag :slow
   @tag timeout: 240_000
   @tag :tmp_dir
   test "native offline lane emits every required distribution without credentials", %{

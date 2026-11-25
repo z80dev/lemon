@@ -75,131 +75,125 @@ defmodule LemonChannels.PortBridgeContractTest do
     end)
   end
 
+  @tag :node
   test "shared parser keeps adapter-specific event and error envelopes", %{tmp_dir: tmp_dir} do
-    if System.find_executable("node") do
-      startup_marker_path = Path.join(tmp_dir, "bridge_parser_started.txt")
-      script_path = Path.join(tmp_dir, "bridge_parser_fixture.mjs")
-      :ok = File.write(script_path, parser_fixture_script(startup_marker_path))
+    startup_marker_path = Path.join(tmp_dir, "bridge_parser_started.txt")
+    script_path = Path.join(tmp_dir, "bridge_parser_fixture.mjs")
+    :ok = File.write(script_path, parser_fixture_script(startup_marker_path))
 
-      Enum.each(@bridges, fn bridge ->
-        with_bridge(bridge, script_path, fn pid ->
-          assert_receive {ready_event_tag, %{"type" => "bridge_test_ready"}},
-                         @fixture_start_timeout
+    Enum.each(@bridges, fn bridge ->
+      with_bridge(bridge, script_path, fn pid ->
+        assert_receive {ready_event_tag, %{"type" => "bridge_test_ready"}},
+                       @fixture_start_timeout
 
-          assert ready_event_tag == bridge.event_tag
+        assert ready_event_tag == bridge.event_tag
 
-          PortBridge.command(pid, %{op: "contract_probe", adapter: bridge.label})
+        PortBridge.command(pid, %{op: "contract_probe", adapter: bridge.label})
 
-          assert_receive {event_tag,
-                          %{
-                            "type" => "error",
-                            "message" => invalid_message,
-                            "line" => "not-json"
-                          }},
-                         2_000
+        assert_receive {event_tag,
+                        %{
+                          "type" => "error",
+                          "message" => invalid_message,
+                          "line" => "not-json"
+                        }},
+                       2_000
 
-          assert event_tag == bridge.event_tag
-          assert invalid_message == "#{bridge.label} bridge emitted invalid JSON"
+        assert event_tag == bridge.event_tag
+        assert invalid_message == "#{bridge.label} bridge emitted invalid JSON"
 
-          assert_receive {event_tag,
-                          %{
-                            "type" => "error",
-                            "message" => non_object_message,
-                            "payload" => []
-                          }},
-                         2_000
+        assert_receive {event_tag,
+                        %{
+                          "type" => "error",
+                          "message" => non_object_message,
+                          "payload" => []
+                        }},
+                       2_000
 
-          assert event_tag == bridge.event_tag
-          assert non_object_message == "#{bridge.label} bridge emitted non-object JSON"
+        assert event_tag == bridge.event_tag
+        assert non_object_message == "#{bridge.label} bridge emitted non-object JSON"
 
-          assert_receive {event_tag,
-                          %{
-                            "type" => "bridge_contract",
-                            "op" => "contract_probe",
-                            "adapter" => adapter
-                          }},
-                         2_000
+        assert_receive {event_tag,
+                        %{
+                          "type" => "bridge_contract",
+                          "op" => "contract_probe",
+                          "adapter" => adapter
+                        }},
+                       2_000
 
-          assert event_tag == bridge.event_tag
-          assert adapter == bridge.label
-        end)
+        assert event_tag == bridge.event_tag
+        assert adapter == bridge.label
       end)
-    else
-      assert true
-    end
+    end)
   end
 
+  @tag :node
   test "both adapters replay the remembered connect command after a port restart", %{
     tmp_dir: tmp_dir
   } do
-    if System.find_executable("node") do
-      Enum.each(@bridges, fn bridge ->
-        bridge_dir = Path.join(tmp_dir, bridge.label)
-        :ok = File.mkdir_p(bridge_dir)
+    Enum.each(@bridges, fn bridge ->
+      bridge_dir = Path.join(tmp_dir, bridge.label)
+      :ok = File.mkdir_p(bridge_dir)
 
-        counter_path = Path.join(bridge_dir, "bridge_start_count.txt")
-        script_path = Path.join(bridge_dir, "bridge_restart_fixture.mjs")
+      counter_path = Path.join(bridge_dir, "bridge_start_count.txt")
+      script_path = Path.join(bridge_dir, "bridge_restart_fixture.mjs")
 
-        # One deliberately slow first boot proves that response deadlines begin
-        # at fixture readiness while the immediately queued command is preserved.
-        startup_delay_ms = if bridge.label == "xmtp", do: 2_500, else: 0
+      # One deliberately slow first boot proves that response deadlines begin
+      # at fixture readiness while the immediately queued command is preserved.
+      startup_delay_ms = if bridge.label == "xmtp", do: 2_500, else: 0
 
-        :ok =
-          File.write(script_path, restart_fixture_script(counter_path, startup_delay_ms))
+      :ok =
+        File.write(script_path, restart_fixture_script(counter_path, startup_delay_ms))
 
-        with_bridge(bridge, script_path, fn pid ->
-          PortBridge.command(pid, %{
-            "op" => "connect",
-            "identity" => "test-#{bridge.label}"
-          })
+      with_bridge(bridge, script_path, fn pid ->
+        PortBridge.command(pid, %{
+          "op" => "connect",
+          "identity" => "test-#{bridge.label}"
+        })
 
-          assert_receive {ready_event_tag,
-                          %{
-                            "type" => "bridge_test_ready",
-                            "generation" => first_generation
-                          }},
-                         @fixture_start_timeout
+        assert_receive {ready_event_tag,
+                        %{
+                          "type" => "bridge_test_ready",
+                          "generation" => first_generation
+                        }},
+                       @fixture_start_timeout
 
-          assert ready_event_tag == bridge.event_tag
+        assert ready_event_tag == bridge.event_tag
 
-          assert_receive {connect_event_tag,
-                          %{
-                            "type" => "bridge_test_connect",
-                            "generation" => ^first_generation
-                          }},
-                         2_000
+        assert_receive {connect_event_tag,
+                        %{
+                          "type" => "bridge_test_connect",
+                          "generation" => ^first_generation
+                        }},
+                       2_000
 
-          assert connect_event_tag == bridge.event_tag
+        assert connect_event_tag == bridge.event_tag
 
-          assert_receive {exit_event_tag, %{"type" => "error", "message" => exit_message}},
-                         4_000
+        assert_receive {exit_event_tag, %{"type" => "error", "message" => exit_message}},
+                       4_000
 
-          assert exit_event_tag == bridge.event_tag
-          assert exit_message == "#{bridge.label} bridge exited"
+        assert exit_event_tag == bridge.event_tag
+        assert exit_message == "#{bridge.label} bridge exited"
 
-          assert_receive {restart_ready_event_tag,
-                          %{
-                            "type" => "bridge_test_ready",
-                            "generation" => second_generation
-                          }},
-                         @fixture_start_timeout
+        assert_receive {restart_ready_event_tag,
+                        %{
+                          "type" => "bridge_test_ready",
+                          "generation" => second_generation
+                        }},
+                       @fixture_start_timeout
 
-          assert restart_ready_event_tag == bridge.event_tag
-          assert second_generation == first_generation + 1
+        assert restart_ready_event_tag == bridge.event_tag
+        assert second_generation == first_generation + 1
 
-          assert_receive {replay_event_tag,
-                          %{
-                            "type" => "bridge_test_connect",
-                            "generation" => ^second_generation
-                          }},
-                         2_000
+        assert_receive {replay_event_tag,
+                        %{
+                          "type" => "bridge_test_connect",
+                          "generation" => ^second_generation
+                        }},
+                       2_000
 
-          assert replay_event_tag == bridge.event_tag
-        end)
+        assert replay_event_tag == bridge.event_tag
       end)
-    else
-      assert true
-    end
+    end)
   end
 
   @tag :node

@@ -18,23 +18,25 @@ defmodule LemonAi.Test.IntegrationConfig do
 
   ## Usage
 
-      # In tests
-      if IntegrationConfig.configured?() do
-        model = IntegrationConfig.model()
-        # run tests...
-      end
+      # In a live test module or describe block
+      setup do: IntegrationConfig.require_configured!()
 
   ## Running Tests
 
+  `scripts/test` scrubs provider credentials unless
+  `LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1` is set.
+
       # With Kimi (default)
-      source .env.kimi && mix test --include integration
+      source .env.kimi && LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \\
+        scripts/test path apps/lemon_ai/test/provider_integration_test.exs --include integration
 
       # With custom provider
       INTEGRATION_PROVIDER=anthropic \\
       INTEGRATION_MODEL=claude-3-5-haiku-20241022 \\
       INTEGRATION_BASE_URL=https://api.anthropic.com \\
       INTEGRATION_API_KEY=sk-... \\
-      mix test --include integration
+      LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \\
+      scripts/test path apps/lemon_ai/test/provider_integration_test.exs --include integration
   """
 
   alias LemonAi.Types.{Model, ModelCost}
@@ -115,9 +117,12 @@ defmodule LemonAi.Test.IntegrationConfig do
   end
 
   @doc """
-  Skip message to display when tests are skipped.
+  Fails the calling test or setup unless integration credentials are set, so an
+  unconfigured live suite is reported failed, never passed.
   """
-  def skip_message do
-    "Skipping integration test: #{describe()}"
+  def require_configured! do
+    if configured?(),
+      do: :ok,
+      else: ExUnit.Assertions.flunk("live integration test is #{describe()}")
   end
 end

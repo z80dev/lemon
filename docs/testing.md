@@ -50,8 +50,9 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 `mix lemon.quality` checks that local markdown links in tracked
 `docs/**/*.md` files resolve, that the generated dependency table in
 `docs/architecture_boundaries.md` is current, that every app's `deps/0` matches
-`LemonCore.Quality.ArchitecturePolicy`, and that no two test modules share a
-name. Add `--validate-config` to also validate the runtime config.
+`LemonCore.Quality.ArchitecturePolicy`, that no tracked `apps/*/test` file
+contains an assertion that cannot fail (see [Tags](#tags)), and that no two test
+modules share a name. Add `--validate-config` to also validate the runtime config.
 
 `quality` needs `shellcheck`, `python3` and `node` on `PATH`. Client lanes reinstall
 dependencies; set `LEMON_TEST_REUSE_NODE_MODULES=1` to reuse existing
@@ -144,7 +145,7 @@ responsibilities. No live provider calls are needed for `premerge` or `changed`.
 | Workflow | Trigger | What it runs |
 | --- | --- | --- |
 | `ci.yml` | every PR and push to `main`; called by `release.yml` and `nightly.yml`; dispatch | `changes` → `scripts/changed_tests` (PRs: `--base origin/<base>`; other events: `--all`); `check` → `scripts/test quality` + `eval-fast` (PRs: `quality --base origin/<base>`, which formats and credo-checks only changed files unless the diff is full scope; Credo's cross-file checks are authoritative on `main`'s full run); `test (n/N)` → `scripts/test fast --partitions N [selected app test dirs]`; `dialyzer` (advisory full run plus the `scripts/dialyzer_gate.sh` allowlist gate); `install` → `scripts/verify_source_install` + `scripts/verify_install_script`; `clients` → `scripts/test clients`; `wasm-runtime`; `history` (PRs only); `CI result` (the one status to require; summarizes failures) |
-| `nightly.yml` | daily + dispatch | the full `ci.yml`; `scripts/test coverage` over every app; the prompt/skill/overflow regression files with `--repeat-until-failure 5`; `scripts/test eval-fast` with 20 iterations; the `nightly-red` issue |
+| `nightly.yml` | daily + dispatch | the full `ci.yml`; `scripts/test coverage` over every app; the prompt/skill/overflow regression files with `--repeat-until-failure 5`; `scripts/test eval-fast` with 20 iterations; the offline latency distribution plus the `:slow` latency-lane test; the credential-free `:integration` cases (`--only provider:error_handling` in `lemon_ai`); the `nightly-red` issue |
 | `product-smoke.yml` | PRs touching `apps/**`, weekly, dispatch | Boots a `lemon_runtime_full` release against a local deterministic provider |
 | `release-smoke.yml` | release paths, weekly, dispatch | Release assembly and boot matrix |
 | `osv-scanner.yml` | lockfile changes, weekly | The only dependency-vulnerability scan (Mix, npm, Bun lockfiles) |
@@ -414,7 +415,10 @@ when trimming slower channel suites.
 
 - `:integration` is excluded by default. It is for tests that need a real
   network service, provider, or toolchain; do not use it to quarantine flaky
-  tests.
+  tests or for deterministic offline tests, which belong in the fast lane. An
+  integration test whose credential is missing must fail, never pass.
+- `:slow` (`lemon_evals`) marks the offline latency-lane test, which boots the
+  native runtime; it is excluded by default and runs in nightly's `latency` job.
 - `:python3` (`coding_agent`) marks tests that need a `python3` interpreter.
   The app's `test_helper.exs` excludes the tag only when `python3` is missing.
 - `:lldb_dap` (`coding_agent`) marks the real debugger smoke. The app excludes
@@ -424,9 +428,21 @@ when trimming slower channel suites.
 - `:ast_grep` (`coding_agent`) marks tests that need the optional ast-grep CLI.
   The app excludes the tag only when backend discovery fails; set
   `LEMON_AST_GREP_EXECUTABLE` to select an installed release binary.
+- `:browser_driver` (`coding_agent`) marks the real-browser smoke in
+  `browser_test.exs`. It needs `node`, the built driver
+  (`cd clients/lemon-browser-node && npm ci && npm run build`; `dist/` is
+  ignored) and Chrome/Chromium on `PATH` or in `LEMON_BROWSER_EXECUTABLE`. The
+  helper excludes the tag when one is missing, unless
+  `LEMON_TEST_REQUIRE_BROWSER_DRIVER=1` (set by CI's `test` job, which builds
+  the driver), where a missing prerequisite fails the run.
+- `:node` (`lemon_channels`) marks bridge tests that spawn Node; excluded when
+  `node` is missing.
 - Skip tags (`@tag :skip`, `@tag skip: ...`, `@moduletag :skip`,
   `@describetag :skip`) fail the `quality` lane. Fix the test or give it a
   named tag with a conditional exclude.
+- Assertions that cannot fail (`assert true`, `else assert true`,
+  `assert :ok`, `refute false`) fail `mix lemon.quality`. Replace an
+  `if available? … else assert true` guard with a named conditional-exclude tag.
 
 See [`testing/deterministic-test-patterns.md`](testing/deterministic-test-patterns.md)
 for synchronization patterns that replace `Process.sleep/1`.
@@ -457,6 +473,22 @@ Choose the model with `LEMON_EVAL_PROVIDER`, `LEMON_EVAL_MODEL`,
 
 `scripts/test path` isolates `LEMON_STORE_PATH`, so resolve secret-store-backed
 provider keys into their env var before running live integration tests.
+
+Live provider suites never pass unconfigured: a selected test whose credential
+is missing fails in setup. Select only configured providers, for example
+`LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 scripts/test path apps/lemon_ai/test/integration_test.exs --only provider:anthropic`
+(also `openai`, `google`, `kimi`, and `all` for two or more providers);
+`apps/lemon_ai/test/provider_integration_test.exs` and
+`apps/coding_agent/test/coding_agent/agent_loop_integration_test.exs` need the
+`INTEGRATION_*` variables of `LemonAi.Test.IntegrationConfig`. The
+`provider:error_handling` cases need network but no credentials and run nightly.
+
+The provider-backed automation proofs (`:automation_live`, `lemon_automation`)
+and the omp smoke (`:omp_live`) have no CI runner; they need operator
+credentials and run only on demand. Each fails, rather than passes, when its
+configuration is missing:
+`LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 LEMON_GOAL_JUDGE_MODEL=<provider/model> scripts/test path apps/lemon_automation/test/lemon_automation/goal_judge_router_live_test.exs --include integration`
+(the kanban proof reads its variables from `kanban_dispatcher_live_test.exs`).
 
 The omp real-binary smoke (lifecycle, approvals bridge, parallel workers) is opt-in:
 `LEMON_OMP_LIVE=1 scripts/test path apps/lemon_omp/test/lemon_omp/live_smoke_test.exs`.

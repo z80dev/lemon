@@ -626,7 +626,7 @@ defmodule LemonCore.SessionLifecycleTest do
       send(deleter.pid, :delete)
       assert_receive :identity_release_paused, 5_000
       Process.put(barrier, :paused)
-      assert true = :erlang.suspend_process(deleter.pid)
+      true = :erlang.suspend_process(deleter.pid)
       send(Process.whereis(Store), :serve_identity_snapshot)
       Process.put(barrier, :released)
       assert :ok = :sys.remove(Store, debug)
@@ -642,7 +642,7 @@ defmodule LemonCore.SessionLifecycleTest do
                })
 
       assert {:ok, _} = AgentIdentity.register("operator", id, %{name: new_name})
-      assert true = :erlang.resume_process(deleter.pid)
+      true = :erlang.resume_process(deleter.pid)
       assert {:ok, %{verified: true}} = Task.await(deleter, 5_000)
 
       assert {:ok, %{id: ^id, name: ^new_name, incarnation: incarnation}} =

@@ -1034,9 +1034,10 @@ defmodule CodingAgent.Tools.PatchTest do
       assert File.read!(file) == "line1\nline2\0embedded\nline3"
     end
 
-    test "handles mixed binary and text content", %{tmp_dir: tmp_dir} do
+    test "rejects invalid UTF-8 mixed into text content", %{tmp_dir: tmp_dir} do
       file = Path.join(tmp_dir, "mixed.txt")
-      File.write!(file, "text line\n" <> <<255, 254>> <> "\nmore text")
+      original = "text line\n" <> <<255, 254>> <> "\nmore text"
+      File.write!(file, original)
 
       patch_text = """
       *** Update File: mixed.txt
@@ -1047,11 +1048,8 @@ defmodule CodingAgent.Tools.PatchTest do
 
       result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
 
-      # Should handle gracefully
-      case result do
-        %AgentToolResult{} -> assert true
-        {:error, _} -> assert true
-      end
+      assert {:error, _} = result
+      assert File.read!(file) == original
     end
   end
 
@@ -1646,11 +1644,15 @@ defmodule CodingAgent.Tools.PatchTest do
 
       result = Task.await(task)
 
-      # Should either complete or abort - both are valid
-      case result do
-        {:error, "Operation aborted"} -> assert true
-        %AgentToolResult{} -> assert true
-      end
+      # The abort races execution: either outcome is valid, but each must leave
+      # the file all-or-nothing.
+      expected =
+        case result do
+          {:error, "Operation aborted"} -> "line1\nline2\nline3\nline4\nline5"
+          %AgentToolResult{} -> "line1\nLINE2\nline3\nLINE4\nline5"
+        end
+
+      assert File.read!(file) == expected
     end
 
     test "abort before any operation starts", %{tmp_dir: tmp_dir} do

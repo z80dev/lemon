@@ -167,12 +167,30 @@ jobs:
           family: test
           bun: "true"
 
+      # browser_test.exs's real-browser smoke (:browser_driver) drives the built
+      # lemon-browser-node local driver and the runner's Chrome; dist/ is
+      # ignored, so build it wherever coding_agent's tests run and make a
+      # missing prerequisite fail the run instead of excluding the smoke.
+      - name: Setup Node (browser driver)
+        if: contains(needs.changes.outputs.test_paths, 'apps/coding_agent/test')
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: clients/lemon-browser-node/package-lock.json
+
+      - name: Build lemon-browser-node local driver
+        if: contains(needs.changes.outputs.test_paths, 'apps/coding_agent/test')
+        working-directory: clients/lemon-browser-node
+        run: npm ci && npm run build
+
       # TEST_PATHS: the selected app test directories (word-split on purpose).
       - name: scripts/test fast (partition ${{ matrix.partition }}/${{ needs.changes.outputs.partitions }})
         env:
           MIX_TEST_PARTITION: ${{ matrix.partition }}
           PARTITIONS: ${{ needs.changes.outputs.partitions }}
           TEST_PATHS: ${{ needs.changes.outputs.test_paths }}
+          LEMON_TEST_REQUIRE_BROWSER_DRIVER: ${{ contains(needs.changes.outputs.test_paths, 'apps/coding_agent/test') && '1' || '' }}
         run: |
           # shellcheck disable=SC2086
           scripts/test fast --partitions "$PARTITIONS" $TEST_PATHS

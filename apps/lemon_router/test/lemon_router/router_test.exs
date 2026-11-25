@@ -113,7 +113,7 @@ defmodule LemonRouter.RouterTest do
   test "RouterBridge reports an unknown abort outcome when tombstone registration exits" do
     orchestrator = Process.whereis(LemonRouter.RunOrchestrator)
     assert is_pid(orchestrator)
-    assert true = Process.unregister(LemonRouter.RunOrchestrator)
+    true = Process.unregister(LemonRouter.RunOrchestrator)
 
     try do
       :ok = RouterBridge.configure(router: Router)
@@ -127,7 +127,7 @@ defmodule LemonRouter.RouterTest do
       refute_receive {:abort_run, "run-tombstone-unavailable-direct", :test_abort}, 100
       refute_receive {:abort_run, "run-tombstone-unavailable", :test_abort}, 100
     after
-      assert true = Process.register(orchestrator, LemonRouter.RunOrchestrator)
+      true = Process.register(orchestrator, LemonRouter.RunOrchestrator)
     end
   end
 

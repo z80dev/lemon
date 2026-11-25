@@ -348,37 +348,38 @@ defmodule LemonSkills.DiscoveryTest do
   end
 
   # ============================================================================
-  # Integration Tests
+  # Discovery metadata
   # ============================================================================
 
-  describe "integration" do
-    @tag :integration
-    test "can discover GitHub-related skills" do
-      results = Discovery.discover("github", timeout: 10_000, max_results: 5)
+  describe "discovery metadata" do
+    test "GitHub results carry complete entries and discovery metadata" do
+      HttpMock.stub(
+        "https://api.github.com/search/repositories",
+        {:ok, @github_search_one_result}
+      )
 
-      if results != [] do
-        first = hd(results)
-        assert first.source == :github
-        assert is_number(get_in(first.entry.manifest, ["_discovery_metadata", "github_stars"]))
-        assert is_binary(get_in(first.entry.manifest, ["_discovery_metadata", "github_url"]))
-      end
-    end
+      HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
 
-    @tag :integration
-    test "entry structure is complete" do
-      results = Discovery.discover("api", timeout: 10_000, max_results: 3)
+      HttpMock.stub(
+        "https://raw.githubusercontent.com/lemon-agent/skills/main/",
+        {:error, :nxdomain}
+      )
 
-      for result <- results do
-        entry = result.entry
+      assert [result] = Discovery.discover("hello", timeout: 5_000, max_results: 5)
+      assert result.source == :github
 
-        assert is_binary(entry.key)
-        assert is_binary(entry.name)
-        assert is_binary(entry.description)
-        assert is_binary(entry.path)
+      entry = result.entry
+      assert entry.key == "acme-lemon-skill-hello"
+      assert entry.name == "lemon-skill-hello"
+      assert entry.description == "A greeting skill for Lemon"
+      assert is_binary(entry.path)
 
-        assert is_map(entry.manifest)
-        assert is_number(get_in(entry.manifest, ["_discovery_metadata", "discovery_score"]))
-      end
+      assert %{
+               "github_stars" => 42,
+               "github_url" => "https://github.com/acme/lemon-skill-hello",
+               # 42 stars + 50 for the name match; the description does not match.
+               "discovery_score" => 92
+             } = entry.manifest["_discovery_metadata"]
     end
   end
 end

@@ -75,26 +75,28 @@ defmodule Mix.Tasks.Lemon.ConfigTest do
       """)
 
       # Capture both stdout and stderr
-      stdout = capture_io(:stdio, fn ->
-        capture_io(:stderr, fn ->
-          # Mix.raise raises a Mix.Error exception
-          try do
-            Config.run(["validate"])
-          rescue
-            Mix.Error -> :ok
-          end
-        end)
-      end)
-
-      stderr = capture_io(:stderr, fn ->
+      stdout =
         capture_io(:stdio, fn ->
-          try do
-            Config.run(["validate"])
-          rescue
-            Mix.Error -> :ok
-          end
+          capture_io(:stderr, fn ->
+            # Mix.raise raises a Mix.Error exception
+            try do
+              Config.run(["validate"])
+            rescue
+              Mix.Error -> :ok
+            end
+          end)
         end)
-      end)
+
+      stderr =
+        capture_io(:stderr, fn ->
+          capture_io(:stdio, fn ->
+            try do
+              Config.run(["validate"])
+            rescue
+              Mix.Error -> :ok
+            end
+          end)
+        end)
 
       output = stdout <> stderr
 
@@ -144,25 +146,27 @@ defmodule Mix.Tasks.Lemon.ConfigTest do
       """)
 
       # Capture both stdout and stderr
-      stdout = capture_io(:stdio, fn ->
-        capture_io(:stderr, fn ->
-          try do
-            Config.run(["validate", "--project-dir", project_dir])
-          rescue
-            Mix.Error -> :ok
-          end
-        end)
-      end)
-
-      stderr = capture_io(:stderr, fn ->
+      stdout =
         capture_io(:stdio, fn ->
-          try do
-            Config.run(["validate", "--project-dir", project_dir])
-          rescue
-            Mix.Error -> :ok
-          end
+          capture_io(:stderr, fn ->
+            try do
+              Config.run(["validate", "--project-dir", project_dir])
+            rescue
+              Mix.Error -> :ok
+            end
+          end)
         end)
-      end)
+
+      stderr =
+        capture_io(:stderr, fn ->
+          capture_io(:stdio, fn ->
+            try do
+              Config.run(["validate", "--project-dir", project_dir])
+            rescue
+              Mix.Error -> :ok
+            end
+          end)
+        end)
 
       output = stdout <> stderr
 
@@ -253,13 +257,13 @@ defmodule Mix.Tasks.Lemon.ConfigTest do
       model = "valid-model"
       """)
 
-      # Should not exit
-      capture_io(fn ->
-        Config.run(["validate"])
-      end)
+      # Returns normally (no Mix.Error/exit) and reports success.
+      output =
+        capture_io(fn ->
+          assert :ok = Config.run(["validate"])
+        end)
 
-      # If we get here, no exit was called
-      assert true
+      assert output =~ "Configuration is valid"
     end
 
     test "raises Mix.Error on invalid config", %{mock_home: mock_home} do

@@ -665,19 +665,12 @@ defmodule CodingAgent.BashEdgeCasesTest do
       assert text =~ "partial"
     end
 
-    test "error result from BashExecutor", %{tmp_dir: _tmp_dir} do
-      # Test error handling - invalid cwd should cause an error
-      result = BashExecutor.execute("echo test", "/nonexistent/path/xyz")
-
-      case result do
-        {:error, _reason} ->
-          # Expected - directory doesn't exist
-          assert true
-
-        {:ok, res} ->
-          # Some systems may handle this differently
-          assert res.exit_code != 0 or res.cancelled == true
-      end
+    test "a missing cwd fails the command before it runs", %{tmp_dir: _tmp_dir} do
+      # The executor prefixes `cd <cwd> &&`, so the shell reports the failure.
+      assert {:ok, result} = BashExecutor.execute("echo ran", "/nonexistent/path/xyz")
+      assert result.exit_code != 0
+      assert result.output =~ "/nonexistent/path/xyz"
+      refute result.output =~ ~r/^ran$/m
     end
   end
 

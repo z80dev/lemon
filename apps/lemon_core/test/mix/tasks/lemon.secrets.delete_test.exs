@@ -156,21 +156,19 @@ defmodule Mix.Tasks.Lemon.Secrets.DeleteTest do
 
   describe "error handling" do
     test "raises Mix.Error when Secrets.delete returns an error" do
-      # Force an error by using an invalid secret name that will fail normalization
-      # Names with special characters that fail normalization will return {:error, :invalid_secret_name}
-      # But wait, looking at the implementation, normalize_name only checks for empty/whitespace
-      # So we need another way to trigger an error
+      assert {:ok, _} = Secrets.set("test_secret_delete_error", "test_value")
 
-      # Actually, looking at Secrets.delete more carefully:
-      # - normalize_name can return {:error, :invalid_secret_name}
-      # - normalize_owner can return {:error, :invalid_owner}
+      # A corrupt receipt row makes the delete transaction fail closed.
+      :ok =
+        Store.put(Secrets.table(), {Secrets.default_owner(), "corrupt_receipts"}, %{
+          receipts: :corrupt
+        })
 
-      # Test with an invalid owner would require setting up a scenario where owner is empty
-      # This is difficult to trigger from the task level since there's no --owner option
+      assert_raise Mix.Error, "Failed to delete secret: :secret_store_failed", fn ->
+        capture_io(fn -> Delete.run(["test_secret_delete_error"]) end)
+      end
 
-      # Instead, let's verify the error handling path works by checking the code structure
-      # The task properly handles {:error, reason} from Secrets.delete
-      assert true
+      assert Secrets.exists?("test_secret_delete_error", env_fallback: false)
     end
   end
 

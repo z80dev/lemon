@@ -9,14 +9,12 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
   4. Session persistence with real messages
 
   Configuration is done via environment variables - see LemonAi.Test.IntegrationConfig.
+  Every test fails, never passes, when that configuration is missing.
 
   To run these tests:
 
-      # Run all agent loop integration tests
-      source .env.kimi && mix test apps/coding_agent/test/coding_agent/agent_loop_integration_test.exs --include integration
-
-      # Run with specific tag
-      source .env.kimi && mix test --include integration --only agent_loop
+      source .env.kimi && LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \\
+        scripts/test path apps/coding_agent/test/coding_agent/agent_loop_integration_test.exs --include integration
   """
 
   use ExUnit.Case, async: false
@@ -52,15 +50,6 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
     merged_opts = Keyword.merge(base_opts, opts)
     {:ok, session} = Session.start_link(merged_opts)
     session
-  end
-
-  defp skip_unless_configured do
-    unless IntegrationConfig.configured?() do
-      IO.puts(IntegrationConfig.skip_message())
-      :skip
-    else
-      :ok
-    end
   end
 
   defp subscribe_and_collect_events(session, timeout) do
@@ -131,6 +120,8 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
     :ok
   end
 
+  setup do: IntegrationConfig.require_configured!()
+
   # ============================================================================
   # Basic Agent Loop Tests
   # ============================================================================
@@ -138,93 +129,75 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
   describe "Basic Agent Loop" do
     @tag :tmp_dir
     test "completes a simple prompt through the full stack", %{tmp_dir: tmp_dir} do
-      case skip_unless_configured() do
-        :skip ->
-          assert true
+      session = start_session(cwd: tmp_dir)
+      :ok = Session.prompt(session, "What is 2 + 2? Reply with just the number.")
 
-        :ok ->
-          session = start_session(cwd: tmp_dir)
-          :ok = Session.prompt(session, "What is 2 + 2? Reply with just the number.")
+      case wait_for_response(session) do
+        {:ok, msg, _events} ->
+          text = get_text(msg)
+          assert String.contains?(text, "4")
 
-          case wait_for_response(session) do
-            {:ok, msg, _events} ->
-              text = get_text(msg)
-              assert String.contains?(text, "4")
-
-            {:error, reason, events} ->
-              flunk("Agent loop failed: #{inspect(reason)}, events: #{inspect(events)}")
-          end
+        {:error, reason, events} ->
+          flunk("Agent loop failed: #{inspect(reason)}, events: #{inspect(events)}")
       end
     end
 
     @tag :tmp_dir
     test "streams response events correctly", %{tmp_dir: tmp_dir} do
-      case skip_unless_configured() do
-        :skip ->
-          assert true
+      session = start_session(cwd: tmp_dir)
+      :ok = Session.prompt(session, "Say hello.")
 
-        :ok ->
-          session = start_session(cwd: tmp_dir)
-          :ok = Session.prompt(session, "Say hello.")
+      case wait_for_response(session) do
+        {:ok, _msg, events} ->
+          # Should have agent_start
+          assert Enum.any?(events, &match?({:agent_start}, &1))
 
-          case wait_for_response(session) do
-            {:ok, _msg, events} ->
-              # Should have agent_start
-              assert Enum.any?(events, &match?({:agent_start}, &1))
+          # Should have turn_start
+          assert Enum.any?(events, &match?({:turn_start}, &1))
 
-              # Should have turn_start
-              assert Enum.any?(events, &match?({:turn_start}, &1))
+          # Should have message_start for user
+          assert Enum.any?(events, fn
+                   {:message_start, %LemonAi.Types.UserMessage{}} -> true
+                   _ -> false
+                 end)
 
-              # Should have message_start for user
-              assert Enum.any?(events, fn
-                       {:message_start, %LemonAi.Types.UserMessage{}} -> true
-                       _ -> false
-                     end)
+          # Should have message_start for assistant
+          assert Enum.any?(events, fn
+                   {:message_start, %AssistantMessage{}} -> true
+                   _ -> false
+                 end)
 
-              # Should have message_start for assistant
-              assert Enum.any?(events, fn
-                       {:message_start, %AssistantMessage{}} -> true
-                       _ -> false
-                     end)
+          # Should have message_update events (streaming)
+          assert Enum.any?(events, &match?({:message_update, _}, &1))
 
-              # Should have message_update events (streaming)
-              assert Enum.any?(events, &match?({:message_update, _}, &1))
-
-            {:error, reason, _events} ->
-              flunk("Agent loop failed: #{inspect(reason)}")
-          end
+        {:error, reason, _events} ->
+          flunk("Agent loop failed: #{inspect(reason)}")
       end
     end
 
     @tag :tmp_dir
     test "handles multi-turn conversation", %{tmp_dir: tmp_dir} do
-      case skip_unless_configured() do
-        :skip ->
-          assert true
+      session = start_session(cwd: tmp_dir)
 
-        :ok ->
-          session = start_session(cwd: tmp_dir)
+      # First turn
+      :ok = Session.prompt(session, "My favorite color is blue. Remember this.")
 
-          # First turn
-          :ok = Session.prompt(session, "My favorite color is blue. Remember this.")
+      case wait_for_response(session) do
+        {:ok, _msg, _events} ->
+          # Second turn - should remember context
+          :ok = Session.prompt(session, "What is my favorite color?")
 
           case wait_for_response(session) do
-            {:ok, _msg, _events} ->
-              # Second turn - should remember context
-              :ok = Session.prompt(session, "What is my favorite color?")
-
-              case wait_for_response(session) do
-                {:ok, msg, _events} ->
-                  text = String.downcase(get_text(msg))
-                  assert text =~ "blue"
-
-                {:error, reason, _events} ->
-                  flunk("Second turn failed: #{inspect(reason)}")
-              end
+            {:ok, msg, _events} ->
+              text = String.downcase(get_text(msg))
+              assert text =~ "blue"
 
             {:error, reason, _events} ->
-              flunk("First turn failed: #{inspect(reason)}")
+              flunk("Second turn failed: #{inspect(reason)}")
           end
+
+        {:error, reason, _events} ->
+          flunk("First turn failed: #{inspect(reason)}")
       end
     end
   end
@@ -236,138 +209,120 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
   describe "Tool Execution" do
     @tag :tmp_dir
     test "model can call read tool and get file contents", %{tmp_dir: tmp_dir} do
-      case skip_unless_configured() do
-        :skip ->
-          assert true
+      # Create a test file
+      test_file = Path.join(tmp_dir, "test_data.txt")
+      File.write!(test_file, "The secret number is 42.")
 
-        :ok ->
-          # Create a test file
-          test_file = Path.join(tmp_dir, "test_data.txt")
-          File.write!(test_file, "The secret number is 42.")
+      session = start_session(cwd: tmp_dir)
 
-          session = start_session(cwd: tmp_dir)
+      prompt = """
+      Read the file test_data.txt and tell me what the secret number is.
+      Just reply with the number.
+      """
 
-          prompt = """
-          Read the file test_data.txt and tell me what the secret number is.
-          Just reply with the number.
-          """
+      :ok = Session.prompt(session, prompt)
 
-          :ok = Session.prompt(session, prompt)
+      case wait_for_response(session, 60_000) do
+        {:ok, msg, events} ->
+          # Should have tool call events (may be nested in message_update)
+          tool_events =
+            Enum.filter(events, fn
+              {:tool_start, _, _} -> true
+              {:tool_end, _, _} -> true
+              {:message_update, {:tool_call_start, _, _}} -> true
+              {:message_update, {:tool_call_end, _, _}} -> true
+              _ -> false
+            end)
 
-          case wait_for_response(session, 60_000) do
-            {:ok, msg, events} ->
-              # Should have tool call events (may be nested in message_update)
-              tool_events =
-                Enum.filter(events, fn
-                  {:tool_start, _, _} -> true
-                  {:tool_end, _, _} -> true
-                  {:message_update, {:tool_call_start, _, _}} -> true
-                  {:message_update, {:tool_call_end, _, _}} -> true
-                  _ -> false
-                end)
+          # Model should have called the read tool
+          assert tool_events != [],
+                 "Expected tool call events, got: #{inspect(Enum.take(events, 20))}"
 
-              # Model should have called the read tool
-              assert tool_events != [],
-                     "Expected tool call events, got: #{inspect(Enum.take(events, 20))}"
+          # Final response should contain 42
+          text = get_text(msg)
+          assert String.contains?(text, "42"), "Expected '42' in response, got: #{text}"
 
-              # Final response should contain 42
-              text = get_text(msg)
-              assert String.contains?(text, "42"), "Expected '42' in response, got: #{text}"
-
-            {:error, reason, events} ->
-              flunk(
-                "Tool execution failed: #{inspect(reason)}, events: #{inspect(Enum.take(events, 10))}"
-              )
-          end
+        {:error, reason, events} ->
+          flunk(
+            "Tool execution failed: #{inspect(reason)}, events: #{inspect(Enum.take(events, 10))}"
+          )
       end
     end
 
     @tag :tmp_dir
     test "model can call write tool to create a file", %{tmp_dir: tmp_dir} do
-      case skip_unless_configured() do
-        :skip ->
-          assert true
+      session = start_session(cwd: tmp_dir)
 
-        :ok ->
-          session = start_session(cwd: tmp_dir)
+      prompt = """
+      Create a file called greeting.txt with the content "Hello from the AI!".
+      After creating it, confirm the file was created.
+      """
 
-          prompt = """
-          Create a file called greeting.txt with the content "Hello from the AI!".
-          After creating it, confirm the file was created.
-          """
+      :ok = Session.prompt(session, prompt)
 
-          :ok = Session.prompt(session, prompt)
+      case wait_for_response(session, 60_000) do
+        {:ok, _msg, events} ->
+          # Should have tool call events for write (may be nested in message_update)
+          tool_events =
+            Enum.filter(events, fn
+              {:tool_start, _, _} -> true
+              {:tool_end, _, _} -> true
+              {:message_update, {:tool_call_start, _, _}} -> true
+              {:message_update, {:tool_call_end, _, _}} -> true
+              _ -> false
+            end)
 
-          case wait_for_response(session, 60_000) do
-            {:ok, _msg, events} ->
-              # Should have tool call events for write (may be nested in message_update)
-              tool_events =
-                Enum.filter(events, fn
-                  {:tool_start, _, _} -> true
-                  {:tool_end, _, _} -> true
-                  {:message_update, {:tool_call_start, _, _}} -> true
-                  {:message_update, {:tool_call_end, _, _}} -> true
-                  _ -> false
-                end)
+          assert tool_events != [], "Expected tool call events"
 
-              assert tool_events != [], "Expected tool call events"
+          # File should exist
+          expected_file = Path.join(tmp_dir, "greeting.txt")
+          assert File.exists?(expected_file), "File was not created at #{expected_file}"
 
-              # File should exist
-              expected_file = Path.join(tmp_dir, "greeting.txt")
-              assert File.exists?(expected_file), "File was not created at #{expected_file}"
+          # Content should be correct
+          content = File.read!(expected_file)
+          assert content =~ "Hello"
 
-              # Content should be correct
-              content = File.read!(expected_file)
-              assert content =~ "Hello"
-
-            {:error, reason, _events} ->
-              flunk("Tool execution failed: #{inspect(reason)}")
-          end
+        {:error, reason, _events} ->
+          flunk("Tool execution failed: #{inspect(reason)}")
       end
     end
 
     @tag :tmp_dir
     test "model can call find tool to locate files", %{tmp_dir: tmp_dir} do
-      case skip_unless_configured() do
-        :skip ->
-          assert true
+      # Create some test files
+      File.write!(Path.join(tmp_dir, "file1.ex"), "defmodule One do end")
+      File.write!(Path.join(tmp_dir, "file2.ex"), "defmodule Two do end")
+      File.write!(Path.join(tmp_dir, "readme.md"), "# README")
 
-        :ok ->
-          # Create some test files
-          File.write!(Path.join(tmp_dir, "file1.ex"), "defmodule One do end")
-          File.write!(Path.join(tmp_dir, "file2.ex"), "defmodule Two do end")
-          File.write!(Path.join(tmp_dir, "readme.md"), "# README")
+      session = start_session(cwd: tmp_dir)
 
-          session = start_session(cwd: tmp_dir)
+      prompt = """
+      Find all .ex files in the current directory using the find tool.
+      List their names.
+      """
 
-          prompt = """
-          Find all .ex files in the current directory using the find tool.
-          List their names.
-          """
+      :ok = Session.prompt(session, prompt)
 
-          :ok = Session.prompt(session, prompt)
+      case wait_for_response(session, 60_000) do
+        {:ok, msg, events} ->
+          text = String.downcase(get_text(msg))
+          # Should either mention the .ex files or have tool events showing find was used
+          has_file_names = text =~ "file1" or text =~ "file2" or text =~ ".ex"
 
-          case wait_for_response(session, 60_000) do
-            {:ok, msg, events} ->
-              text = String.downcase(get_text(msg))
-              # Should either mention the .ex files or have tool events showing find was used
-              has_file_names = text =~ "file1" or text =~ "file2" or text =~ ".ex"
+          tool_events =
+            Enum.filter(events, fn
+              {:tool_start, _, _} -> true
+              {:tool_end, _, _} -> true
+              {:message_update, {:tool_call_start, _, _}} -> true
+              {:message_update, {:tool_call_end, _, _}} -> true
+              _ -> false
+            end)
 
-              tool_events =
-                Enum.filter(events, fn
-                  {:tool_start, _, _} -> true
-                  {:tool_end, _, _} -> true
-                  {:message_update, {:tool_call_start, _, _}} -> true
-                  {:message_update, {:tool_call_end, _, _}} -> true
-                  _ -> false
-                end)
+          assert has_file_names or tool_events != [],
+                 "Expected file names in response or tool events, got text: #{text}"
 
-              assert has_file_names or tool_events != [],
-                     "Expected file names in response or tool events, got text: #{text}"
-
-            {:error, reason, _events} ->
-              flunk("Tool execution failed: #{inspect(reason)}")
-          end
+        {:error, reason, _events} ->
+          flunk("Tool execution failed: #{inspect(reason)}")
       end
     end
   end
@@ -379,72 +334,60 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
   describe "Session Persistence" do
     @tag :tmp_dir
     test "messages are persisted to session file", %{tmp_dir: tmp_dir} do
-      case skip_unless_configured() do
-        :skip ->
-          assert true
+      session_file = Path.join(tmp_dir, "test_session.jsonl")
+      session = start_session(cwd: tmp_dir, session_file: session_file)
 
-        :ok ->
-          session_file = Path.join(tmp_dir, "test_session.jsonl")
-          session = start_session(cwd: tmp_dir, session_file: session_file)
+      :ok = Session.prompt(session, "Say 'hello test'.")
 
-          :ok = Session.prompt(session, "Say 'hello test'.")
+      case wait_for_response(session) do
+        {:ok, _msg, _events} ->
+          # Save the session
+          :ok = Session.save(session)
 
-          case wait_for_response(session) do
-            {:ok, _msg, _events} ->
-              # Save the session
-              :ok = Session.save(session)
+          # File should exist and have content
+          assert File.exists?(session_file)
+          content = File.read!(session_file)
+          assert content != ""
 
-              # File should exist and have content
-              assert File.exists?(session_file)
-              content = File.read!(session_file)
-              assert content != ""
+          # Should contain both user and assistant messages
+          assert content =~ "user"
+          assert content =~ "assistant"
 
-              # Should contain both user and assistant messages
-              assert content =~ "user"
-              assert content =~ "assistant"
-
-            {:error, reason, _events} ->
-              flunk("Session failed: #{inspect(reason)}")
-          end
+        {:error, reason, _events} ->
+          flunk("Session failed: #{inspect(reason)}")
       end
     end
 
     @tag :tmp_dir
     test "session can be resumed from file", %{tmp_dir: tmp_dir} do
-      case skip_unless_configured() do
-        :skip ->
-          assert true
+      session_file = Path.join(tmp_dir, "resume_test.jsonl")
 
-        :ok ->
-          session_file = Path.join(tmp_dir, "resume_test.jsonl")
+      # First session
+      session1 = start_session(cwd: tmp_dir, session_file: session_file)
 
-          # First session
-          session1 = start_session(cwd: tmp_dir, session_file: session_file)
+      :ok = Session.prompt(session1, "My secret word is 'banana'. Remember it.")
 
-          :ok = Session.prompt(session1, "My secret word is 'banana'. Remember it.")
+      case wait_for_response(session1) do
+        {:ok, _msg, _events} ->
+          :ok = Session.save(session1)
+          GenServer.stop(session1)
 
-          case wait_for_response(session1) do
-            {:ok, _msg, _events} ->
-              :ok = Session.save(session1)
-              GenServer.stop(session1)
+          # Resume session
+          session2 = start_session(cwd: tmp_dir, session_file: session_file)
 
-              # Resume session
-              session2 = start_session(cwd: tmp_dir, session_file: session_file)
+          :ok = Session.prompt(session2, "What was my secret word?")
 
-              :ok = Session.prompt(session2, "What was my secret word?")
-
-              case wait_for_response(session2) do
-                {:ok, msg, _events} ->
-                  text = String.downcase(get_text(msg))
-                  assert text =~ "banana", "Expected 'banana' in response, got: #{text}"
-
-                {:error, reason, _events} ->
-                  flunk("Resumed session failed: #{inspect(reason)}")
-              end
+          case wait_for_response(session2) do
+            {:ok, msg, _events} ->
+              text = String.downcase(get_text(msg))
+              assert text =~ "banana", "Expected 'banana' in response, got: #{text}"
 
             {:error, reason, _events} ->
-              flunk("Initial session failed: #{inspect(reason)}")
+              flunk("Resumed session failed: #{inspect(reason)}")
           end
+
+        {:error, reason, _events} ->
+          flunk("Initial session failed: #{inspect(reason)}")
       end
     end
   end
@@ -456,43 +399,26 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
   describe "Error Handling" do
     @tag :tmp_dir
     test "handles abort gracefully during streaming", %{tmp_dir: tmp_dir} do
-      case skip_unless_configured() do
-        :skip ->
-          assert true
+      session = start_session(cwd: tmp_dir)
 
-        :ok ->
-          session = start_session(cwd: tmp_dir)
+      # Subscribe to events
+      _ref = Session.subscribe(session)
 
-          # Subscribe to events
-          _ref = Session.subscribe(session)
+      # Start a prompt that might take a while
+      :ok = Session.prompt(session, "Count from 1 to 100 slowly.")
 
-          # Start a prompt that might take a while
-          :ok = Session.prompt(session, "Count from 1 to 100 slowly.")
+      # Wait a bit for streaming to start
+      Process.sleep(500)
 
-          # Wait a bit for streaming to start
-          Process.sleep(500)
+      # Abort
+      :ok = Session.abort(session)
 
-          # Abort
-          :ok = Session.abort(session)
-
-          # Should not crash, and is_streaming should be false eventually
-          # Retry a few times as abort may take some time to propagate
-          result =
-            Enum.find_value(1..10, {:error, :timeout}, fn _ ->
-              Process.sleep(200)
-              state = Session.get_state(session)
-              if state.is_streaming == false, do: {:ok, state}, else: nil
-            end)
-
-          case result do
-            {:ok, _state} ->
-              assert true
-
-            {:error, :timeout} ->
-              state = Session.get_state(session)
-              assert state.is_streaming == false, "is_streaming should be false after abort"
-          end
-      end
+      # Abort may take a moment to propagate; the session must stop streaming.
+      assert Enum.any?(1..10, fn _ ->
+               Process.sleep(200)
+               Session.get_state(session).is_streaming == false
+             end),
+             "is_streaming should be false after abort"
     end
   end
 end

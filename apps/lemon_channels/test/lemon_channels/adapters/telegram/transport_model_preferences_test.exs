@@ -79,7 +79,7 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapterTest do
 
     :ok = ModelPolicyAdapter.put_default_thinking_preference("default", chat_id, nil, "high")
 
-    assert true == ModelPolicyAdapter.clear_default_thinking_preference("default", chat_id, nil)
+    assert ModelPolicyAdapter.clear_default_thinking_preference("default", chat_id, nil) == true
     assert nil == ModelPolicyAdapter.default_thinking_preference("default", chat_id, nil)
     assert nil == ModelPolicyAdapter.default_model_preference("default", chat_id, nil)
     assert nil == ModelPolicy.get(ModelPolicyAdapter.route_for("default", chat_id, nil))
