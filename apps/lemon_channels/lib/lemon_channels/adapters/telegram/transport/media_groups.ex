@@ -62,7 +62,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MediaGroups do
 
         timer_ref =
           Process.send_after(
-            self(),
+            LemonChannels.Adapters.Telegram.Transport.Owner.pid(),
             {:media_group_flush, group_key, debounce_ref},
             debounce_ms
           )
@@ -81,7 +81,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MediaGroups do
 
         timer_ref =
           Process.send_after(
-            self(),
+            LemonChannels.Adapters.Telegram.Transport.Owner.pid(),
             {:media_group_flush, group_key, debounce_ref},
             debounce_ms
           )

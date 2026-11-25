@@ -9,7 +9,8 @@ defmodule Mix.Tasks.Lemon.Workspace do
     mix lemon.workspace init [--workspace-dir PATH]
 
   This creates missing files under `~/.lemon/agent/workspace` using
-  the bundled templates. Existing files are left untouched.
+  the bundled templates, including templates deleted since sessions seeded
+  the workspace (sessions seed it only once). Existing files are left untouched.
   """
 
   alias CodingAgent.Workspace

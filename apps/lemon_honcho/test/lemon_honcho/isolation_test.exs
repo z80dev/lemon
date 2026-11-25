@@ -135,7 +135,7 @@ defmodule LemonHoncho.IsolationTest do
   use ExUnit.Case, async: false
 
   alias LemonAgent.Types.AgentToolResult
-  alias LemonHoncho.{Config, MemoryProvider, SessionManager}
+  alias LemonHoncho.{Config, SessionManager}
   alias LemonHoncho.IsolationTest.FakeHoncho
   alias LemonHoncho.Tools.Search
   alias LemonMemory.Document
@@ -280,56 +280,6 @@ defmodule LemonHoncho.IsolationTest do
 
       assert_received {:fake_honcho, "POST", ["v3", "workspaces", _ws, "search"], body}
       assert is_map(body["filters"])
-    end
-  end
-
-  describe "MemoryProvider.search/2" do
-    test "drops documents that do not belong to the requesting peer and agent",
-         %{workspace: workspace} do
-      alice = request(@alice_key, workspace, @alice)
-      upload(alice, "alice note about lunch")
-      SessionManager.context_for(alice)
-      {:ok, honcho_session} = SessionManager.honcho_session_id(cache_key(alice))
-
-      # Foreign material in the same Honcho session: another sender, another
-      # profile, and a pre-isolation message with no owner at all.
-      FakeHoncho.seed(honcho_session, %{
-        "content" => "bob note about lunch",
-        "peer_id" => "telegram_222",
-        "metadata" => %{"lemon_agent_id" => "demo", "lemon_user_peer" => "telegram_222"}
-      })
-
-      FakeHoncho.seed(honcho_session, %{
-        "content" => "other profile note about lunch",
-        "peer_id" => "telegram_111",
-        "metadata" => %{"lemon_agent_id" => "other", "lemon_user_peer" => "telegram_111"}
-      })
-
-      FakeHoncho.seed(honcho_session, %{"content" => "legacy note about lunch", "peer_id" => "x"})
-
-      documents =
-        MemoryProvider.search("lunch",
-          scope: :session,
-          scope_key: @alice_key,
-          channel_identity: @alice
-        )
-
-      # Alice's own exchange (her message and the assistant's reply to her) only.
-      assert documents |> Enum.map(& &1.answer_summary) |> Enum.sort() ==
-               ["alice note about lunch", "noted"]
-
-      assert Enum.all?(documents, &(&1.session_key == @alice_key and &1.agent_id == "demo"))
-    end
-
-    test "scopes that cannot be partitioned by peer return [] without a request" do
-      FakeHoncho.seed("workspace", %{"content" => "bob note about lunch", "peer_id" => "bob"})
-
-      for scope <- [:all, :workspace, :agent] do
-        assert MemoryProvider.search("lunch", scope: scope, scope_key: "demo") == []
-      end
-
-      assert MemoryProvider.search("lunch", scope: :session, scope_key: "never-served") == []
-      refute_received {:fake_honcho, "POST", _segments, %{"query" => _}}
     end
   end
 

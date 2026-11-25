@@ -158,6 +158,14 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Fixed
 
+- One-shot commands boot `:lemon_core` in client mode through
+  `LemonCore.CLI.start/2` (context, learn, learning, mcp, update, migrate,
+  providers and onboarding included), so they no longer expire a running
+  daemon's approvals or run its sweeps, reloader, run history or SIGTERM trap;
+  `doctor`, `config show`/`validate` and `secrets status`/`list`/`check` open the
+  store read-only. `node join` keeps the full runtime. Hermes session import
+  confirms each memory write and reports unconfirmed ones as `outcome_unknown`
+  (#667).
 - Source and packaged launchers discover systemd user units under an absolute
   `XDG_CONFIG_HOME`, while invalid relative values fall back to `$HOME/.config`
   as required by the XDG base-directory specification.

@@ -50,9 +50,9 @@ counter. Unrelated messages in the same mailbox conservatively consume capacity.
 | Native session → direct subscribers | Defaults to 256 queued entries and 1 MiB per event; overflow fences that subscription and explicitly signals recovery. At most one compact terminal notification is reserved in addition to the overflow marker, preserving a separate reconstructable completion path. |
 | Native session → executor runner | Uses the bounded direct subscription rather than an unused duplicate stream; terminal recovery rereads the native owner instead of relying on every delta. Session subscription streams also bound mailbox ingress and the existing internal EventStream queue. |
 | Bus → control-plane EventBridge → operator WebSocket | Defaults to 256 queued entries and 1 MiB per event at bridge ingress and each recipient; no task is created for every broadcast. Overflow sends `stream.resync` or disconnects the lagging socket; reconnect reauthenticates before reading snapshots. |
-| Bus → browser chat pane | One shared 256-entry handle across session/approval/system topics, 65,536 bytes per message, and one overflow marker. Live answer segments cap at 65,536 bytes; transcript/tool caches cap at 400 items and terminal tombstones at 128 runs. |
+| Bus → browser chat pane | One shared 256-entry handle across the session, `session_events`, approval and system topics, 1 MiB per message, and one overflow marker. Text, tools and completion come only from `chat.history` plus sequenced `session.event` batches continuing the pane's cursor (first from `sessions.snapshot` `consistency.eventCursor`); unsequenced deltas are ignored. A cursor gap or overflow replays `sessions.events` from the cursor without touching rendered text; only an expired cursor or changed stream reloads history. The snapshot supplies state only, read at mount and at most once per run, at its end. Live answer segments cap at 65,536 bytes (the full text is reloaded from history when the run ends); transcript/tool caches cap at 400 items and terminal tombstones at 128 runs. |
 | Router answer/status coalescers | Tagged pre-mailbox admission defaults to 256 entries / 65,536 bytes per event. Overflow fences transient rendering and signals session resync; answer finalization requires canonical `final_text` after overflow. Status finalization records an interruption hint instead of claiming a complete action stream. Finalized gates reject delayed old envelopes; 128 recent terminal run IDs fence late API calls. The existing distinct-action history is not a fixed-count buffer; the ingress bound is not a claim that a run with arbitrarily many distinct actions retains constant memory. |
-| TUI / browser after dropped progress | Both consume `sessions.snapshot`; active recovered text is replaced from authority, never appended to an uncertain token prefix. No offline mutation is replayed. |
+| TUI after dropped progress | Consumes `sessions.snapshot`; active recovered text is replaced from authority, never appended to an uncertain token prefix. No offline mutation is replayed. |
 
 ### Reliable truth and consistency
 
@@ -245,7 +245,7 @@ The busiest topic and the only one whose subscribers span the umbrella.
 | `:run_completed` (typed) | `LemonGateway.Run` (including admission failures); synthetic completions from `LemonRouter.RunProcess`, `RunProcess.Watchdog`, and `SessionCoordinator` | `Events.RunCompleted` wrapping `Events.Completion`; synthetic ones carry `meta.synthetic == true` |
 | `:run_failed` (typed) | `LemonRouter.RunProcess` (abnormal termination) | `Events.RunFailed` (`run_id`, `session_key`, `reason`) |
 | `:run_phase_changed` (typed) | `LemonRouter.PhasePublisher` (the only publisher; the gateway tracks phases but does not broadcast them) | `Events.RunPhaseChanged`, built with `RunPhaseChanged.build/1` |
-| `:engine_action` (typed) | `LemonGateway.Run`; `CodingAgent.Tools.Task.LiveBridge` and `Task.Async` for projected child actions; `LemonCore.Event.engine_reasoning/1` | `Events.EngineAction` wrapping `Events.Action` |
+| `:engine_action` (typed) | `LemonGateway.Run`; `CodingAgent.TaskRuntime.Child` (a task's owner) and `Task.Async` for projected child actions; `LemonCore.Event.engine_reasoning/1` | `Events.EngineAction` wrapping `Events.Action` |
 | `:engine_started`, `:engine_completed`, `:engine_event` | `LemonGateway.Run` (native executor events) | plain maps; `:engine_event` is the escape hatch for unrecognised native events (not registered) |
 | `:checkpoint_created` / `_restored` / `_deleted` | `LemonCore.Checkpoint`; remote ones relayed by `LemonGateway.Run` | map (checkpoint id/kind, tool, action, path counts) — also on `session:<key>` (not registered) |
 | `:task_started` / `_completed` / `_error` / `_timeout` / `_aborted` | `CodingAgent.Tools.Task.Async` | map (`task_id`, `run_id`, `parent_run_id`, `session_key`, `agent_id`, …); published to the child run and the parent run |
@@ -257,7 +257,7 @@ requests as direct request/reply calls, not bus events (`:no_client`, `:client_d
 `:timeout`).
 
 Subscribers include `LemonRouter.RunProcess` (also forwards run events to the session
-topic), `LemonRouter.AsyncTaskSurfaceSubscriber`, `CodingAgent.Tools.Task.LiveBridge`,
+topic), `LemonRouter.AsyncTaskSurfaceSubscriber`, `CodingAgent.TaskRuntime.Child`,
 `CodingAgent.Tools.Agent` (completion waits), the execution-node worker
 (`CodingAgent.ExecutionNode.Worker`), `LemonChannels.TypingIndicator`,
 `LemonChannels.UserPromptSurface`, the Discord/Telegram transports,
@@ -315,6 +315,11 @@ transports, and `LemonControlPlane.EventBridge` (dynamic).
 finalize-run hook and `CodingAgent.Session.terminate/2` through
 `LemonCore.ExecApprovalExpiry`). It is immediate and grants nothing; `:timeout` stays
 the clock deadline. Channel prompts and TUI records are edited to say the run ended.
+
+Terminal approval records (resolved, denied, expired, cancelled, unknown) are
+retained for 24 hours (`config :lemon_core, :exec_approval_receipt_retention_ms`)
+and then swept. Within that window a verified resolver gets the replayed receipt;
+afterwards resolving the ID returns `not_found`.
 
 `decision: :outcome_unknown` means a store write timed out while resolving: the
 completion receipt or the standing grant may still apply. The waiting request

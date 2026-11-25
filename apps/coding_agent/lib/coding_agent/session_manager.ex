@@ -10,9 +10,10 @@ defmodule CodingAgent.SessionManager do
   syncs effectful tool intents before dispatch. Tool results are appended without
   a per-result sync.
 
-  A rebuildable SQLite metadata index keeps listing from reopening unchanged
-  journals. Loading streams records for every journal size, retaining only the
-  materialized session plus one input record (not the entire JSONL source).
+  Appends, checkpoints and rewrites touch only the journal: no lock or metadata
+  index sits on the append path. Loading streams records for every journal size,
+  retaining only the materialized session plus one input record (not the entire
+  JSONL source).
 
   ## Tree Structure
 
@@ -27,7 +28,6 @@ defmodule CodingAgent.SessionManager do
   """
 
   alias CodingAgent.Session.BudgetLedger
-  alias CodingAgent.SessionIndex
   alias CodingAgent.SessionManager.{Session, SessionEntry, SessionHeader}
 
   @current_version 3
@@ -70,7 +70,8 @@ defmodule CodingAgent.SessionManager do
     - `:compaction` - summary, first_kept_entry_id, tokens_before, details, from_hook
     - `:branch_summary` - from_id, summary, details, from_hook
     - `:label` - target_id, label (string or nil to remove)
-    - `:session_info` - name field
+    - `:session_info` - name field (retired: nothing writes it; older journals'
+      entries are read and preserved on rewrite)
     - `:custom` - custom_type, data fields
     - `:custom_message` - custom_type, content, display, details
     """
@@ -234,17 +235,6 @@ defmodule CodingAgent.SessionManager do
       }
     end
 
-    @doc "Create a session info entry"
-    def session_info(name, opts \\ []) do
-      %__MODULE__{
-        type: :session_info,
-        name: name,
-        id: Keyword.get(opts, :id),
-        parent_id: Keyword.get(opts, :parent_id),
-        timestamp: Keyword.get(opts, :timestamp, System.system_time(:millisecond))
-      }
-    end
-
     @doc "Create a custom entry"
     def custom(custom_type, data, opts \\ []) do
       %__MODULE__{
@@ -388,11 +378,7 @@ defmodule CodingAgent.SessionManager do
       ]
       |> Enum.join("\n")
 
-    with :ok <- File.mkdir_p(dir) do
-      SessionIndex.mutate(path, {:snapshot, session.header, session.entries_rev}, fn ->
-        atomic_write(path, lines <> "\n")
-      end)
-    end
+    with :ok <- File.mkdir_p(dir), do: atomic_write(path, lines <> "\n")
   end
 
   defp atomic_write(path, content) do
@@ -448,11 +434,9 @@ defmodule CodingAgent.SessionManager do
         "checkpointEntryCount" => map_size(session.by_id)
       })
 
-    SessionIndex.mutate(session.file_path, :checkpoint, fn ->
-      with :ok <- :file.write(session.append_device, [marker, "\n"]),
-           :ok <- :file.datasync(session.append_device),
-           do: :ok
-    end)
+    with :ok <- :file.write(session.append_device, [marker, "\n"]),
+         :ok <- :file.datasync(session.append_device),
+         do: :ok
   end
 
   @doc """
@@ -631,17 +615,15 @@ defmodule CodingAgent.SessionManager do
   """
   @spec append_to_file(String.t(), SessionEntry.t()) :: :ok | {:error, term()}
   def append_to_file(path, %SessionEntry{} = entry) do
-    SessionIndex.mutate(path, {:append, entry}, fn ->
-      with {:ok, device} <- :file.open(path, [:append, :raw, :binary]) do
-        try do
-          with :ok <- :file.write(device, [encode_entry(entry), "\n"]),
-               :ok <- :file.datasync(device),
-               do: :ok
-        after
-          :file.close(device)
-        end
+    with {:ok, device} <- :file.open(path, [:append, :raw, :binary]) do
+      try do
+        with :ok <- :file.write(device, [encode_entry(entry), "\n"]),
+             :ok <- :file.datasync(device),
+             do: :ok
+      after
+        :file.close(device)
       end
-    end)
+    end
   end
 
   @doc """
@@ -672,9 +654,7 @@ defmodule CodingAgent.SessionManager do
     result =
       cond do
         session.append_device ->
-          SessionIndex.mutate(session.file_path, {:append, entry}, fn ->
-            :file.write(session.append_device, [encode_entry(entry), "\n"])
-          end)
+          :file.write(session.append_device, [encode_entry(entry), "\n"])
 
         session.file_path ->
           append_to_file(session.file_path, entry)
@@ -1040,9 +1020,15 @@ defmodule CodingAgent.SessionManager do
     |> Enum.reject(&is_nil/1)
   end
 
-  defp entry_to_message(%{type: :message, message: message}), do: message
+  @doc """
+  The journal message map an entry contributes to the model context, or nil for
+  entries that contribute none. Read it with
+  `CodingAgent.Session.MessageSerialization.deserialize_message/1`.
+  """
+  @spec entry_to_message(SessionEntry.t()) :: map() | nil
+  def entry_to_message(%{type: :message, message: message}), do: message
 
-  defp entry_to_message(%{type: :custom_message} = entry) do
+  def entry_to_message(%{type: :custom_message} = entry) do
     %{
       "role" => "custom",
       "custom_type" => entry.custom_type,
@@ -1053,7 +1039,7 @@ defmodule CodingAgent.SessionManager do
     }
   end
 
-  defp entry_to_message(%{type: :branch_summary} = entry) do
+  def entry_to_message(%{type: :branch_summary} = entry) do
     %{
       "role" => "branch_summary",
       "summary" => entry.summary,
@@ -1062,7 +1048,7 @@ defmodule CodingAgent.SessionManager do
     }
   end
 
-  defp entry_to_message(_), do: nil
+  def entry_to_message(_), do: nil
 
   defp extract_async_followup_messages(entries) do
     entries
@@ -1259,16 +1245,6 @@ defmodule CodingAgent.SessionManager do
 
     Path.join(get_session_dir(cwd), basename <> ".jsonl")
   end
-
-  @doc """
-  List all sessions for a cwd with metadata.
-
-  Returns indexed header fields, `:title`, `:updated_at` and `:path`. Unchanged
-  journals are statted but not opened. Missing or changed cache rows rebuild
-  from their journal; a deleted index rebuilds automatically.
-  """
-  @spec list_sessions(String.t()) :: {:ok, [map()]} | {:error, term()}
-  def list_sessions(cwd), do: SessionIndex.list(get_session_dir(cwd))
 
   # ============================================================================
   # JSONL Parsing and Encoding
@@ -1530,11 +1506,7 @@ defmodule CodingAgent.SessionManager do
     LemonAi.Types.ToolResultMessage,
     LemonAi.Types.Usage,
     LemonAi.Types.Cost,
-    CodingAgent.Messages.CustomMessage,
-    CodingAgent.Messages.TextContent,
-    CodingAgent.Messages.ThinkingContent,
-    CodingAgent.Messages.ImageContent,
-    CodingAgent.Messages.ToolCall
+    CodingAgent.Messages.CustomMessage
   ]
 
   defp json_safe(%_{} = term) do

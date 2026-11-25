@@ -285,7 +285,7 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
 
       opts = %StreamOptions{
         api_key: "test-key",
-        thinking_budgets: %{azure_api_version: "2024-12-01-preview"}
+        provider_options: %{azure_openai_responses: %{api_version: "2024-12-01-preview"}}
       }
 
       {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
@@ -433,52 +433,33 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
       EventStream.result(stream, 1000)
     end
 
-    test "uses azure_base_url from thinking_budgets opts" do
+    test "ignores legacy Azure settings in thinking_budgets" do
       test_pid = self()
 
       Req.Test.stub(__MODULE__, fn conn ->
-        send(test_pid, {:request_host, conn.host})
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request, conn.host, conn.query_string, Jason.decode!(raw)})
         Plug.Conn.send_resp(conn, 200, sse_body([:done]))
       end)
 
-      model = %{base_model() | base_url: nil}
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
       opts = %StreamOptions{
         api_key: "test-key",
-        thinking_budgets: %{azure_base_url: "https://optsresource.openai.azure.com/openai/v1"}
+        thinking_budgets: %{
+          azure_base_url: "https://optsresource.openai.azure.com/openai/v1",
+          azure_resource_name: "optsresourcename",
+          azure_api_version: "2024-12-01-preview",
+          azure_deployment_name: "legacy-deployment"
+        }
       }
 
-      {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
+      {:ok, stream} = AzureOpenAIResponses.stream(base_model(), context, opts)
 
-      assert_receive {:request_host, host}, 1000
-      assert host == "optsresource.openai.azure.com"
-
-      EventStream.result(stream, 1000)
-    end
-
-    test "uses azure_resource_name from thinking_budgets opts" do
-      test_pid = self()
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        send(test_pid, {:request_host, conn.host})
-        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
-      end)
-
-      model = %{base_model() | base_url: nil}
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-
-      opts = %StreamOptions{
-        api_key: "test-key",
-        thinking_budgets: %{azure_resource_name: "optsresourcename"}
-      }
-
-      {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
-
-      assert_receive {:request_host, host}, 1000
-      assert host == "optsresourcename.openai.azure.com"
-
-      EventStream.result(stream, 1000)
+      assert_receive {:request, "myresource.openai.azure.com", query, body}, 1000
+      assert query == "api-version=v1"
+      assert body["model"] == "gpt-4o"
+      assert {:ok, _} = EventStream.result(stream, 1000)
     end
   end
 
@@ -508,7 +489,7 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
       EventStream.result(stream, 1000)
     end
 
-    test "uses azure_deployment_name from opts" do
+    test "uses deployment_name from provider_options" do
       test_pid = self()
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -522,7 +503,7 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
 
       opts = %StreamOptions{
         api_key: "test-key",
-        thinking_budgets: %{azure_deployment_name: "my-custom-deployment"}
+        provider_options: %{azure_openai_responses: %{deployment_name: "my-custom-deployment"}}
       }
 
       {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
@@ -595,7 +576,7 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
       EventStream.result(stream, 1000)
     end
 
-    test "opts deployment name takes precedence over provider_options mapping" do
+    test "an explicit deployment_name takes precedence over the deployment map" do
       test_pid = self()
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -609,9 +590,9 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
 
       opts = %StreamOptions{
         api_key: "test-key",
-        thinking_budgets: %{azure_deployment_name: "opts-deployment"},
         provider_options: %{
           azure_openai_responses: %{
+            deployment_name: "opts-deployment",
             deployment_name_map: %{"gpt-4o" => "resolved-deployment"}
           }
         }
@@ -913,17 +894,59 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
       assert {:error, %AssistantMessage{stop_reason: :error}} = EventStream.result(stream, 1000)
     end
 
-    test "handles 429 rate limit error" do
+    test "429 is retried per policy and surfaces a classified error without the raw body" do
+      test_pid = self()
+
       Req.Test.stub(__MODULE__, fn conn ->
-        Plug.Conn.send_resp(conn, 429, Jason.encode!(%{error: %{message: "Rate limit exceeded"}}))
+        send(test_pid, :azure_request)
+
+        conn
+        |> Plug.Conn.put_resp_header("retry-after", "1")
+        |> Plug.Conn.send_resp(429, Jason.encode!(%{error: %{message: "Rate limit exceeded"}}))
       end)
 
-      model = base_model()
+      retry = %{max_attempts: 3, sleep_fun: fn ms -> send(test_pid, {:azure_sleep, ms}) end}
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: "test-key"}
+      opts = %StreamOptions{api_key: "test-key", provider_retry: retry}
 
-      {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
-      assert {:error, %AssistantMessage{stop_reason: :error}} = EventStream.result(stream, 1000)
+      {:ok, stream} = AzureOpenAIResponses.stream(base_model(), context, opts)
+
+      assert {:error, %AssistantMessage{stop_reason: :error} = message} =
+               EventStream.result(stream, 5_000)
+
+      for _attempt <- 1..3, do: assert_received(:azure_request)
+      refute_received :azure_request
+      assert_received {:azure_sleep, _}
+      assert_received {:azure_sleep, _}
+      assert %{status: 429, category: :rate_limit, retryable: true} = message.error_details
+      assert message.retry_after_ms == 1_000
+      refute message.error_message =~ "Req.Response"
+      refute message.error_message =~ "Async"
+    end
+
+    test "a 429 followed by success completes after one retry" do
+      test_pid = self()
+      attempts = :counters.new(1, [])
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        :counters.add(attempts, 1, 1)
+
+        if :counters.get(attempts, 1) == 1 do
+          Plug.Conn.send_resp(conn, 429, Jason.encode!(%{error: %{message: "Slow down"}}))
+        else
+          Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+        end
+      end)
+
+      retry = %{max_attempts: 3, sleep_fun: fn ms -> send(test_pid, {:azure_sleep, ms}) end}
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      opts = %StreamOptions{api_key: "test-key", provider_retry: retry}
+
+      {:ok, stream} = AzureOpenAIResponses.stream(base_model(), context, opts)
+
+      assert {:ok, %AssistantMessage{stop_reason: :stop}} = EventStream.result(stream, 5_000)
+      assert :counters.get(attempts, 1) == 2
+      assert_received {:azure_sleep, _}
     end
 
     test "handles 500 server error" do
@@ -1733,7 +1756,7 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
       EventStream.result(stream, 1000)
     end
 
-    test "opts api_key takes precedence over provider_options" do
+    test "the resolved provider_options api_key takes precedence over opts.api_key" do
       test_pid = self()
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -1753,7 +1776,7 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
 
       assert_receive {:request_headers, headers}, 1000
       headers_map = Map.new(headers)
-      assert headers_map["api-key"] == "opts-api-key"
+      assert headers_map["api-key"] == "resolved-api-key"
 
       EventStream.result(stream, 1000)
     end

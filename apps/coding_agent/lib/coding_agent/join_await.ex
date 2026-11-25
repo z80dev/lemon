@@ -1,12 +1,12 @@
 defmodule CodingAgent.JoinAwait do
   @moduledoc """
   Message-driven task joins. Subscribe before reading authoritative state, then
-  wait on run/task/question changes, child monitors or cancellation. A single
-  absolute deadline bounds the whole join; notifications never extend it.
+  wait on run/task/question changes, child owner and worker monitors or
+  cancellation. A single absolute deadline bounds the whole join;
+  notifications never extend it.
   """
 
-  alias CodingAgent.{ParentQuestions, RunGraph, TaskStore}
-  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.{ParentQuestions, RunGraph, TaskRuntime, TaskStore}
   alias LemonAgent.AbortSignal
   alias LemonCore.Bus
 
@@ -16,14 +16,16 @@ defmodule CodingAgent.JoinAwait do
           | {:yield, :timeout | :interrupted}
           | {:error, term()}
   def await(run_ids, task_ids, mode, signal, opts \\ []) do
-    deadline =
+    # Caller policy: a join without an explicit timeout yields
+    # `{:yield, :timeout}` at `:task_join_timeout_ms` (default 30 minutes)
+    # instead of waiting forever; the children keep running.
+    timeout_ms =
       case Keyword.get(opts, :timeout_ms) do
-        milliseconds when is_integer(milliseconds) ->
-          System.monotonic_time(:millisecond) + milliseconds
-
-        _ ->
-          :infinity
+        milliseconds when is_integer(milliseconds) -> milliseconds
+        _ -> Application.get_env(:coding_agent, :task_join_timeout_ms, 30 * 60 * 1000)
       end
+
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
 
     interrupted? = Keyword.get(opts, :interrupted?, fn -> false end)
 
@@ -47,10 +49,11 @@ defmodule CodingAgent.JoinAwait do
   end
 
   defp do_await(run_ids, task_ids, mode, signal, deadline, interrupted?) do
-    owners = [CodingAgent.TaskStoreServer, CodingAgent.RunGraphServer, Control]
+    owners = [CodingAgent.TaskStoreServer, CodingAgent.RunGraphServer]
     owner_pids = owners |> Enum.map(&Process.whereis/1) |> Enum.filter(&is_pid/1)
-    workers = Control.worker_pids(task_ids)
-    monitors = Map.new(Enum.uniq(owner_pids ++ workers), &{Process.monitor(&1), &1})
+    # A child's owner or worker exiting is a change to re-read, not a failure.
+    children = TaskRuntime.pids(task_ids)
+    monitors = Map.new(Enum.uniq(owner_pids ++ children), &{Process.monitor(&1), &1})
 
     outcome =
       try do
@@ -61,7 +64,7 @@ defmodule CodingAgent.JoinAwait do
           interrupted?.() ->
             {:yield, :interrupted}
 
-          deadline != :infinity and System.monotonic_time(:millisecond) >= deadline ->
+          System.monotonic_time(:millisecond) >= deadline ->
             {:yield, :timeout}
 
           true ->
@@ -140,10 +143,7 @@ defmodule CodingAgent.JoinAwait do
   end
 
   defp wait_for_change(signal, deadline, monitors, owner_pids) do
-    timeout =
-      if deadline == :infinity,
-        do: :infinity,
-        else: max(0, deadline - System.monotonic_time(:millisecond))
+    timeout = max(0, deadline - System.monotonic_time(:millisecond))
 
     receive do
       {:lemon_abort, ^signal, _kind} ->

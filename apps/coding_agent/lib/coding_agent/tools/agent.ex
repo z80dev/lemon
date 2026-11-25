@@ -44,7 +44,7 @@ defmodule CodingAgent.Tools.Agent do
     TaskStore
   }
 
-  alias CodingAgent.Tools.Task.{Control, Params, Result}
+  alias CodingAgent.Tools.Task.{Control, InvocationAuthority, Params, Result}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -905,12 +905,12 @@ defmodule CodingAgent.Tools.Agent do
 
     request = %{
       request
-      | meta: Params.continuation_metadata(request.meta, context)
+      | meta: InvocationAuthority.continuation_metadata(request.meta, context)
     }
 
     result =
-      if Params.managed_context?(context) do
-        Params.submit_native_followup(
+      if InvocationAuthority.managed_context?(context) do
+        InvocationAuthority.submit_native_followup(
           context,
           %{
             request

@@ -275,23 +275,17 @@ defmodule CodingAgent.Tools.SendFileTest do
     end
   end
 
+  # The test-mode full-replacement layer read by `LemonCore.GatewayConfig`.
   defp put_config(key, value) do
-    case Process.whereis(LemonGateway.Config) do
-      pid when is_pid(pid) ->
-        previous = :sys.get_state(LemonGateway.Config)
-        :sys.replace_state(LemonGateway.Config, &Map.put(&1, key, value))
-        on_exit(fn -> :sys.replace_state(LemonGateway.Config, fn _ -> previous end) end)
+    env_key = :"Elixir.LemonGateway.Config"
+    previous = Application.get_env(:lemon_gateway, env_key)
+    Application.put_env(:lemon_gateway, env_key, Map.put(Map.new(previous || []), key, value))
 
-      nil ->
-        previous = Application.get_env(:lemon_gateway, key)
-        Application.put_env(:lemon_gateway, key, value)
-
-        on_exit(fn ->
-          if previous,
-            do: Application.put_env(:lemon_gateway, key, previous),
-            else: Application.delete_env(:lemon_gateway, key)
-        end)
-    end
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:lemon_gateway, env_key, previous),
+        else: Application.delete_env(:lemon_gateway, env_key)
+    end)
   end
 
   describe "channel policy" do

@@ -63,9 +63,9 @@ defmodule LemonHoncho.Application do
   end
 
   # Registered only when configured, because an unregistered provider costs
-  # nothing while a registered one that cannot answer adds its timeout to every
-  # memory search the agent runs. The timeout is capped well below the client's
-  # own: search is on the agent's path and a slow provider is a slow turn.
+  # nothing while a registered one that cannot accept documents adds its timeout
+  # to every run-finalisation `put/2` fan-out. The timeout is capped well below
+  # the client's own: `put/2` only hands the document to the session manager.
   defp register_memory_provider(%Config{} = config) do
     if is_pid(Process.whereis(LemonMemory.Providers)) do
       config

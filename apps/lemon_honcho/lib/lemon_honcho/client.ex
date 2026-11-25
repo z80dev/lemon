@@ -28,6 +28,10 @@ defmodule LemonHoncho.Client do
     * `{:error, {:api_error, status, body}}` — any other non-2xx response.
     * `{:error, {:transport, reason}}` — the request never produced a
       response: a timeout, a refused connection, a raised exception.
+    * `{:error, :outcome_unknown}` — a call that changes remote state
+      (`chat/4`, `add_messages/3`, `create_conclusions/2`, the delete in
+      `delete_conclusion/3`) was sent but no answer arrived: Honcho may or may
+      not have applied it. Callers must not retry it blindly.
 
   A 2xx response with an empty body (a 204, or a 200 with no content) is
   normalized to `{:ok, %{}}` rather than `{:ok, ""}` or `{:ok, nil}`, so a
@@ -58,22 +62,30 @@ defmodule LemonHoncho.Client do
 
   ## Retries, and how long a call can take
 
-  A request is retried when the same request could plausibly succeed a moment
-  later: a 429 or a 5xx, a timeout, a closed or refused connection, an HTTP/2
-  stream that was never processed. It is *not* retried when the failure is
-  structural — a name that does not resolve, a network with no route, a TLS
-  handshake that will never verify, a malformed option. Those cannot become
-  healthy inside a few seconds of backoff, and retrying them used to be the
-  single largest contributor to how long a failing call took.
+  Whether a call is retried is decided in one place, `retry_policy/2`, and it
+  depends on the call before the failure: only an idempotent request is ever
+  sent twice. GET reads are idempotent by method. A POST or PUT is retried only
+  when its function declares it idempotent — the get-or-create `ensure_*`
+  calls, the searches (POST only because they carry a body), and the
+  card/config replacements. Everything else is sent exactly once: `chat/4` (a
+  billed dialectic call), `add_messages/3`, `create_conclusions/2` and the
+  conclusion delete. A new POST therefore cannot inherit retries by accident.
+  When a sent-once call times out or loses its connection the result is
+  `{:error, :outcome_unknown}`, never a retryable transport error.
 
-  That still leaves the ordinary bound wide: up to two retries, each waiting
-  `config.timeout_ms`, with Req's exponential backoff in between. That
-  is the right trade on the turn path, where a transient 502 costing three
-  seconds beats a turn assembled without memory. It is the wrong trade for a
-  diagnostic, where the operator is watching a terminal and needs the answer to
-  arrive within the number printed on the tin — so `ensure_workspace/2` accepts
-  `:max_retries` and `:total_timeout` to bound one call explicitly. Nothing else
-  here takes them, because nothing else is on that path.
+  An idempotent request is retried when the same request could plausibly
+  succeed a moment later: a 429 or a 5xx, a timeout, a closed or refused
+  connection, an HTTP/2 stream that was never processed. It is *not* retried
+  when the failure is structural — a name that does not resolve, a network
+  with no route, a TLS handshake that will never verify, a malformed option.
+
+  The ordinary bound is up to two retries, each attempt waiting
+  `config.timeout_ms`. The pause before a retry is exponential backoff or the
+  server's `Retry-After`, but never more than one second per pause and two
+  seconds over the whole call, so a server asking for an hour's wait cannot
+  park a turn. The diagnostic path is tighter still — `ensure_workspace/2`
+  accepts `:max_retries` and `:total_timeout` to bound one call explicitly, and
+  a bounded call never pauses between attempts.
 
   ## Testing
 
@@ -122,8 +134,14 @@ defmodule LemonHoncho.Client do
   @default_search_limit 10
   @default_top_k 10
 
+  # Pause before the next retry of an idempotent call: exponential backoff from
+  # the base, or the server's `Retry-After`, capped per pause and over the call.
+  @base_retry_delay_ms 250
+  @max_retry_delay_ms 1_000
+  @max_total_retry_delay_ms 2_000
+
   # The exception reasons a second attempt can plausibly fix. Everything absent
-  # from this list fails on the first attempt; see `retry?/2`.
+  # from this list fails on the first attempt; see `retry?/3`.
   @retry_reasons [
     :timeout,
     :closed,
@@ -132,6 +150,22 @@ defmodule LemonHoncho.Client do
     :pool_timeout,
     :unprocessed,
     :pool_not_available
+  ]
+
+  # Transport failures that prove a request never reached Honcho: the
+  # connection was refused or never opened, the pool had no connection to give,
+  # or the HTTP/2 stream was refused unprocessed. A sent-once call failing for
+  # any other reason (a timeout, a dropped connection, a raise, an exit) may
+  # have been applied, and is reported as `:outcome_unknown`.
+  @unsent_reasons [
+    :econnrefused,
+    :nxdomain,
+    :ehostunreach,
+    :enetunreach,
+    :eaddrnotavail,
+    :pool_timeout,
+    :pool_not_available,
+    :unprocessed
   ]
 
   # Floor for a per-attempt timeout derived from `:total_timeout`. A ceiling of
@@ -158,7 +192,7 @@ defmodule LemonHoncho.Client do
   ## Options
 
   `opts` defaults to the ordinary behaviour every other function here has:
-  `config.timeout_ms` per attempt and up to #{@max_retries} retries with Req's
+  `config.timeout_ms` per attempt and up to #{@max_retries} retries with capped
   exponential backoff. Pass either option to trade "try hard to succeed" for
   "answer within a stated time":
 
@@ -180,7 +214,7 @@ defmodule LemonHoncho.Client do
   """
   @spec ensure_workspace(Config.t(), call_opts()) :: result()
   def ensure_workspace(%Config{} = config, opts \\ []) do
-    request(config, :post, ["workspaces"], [json: %{id: config.workspace}], opts)
+    request(config, :post, ["workspaces"], [json: %{id: config.workspace}], idempotent(opts))
   end
 
   @doc """
@@ -191,7 +225,7 @@ defmodule LemonHoncho.Client do
   """
   @spec ensure_peer(Config.t(), String.t()) :: result()
   def ensure_peer(%Config{} = config, peer_id) when is_binary(peer_id) do
-    request(config, :post, scoped(config, ["peers"]), json: %{id: peer_id})
+    request(config, :post, scoped(config, ["peers"]), [json: %{id: peer_id}], idempotent())
   end
 
   @doc """
@@ -207,7 +241,7 @@ defmodule LemonHoncho.Client do
       when is_binary(session_id) and is_list(peer_specs) do
     body = %{id: session_id, peers: peers_object(peer_specs)}
 
-    request(config, :post, scoped(config, ["sessions"]), json: body)
+    request(config, :post, scoped(config, ["sessions"]), [json: body], idempotent())
   end
 
   @doc """
@@ -221,7 +255,7 @@ defmodule LemonHoncho.Client do
   def set_peer_config(%Config{} = config, session_id, peer_id, flags) when is_map(flags) do
     segments = scoped(config, ["sessions", session_id, "peers", peer_id, "config"])
 
-    request(config, :put, segments, json: observation_flags(flags))
+    request(config, :put, segments, [json: observation_flags(flags)], idempotent())
   end
 
   @doc """
@@ -361,7 +395,7 @@ defmodule LemonHoncho.Client do
         }
 
         config
-        |> request(:post, scoped(config, segments), json: body)
+        |> request(:post, scoped(config, segments), [json: body], idempotent())
         |> as_list()
         |> owned_by(owner)
 
@@ -401,7 +435,7 @@ defmodule LemonHoncho.Client do
     options = [json: %{peer_card: card}, params: query_params(opts, [:target])]
 
     config
-    |> request(:put, scoped(config, ["peers", peer_id, "card"]), options)
+    |> request(:put, scoped(config, ["peers", peer_id, "card"]), options, idempotent())
     |> as_peer_card()
   end
 
@@ -442,7 +476,7 @@ defmodule LemonHoncho.Client do
     }
 
     config
-    |> request(:post, scoped(config, ["conclusions", "query"]), json: body)
+    |> request(:post, scoped(config, ["conclusions", "query"]), [json: body], idempotent())
     |> as_list()
     |> matching(filters)
   end
@@ -500,38 +534,86 @@ defmodule LemonHoncho.Client do
 
   defp request(%Config{} = config, method, segments, options, call_opts \\ []) do
     case endpoint(config) do
-      {:ok, base_url} -> dispatch(config, base_url, method, segments, options, call_opts)
-      {:error, reason} -> {:error, reason}
+      {:ok, base_url} ->
+        policy = retry_policy(method, call_opts)
+
+        config
+        |> dispatch(base_url, method, segments, options, {policy, call_opts})
+        |> settle(policy)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  defp dispatch(config, base_url, method, segments, options, call_opts) do
+  # The one place a call's retry behaviour is decided. A request is sent twice
+  # only when sending it twice is harmless: a GET or HEAD by method, a POST or
+  # PUT only when its function marks it with `idempotent/1` (get-or-create,
+  # search, replace). Everything else — Req's own safe default would be the
+  # same — is `:send_once`, so a new mutation cannot inherit retries by
+  # forgetting to opt out, and a dialectic call is never billed twice.
+  defp retry_policy(method, _call_opts) when method in [:get, :head], do: :idempotent
+
+  defp retry_policy(_method, call_opts) do
+    if Keyword.get(call_opts, :idempotent) == true, do: :idempotent, else: :send_once
+  end
+
+  defp idempotent(call_opts \\ []), do: Keyword.put(call_opts, :idempotent, true)
+
+  defp dispatch(config, base_url, method, segments, options, {policy, call_opts}) do
     bounds = bounds(config, call_opts)
 
-    request_options =
-      [
-        method: method,
-        url: base_url <> path(segments),
-        headers: headers(config, base_url),
-        receive_timeout: bounds.attempt_timeout,
-        retry: &retry?/2,
-        max_retries: bounds.max_retries
-      ]
-      |> Keyword.merge(bounds.extra)
-      |> Keyword.merge(payload_options(options))
-      |> Keyword.merge(override_options())
-
-    request_options |> Req.new() |> Req.request() |> handle_response()
+    [
+      method: method,
+      url: base_url <> path(segments),
+      headers: headers(config, base_url),
+      receive_timeout: bounds.attempt_timeout
+    ]
+    |> Keyword.merge(retry_options(policy, bounds))
+    |> Keyword.merge(bounds.extra)
+    |> Keyword.merge(payload_options(options))
+    |> Keyword.merge(override_options())
+    |> Req.new()
+    |> Req.request()
   rescue
-    exception -> transport_error(exception)
+    exception -> {:error, exception}
   catch
-    :exit, reason -> transport_error({:exit, reason})
+    :exit, reason -> {:error, {:exit, reason}}
   end
+
+  defp retry_options(:send_once, _bounds), do: [retry: false]
+
+  defp retry_options(:idempotent, bounds) do
+    [
+      retry: fn request, outcome -> retry?(request, outcome, bounds.delay_cap) end,
+      max_retries: bounds.max_retries
+    ]
+  end
+
+  # A sent-once call that failed without a response is only a plain transport
+  # error when the failure proves nothing reached Honcho. Otherwise the remote
+  # write may have happened, and saying so is the caller's cue not to resend.
+  defp settle({:error, reason}, :send_once) do
+    if unsent?(reason) do
+      transport_error(reason)
+    else
+      Logger.debug("honcho: request outcome unknown: #{inspect(reason)}")
+      {:error, :outcome_unknown}
+    end
+  end
+
+  defp settle(result, _policy), do: handle_response(result)
+
+  defp unsent?(%{reason: reason}), do: unsent_reason?(reason)
+  defp unsent?(_reason), do: false
+
+  defp unsent_reason?(%{reason: nested}), do: unsent_reason?(nested)
+  defp unsent_reason?(reason), do: reason in @unsent_reasons
 
   # Ordinary calls keep the bound every caller above already relies on. A call
   # that names a `:total_timeout` is the diagnostic path and gets the opposite
   # trade: the wait is capped by the number the operator can see, even when a
-  # longer one would have succeeded.
+  # longer one would have succeeded, and no pause is taken between attempts.
   #
   # `connect_options` is set only on that path. It is what makes the ceiling
   # cover a host that accepts a connection slowly rather than only a host that
@@ -548,13 +630,27 @@ defmodule LemonHoncho.Client do
         %{
           max_retries: max_retries,
           attempt_timeout: attempt,
-          extra: [retry_delay: 0, connect_options: [timeout: attempt]]
+          delay_cap: 0,
+          extra: [connect_options: [timeout: attempt]]
         }
 
       _unbounded ->
-        %{max_retries: max_retries, attempt_timeout: config.timeout_ms, extra: []}
+        %{
+          max_retries: max_retries,
+          attempt_timeout: config.timeout_ms,
+          delay_cap: delay_cap(max_retries),
+          extra: []
+        }
     end
   end
+
+  # Each pause is capped so that all of them together stay inside
+  # `@max_total_retry_delay_ms`, however many retries a call allows.
+  defp delay_cap(max_retries) when max_retries > 0 do
+    min(@max_retry_delay_ms, div(@max_total_retry_delay_ms, max_retries))
+  end
+
+  defp delay_cap(_max_retries), do: 0
 
   # `config.timeout_ms` is the last clamp on purpose: a caller asking for a
   # ceiling can only ever shorten a request, never extend one past the timeout
@@ -614,18 +710,41 @@ defmodule LemonHoncho.Client do
   # an exception this module has never seen, fails on the first attempt. That is
   # the safe default here precisely because a failed call is never fatal: every
   # caller degrades to "no memory this turn".
-  defp retry?(_request, %Req.Response{status: status}), do: status in @retry_statuses
-  defp retry?(_request, exception) when is_exception(exception), do: retryable?(exception)
-  defp retry?(_request, _other), do: false
+  #
+  # Only idempotent calls reach this function (see `retry_policy/2`).
+  defp retry?(request, outcome, delay_cap) do
+    if retryable?(outcome), do: {:delay, retry_delay(request, outcome, delay_cap)}, else: false
+  end
+
+  defp retryable?(%Req.Response{status: status}), do: status in @retry_statuses
+  defp retryable?(exception) when is_exception(exception), do: retryable_exception?(exception)
+  defp retryable?(_other), do: false
 
   # Matched structurally rather than by module: `Req.TransportError`,
   # `Req.HTTPError`, `Mint.TransportError` and `Finch.Error` all carry their
   # reason in the same field, and one of them sometimes nests another.
-  defp retryable?(%{reason: reason}), do: retryable_reason?(reason)
-  defp retryable?(_exception), do: false
+  defp retryable_exception?(%{reason: reason}), do: retryable_reason?(reason)
+  defp retryable_exception?(_exception), do: false
 
   defp retryable_reason?(%{reason: nested}), do: retryable_reason?(nested)
   defp retryable_reason?(reason), do: reason in @retry_reasons
+
+  # A server's `Retry-After` is honoured only up to the cap: a 429 asking for an
+  # hour must not park a turn for an hour.
+  defp retry_delay(request, outcome, delay_cap) do
+    attempt = Req.Request.get_private(request, :req_retry_count, 0)
+    wanted = retry_after(outcome) || @base_retry_delay_ms * Integer.pow(2, attempt)
+
+    min(wanted, delay_cap)
+  end
+
+  defp retry_after(%Req.Response{} = response) do
+    Req.Response.get_retry_after(response)
+  rescue
+    _unparseable -> nil
+  end
+
+  defp retry_after(_exception), do: nil
 
   ## URL and auth
 

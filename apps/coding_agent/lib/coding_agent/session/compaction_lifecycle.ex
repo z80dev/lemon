@@ -42,7 +42,8 @@ defmodule CodingAgent.Session.CompactionLifecycle do
 
   @type callbacks(state) :: %{
           required(:restore_messages_from_session) => (map() -> [map()]),
-          required(:broadcast_event) => (state, LemonAgent.Types.agent_event() -> :ok)
+          required(:broadcast_event) => (state, LemonAgent.Types.agent_event() -> :ok),
+          required(:terminalize) => (state, LemonAgent.Types.agent_event() -> state)
         }
 
   @spec apply_result(map(), {:ok, map()} | {:error, term()}, String.t() | nil, callbacks(map())) ::
@@ -72,14 +73,9 @@ defmodule CodingAgent.Session.CompactionLifecycle do
   end
 
   @doc false
-  def before_prompt(state, message, system_prompt) do
+  def before_prompt(state, message, system_prompt, callbacks) do
     if state.auto_compaction.blocked_signature == {:blocked, state.session_manager.leaf_id} do
-      CodingAgent.Session.Notifier.broadcast_event(
-        state,
-        {:error, :compaction_recovery_band, nil}
-      )
-
-      %{state | is_streaming: false}
+      callbacks.terminalize.(state, {:error, :compaction_recovery_band, nil})
     else
       state = maybe_trigger(state, self(), {message, system_prompt})
 
@@ -243,12 +239,12 @@ defmodule CodingAgent.Session.CompactionLifecycle do
             |> CompactionManager.clear_auto_compaction_state()
 
           {:error, :compaction_recovery_band, new_state} ->
-            callbacks.broadcast_event.(new_state, {:error, :compaction_recovery_band, nil})
+            new_state =
+              callbacks.terminalize.(new_state, {:error, :compaction_recovery_band, nil})
 
             %{
               new_state
-              | is_streaming: false,
-                auto_compaction: %{
+              | auto_compaction: %{
                   new_state.auto_compaction
                   | blocked_signature: {:blocked, new_state.session_manager.leaf_id}
                 }

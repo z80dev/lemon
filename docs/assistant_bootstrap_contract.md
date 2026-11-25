@@ -67,6 +67,15 @@ Canonical files:
 
 Daily memory files are expected under `memory/YYYY-MM-DD.md` and are read/written via tools.
 
+The first session that reads assistant-home bootstrap (chat/persona mode)
+seeds an empty workspace from the bundled templates and leaves a
+`.lemon-workspace-seeded` marker; later sessions never write templates, so a
+deleted `BOOTSTRAP.md`, `HEARTBEAT.md` or `memory/topics/TEMPLATE.md` stays
+deleted. A workspace that already holds any template is only marked. Coding
+sessions do not touch the workspace, and an unwritable workspace is logged, not
+a session start failure. `mix lemon.workspace init` restores missing templates
+on request.
+
 ### Placed profile sessions
 
 Profile execution supplies a JSON-safe `profile_instructions` snapshot mapping

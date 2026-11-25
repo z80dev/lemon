@@ -309,17 +309,15 @@ defmodule LemonGateway.ApplicationTest do
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      config = Elixir.LemonGateway.Config.get()
-      assert config.max_concurrent_runs == 10
+      assert {:ok, %{max: 10}} = LemonGateway.Slots.stats()
     end
 
-    test "Config.get/1 returns defaults and configured overrides" do
+    test "gateway settings use defaults and configured overrides" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{})
       Application.put_env(:lemon_gateway, :transports, [])
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      assert Elixir.LemonGateway.Config.get(:max_concurrent_runs) == 2
-      assert Elixir.LemonGateway.Config.get(:auto_resume) == false
+      assert {:ok, %{max: 2}} = LemonGateway.Slots.stats()
 
       stop_application()
 
@@ -332,8 +330,8 @@ defmodule LemonGateway.ApplicationTest do
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      assert Elixir.LemonGateway.Config.get(:max_concurrent_runs) == 7
-      assert Elixir.LemonGateway.Config.get(:enable_telegram) == true
+      assert {:ok, %{max: 7}} = LemonGateway.Slots.stats()
+      assert LemonCore.GatewayConfig.get(:enable_telegram) == true
     end
   end
 
@@ -427,13 +425,11 @@ defmodule LemonGateway.ApplicationTest do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       # Verify processes are registered
-      assert is_pid(Process.whereis(Elixir.LemonGateway.Config))
       assert is_pid(Process.whereis(Elixir.LemonGateway.Slots))
 
       :ok = Application.stop(:lemon_gateway)
 
       # Names should be freed
-      assert Process.whereis(Elixir.LemonGateway.Config) == nil
       assert Process.whereis(Elixir.LemonGateway.Slots) == nil
     end
 
@@ -446,7 +442,6 @@ defmodule LemonGateway.ApplicationTest do
 
       # Verify running
       assert is_pid(Process.whereis(Elixir.LemonGateway.Supervisor))
-      assert is_pid(Process.whereis(Elixir.LemonGateway.Config))
     end
 
     test "RunSupervisor starts without children after clean shutdown" do
@@ -612,24 +607,6 @@ defmodule LemonGateway.ApplicationTest do
       end)
 
       :ok
-    end
-
-    test "Config process is restarted if it crashes" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      original_pid = Process.whereis(Elixir.LemonGateway.Config)
-      assert is_pid(original_pid)
-
-      # Kill the process
-      Process.exit(original_pid, :kill)
-
-      new_pid = await_restart(Elixir.LemonGateway.Config, original_pid)
-      assert is_pid(new_pid)
-      assert new_pid != original_pid
-
-      # Should still be functional
-      config = Elixir.LemonGateway.Config.get()
-      assert is_map(config)
     end
 
     test "Slots process is restarted if it crashes" do

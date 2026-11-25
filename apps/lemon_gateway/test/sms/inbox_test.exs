@@ -291,10 +291,12 @@ defmodule LemonGateway.Sms.InboxTest do
     end
 
     test "a configured zero grace period is ignored in favour of the default" do
-      config_pid = Process.whereis(LemonGateway.Config)
-      original = :sys.get_state(config_pid)
-      on_exit(fn -> :sys.replace_state(config_pid, fn _ -> original end) end)
-      :sys.replace_state(config_pid, &Map.put(&1, :sms, %{handoff_grace_ms: 0}))
+      original = Application.get_env(:lemon_gateway, LemonGateway.Config)
+      on_exit(fn -> Application.put_env(:lemon_gateway, LemonGateway.Config, original) end)
+
+      Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+        sms: %{handoff_grace_ms: 0}
+      })
 
       assert LemonGateway.Sms.Config.handoff_grace_ms() == 10 * 60 * 1000
       assert :ok = Inbox.reserve("a")
@@ -302,7 +304,7 @@ defmodule LemonGateway.Sms.InboxTest do
       assert {:error, :inbox_reserved} = Inbox.reserve("b")
     end
 
-    test "config load rejects a zero or negative handoff grace" do
+    test "config validation rejects a zero or negative handoff grace" do
       previous = Application.get_env(:lemon_gateway, LemonGateway.Config)
 
       on_exit(fn ->
@@ -312,23 +314,19 @@ defmodule LemonGateway.Sms.InboxTest do
       end)
 
       for bad <- [0, -5, "600000"] do
-        Application.put_env(:lemon_gateway, LemonGateway.Config, %{
-          "sms" => %{"handoff_grace_ms" => bad}
-        })
+        assert {:error, errors} =
+                 LemonCore.Config.Modular.validate_settings(%{
+                   "gateway" => %{"sms" => %{"handoff_grace_ms" => bad}}
+                 })
 
-        log =
-          ExUnit.CaptureLog.capture_log(fn ->
-            refute Map.has_key?(LemonGateway.ConfigLoader.load().sms, :handoff_grace_ms)
-          end)
-
-        assert log =~ "handoff_grace_ms must be a positive integer"
+        assert Enum.any?(errors, &String.starts_with?(&1, "gateway.sms.handoff_grace_ms"))
       end
 
       Application.put_env(:lemon_gateway, LemonGateway.Config, %{
         "sms" => %{"handoff_grace_ms" => 30_000}
       })
 
-      assert LemonGateway.ConfigLoader.load().sms.handoff_grace_ms == 30_000
+      assert LemonGateway.Sms.Config.handoff_grace_ms() == 30_000
     end
   end
 

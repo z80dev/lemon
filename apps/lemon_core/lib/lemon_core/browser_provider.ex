@@ -33,7 +33,7 @@ defmodule LemonCore.BrowserProvider do
 
   alias LemonCore.BrowserProvider.LCUProbe
 
-  @providers ~w(auto tern lcu relay local cdp browserbase browser_use firecrawl camofox controller hybrid)
+  @providers ~w(auto tern lcu relay local cdp browserbase browser_use firecrawl camofox)
   @auto ~w(lcu relay local)
   @timeout_ms 5_000
   @invalid "Invalid browser provider; set runtime.tools.browser.provider to a supported provider."
@@ -50,9 +50,7 @@ defmodule LemonCore.BrowserProvider do
     "browserbase" => "Browserbase is configured and its driver is available.",
     "browser_use" => "Browser Use is configured and its driver is available.",
     "firecrawl" => "Firecrawl is configured and its driver is available.",
-    "camofox" => "Camofox is configured and its driver is available.",
-    "controller" => "The configured browser controller is connected.",
-    "hybrid" => "The configured hybrid browser routes are available."
+    "camofox" => "Camofox is configured and its driver is available."
   }
   @unavailability %{
     "tern" =>
@@ -68,10 +66,7 @@ defmodule LemonCore.BrowserProvider do
     "browser_use" => "Browser Use is unavailable; configure its credentials and browser driver.",
     "firecrawl" => "Firecrawl is unavailable; configure its credentials and browser driver.",
     "camofox" =>
-      "Camofox is unavailable; configure a reachable Camofox endpoint and browser driver.",
-    "controller" => "Browser controller is unavailable; configure and connect the controller.",
-    "hybrid" =>
-      "Hybrid browser is unavailable; configure available local and public browser routes."
+      "Camofox is unavailable; configure a reachable Camofox endpoint and browser driver."
   }
 
   # Bundled releases ship the driver in lemon_browser's priv directory; source

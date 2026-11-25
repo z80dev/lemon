@@ -171,6 +171,7 @@ defmodule LemonHoncho.Tools.Conclude do
       {:error, {:invalid_input, message}} -> failure(message)
       {:error, {:withheld, parameter}} -> withheld(parameter)
       {:error, :not_owned} -> failure(not_owned_message())
+      {:error, :outcome_unknown} -> failure(Common.outcome_unknown_message("conclusion"))
       {:error, {:unauthorized, _body}} -> failure(Common.unauthorized_message())
       {:error, {:api_error, status, body}} -> failure(Common.api_message(status, body))
       {:error, reason} -> failure("Honcho conclusion request failed: #{inspect(reason)}")

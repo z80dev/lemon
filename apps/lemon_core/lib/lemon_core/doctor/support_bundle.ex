@@ -282,11 +282,8 @@ defmodule LemonCore.Doctor.SupportBundle do
         probe(runtime_module(:media_jobs), :default_artifacts_dir, [project_dir], nil),
       worker_status:
         probe(runtime_module(:media_supervisor), :status, [], %{
-          supervised: false,
           running: false,
           active_jobs: 0,
-          workers: 0,
-          supervisors: 0,
           error: "media runtime not available"
         }),
       summary:

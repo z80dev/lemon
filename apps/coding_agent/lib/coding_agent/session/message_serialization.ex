@@ -118,29 +118,6 @@ defmodule CodingAgent.Session.MessageSerialization do
     )
   end
 
-  def serialize_content_block(%CodingAgent.Messages.TextContent{text: text}) do
-    %{"type" => "text", "text" => text}
-  end
-
-  def serialize_content_block(%CodingAgent.Messages.ImageContent{
-        data: data,
-        mime_type: mime_type
-      }) do
-    %{"type" => "image", "data" => data, "mime_type" => mime_type}
-  end
-
-  def serialize_content_block(%CodingAgent.Messages.ThinkingContent{thinking: thinking}) do
-    %{"type" => "thinking", "thinking" => thinking}
-  end
-
-  def serialize_content_block(%CodingAgent.Messages.ToolCall{
-        id: id,
-        name: name,
-        arguments: arguments
-      }) do
-    %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => arguments}
-  end
-
   def serialize_content_block(%{type: :text, text: text}) do
     %{"type" => "text", "text" => text}
   end
@@ -252,8 +229,12 @@ defmodule CodingAgent.Session.MessageSerialization do
   def deserialize_content(content) when is_binary(content), do: content
   def deserialize_content(content) when is_list(content), do: deserialize_content_blocks(content)
 
-  @spec deserialize_content_blocks(list() | nil) :: list()
+  @spec deserialize_content_blocks(list() | String.t() | nil) :: list()
   def deserialize_content_blocks(nil), do: []
+
+  # Hand-written and older journals may store block content as plain text.
+  def deserialize_content_blocks(text) when is_binary(text),
+    do: [%LemonAi.Types.TextContent{type: :text, text: text}]
 
   def deserialize_content_blocks(blocks) when is_list(blocks) do
     Enum.map(blocks, &deserialize_content_block/1)

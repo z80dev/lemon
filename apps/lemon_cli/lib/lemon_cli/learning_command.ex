@@ -30,7 +30,7 @@ defmodule LemonCli.LearningCommand do
   defp execute(profile, kind, limit, json?) do
     result =
       LogSilencer.with_quiet_logs(json?, fn ->
-        with {:ok, _} <- Application.ensure_all_started(:lemon_skills) do
+        with :ok <- LemonCore.CLI.start(:lemon_skills) do
           service = Application.get_env(:lemon_cli, :timeline_service, LemonSkills.Timeline)
           service.for_profile(profile, kind: kind, limit: limit)
         end

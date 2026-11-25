@@ -37,7 +37,7 @@ defmodule LemonCore.Doctor.SupportBundleTest do
 
   defmodule StubMediaSupervisor do
     def status do
-      %{supervised: true, running: true, active_jobs: 0, workers: 1, supervisors: 1}
+      %{running: true, active_jobs: 0}
     end
   end
 
@@ -623,7 +623,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
 
     assert %{"path_hash" => _, "exists" => _} = media["jobs_dir"]
     assert %{"path_hash" => _, "exists" => _} = media["artifacts_dir"]
-    assert media["worker_status"]["supervised"] == true
     assert media["worker_status"]["running"] == true
     assert is_integer(media["worker_status"]["active_jobs"])
     assert media["summary"]["count"] == 1

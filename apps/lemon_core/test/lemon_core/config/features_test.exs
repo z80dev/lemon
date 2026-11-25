@@ -74,9 +74,20 @@ defmodule LemonCore.Config.FeaturesTest do
       assert features.session_search == :"default-on"
     end
 
-    test "unknown values parse to off (fail-closed)" do
+    # #617: a typo is a validation error, not a silent kill switch.
+    test "unknown values are kept and fail validation" do
       features = Features.resolve(%{"features" => %{"session_search" => "banana"}})
-      assert features.session_search == :off
+      assert features.session_search == "banana"
+      refute Features.enabled?(features, :session_search)
+      assert {:error, [error]} = Features.validate(features)
+      assert error =~ "features.session_search"
+
+      assert {:error, errors} =
+               LemonCore.Config.Modular.validate_settings(%{
+                 "features" => %{"crash_resume" => "yes"}
+               })
+
+      assert Enum.any?(errors, &String.starts_with?(&1, "features.crash_resume:"))
     end
 
     test "environment variable kill switch wins over TOML" do

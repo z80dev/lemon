@@ -14,21 +14,16 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   alias LemonAi.Types.TextContent
   alias LemonCore.Config
   alias LemonSkills.Tools.MediaCommon
-  alias LemonMedia.MediaJobSupervisor
 
   import LemonSkills.Tools.MediaCommon,
     only: [
       bounded_integer: 3,
-      optional_string: 1,
-      provider_error_kind: 1,
-      reject_blank_values: 1,
-      transient_status?: 1,
-      wait_for_job: 3
+      optional_string: 1
     ]
 
-  @topic "media_jobs"
-  @default_timeout_ms 20_000
-  @max_timeout_ms 300_000
+  @local_timeout_ms 20_000
+  @provider_timeout_ms 900_000
+  @max_timeout_ms 1_800_000
   @local_provider "local_mp4"
   @openai_provider "openai_video"
   @vertex_provider "vertex_veo"
@@ -37,7 +32,6 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   @default_vertex_model "veo-3.1-fast-generate-001"
   @default_vertex_location "us-central1"
   @formats %{"mp4" => "video/mp4"}
-  @local_mp4_preview <<0, 0, 0, 24, "ftypmp42", 0, 0, 0, 0, "mp42isom", 0, 0, 0, 8, "free">>
 
   @doc """
   Returns the `LemonAgent.Types.AgentTool.t()` definition for the
@@ -121,7 +115,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
             "description" => "Maximum time to wait for the supervised media worker."
           }
         },
-        "required" => ["prompt"]
+        "required" => ["prompt", "provider"]
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
@@ -132,8 +126,8 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   `params` map, `signal`, `on_update` callback, `cwd`, and `opts`.
 
   Reads `"prompt"` (required, non-empty after trimming), `"provider"`
-  (defaults to `"local_mp4"`; the other accepted values are `"openai_video"`
-  and `"vertex_veo"`), `"model"` (defaults to `"local_mp4_preview"`,
+  (required: `"local_mp4"`, `"openai_video"`, or
+  `"vertex_veo"`), `"model"` (defaults to `"local_mp4_preview"`,
   `"sora-2"`, or `"veo-3.1-fast-generate-001"` per provider), `"filename"`,
   `"size"` (for Vertex, `"1280x720"`/`"720x1280"` map to `"16:9"`/`"9:16"`),
   `"seconds"` (for Vertex, clamped 1-60), `"storageUri"`/`"storage_uri"`
@@ -141,7 +135,8 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   `"maxRetries"` (defaults to `1`, clamped 0-3), `"maxPolls"` (defaults to
   `30`, clamped 1-120), `"pollIntervalMs"` (defaults to `2_000`, clamped
   0-30_000), `"sendToChannel"` (defaults to `false`), and `"timeoutMs"`
-  (defaults to `20_000`, clamped 100-300_000).
+  (defaults to `20_000` local or `900_000` provider-backed, clamped
+  100-1_800_000).
 
   On success returns a `%LemonAgent.Types.AgentToolResult{}` with `content`
   the pretty-printed JSON payload and `details` the payload map (`job_id`,
@@ -158,12 +153,12 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
          {:ok, prompt} <- required_prompt(params),
          {:ok, provider} <- provider(params),
          {:ok, generation} <- generation(provider, params),
-         {:ok, timeout_ms} <- MediaCommon.timeout_ms(params, @default_timeout_ms, @max_timeout_ms),
+         {:ok, timeout_ms} <-
+           MediaCommon.timeout_ms(params, default_timeout_ms(provider), @max_timeout_ms),
          {:ok, artifact_path} <-
            MediaCommon.artifact_path(params, cwd, opts, generation.format, "media-video"),
-         :ok <- Phoenix.PubSub.subscribe(LemonCore.PubSub, @topic),
-         {:ok, _pid, queued_job} <-
-           MediaJobSupervisor.start_job(
+         {:ok, completed_job} <-
+           MediaCommon.run_job(
              %{
                type: :video,
                provider: provider,
@@ -176,11 +171,11 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
                cwd,
                opts,
                artifact_path,
-               runner(cwd, opts, artifact_path, generation)
-             )
-           ),
-         :ok <- AbortHelpers.check_abort(signal),
-         {:ok, completed_job} <- wait_for_job(queued_job.job_id, timeout_ms, signal) do
+               MediaCommon.runner(generation, artifact_path, runtime(cwd, opts, generation))
+             ),
+             timeout_ms,
+             signal
+           ) do
       payload = payload(completed_job, artifact_path, params)
 
       %AgentToolResult{
@@ -198,14 +193,18 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   defp required_prompt(_params), do: {:error, "prompt is required"}
 
   defp provider(params) do
-    case Map.get(params, "provider", @local_provider) do
+    case Map.get(params, "provider") do
       @local_provider -> {:ok, @local_provider}
       @openai_provider -> {:ok, @openai_provider}
       @vertex_provider -> {:ok, @vertex_provider}
+      nil -> {:error, "provider is required"}
       other when is_binary(other) -> {:error, "unsupported media video provider: #{other}"}
       _other -> {:error, "provider must be a string"}
     end
   end
+
+  defp default_timeout_ms(@local_provider), do: @local_timeout_ms
+  defp default_timeout_ms(_provider), do: @provider_timeout_ms
 
   defp generation(@local_provider, _params) do
     {:ok,
@@ -248,68 +247,9 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
      }}
   end
 
-  defp runner(_cwd, _opts, artifact_path, %{provider: @local_provider}) do
-    &run_local_video(&1, artifact_path)
-  end
-
-  defp runner(cwd, opts, artifact_path, %{provider: @openai_provider} = generation) do
-    runtime = openai_runtime(cwd, opts)
-    &run_openai_video(&1, artifact_path, generation, runtime)
-  end
-
-  defp runner(cwd, opts, artifact_path, %{provider: @vertex_provider} = generation) do
-    runtime = vertex_runtime(cwd, opts)
-    &run_vertex_veo(&1, artifact_path, generation, runtime)
-  end
-
-  defp run_local_video(_attrs, artifact_path) do
-    with :ok <- write_file(artifact_path, @local_mp4_preview),
-         {:ok, stat} <- File.stat(artifact_path) do
-      {:ok,
-       %{
-         artifact_path: artifact_path,
-         artifact_name: Path.basename(artifact_path),
-         mime_type: "video/mp4",
-         bytes: stat.size
-       }}
-    end
-  end
-
-  defp run_openai_video(attrs, artifact_path, generation, runtime) do
-    with {:ok, api_key} <- MediaCommon.provider_api_key(runtime, :missing_openai_video_api_key),
-         {:ok, video} <- create_openai_video(attrs, generation, runtime, api_key),
-         {:ok, completed} <- wait_openai_video(video, generation, runtime, api_key),
-         {:ok, bytes} <- download_openai_video(completed, generation, runtime, api_key),
-         :ok <- write_file(artifact_path, bytes),
-         {:ok, stat} <- File.stat(artifact_path) do
-      {:ok,
-       %{
-         artifact_path: artifact_path,
-         artifact_name: Path.basename(artifact_path),
-         mime_type: "video/mp4",
-         bytes: stat.size,
-         provider_job_id: redacted_video_id(completed)
-       }}
-    end
-  end
-
-  defp run_vertex_veo(attrs, artifact_path, generation, runtime) do
-    with {:ok, access_token} <- vertex_access_token(runtime),
-         {:ok, operation} <- create_vertex_veo(attrs, generation, runtime, access_token),
-         {:ok, completed} <- wait_vertex_veo(operation, generation, runtime, access_token),
-         {:ok, {bytes, mime_type}} <- decode_vertex_veo_response(completed, generation.mime_type),
-         :ok <- write_file(artifact_path, bytes),
-         {:ok, stat} <- File.stat(artifact_path) do
-      {:ok,
-       %{
-         artifact_path: artifact_path,
-         artifact_name: Path.basename(artifact_path),
-         mime_type: mime_type,
-         bytes: stat.size,
-         provider_job_id: redacted_operation_name(completed)
-       }}
-    end
-  end
+  defp runtime(_cwd, _opts, %{provider: @local_provider}), do: nil
+  defp runtime(cwd, opts, %{provider: @openai_provider}), do: openai_runtime(cwd, opts)
+  defp runtime(cwd, opts, %{provider: @vertex_provider}), do: vertex_runtime(cwd, opts)
 
   defp openai_runtime(cwd, opts) do
     config = Keyword.get_lazy(opts, :media_video_config, fn -> Config.load(cwd) end)
@@ -324,8 +264,9 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
       )
 
     Map.merge(endpoint, %{
-      http_post: Keyword.get(opts, :media_video_http_post, &Req.post/2),
-      http_get: Keyword.get(opts, :media_video_http_get, &Req.get/2)
+      credential: MediaCommon.credential(endpoint, :missing_openai_video_api_key),
+      http_post: Keyword.get(opts, :media_video_http_post),
+      http_get: Keyword.get(opts, :media_video_http_get)
     })
   end
 
@@ -349,454 +290,15 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
       service_account_json:
         Keyword.get(opts, :vertex_veo_service_account_json) ||
           resolved[:service_account_json],
-      http_post: Keyword.get(opts, :media_video_http_post, &Req.post/2),
-      token_http_post: Keyword.get(opts, :vertex_token_http_post, &Req.post/2)
+      http_post: Keyword.get(opts, :media_video_http_post),
+      token_http_post: Keyword.get(opts, :vertex_token_http_post)
     }
-  end
-
-  defp vertex_access_token(%{access_token: token}) when is_binary(token) and token != "",
-    do: {:ok, token}
-
-  defp vertex_access_token(%{service_account_json: json} = runtime)
-       when is_binary(json) and json != "" do
-    with {:ok, credentials} <- Jason.decode(json),
-         {:ok, jwt, token_uri} <- vertex_service_account_jwt(credentials),
-         {:ok, token} <- exchange_vertex_jwt(jwt, token_uri, runtime) do
-      {:ok, token}
-    else
-      {:error, reason} -> {:error, reason}
-      _ -> {:error, :invalid_vertex_veo_service_account_json}
-    end
-  end
-
-  defp vertex_access_token(_runtime), do: {:error, :missing_vertex_veo_credentials}
-
-  defp vertex_service_account_jwt(credentials) do
-    client_email = credentials["client_email"]
-    private_key = credentials["private_key"]
-    token_uri = credentials["token_uri"] || "https://oauth2.googleapis.com/token"
-
-    if is_binary(client_email) and client_email != "" and is_binary(private_key) and
-         private_key != "" do
-      now = System.system_time(:second)
-
-      header = %{"alg" => "RS256", "typ" => "JWT"}
-
-      claims = %{
-        "iss" => client_email,
-        "sub" => client_email,
-        "scope" => "https://www.googleapis.com/auth/cloud-platform",
-        "aud" => token_uri,
-        "iat" => now,
-        "exp" => now + 3600
-      }
-
-      signing_input =
-        Base.url_encode64(Jason.encode!(header), padding: false) <>
-          "." <> Base.url_encode64(Jason.encode!(claims), padding: false)
-
-      with [pem_entry | _] <- :public_key.pem_decode(private_key),
-           private_key <- :public_key.pem_entry_decode(pem_entry) do
-        signature = :public_key.sign(signing_input, :sha256, private_key)
-        jwt = signing_input <> "." <> Base.url_encode64(signature, padding: false)
-        {:ok, jwt, token_uri}
-      else
-        _ -> {:error, :invalid_vertex_veo_service_account_private_key}
-      end
-    else
-      {:error, :invalid_vertex_veo_service_account_json}
-    end
-  end
-
-  defp exchange_vertex_jwt(jwt, token_uri, runtime) do
-    body =
-      URI.encode_query(%{
-        "grant_type" => "urn:ietf:params:oauth:grant-type:jwt-bearer",
-        "assertion" => jwt
-      })
-
-    request_opts = [
-      headers: [{"content-type", "application/x-www-form-urlencoded"}],
-      body: body,
-      receive_timeout: 60_000
-    ]
-
-    case runtime.token_http_post.(token_uri, request_opts) do
-      {:ok, %{status: status, body: %{"access_token" => token}}}
-      when status in 200..299 and is_binary(token) and token != "" ->
-        {:ok, token}
-
-      {:ok, %{status: status, body: response_body}} ->
-        {:error, {:vertex_veo_token_http_error, status, provider_error_kind(response_body)}}
-
-      {:error, reason} ->
-        {:error, {:vertex_veo_token_request_failed, provider_error_kind(reason)}}
-    end
-  end
-
-  defp create_openai_video(attrs, generation, runtime, api_key) do
-    prompt = Map.get(attrs, :prompt) || Map.get(attrs, "prompt")
-    url = String.trim_trailing(runtime.base_url, "/") <> "/videos"
-
-    body =
-      %{
-        "model" => generation.model,
-        "prompt" => prompt,
-        "size" => generation.size,
-        "seconds" => generation.seconds
-      }
-      |> reject_blank_values()
-
-    request_opts = [
-      headers: [{"authorization", "Bearer #{api_key}"}],
-      json: body,
-      receive_timeout: 300_000
-    ]
-
-    do_post(runtime, url, request_opts, generation.max_retries, :openai_video_create)
-  end
-
-  defp wait_openai_video(video, generation, runtime, api_key) do
-    case video_status(video) do
-      status when status in ["completed", "succeeded"] ->
-        {:ok, video}
-
-      status when status in ["failed", "cancelled"] ->
-        {:error, {:openai_video_failed, status, provider_error_kind(video)}}
-
-      _status ->
-        poll_openai_video(video_id(video), generation, runtime, api_key, generation.max_polls)
-    end
-  end
-
-  defp poll_openai_video(nil, _generation, _runtime, _api_key, _remaining) do
-    {:error, :missing_openai_video_id}
-  end
-
-  defp poll_openai_video(_id, _generation, _runtime, _api_key, 0) do
-    {:error, :openai_video_poll_exhausted}
-  end
-
-  defp poll_openai_video(id, generation, runtime, api_key, remaining) do
-    if generation.poll_interval_ms > 0, do: Process.sleep(generation.poll_interval_ms)
-
-    url = String.trim_trailing(runtime.base_url, "/") <> "/videos/" <> id
-
-    request_opts = [
-      headers: [{"authorization", "Bearer #{api_key}"}],
-      receive_timeout: 300_000
-    ]
-
-    with {:ok, video} <-
-           do_get(runtime, url, request_opts, generation.max_retries, :openai_video_status) do
-      case video_status(video) do
-        status when status in ["completed", "succeeded"] ->
-          {:ok, video}
-
-        status when status in ["failed", "cancelled"] ->
-          {:error, {:openai_video_failed, status, provider_error_kind(video)}}
-
-        _status ->
-          poll_openai_video(id, generation, runtime, api_key, remaining - 1)
-      end
-    end
-  end
-
-  defp download_openai_video(video, generation, runtime, api_key) do
-    case video_id(video) do
-      id when is_binary(id) ->
-        url = String.trim_trailing(runtime.base_url, "/") <> "/videos/" <> id <> "/content"
-
-        request_opts = [
-          headers: [{"authorization", "Bearer #{api_key}"}],
-          receive_timeout: 300_000
-        ]
-
-        do_get(runtime, url, request_opts, generation.max_retries, :openai_video_download)
-
-      _ ->
-        {:error, :missing_openai_video_id}
-    end
-  end
-
-  defp create_vertex_veo(attrs, generation, runtime, access_token) do
-    with {:ok, project} <- required_vertex_value(runtime.project, :missing_vertex_veo_project),
-         {:ok, location} <- required_vertex_value(runtime.location, :missing_vertex_veo_location) do
-      prompt = Map.get(attrs, :prompt) || Map.get(attrs, "prompt")
-
-      url =
-        "https://#{location}-aiplatform.googleapis.com/v1/projects/#{project}/locations/#{location}/publishers/google/models/#{generation.model}:predictLongRunning"
-
-      parameters =
-        %{
-          "sampleCount" => 1,
-          "durationSeconds" => vertex_duration(generation.seconds),
-          "aspectRatio" => vertex_aspect_ratio(generation.size),
-          "storageUri" => generation.storage_uri
-        }
-        |> reject_blank_values()
-
-      body = %{
-        "instances" => [%{"prompt" => prompt}],
-        "parameters" => parameters
-      }
-
-      request_opts = [
-        headers: [{"authorization", "Bearer #{access_token}"}],
-        json: body,
-        receive_timeout: 300_000
-      ]
-
-      do_post(runtime, url, request_opts, generation.max_retries, :vertex_veo_create)
-    end
-  end
-
-  defp wait_vertex_veo(operation, generation, runtime, access_token) do
-    cond do
-      operation_done?(operation) and operation_error(operation) ->
-        {:error, {:vertex_veo_failed, provider_error_kind(operation_error(operation))}}
-
-      operation_done?(operation) ->
-        {:ok, operation}
-
-      true ->
-        poll_vertex_veo(
-          operation_name(operation),
-          generation,
-          runtime,
-          access_token,
-          generation.max_polls
-        )
-    end
-  end
-
-  defp poll_vertex_veo(nil, _generation, _runtime, _access_token, _remaining) do
-    {:error, :missing_vertex_veo_operation_name}
-  end
-
-  defp poll_vertex_veo(_operation_name, _generation, _runtime, _access_token, 0) do
-    {:error, :vertex_veo_poll_exhausted}
-  end
-
-  defp poll_vertex_veo(operation_name, generation, runtime, access_token, remaining) do
-    if generation.poll_interval_ms > 0, do: Process.sleep(generation.poll_interval_ms)
-
-    with {:ok, project} <- required_vertex_value(runtime.project, :missing_vertex_veo_project),
-         {:ok, location} <- required_vertex_value(runtime.location, :missing_vertex_veo_location) do
-      url =
-        "https://#{location}-aiplatform.googleapis.com/v1/projects/#{project}/locations/#{location}/publishers/google/models/#{generation.model}:fetchPredictOperation"
-
-      request_opts = [
-        headers: [{"authorization", "Bearer #{access_token}"}],
-        json: %{"operationName" => operation_name},
-        receive_timeout: 300_000
-      ]
-
-      with {:ok, operation} <-
-             do_post(runtime, url, request_opts, generation.max_retries, :vertex_veo_status) do
-        cond do
-          operation_done?(operation) and operation_error(operation) ->
-            {:error, {:vertex_veo_failed, provider_error_kind(operation_error(operation))}}
-
-          operation_done?(operation) ->
-            {:ok, operation}
-
-          true ->
-            poll_vertex_veo(operation_name, generation, runtime, access_token, remaining - 1)
-        end
-      end
-    end
-  end
-
-  defp required_vertex_value(value, _reason) when is_binary(value) and value != "",
-    do: {:ok, value}
-
-  defp required_vertex_value(_value, reason), do: {:error, reason}
-
-  defp do_post(runtime, url, request_opts, retries, error_kind) do
-    case runtime.http_post.(url, request_opts) do
-      {:ok, %{status: status, body: body}} when status in 200..299 ->
-        {:ok, body}
-
-      {:ok, %{status: status, body: body}} ->
-        retry_or_error(
-          fn -> do_post(runtime, url, request_opts, retries - 1, error_kind) end,
-          retries,
-          error_kind,
-          status,
-          body
-        )
-
-      {:error, _reason} when retries > 0 ->
-        do_post(runtime, url, request_opts, retries - 1, error_kind)
-
-      {:error, reason} ->
-        {:error, {:"#{error_kind}_request_failed", provider_error_kind(reason)}}
-    end
-  end
-
-  defp do_get(runtime, url, request_opts, retries, error_kind) do
-    case runtime.http_get.(url, request_opts) do
-      {:ok, %{status: status, body: body}} when status in 200..299 ->
-        {:ok, body}
-
-      {:ok, %{status: status, body: body}} ->
-        retry_or_error(
-          fn -> do_get(runtime, url, request_opts, retries - 1, error_kind) end,
-          retries,
-          error_kind,
-          status,
-          body
-        )
-
-      {:error, _reason} when retries > 0 ->
-        do_get(runtime, url, request_opts, retries - 1, error_kind)
-
-      {:error, reason} ->
-        {:error, {:"#{error_kind}_request_failed", provider_error_kind(reason)}}
-    end
-  end
-
-  defp retry_or_error(retry_fun, retries, error_kind, status, body) do
-    if transient_status?(status) and retries > 0 do
-      retry_fun.()
-    else
-      {:error, {:"#{error_kind}_http_error", status, provider_error_kind(body)}}
-    end
   end
 
   defp payload(job, artifact_path, params) do
     job
     |> MediaCommon.payload(artifact_path, mime_type_from_path(artifact_path), "prompt")
     |> MediaCommon.maybe_auto_send(params, "generated video preview")
-  end
-
-  defp write_file(path, bytes) when is_binary(bytes), do: MediaCommon.write_artifact(path, bytes)
-
-  defp video_id(video) when is_map(video) do
-    optional_string(video["id"]) || optional_string(video[:id])
-  end
-
-  defp video_id(_video), do: nil
-
-  defp video_status(video) when is_map(video) do
-    video["status"] || video[:status]
-  end
-
-  defp video_status(_video), do: nil
-
-  defp redacted_video_id(video) do
-    case video_id(video) do
-      id when is_binary(id) ->
-        :crypto.hash(:sha256, id)
-        |> Base.encode16(case: :lower)
-        |> String.slice(0, 16)
-
-      _ ->
-        nil
-    end
-  end
-
-  defp operation_name(operation) when is_map(operation) do
-    optional_string(operation["name"]) || optional_string(operation[:name])
-  end
-
-  defp operation_name(_operation), do: nil
-
-  defp operation_done?(%{"done" => done}), do: done == true
-  defp operation_done?(%{done: done}), do: done == true
-  defp operation_done?(_operation), do: false
-
-  defp operation_error(%{"error" => error}) when is_map(error), do: error
-  defp operation_error(%{error: error}) when is_map(error), do: error
-  defp operation_error(_operation), do: nil
-
-  defp redacted_operation_name(operation) do
-    case operation_name(operation) do
-      name when is_binary(name) ->
-        :crypto.hash(:sha256, name)
-        |> Base.encode16(case: :lower)
-        |> String.slice(0, 16)
-
-      _ ->
-        nil
-    end
-  end
-
-  defp decode_vertex_veo_response(operation, default_mime) do
-    response = operation_response(operation)
-
-    cond do
-      is_binary(
-        get_in(response, ["generatedVideos", Access.at(0), "video", "bytesBase64Encoded"])
-      ) ->
-        video = get_in(response, ["generatedVideos", Access.at(0), "video"])
-        decode_vertex_veo_bytes(video["bytesBase64Encoded"], video["mimeType"], default_mime)
-
-      is_binary(get_in(response, [:generatedVideos, Access.at(0), :video, :bytesBase64Encoded])) ->
-        video = get_in(response, [:generatedVideos, Access.at(0), :video])
-        decode_vertex_veo_bytes(video[:bytesBase64Encoded], video[:mimeType], default_mime)
-
-      is_binary(get_in(response, ["videos", Access.at(0), "bytesBase64Encoded"])) ->
-        video = get_in(response, ["videos", Access.at(0)])
-        decode_vertex_veo_bytes(video["bytesBase64Encoded"], video["mimeType"], default_mime)
-
-      is_binary(get_in(response, ["predictions", Access.at(0), "bytesBase64Encoded"])) ->
-        video = get_in(response, ["predictions", Access.at(0)])
-        decode_vertex_veo_bytes(video["bytesBase64Encoded"], video["mimeType"], default_mime)
-
-      has_vertex_veo_gcs_uri?(response) ->
-        {:error, :vertex_veo_gcs_uri_response_unsupported}
-
-      true ->
-        {:error, :missing_vertex_veo_video}
-    end
-  end
-
-  defp operation_response(%{"response" => response}) when is_map(response), do: response
-  defp operation_response(%{response: response}) when is_map(response), do: response
-  defp operation_response(response) when is_map(response), do: response
-  defp operation_response(_operation), do: %{}
-
-  defp decode_vertex_veo_bytes(encoded, mime_type, default_mime) do
-    case Base.decode64(encoded) do
-      {:ok, bytes} -> {:ok, {bytes, optional_string(mime_type) || default_mime}}
-      :error -> {:error, :invalid_vertex_veo_base64}
-    end
-  end
-
-  defp has_vertex_veo_gcs_uri?(%{"gcsUris" => [uri | _]}) when is_binary(uri), do: true
-
-  defp has_vertex_veo_gcs_uri?(%{gcsUris: [uri | _]}) when is_binary(uri), do: true
-
-  defp has_vertex_veo_gcs_uri?(%{"generatedVideos" => [%{"video" => %{"uri" => uri}} | _]})
-       when is_binary(uri),
-       do: true
-
-  defp has_vertex_veo_gcs_uri?(%{generatedVideos: [%{video: %{uri: uri}} | _]})
-       when is_binary(uri),
-       do: true
-
-  defp has_vertex_veo_gcs_uri?(_response), do: false
-
-  defp vertex_aspect_ratio(value) do
-    value
-    |> optional_string()
-    |> case do
-      ratio when ratio in ["16:9", "9:16"] -> ratio
-      "1280x720" -> "16:9"
-      "720x1280" -> "9:16"
-      _ -> nil
-    end
-  end
-
-  defp vertex_duration(value) do
-    value
-    |> optional_string()
-    |> case do
-      nil -> nil
-      value -> bounded_integer(value, 1, 60)
-    end
   end
 
   defp mime_type_from_path(path) do

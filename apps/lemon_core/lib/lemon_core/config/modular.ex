@@ -159,11 +159,17 @@ defmodule LemonCore.Config.Modular do
     end
 
     if validate? do
-      case Validator.validate(config) do
-        :ok ->
+      validation_errors =
+        case Validator.validate(config) do
+          :ok -> []
+          {:error, errors} -> errors
+        end
+
+      case validation_errors ++ Validator.profile_errors(settings) do
+        [] ->
           :ok
 
-        {:error, errors} ->
+        errors ->
           raise ValidationError,
             message: "Configuration validation failed",
             errors: qualify_errors(errors, sources)
@@ -254,7 +260,7 @@ defmodule LemonCore.Config.Modular do
         {:error, errs} -> errs
       end
 
-    case removed_setting_errors ++ validation_errors do
+    case removed_setting_errors ++ validation_errors ++ Validator.profile_errors(settings) do
       [] -> {:ok, config}
       errors -> {:error, errors}
     end

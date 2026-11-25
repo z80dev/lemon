@@ -64,6 +64,11 @@ All notable changes to `lemon_control_plane` are documented here.
   `retrySafe: false`. An `agentId` naming a managed profile runs as that
   profile's chat in its workspace and rejects a caller `cwd`. Unknown queue
   modes are rejected (#620).
+- `node.process.run`, `.get` and `.cancel` receipts accept the terminal state
+  `failed` (null exit and outputs): the destination proved the program never
+  started. Terminal receipts now retire on the destination 24 hours after they
+  finish; only unresolved receipts count toward its 1,000 limit (#679).
+
 - **Breaking security change:** HTTP/WebSocket listeners default to loopback.
   LAN deployments must explicitly configure `LEMON_CONTROL_PLANE_BIND_IP` and
   authentication. The separate node gateway defaults to `127.0.0.1:4044`;
@@ -75,6 +80,17 @@ All notable changes to `lemon_control_plane` are documented here.
   `consistency.eventCursor`: a live event between them returns the newer
   collection and its cursor (read in one owner call) instead of
   `snapshot_raced` (#628).
+- `sessions.snapshot` approvals carry `command`, `path`, `plan`, a bounded
+  `argumentsPreview` and per-item `truncated`/`planTruncated` flags, so a
+  recovered approval never renders as hashes only and a clipped plan is never
+  presented as complete; the approvals budget is 16,384 bytes (#654).
+- Read methods fail closed on store and runtime failures (`UNAVAILABLE`, never
+  empty/idle/not-found); `cron.status` reports `null` counters, an
+  `unavailable` section list and `enabled: null` for an unreadable job list; a
+  node whose registry read fails gets a retryable `UNAVAILABLE` at `connect`.
+  `ConfigStore` and `LogRing` reads return tagged results (#619).
+- `memory.transfer` releases a local source's frozen memory snapshot as soon
+  as the destination receipt is recorded instead of keeping it indefinitely (#623).
 - Timeouts, closed openers and unclassified failures of passive node inspections
   (`node.capabilities.get`, `node.runtime.features`, `node.host.info`) are
   retry-safe unavailable reads, not uncertain mutations.

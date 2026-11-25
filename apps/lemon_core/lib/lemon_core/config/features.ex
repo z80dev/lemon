@@ -187,7 +187,9 @@ defmodule LemonCore.Config.Features do
   defp parse_state(:"default-on"), do: :"default-on"
   defp parse_state("on"), do: :"default-on"
   defp parse_state(:on), do: :"default-on"
-  defp parse_state(_), do: :off
+  # Unknown values are kept so `validate/1` reports them instead of the flag
+  # silently turning off.
+  defp parse_state(raw), do: raw
 
   defp valid_state?(:off), do: true
   defp valid_state?(:"opt-in"), do: true

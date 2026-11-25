@@ -31,12 +31,15 @@ defmodule LemonAutomation.CronManager do
   5. Emits events for monitoring
 
   Prompt jobs use `cwd` as the native coding session's repository. Each run
-  owns a fixed router ID before submission. Wait timeouts, worker death, and
-  ambiguous submissions or aborts retain active ownership with
+  owns a fixed router ID before submission. Once its submission has started
+  (`meta.submission_started`), wait timeouts, worker death, and ambiguous
+  submissions or aborts retain active ownership with
   `meta.outcome_unknown: true`; ticks and restart reconcile the durable router
-  result rather than scheduling another editor. Only confirmed terminal
-  failures are retryable. Pausing prevents future scheduled runs; aborting
-  cancels the exact owned router run and does not repeat an ambiguous abort.
+  result rather than scheduling another editor. A claim whose submission never
+  started (a restart or worker crash before submit) is released as a retryable
+  failure with a `claim_released` audit. Only confirmed terminal failures are
+  retryable. Pausing prevents future scheduled runs; aborting cancels the exact
+  owned router run and does not repeat an ambiguous abort.
 
   Scheduled retries use `LemonCore.Retry.Policy` for their shared retry budget
   and fixed, jitter-free delay. Durable lineage, claims and timers remain here.
@@ -147,6 +150,13 @@ defmodule LemonAutomation.CronManager do
 
   @tick_interval_ms 60_000
   @call_timeout_ms 10_000
+  # Ceiling for every timer armed from job data (schedule recheck, retry tick);
+  # a later timer simply re-arms, so no job value can reach send_after's limit.
+  @max_job_timer_ms 300_000
+  @not_submitted_error "cron run was never submitted"
+  # Margin past a job's jitter window before an untracked, unsubmitted claim
+  # counts as orphaned (its submit message can no longer be pending).
+  @orphan_claim_grace_ms 5_000
   @task_supervisor LemonAutomation.TaskSupervisor
   @forwarded_summary_max_bytes 12_000
 
@@ -416,6 +426,7 @@ defmodule LemonAutomation.CronManager do
       catch_up_slots: %{},
       last_cleanup_at_ms: clock.now_ms(),
       run_retention_per_job: 100,
+      audit_retention_max: CronStore.audit_retention_max(),
       task_supervisor:
         Keyword.get(
           opts,
@@ -765,7 +776,7 @@ defmodule LemonAutomation.CronManager do
             run = %{run | meta: Map.put(run.meta || %{}, :abort_requested, true)}
             :ok = CronStore.put_run(run)
 
-            case abort_router_run(run) do
+            case abort_unsubmitted_or_router(run) do
               :ok ->
                 {aborted, state} =
                   terminalize_run(state, run, {:aborted, "Run aborted by operator"},
@@ -1061,7 +1072,7 @@ defmodule LemonAutomation.CronManager do
       if next do
         token = make_ref()
         # Bound rechecks after a failed claim; never busy-loop on an overdue slot.
-        delay = min(max(next - now, 100), 300_000)
+        delay = min(max(next - now, 100), @max_job_timer_ms)
         {Process.send_after(self(), {:scheduled_tick, token}, delay), token}
       end
 
@@ -1090,6 +1101,15 @@ defmodule LemonAutomation.CronManager do
   end
 
   defp abort_router_run(_run), do: :ok
+
+  # `abort_requested` is already persisted, so `claim_submission` refuses this
+  # run: a run that never started submission is definitely not at the router.
+  defp abort_unsubmitted_or_router(%CronRun{} = run) do
+    if submission_started?(run), do: abort_router_run(run), else: :ok
+  end
+
+  defp submission_started?(%CronRun{meta: meta}),
+    do: meta_value(meta || %{}, :submission_started) == true
 
   defp start_restoration(state) do
     manager = self()
@@ -1141,6 +1161,8 @@ defmodule LemonAutomation.CronManager do
   end
 
   defp finish_restoration(state, {result, fallback, retention}) do
+    initial? = state.restoration_initial
+
     state = %{
       state
       | restoration_task: nil,
@@ -1159,7 +1181,7 @@ defmodule LemonAutomation.CronManager do
               restoration_pending: false,
               restoration_backoff_ms: 250
           }
-          |> recover_stale_active_runs(LemonCore.Clock.now_ms(), active_runs)
+          |> recover_stale_active_runs(LemonCore.Clock.now_ms(), active_runs, initial?)
           |> schedule_restored_retries(retries, paused?)
           |> schedule_next_run(paused?)
 
@@ -1443,6 +1465,11 @@ defmodule LemonAutomation.CronManager do
     state =
       if now - Map.get(state, :last_cleanup_at_ms, 0) >= 3_600_000 do
         CronStore.cleanup_old_runs(Map.get(state, :run_retention_per_job, 100))
+
+        CronStore.cleanup_audit_events(
+          Map.get(state, :audit_retention_max, CronStore.audit_retention_max())
+        )
+
         Map.put(state, :last_cleanup_at_ms, now)
       else
         state
@@ -1486,7 +1513,10 @@ defmodule LemonAutomation.CronManager do
       true
   end
 
-  defp recover_stale_active_runs(state, now, results) do
+  # `startup?` is the first restoration after boot: no jitter timer or worker
+  # from before the restart can still submit a claim, so every unsubmitted claim
+  # is orphaned. Later passes wait out the job's jitter window first.
+  defp recover_stale_active_runs(state, now, results, startup? \\ false) do
     # Include orphaned runs: removing a job must not drop ownership of its editor.
     results = results || recovery_results(CronStore.active_runs())
 
@@ -1509,11 +1539,17 @@ defmodule LemonAutomation.CronManager do
               stop_tracked_task(state, run.id)
 
             :unknown ->
-              if meta_value(run.meta, :outcome_unknown) == true or stale_run?(run, job, now) do
-                {_run, state} = retain_unknown_run(state, run, :completion_outcome_unknown)
-                state
-              else
-                state
+              cond do
+                orphaned_claim?(run, job, state, now, startup?) ->
+                  {_run, state} = release_unsubmitted_claim(state, run, [])
+                  state
+
+                meta_value(run.meta, :outcome_unknown) == true or stale_run?(run, job, now) ->
+                  {_run, state} = retain_unknown_run(state, run, :completion_outcome_unknown)
+                  state
+
+                true ->
+                  state
               end
           end
 
@@ -1619,7 +1655,7 @@ defmodule LemonAutomation.CronManager do
       Logger.info("[CronManager] Skipping scheduled job #{job.id}: active run already exists")
       update_suppressed_scheduled_job(job, state)
     else
-      jitter_ms = if job.jitter_sec > 0, do: :rand.uniform(job.jitter_sec * 1000), else: 0
+      jitter_ms = jitter_delay_ms(job)
       scheduled_for_ms = job.next_run_at_ms || now || LemonCore.Clock.now_ms()
 
       catch_up = get_in(state, [:catch_up_slots, job.id]) == scheduled_for_ms
@@ -1995,17 +2031,71 @@ defmodule LemonAutomation.CronManager do
     {job, %{state | jobs: Map.put(state.jobs, job.id, job)}}
   end
 
+  # `outcome_unknown` is only for a run whose submission may have reached the
+  # router. `claim_submission` persists `submission_started` before the worker
+  # may submit, so without it the run definitely never left this node: release
+  # it as a retryable failure instead of locking the job.
   defp retain_unknown_run(state, run, reason, opts \\ []) do
-    if CronRun.finished?(run) do
-      {run, state}
-    else
-      meta = Map.put(run.meta || %{}, :outcome_unknown, true)
-      updated = %{run | status: :running, error: Atom.to_string(reason), meta: meta}
-      :ok = CronStore.put_run(updated)
-      maybe_record_terminal_audit(Keyword.get(opts, :audit_action), updated)
-      {updated, state}
+    run = CronStore.get_run(run.id) || run
+
+    cond do
+      CronRun.finished?(run) ->
+        {run, state}
+
+      not submission_started?(run) ->
+        release_unsubmitted_claim(state, run, opts)
+
+      true ->
+        meta = Map.put(run.meta || %{}, :outcome_unknown, true)
+        updated = %{run | status: :running, error: Atom.to_string(reason), meta: meta}
+        :ok = CronStore.put_run(updated)
+        maybe_record_terminal_audit(Keyword.get(opts, :audit_action), updated)
+        {updated, state}
     end
   end
+
+  defp release_unsubmitted_claim(state, run, opts) do
+    result =
+      if meta_value(run.meta || %{}, :abort_requested),
+        do: {:aborted, "Run stopped before submission"},
+        else: {:not_submitted, @not_submitted_error}
+
+    {released, state} =
+      terminalize_run(state, run, result, Keyword.put(opts, :audit_action, :claim_released))
+
+    {released, stop_tracked_task(state, run.id)}
+  end
+
+  defp orphaned_claim?(run, job, state, now, startup?) do
+    not submission_started?(run) and not Map.has_key?(Map.get(state, :tasks, %{}), run.id) and
+      (startup? or orphan_window_elapsed?(run, job, now))
+  end
+
+  defp orphan_window_elapsed?(%CronRun{started_at_ms: started}, job, now)
+       when is_integer(started) and is_integer(now) do
+    now - started > jitter_window_ms(job) + @orphan_claim_grace_ms
+  end
+
+  defp orphan_window_elapsed?(_run, _job, _now), do: false
+
+  # Jitter is validated against `CronJob.numeric_bounds/0` on add and update; a
+  # stored value outside them is clamped instead of raising in `:rand.uniform/1`
+  # or `Process.send_after/3`.
+  defp jitter_window_ms(%CronJob{jitter_sec: sec}) when is_integer(sec) and sec > 0 do
+    {_min, max} = CronJob.numeric_bounds().jitter_sec
+    min(sec, max) * 1000
+  end
+
+  defp jitter_window_ms(_job), do: 0
+
+  defp jitter_delay_ms(job) do
+    case jitter_window_ms(job) do
+      0 -> 0
+      window_ms -> :rand.uniform(window_ms)
+    end
+  end
+
+  defp terminal_result(run, {:not_submitted, reason}), do: CronRun.fail(run, reason)
 
   defp terminal_result(run, {:worker_down, _reason}), do: CronRun.fail(run, "cron worker exited")
 
@@ -2225,7 +2315,7 @@ defmodule LemonAutomation.CronManager do
           cond do
             held? -> @tick_interval_ms
             due_at_ms <= now -> if(startup?, do: 0, else: 1_000)
-            true -> due_at_ms - now
+            true -> min(due_at_ms - now, @max_job_timer_ms)
           end
 
         %{state | retry_timer: Process.send_after(self(), :retry_tick, delay_ms)}
@@ -2544,6 +2634,7 @@ defmodule LemonAutomation.CronManager do
     with {:ok, params} <- validate_timezone_field(params, default_timezone),
          {:ok, params} <- validate_cwd(params),
          {:ok, params} <- validate_monitor_flags(params),
+         {:ok, params} <- validate_numeric_fields(params),
          {:ok, params} <- validate_profile_field(params, mode),
          {:ok, params} <- validate_model_field(params, mode),
          {:ok, params} <- validate_context_from(params, mode, job_id),
@@ -2669,6 +2760,20 @@ defmodule LemonAutomation.CronManager do
       {:ok, _value} ->
         {:invalid_target, "once must be a boolean"}
     end
+  end
+
+  defp validate_numeric_fields(params) do
+    CronJob.numeric_bounds()
+    |> Map.keys()
+    |> Enum.sort()
+    |> Enum.reduce_while({:ok, params}, fn field, acc ->
+      with {:ok, value} <- fetch_param(params, field),
+           {:error, reason} <- CronJob.validate_numeric(field, value) do
+        {:halt, {:invalid_target, reason}}
+      else
+        _ -> {:cont, acc}
+      end
+    end)
   end
 
   defp validate_monitor_flags(params) do

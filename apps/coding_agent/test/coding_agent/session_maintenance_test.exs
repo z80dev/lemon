@@ -5,7 +5,6 @@ defmodule CodingAgent.SessionMaintenanceTest do
     Artifacts,
     Config,
     ControlPlaneProvider,
-    SessionIndex,
     SessionMaintenance
   }
 
@@ -126,7 +125,54 @@ defmodule CodingAgent.SessionMaintenanceTest do
            end) == {:error, :lock_upgrade}
   end
 
-  test "preview does not write journals, archive directories or an index", %{cwd: cwd} do
+  test "a dry run takes no root admission, so it never blocks startup or artifact spill", %{
+    cwd: cwd
+  } do
+    journal(cwd, "cold")
+    {:ok, _} = Artifacts.spill("orphaned output", cwd, session_id: "orphan")
+    parent = self()
+
+    # A startup or spill writer still inside shared admission.
+    {holder, monitor} =
+      spawn_monitor(fn ->
+        SessionMaintenance.with_root_lock(fn ->
+          send(parent, :admitted)
+
+          receive do
+            :stop -> :ok
+          end
+        end)
+      end)
+
+    cleanup_owner_on_exit(holder)
+    assert_receive :admitted, 5_000
+
+    :erlang.trace_pattern({:global, :trans, :_}, true, [])
+    :erlang.trace(self(), true, [:call])
+
+    try do
+      assert {:ok, report} = preview()
+      assert report.archive_count == 1
+      assert report.orphan_count == 1
+    after
+      :erlang.trace(self(), false, [:call])
+      :erlang.trace_pattern({:global, :trans, :_}, false, [])
+    end
+
+    root_locks =
+      for {:trace, _, :call, {:global, :trans, [{{SessionMaintenance, _root}, _}, _ | _]}} <-
+            drain_traces(),
+          do: :root_lock
+
+    assert root_locks == []
+
+    # Spills and startups admitted while maintenance only previews.
+    assert {:ok, _} = Artifacts.spill("written during preview", cwd, session_id: "warm")
+    send(holder, :stop)
+    assert_receive {:DOWN, ^monitor, :process, ^holder, :normal}, 5_000
+  end
+
+  test "preview does not write journals or archive directories", %{cwd: cwd} do
     path = journal(cwd, "cold")
     before = File.read!(path)
     names = File.ls!(Config.sessions_dir(cwd))
@@ -144,13 +190,12 @@ defmodule CodingAgent.SessionMaintenanceTest do
     refute inspect(report) =~ cwd
   end
 
-  test "archives cold journals, removes their index row and retains archived artifacts", %{
+  test "archives cold journals and retains archived artifacts", %{
     cwd: cwd
   } do
     path = journal(cwd, "cold")
     {:ok, uri} = Artifacts.spill("keep archived output", cwd, session_id: "cold")
     {:ok, original_artifact} = Artifacts.resolve(uri, cwd, session_id: "cold")
-    assert {:ok, [_]} = SessionIndex.list(Config.sessions_dir(cwd))
     assert {:ok, report} = preview()
     assert {:ok, executed} = execute(report)
     assert executed.archived_count == 1
@@ -158,7 +203,6 @@ defmodule CodingAgent.SessionMaintenanceTest do
     assert executed.verified
     refute File.exists?(path)
     assert File.regular?(Path.join([Config.sessions_dir(cwd), "archive", "cold.jsonl"]))
-    assert {:ok, []} = SessionIndex.list(Config.sessions_dir(cwd))
     assert {:ok, ^original_artifact} = Artifacts.resolve(uri, cwd, session_id: "cold")
     assert {:ok, next} = preview()
     assert next.archive_count == 0
@@ -213,12 +257,14 @@ defmodule CodingAgent.SessionMaintenanceTest do
     assert File.regular?(Path.join(Config.sessions_dir(cwd), "cold.jsonl"))
   end
 
+  # Files a run would not mutate are bound by stat fingerprint (size, inode,
+  # mtime, ctime, mode, links); only candidates are content-hashed.
   test "changed retained artifacts also invalidate archive confirmation", %{cwd: cwd} do
     journal(cwd, "cold")
     {:ok, uri} = Artifacts.spill("original", cwd, session_id: "cold")
     {:ok, artifact} = Artifacts.resolve(uri, cwd, session_id: "cold")
     assert {:ok, report} = preview()
-    File.write!(artifact, "modified")
+    File.write!(artifact, "modified retained output")
     assert {:error, :confirmation_mismatch} = execute(report)
   end
 
@@ -301,22 +347,17 @@ defmodule CodingAgent.SessionMaintenanceTest do
     end
   end
 
-  test "journal-less startup admission protects its spills before owner publication", %{cwd: cwd} do
+  test "journal-less startup admission protects its spills before the journal exists", %{
+    cwd: cwd
+  } do
     {:ok, _} = Artifacts.spill("retain", cwd, session_id: "starting")
-    path = Path.join(Config.sessions_dir(cwd), "starting.jsonl")
+    assert {:ok, %{orphan_count: 1} = before_startup} = preview()
     parent = self()
 
     {pid, monitor} =
       spawn_monitor(fn ->
-        Ownership.initialize([cwd: cwd, session_id: "starting"], fn _opts ->
-          send(parent, :startup_admitted)
-
-          receive do
-            :publish -> {:ok, %{session_file: path}}
-          end
-        end)
-
-        send(parent, :startup_published)
+        {:ok, _opts, _path} = Ownership.admit(cwd: cwd, session_id: "starting")
+        send(parent, :startup_admitted)
 
         receive do
           :stop -> :ok
@@ -324,22 +365,12 @@ defmodule CodingAgent.SessionMaintenanceTest do
       end)
 
     cleanup_owner_on_exit(pid)
-
     assert_receive :startup_admitted, 5_000
 
-    task =
-      Task.async(fn ->
-        send(parent, :maintenance_started)
-        preview()
-      end)
-
-    assert_receive :maintenance_started, 5_000
-    send(pid, :publish)
-    assert_receive :startup_published, 5_000
-
     try do
-      assert {:ok, report} = Task.await(task)
+      assert {:ok, report} = preview()
       assert report.orphan_count == 0
+      assert {:error, :confirmation_mismatch} = execute(before_startup)
       assert File.dir?(Config.spill_dir(cwd, "starting"))
     after
       stop_owner(pid, monitor)
@@ -379,27 +410,24 @@ defmodule CodingAgent.SessionMaintenanceTest do
     assert File.dir?(Config.spill_dir(cwd, "orphan"))
   end
 
-  test "index mutation failure stops the pass without retrying or sweeping later candidates", %{
+  test "a failed mutation stops the pass without retrying or sweeping later candidates", %{
     cwd: cwd
   } do
-    path = journal(cwd, "cold")
-    {:ok, _} = Artifacts.spill("retain on failure", cwd, session_id: "orphan")
+    journal(cwd, "cold")
+    {:ok, _} = Artifacts.spill("undeletable", cwd, session_id: "orphan-a")
+    {:ok, _} = Artifacts.spill("retain on failure", cwd, session_id: "orphan-b")
+    locked = Config.spill_dir(cwd, "orphan-a")
+    File.chmod!(locked, 0o500)
+    on_exit(fn -> File.chmod(locked, 0o700) end)
     assert {:ok, plan} = SessionMaintenance.plan(@cutoff)
+    assert Enum.map(plan.candidates, & &1.kind) == [:archive, :orphan_artifact, :orphan_artifact]
 
-    assert {:error, {:partial_failure, report}} =
-             SessionMaintenance.execute(plan,
-               remove_index: fn removed ->
-                 send(self(), {:index_remove_attempt, removed})
-                 {:error, :injected_failure}
-               end
-             )
-
+    assert {:error, {:partial_failure, report}} = SessionMaintenance.execute(plan)
     refute report.verified
     assert report.archived_count == 1
     assert report.swept_count == 0
-    assert_received {:index_remove_attempt, ^path}
-    refute_received {:index_remove_attempt, _}
-    assert File.dir?(Config.spill_dir(cwd, "orphan"))
+    assert File.ls!(locked) != []
+    assert File.dir?(Config.spill_dir(cwd, "orphan-b"))
     assert File.regular?(Path.join([Config.sessions_dir(cwd), "archive", "cold.jsonl"]))
   end
 
@@ -482,6 +510,14 @@ defmodule CodingAgent.SessionMaintenanceTest do
       Process.exit(pid, :kill)
       assert_receive {:DOWN, ^monitor, :process, ^pid, _}, 5_000
     end)
+  end
+
+  defp drain_traces(acc \\ []) do
+    receive do
+      {:trace, _, :call, _} = trace -> drain_traces([trace | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 
   defp preview, do: SessionLifecycle.maintenance(older_than_ms: @cutoff)

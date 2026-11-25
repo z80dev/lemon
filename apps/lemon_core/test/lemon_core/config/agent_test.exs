@@ -465,7 +465,19 @@ defmodule LemonCore.Config.AgentTest do
     test "is unlimited unless a positive cap is configured" do
       assert Agent.resolve(%{}).max_tool_turns == :infinity
       assert Agent.resolve(%{"runtime" => %{"max_tool_turns" => 0}}).max_tool_turns == :infinity
-      assert Agent.resolve(%{"runtime" => %{"max_tool_turns" => -3}}).max_tool_turns == :infinity
+    end
+
+    # #617: an invalid cap is kept for the validator, not read as "unlimited".
+    test "keeps an invalid cap raw so validation reports it" do
+      assert Agent.resolve(%{"runtime" => %{"max_tool_turns" => -3}}).max_tool_turns == -3
+      assert Agent.resolve(%{"runtime" => %{"max_tool_turns" => "ten"}}).max_tool_turns == "ten"
+
+      assert {:error, errors} =
+               LemonCore.Config.Modular.validate_settings(%{
+                 "runtime" => %{"max_tool_turns" => "ten"}
+               })
+
+      assert Enum.any?(errors, &String.starts_with?(&1, "runtime.max_tool_turns:"))
     end
 
     test "accepts a positive cap from [runtime]" do

@@ -167,22 +167,15 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
             azure_input(base_opts, provider_cfg)
           )
 
-        thinking_budgets =
-          base_opts.thinking_budgets
-          |> maybe_put(:azure_api_version, resolved[:api_version])
-          |> maybe_put(:azure_base_url, resolved[:base_url])
-          |> maybe_put(:azure_resource_name, resolved[:resource_name])
-          |> maybe_put(:azure_deployment_name_map, resolved[:deployment_name_map])
-
         base_opts
         |> maybe_put_struct(:api_key, resolved[:api_key])
         |> apply_resolved_authority(resolved)
-        |> Map.put(:thinking_budgets, thinking_budgets)
         |> put_provider_options(:azure_openai_responses, %{
           api_key: resolved[:api_key],
           base_url: resolved[:base_url],
           api_version: resolved[:api_version],
           resource_name: resolved[:resource_name],
+          deployment_name: azure_override(base_opts, :deployment_name),
           deployment_name_map: resolved[:deployment_name_map]
         })
 
@@ -267,16 +260,13 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
     |> Map.put(:provider_config, provider_cfg)
   end
 
+  # Azure settings live only in `provider_options[:azure_openai_responses]`;
+  # configured values win over per-request caller overrides there.
   defp azure_input(base_opts, provider_cfg) do
     azure_opts =
-      [
-        base_url: :azure_base_url,
-        resource_name: :azure_resource_name,
-        api_version: :azure_api_version,
-        deployment_name_map: :azure_deployment_name_map
-      ]
-      |> Map.new(fn {key, wire_key} ->
-        {key, provider_config_value(provider_cfg, key) || base_opts.thinking_budgets[wire_key]}
+      [:base_url, :resource_name, :api_version, :deployment_name_map]
+      |> Map.new(fn key ->
+        {key, provider_config_value(provider_cfg, key) || azure_override(base_opts, key)}
       end)
       |> Map.reject(fn {_key, value} -> is_nil(value) end)
 
@@ -285,6 +275,11 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
     |> Map.put(:provider_config, provider_cfg)
     |> put_configured_api_key(base_opts, provider_cfg)
   end
+
+  defp azure_override(%{provider_options: %{azure_openai_responses: %{} = overrides}}, key),
+    do: Map.get(overrides, key)
+
+  defp azure_override(_base_opts, _key), do: nil
 
   # The resolver reads the configured AWS secrets itself, stopping at an
   # unreadable one instead of continuing to the ambient AWS_* credentials.

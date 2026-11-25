@@ -10,9 +10,9 @@ defmodule LemonRouter.RunProcess.Watchdog do
   | awaiting start | run started | running / idle timeout |
   | running or confirming idle | output, action, keepalive | running / fresh idle timeout |
   | running | idle timeout, prompt delivered | confirming idle / confirmation timeout |
-  | running | idle timeout, no prompt destination | completing / synthetic failure |
-  | confirming idle | confirmation timeout | completing / synthetic failure |
-  | active | cancel | completing / synthetic cancellation |
+  | running | idle timeout, no prompt destination | aborting / gateway cancel (`:run_idle_watchdog_timeout`) |
+  | confirming idle | confirmation timeout | aborting / gateway cancel (`:run_idle_watchdog_timeout`) |
+  | active | cancel | aborting / gateway cancel (`:user_requested`) |
   | any | unrelated event | unchanged / existing deadline retained |
 
   Leaving the active state cancels its `state_timeout` automatically. Zero
@@ -99,21 +99,14 @@ defmodule LemonRouter.RunProcess.Watchdog do
     end
   end
 
-  @spec fail_run_for_idle_timeout(map()) :: :ok
-  def fail_run_for_idle_timeout(state) do
+  @spec log_idle_timeout(map()) :: :ok
+  def log_idle_timeout(state) do
     timeout_ms = state.run_watchdog_timeout_ms || @default_run_idle_watchdog_timeout_ms
 
     Logger.error(
       "RunProcess watchdog idle timeout run_id=#{inspect(state.run_id)} " <>
         "session_key=#{inspect(state.session_key)} idle_timeout_ms=#{timeout_ms}"
     )
-
-    emit_synthetic_run_completion(state, {:run_idle_watchdog_timeout, timeout_ms}, timeout_ms)
-  end
-
-  @spec fail_run_for_user_cancel(map()) :: :ok
-  def fail_run_for_user_cancel(state) do
-    emit_synthetic_run_completion(state, :user_requested, nil)
   end
 
   defp watchdog_confirmation_intent(state) do
@@ -153,35 +146,6 @@ defmodule LemonRouter.RunProcess.Watchdog do
     end
   end
 
-  defp emit_synthetic_run_completion(state, error, duration_ms) do
-    try do
-      engine_runtime(state).cancel_by_run_id(state.run_id, :run_watchdog_timeout)
-    rescue
-      _ -> :ok
-    end
-
-    event =
-      LemonCore.Event.new(
-        :run_completed,
-        LemonCore.Events.RunCompleted.new(%{
-          completed:
-            LemonCore.Events.Completion.new(%{
-              ok: false,
-              error: error,
-              answer: ""
-            }),
-          duration_ms: duration_ms
-        }),
-        %{
-          run_id: state.run_id,
-          session_key: state.session_key,
-          synthetic: true
-        }
-      )
-
-    LemonRouter.RunCompletion.publish(state.execution_request, event)
-  end
-
   defp dispatcher do
     Application.get_env(:lemon_router, :dispatcher, LemonChannels.Dispatcher)
   end
@@ -193,9 +157,4 @@ defmodule LemonRouter.RunProcess.Watchdog do
   defp get_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key, :unset)
   defp get_opt(opts, key) when is_map(opts), do: Map.get(opts, key, :unset)
   defp get_opt(_, _), do: :unset
-
-  defp engine_runtime(state) do
-    Map.get(state, :engine_runtime) ||
-      Application.get_env(:lemon_router, :engine_runtime)
-  end
 end

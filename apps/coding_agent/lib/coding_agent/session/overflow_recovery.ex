@@ -43,7 +43,7 @@ defmodule CodingAgent.Session.OverflowRecovery do
   @type callbacks(state) :: %{
           required(:restore_messages_from_session) => (map() -> [map()]),
           required(:broadcast_event) => (state, LemonAgent.Types.agent_event() -> :ok),
-          required(:handle_agent_event) => (LemonAgent.Types.agent_event(), state -> state)
+          required(:terminalize) => (state, LemonAgent.Types.agent_event() -> state)
         }
 
   @spec handle_task_down(map(), callbacks(map())) :: map()
@@ -170,6 +170,11 @@ defmodule CodingAgent.Session.OverflowRecovery do
   defp provider_failure?(%{category: _category}), do: true
   defp provider_failure?(_reason), do: false
 
+  @doc """
+  Apply the summary task's result. Steering or follow-up input journaled while
+  it ran only appends to the summarized history, so the result still applies;
+  any other change to the session fails the run instead of leaving it streaming.
+  """
   @spec handle_result(map(), term(), {:ok, map()} | {:error, term()}, callbacks(map())) :: map()
   def handle_result(state, signature, result, callbacks) do
     cond do
@@ -179,8 +184,15 @@ defmodule CodingAgent.Session.OverflowRecovery do
       state.overflow_recovery.signature != signature ->
         state
 
-      signature != CompactionManager.session_signature(state) ->
-        CompactionManager.clear_overflow_recovery_task_state(state)
+      not CompactionManager.appended_since?(state, signature) ->
+        failed_state = CompactionManager.clear_overflow_recovery_task_state(state)
+
+        CompactionManager.emit_overflow_recovery_telemetry(:failure, failed_state, %{
+          duration_ms: CompactionManager.overflow_recovery_duration_ms(state),
+          reason: "stale_session"
+        })
+
+        finalize_failure(failed_state, :overflow_recovery_stale_session, callbacks)
 
       true ->
         state = CompactionManager.clear_overflow_recovery_task_state(state)
@@ -286,10 +298,6 @@ defmodule CodingAgent.Session.OverflowRecovery do
 
   defp finalize_failure(state, fallback_reason, callbacks) do
     reason = state.overflow_recovery.error_reason || fallback_reason
-    event = {:error, reason, state.overflow_recovery.partial_state}
-
-    callbacks.broadcast_event.(state, event)
-    state = callbacks.handle_agent_event.(event, state)
-    CompactionManager.clear_overflow_recovery_state_on_terminal(event, state)
+    callbacks.terminalize.(state, {:error, reason, state.overflow_recovery.partial_state})
   end
 end

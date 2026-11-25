@@ -111,6 +111,18 @@ the existing gateway run `:start`, `:first_token` and `:stop` events. Consumers
 must keep synchronous handlers cheap; the benchmark only sends bounded timing
 messages to its owner and retains no session content.
 
+## Prompt source loading
+
+Instruction and rule loading runs on session start and on every turn's prompt
+refresh. `CodingAgent.ResourceLoader.SourceReader` emits
+`[:coding_agent, :prompt_sources, :read]` for every disk read of an instruction
+file, `@` import or rule file (stat-validated cache hits emit nothing), with
+`%{bytes: n}` and metadata `%{truncated: boolean}`, and
+`[:coding_agent, :prompt_sources, :load]` once per loader pass with
+`%{duration: native_time_units, reads: n, bytes: n}` and metadata
+`%{source: :instructions | :rules}`. No paths or content are included. A turn
+whose sources are unchanged reports `reads: 0`.
+
 ## Conventions
 
 ### Naming
@@ -468,8 +480,6 @@ Aggregate snapshots do not provide per-run wait latency. See the
 |---|---|---|---|
 | `[:lemon_ai, :dispatcher, :dispatch]` | `system_time` | `provider` | [`LemonAi.CallDispatcher.dispatch/3`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher.ex), before breaker and rate-limit checks |
 | `[:lemon_ai, :dispatcher, :rejected]` | `duration`, `system_time` | `provider`, `reason` (`:circuit_open` \| `:rate_limited` \| `:max_concurrency`), `retry_after_ms` (circuit-open only) | [`LemonAi.CallDispatcher.dispatch/3`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher.ex) |
-| `[:lemon_ai, :dispatcher, :hedge_started]` | `duplicate_input_tokens` (prompt-size estimate, not vendor billing) | `provider`, `model` | [`launch/6`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher/hedge.ex) in `LemonAi.CallDispatcher.Hedge`: opt-in duplicate admitted after the model p90 first-content deadline. Transport model-call spans remain separate; the returned logical message includes the extra input estimate. |
-| `[:lemon_ai, :dispatcher, :hedge_skipped]` | none | `provider`, `model`, `reason` | [`race/6`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher/hedge.ex) and [`launch/6`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher/hedge.ex): hedge attempted but rejected, including zero-wait admission rejection. No queue is created. |
 | `[:lemon_ai, :model_call, :start]` | `system_time`, `monotonic_time` | `provider`, `telemetry_span_context`, and `model` (id), `api`, `call_kind` (`:stream` \| `:complete`) when the caller labelled the call | [`LemonAi.ModelCallTelemetry.start/2`](../apps/lemon_ai/lib/lemon_ai/model_call_telemetry.ex), called by `CallDispatcher.dispatch/3` after the breaker, concurrency slot and rate limiter admit the call. Rejected dispatches emit only `:rejected` — never a `:start` |
 | `[:lemon_ai, :model_call, :stop]` | `duration`, `monotonic_time` (native); `first_event_duration` (native, first text/thinking/tool-call delta, only when observed); `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` (only when the provider reported them) | start metadata plus `outcome` (`:ok` \| `:error` \| `:canceled` \| `:aborted`), `stop_reason` (when the final message has one), `error_category` (non-`:ok` outcomes; bounded atom — a `LemonAi.Error.classify/1` category, or `:canceled`/`:timeout`/`:idle_timeout`/`:owner_down`/`:shutdown`/`:aborted`/`:stream_exit`/`:stream_tracking_failed`/`:stream_tracking_exit`/`:unexpected_result`) | [`emit_stop/6`](../apps/lemon_ai/lib/lemon_ai/model_call_telemetry.ex), through `ModelCallTelemetry.stop_result/2`, `stop_stream/4` and `stop_failure/3`. For streams it fires when the stream reaches its terminal event (done, error, cancel, idle/hard timeout) or the producer dies, from the existing stream tracker — not when `dispatch/3` returns. Prompts, messages, credentials, URLs and raw error terms are never in the metadata |
 | `[:lemon_ai, :model_call, :exception]` | `duration`, `monotonic_time` (native) | start metadata plus `kind` (`:error` \| `:throw` \| `:exit`), `reason` (exception module for `:error`, otherwise the kind) | [`LemonAi.ModelCallTelemetry.exception/3`](../apps/lemon_ai/lib/lemon_ai/model_call_telemetry.ex), when the dispatch callback raises, throws or exits. Exactly one `:stop` or `:exception` follows each `:start`, unless the stream tracker process is killed outright |
@@ -908,7 +918,7 @@ Every atom below appears in a live `LemonCore.Introspection.record/3` call.
 |---|---|
 | `LemonRouter.RunProcess` | `:run_started`, `:run_completed`, `:run_failed` |
 | `LemonRouter.RunOrchestrator` | `:orchestration_started`, `:orchestration_resolved`, `:orchestration_failed` |
-| Router answer finalization | `:answer_finalize_started`, `:answer_finalize_dispatch`, `:answer_finalize_completed`, `:answer_artifact_finalize_failed`, `:answer_media_jobs_record_failed` |
+| Router answer finalization | `:answer_finalize_started`, `:answer_finalize_dispatch`, `:answer_finalize_failed`, `:answer_finalize_completed`, `:answer_artifact_finalize_failed`, `:answer_media_jobs_record_failed` |
 | `CodingAgent.Session` | `:session_started`, `:session_ended`, `:compaction_triggered` |
 | `CodingAgent.Session.EventHandler` | `:tool_call_dispatched`, `:engine_event_ignored` |
 | `LemonAgent.Agent` | `:agent_loop_started`, `:agent_turn_observed` (inferred), `:agent_loop_ended`, `:agent_progress_snapshot` |

@@ -242,6 +242,90 @@ defmodule LemonWeb.BlueprintManagementLiveTest do
     refute log =~ ctx.root
   end
 
+  test "blueprint activation timeout is outcome_unknown", ctx do
+    {:ok, view, digest} = previewed(ctx)
+
+    catalog_with(fn
+      :activate, _args -> exit(:timeout)
+      action, args -> real_catalog(action, args)
+    end)
+
+    html = render_submit(view, "activate", %{"activation" => %{"confirmation_digest" => digest}})
+    assert html =~ "may have been applied"
+    assert html =~ "not retried"
+    refute html =~ "Nothing changed"
+    refute html =~ "Activate exact plan"
+    assert html =~ ~s(id="blueprint-outcome-unknown")
+
+    # The target stays locked until a fresh preview has read its state.
+    locked =
+      render_submit(view, "activate", %{"activation" => %{"confirmation_digest" => digest}})
+
+    refute locked =~ "Activate exact plan"
+
+    previewed_again =
+      render_submit(view, "preview", %{"preview" => %{"profile_id" => ctx.profile_id}})
+
+    assert previewed_again =~ "Activate exact plan"
+    refute previewed_again =~ ~s(id="blueprint-outcome-unknown")
+  end
+
+  test "blueprint activation with unparseable success does not claim nothing changed", ctx do
+    {:ok, view, digest} = previewed(ctx)
+    test_pid = self()
+
+    catalog_with(fn
+      :activate, _args ->
+        {:ok, %{"unexpected" => true}}
+
+      action, args ->
+        send(test_pid, {:catalog, action})
+        real_catalog(action, args)
+    end)
+
+    html = render_submit(view, "activate", %{"activation" => %{"confirmation_digest" => digest}})
+    assert html =~ "applied; details unavailable"
+    refute html =~ "Nothing changed"
+    assert_received {:catalog, :list}
+  end
+
+  test "inspect, validate and preview failures never claim nothing changed", ctx do
+    {:ok, view, _html} = live(authenticated_conn(ctx.token), "/blueprints")
+    render_click(view, "inspect", %{"bundle" => ctx.bundle_id})
+
+    catalog_with(fn
+      :list, args -> real_catalog(:list, args)
+      _action, _args -> raise "boom"
+    end)
+
+    for html <- [
+          render_click(view, "validate", %{}),
+          render_submit(view, "preview", %{"preview" => %{"profile_id" => ctx.profile_id}}),
+          render_click(view, "inspect", %{"bundle" => ctx.bundle_id})
+        ] do
+      assert html =~ "could not be confirmed"
+      refute html =~ "Nothing changed"
+      refute html =~ "boom"
+    end
+  end
+
+  defp previewed(ctx) do
+    {:ok, view, _html} = live(authenticated_conn(ctx.token), "/blueprints")
+    render_click(view, "inspect", %{"bundle" => ctx.bundle_id})
+    html = render_submit(view, "preview", %{"preview" => %{"profile_id" => ctx.profile_id}})
+    {:ok, view, confirmation_digest(html)}
+  end
+
+  defp catalog_with(fun), do: Application.put_env(:lemon_web, :blueprint_catalog_fun, fun)
+
+  defp real_catalog(action, args),
+    do:
+      apply(
+        LemonAutomation.Blueprint.Catalog,
+        action,
+        args ++ [Application.get_env(:lemon_web, :blueprint_opts, [])]
+      )
+
   defp authenticated_conn(token), do: log_in(build_conn(), token)
 
   defp matching_jobs(bundle_id) do

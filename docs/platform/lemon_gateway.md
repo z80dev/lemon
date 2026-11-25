@@ -26,9 +26,11 @@ Router-owned `SessionCoordinator` decides queue semantics (collect, followup,
 steer, interrupt) and hands queue-semantic-free `%LemonCore.ExecutionCommand{}`
 values to `LemonGateway.Runtime.submit_execution/1`, the public submission
 boundary. Runtime starts a temporary `Run` directly under `RunSupervisor`.
-The Run claims its engine session through `EngineSessionClaim` before requesting
-a permit from `Slots`; contention fails immediately with `:session_in_use`,
-without holding a permit. Slots queues live Run processes FIFO. A terminal
+The Run claims its engine session through `EngineSessionClaim` while it starts,
+before requesting a permit from `Slots`; contention refuses the start with
+`{:error, :session_in_use}` (the router retries it), without holding a permit.
+A cancelled Run holds its permit and claim until its executor exits or the
+15-second drain deadline passes. Slots queues live Run processes FIFO. A terminal
 fence before admission and cancellation/terminal recheck after grant prevent
 late execution. The Run drives the executor and publishes `run_started`, `delta`,
 `engine_action` and `run_completed` on `run:<run_id>`

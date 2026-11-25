@@ -47,7 +47,6 @@ defmodule LemonAutomation.Tools.Cron do
   alias LemonAutomation.{CronAuthority, CronJob, CronManager, CronMemory, CronStore}
 
   @actions ~w(status list add update pause resume abort remove run runs)
-  @default_timeout_ms 300_000
   @default_limit 100
   @memory_file_keys ~w(memoryFile memory_file)
   @memory_file_refusal "memoryFile cannot be set: each job's cross-run memory is the " <>
@@ -324,28 +323,9 @@ defmodule LemonAutomation.Tools.Cron do
             deliver_to: fetch_param(source, "deliverTo") || fetch_param(source, "deliver_to"),
             once: parse_bool(fetch_param(source, "once"), false),
             enabled: parse_bool(fetch_param(source, "enabled"), true),
-            timezone: normalize_string(fetch_param(source, "timezone")) || "UTC",
-            jitter_sec:
-              parse_non_negative_integer(
-                fetch_param(source, "jitterSec") || fetch_param(source, "jitter_sec"),
-                0
-              ),
-            timeout_ms:
-              parse_positive_integer(
-                fetch_param(source, "timeoutMs") || fetch_param(source, "timeout_ms"),
-                @default_timeout_ms
-              ),
-            max_retries:
-              parse_non_negative_integer(
-                fetch_param(source, "maxRetries") || fetch_param(source, "max_retries"),
-                0
-              ),
-            retry_backoff_ms:
-              parse_non_negative_integer(
-                fetch_param(source, "retryBackoffMs") || fetch_param(source, "retry_backoff_ms"),
-                30_000
-              )
+            timezone: normalize_string(fetch_param(source, "timezone")) || "UTC"
           }
+          |> Map.merge(numeric_params(source))
           |> maybe_put(:meta, if(is_map(meta), do: meta, else: nil))
           |> Map.put(
             :authority,
@@ -404,31 +384,7 @@ defmodule LemonAutomation.Tools.Cron do
       )
       |> maybe_put(:once, parse_bool_or_nil(fetch_param(patch_source, "once")))
       |> maybe_put(:enabled, parse_bool_or_nil(fetch_param(patch_source, "enabled")))
-      |> maybe_put(
-        :jitter_sec,
-        parse_non_negative_integer_or_nil(
-          fetch_param(patch_source, "jitterSec") || fetch_param(patch_source, "jitter_sec")
-        )
-      )
-      |> maybe_put(
-        :timeout_ms,
-        parse_positive_integer_or_nil(
-          fetch_param(patch_source, "timeoutMs") || fetch_param(patch_source, "timeout_ms")
-        )
-      )
-      |> maybe_put(
-        :max_retries,
-        parse_non_negative_integer_or_nil(
-          fetch_param(patch_source, "maxRetries") || fetch_param(patch_source, "max_retries")
-        )
-      )
-      |> maybe_put(
-        :retry_backoff_ms,
-        parse_non_negative_integer_or_nil(
-          fetch_param(patch_source, "retryBackoffMs") ||
-            fetch_param(patch_source, "retry_backoff_ms")
-        )
-      )
+      |> Map.merge(numeric_params(patch_source))
       |> maybe_put(
         :meta,
         if(is_map(fetch_param(patch_source, "meta")),
@@ -916,31 +872,37 @@ defmodule LemonAutomation.Tools.Cron do
   defp parse_bool_or_nil(nil), do: nil
   defp parse_bool_or_nil(value), do: parse_bool(value, nil)
 
-  defp parse_non_negative_integer(value, default) do
-    case parse_integer(value) do
-      int when is_integer(int) and int >= 0 -> int
-      _ -> default
+  @numeric_param_keys [
+    {:jitter_sec, "jitterSec", "jitter_sec"},
+    {:timeout_ms, "timeoutMs", "timeout_ms"},
+    {:max_retries, "maxRetries", "max_retries"},
+    {:retry_backoff_ms, "retryBackoffMs", "retry_backoff_ms"}
+  ]
+
+  # Numeric job fields pass through unchanged except for integer strings, so
+  # CronManager rejects a non-integer or out-of-range value with the shared
+  # `CronJob.numeric_bounds/0` message instead of the tool silently defaulting.
+  defp numeric_params(source) do
+    for {field, camel, snake} <- @numeric_param_keys,
+        value = fetch_param(source, camel) || fetch_param(source, snake),
+        not is_nil(value),
+        into: %{},
+        do: {field, numeric_value(value)}
+  end
+
+  defp numeric_value(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {int, ""} -> int
+      _ -> value
     end
   end
 
-  defp parse_non_negative_integer_or_nil(value) do
-    case parse_integer(value) do
-      int when is_integer(int) and int >= 0 -> int
-      _ -> nil
-    end
-  end
+  defp numeric_value(value), do: value
 
   defp parse_positive_integer(value, default) do
     case parse_integer(value) do
       int when is_integer(int) and int > 0 -> int
       _ -> default
-    end
-  end
-
-  defp parse_positive_integer_or_nil(value) do
-    case parse_integer(value) do
-      int when is_integer(int) and int > 0 -> int
-      _ -> nil
     end
   end
 

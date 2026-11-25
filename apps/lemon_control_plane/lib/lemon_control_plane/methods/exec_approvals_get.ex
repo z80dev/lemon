@@ -10,6 +10,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Protocol.Errors
   alias LemonCore.ExecApprovalStore
 
   @impl true
@@ -20,38 +21,40 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
 
   @impl true
   def handle(_params, _ctx) do
-    # Get the global policy map (tool -> disposition)
-    policy = ExecApprovalStore.get_global_policy_map() || %{}
+    with {:ok, policy} <- ExecApprovalStore.fetch_global_policy_map(),
+         {:ok, global_policies} <- ExecApprovalStore.fetch_global_policies(),
+         {:ok, pending_rows} <- ExecApprovalStore.fetch_pending_list() do
+      policy = policy || %{}
 
-    # Get specific approvals (tool+action combinations)
-    approvals =
-      ExecApprovalStore.list_global_policies()
-      |> Enum.map(fn {{tool, action_hash}, approval} ->
-        %{
-          "tool" => tool,
-          "actionHash" => if(action_hash == :any, do: "*", else: action_hash),
-          "scope" => "global",
-          "approved" => approval.approved,
-          "approvedAtMs" => approval[:approved_at_ms]
-        }
-      end)
+      approvals =
+        Enum.map(global_policies, fn {{tool, action_hash}, approval} ->
+          %{
+            "tool" => tool,
+            "actionHash" => if(action_hash == :any, do: "*", else: action_hash),
+            "scope" => "global",
+            "approved" => approval.approved,
+            "approvedAtMs" => approval[:approved_at_ms]
+          }
+        end)
 
-    # Get pending requests
-    now_ms = LemonCore.Clock.now_ms()
+      now_ms = LemonCore.Clock.now_ms()
 
-    pending =
-      ExecApprovalStore.list_pending()
-      |> Enum.map(fn {_id, p} -> p end)
-      |> Enum.filter(&pending_active?(&1, now_ms))
-      |> Enum.map(&format_pending/1)
+      pending =
+        pending_rows
+        |> Enum.map(fn {_id, p} -> p end)
+        |> Enum.filter(&pending_active?(&1, now_ms))
+        |> Enum.map(&format_pending/1)
 
-    {:ok,
-     %{
-       "policy" => policy,
-       "approvals" => approvals,
-       "pending" => pending,
-       "summary" => summary(policy, approvals, pending)
-     }}
+      {:ok,
+       %{
+         "policy" => policy,
+         "approvals" => approvals,
+         "pending" => pending,
+         "summary" => summary(policy, approvals, pending)
+       }}
+    else
+      {:error, _reason} -> {:error, Errors.unavailable("Approval state is unavailable")}
+    end
   end
 
   defp pending_active?(pending, now_ms) do

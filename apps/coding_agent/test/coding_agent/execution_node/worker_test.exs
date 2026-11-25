@@ -299,7 +299,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
       %{
         __event__: :completed,
         ok: true,
-        answer: "",
+        answer: "done remotely",
         error: nil,
         usage: %{input_tokens: 4},
         meta: %{provider: "test"},
@@ -924,9 +924,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   @tag :tmp_dir
-  test "cancels execution before streamed result accumulation exceeds maxPayload", %{
-    tmp_dir: tmp_dir
-  } do
+  test "streamed deltas past maxPayload split into budgeted events; only the final answer is capped",
+       %{tmp_dir: tmp_dir} do
     {:ok, worker} = start_worker(tmp_dir, token: "node-token")
     assert_receive {:socket_started, socket, _opts}
 
@@ -945,20 +944,54 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     )
 
     assert_receive {:executor_started, _request, _opts, ^worker, run_ref, context}
-    send(worker, {:engine_delta, run_ref, String.duplicate("x", 400)})
+    # Multi-byte text larger than the per-event budget (maxPayload - 8 KiB).
+    streamed = String.duplicate("é", 200)
+    send(worker, {:engine_delta, run_ref, streamed})
 
-    assert_receive {:executor_cancelled, ^context}
+    texts = ack_events(worker, socket, "invoke-bounded")
+    assert length(texts) > 1
+    assert Enum.join(texts) == streamed
+    refute_received {:executor_cancelled, ^context}
 
-    # No terminal response, and still active, until the runner has exited.
-    refute_receive {:socket_request, ^socket, "node.invoke.result", _, _, _}, 100
-    assert_still_stopping(worker, "invoke-bounded")
-    Process.exit(context.runner_pid, :kill)
+    send(worker, {
+      :engine_event,
+      run_ref,
+      %{
+        __event__: :completed,
+        ok: true,
+        answer: streamed,
+        error: nil,
+        usage: nil,
+        meta: nil,
+        resume: nil
+      }
+    })
 
     assert_receive {:socket_request, ^socket, "node.invoke.result",
                     %{"invokeId" => "invoke-bounded", "error" => "result_payload_limit_exceeded"},
                     {:invoke_result, "invoke-bounded"}, 30_000}
 
+    Process.exit(context.runner_pid, :kill)
     GenServer.stop(worker)
+  end
+
+  # Acknowledges every queued `node.invoke.event` and returns their delta texts.
+  defp ack_events(worker, socket, invoke_id, acc \\ []) do
+    receive do
+      {:socket_request, ^socket, "node.invoke.event",
+       %{"invokeId" => ^invoke_id, "seq" => seq, "event" => event} = params, tag, _timeout} ->
+        assert byte_size(Jason.encode!(params)) <= 8_500 - 8_192
+
+        send(
+          worker,
+          {:execution_node_socket, socket,
+           {:response, tag, {:ok, %{"received" => true, "seq" => seq}}}}
+        )
+
+        ack_events(worker, socket, invoke_id, [event["text"] | acc])
+    after
+      200 -> Enum.reverse(acc)
+    end
   end
 
   @tag :tmp_dir
@@ -1230,7 +1263,157 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   @tag :tmp_dir
-  test "bounded unacknowledged events fail closed", %{tmp_dir: tmp_dir} do
+  test "a stalled acknowledgement coalesces a 20,000-chunk stream instead of cancelling", %{
+    tmp_dir: tmp_dir
+  } do
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _opts}
+
+    send(
+      worker,
+      {:execution_node_socket, socket, {:connected, %{"auth" => %{"clientId" => "node-1"}}}}
+    )
+
+    invoke(worker, socket, "invoke-flood", "node-1", %{
+      "version" => 1,
+      "prompt" => "stream",
+      "meta" => %{}
+    })
+
+    assert_receive {:executor_started, _request, _opts, ^worker, run_ref, context}
+    for i <- 1..20_000, do: send(worker, {:engine_delta, run_ref, "#{rem(i, 10)}"})
+
+    # Only the first chunk is in flight; the rest waits as one coalesced entry.
+    assert_receive {:socket_request, ^socket, "node.invoke.event",
+                    %{"seq" => 1, "event" => %{"text" => "1"}}, tag1, 30_000}
+
+    {_link_state, state} = :sys.get_state(worker)
+    invocation = state.invocations["invoke-flood"]
+    assert :queue.len(invocation.event_queue) == 1
+    assert invocation.pending_events == 0
+    assert invocation.pending_delta_bytes == 19_999
+    refute_received {:executor_cancelled, ^context}
+
+    send(
+      worker,
+      {:execution_node_socket, socket,
+       {:response, tag1, {:ok, %{"received" => true, "seq" => 1}}}}
+    )
+
+    assert_receive {:socket_request, ^socket, "node.invoke.event",
+                    %{"seq" => 2, "event" => %{"type" => "delta", "text" => rest}}, tag2, 30_000}
+
+    assert rest == Enum.map_join(2..20_000, &"#{rem(&1, 10)}")
+
+    send(
+      worker,
+      {:execution_node_socket, socket,
+       {:response, tag2, {:ok, %{"received" => true, "seq" => 2}}}}
+    )
+
+    send(worker, {
+      :engine_event,
+      run_ref,
+      %{
+        __event__: :completed,
+        ok: true,
+        answer: "flood done",
+        error: nil,
+        usage: nil,
+        meta: nil,
+        resume: nil
+      }
+    })
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"result" => %{"completed" => %{"ok" => true, "answer" => "flood done"}}},
+                    {:invoke_result, "invoke-flood"}, 30_000}
+
+    refute_received {:executor_cancelled, ^context}
+    Process.exit(context.runner_pid, :kill)
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "a 128 KiB write action is elided to the event budget instead of failing the run", %{
+    tmp_dir: tmp_dir
+  } do
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _opts}
+
+    send(
+      worker,
+      {:execution_node_socket, socket, {:connected, %{"auth" => %{"clientId" => "node-1"}}}}
+    )
+
+    invoke(worker, socket, "invoke-write", "node-1", %{
+      "version" => 1,
+      "prompt" => "write",
+      "meta" => %{}
+    })
+
+    assert_receive {:executor_started, _request, _opts, ^worker, run_ref, context}
+    content = String.duplicate("a", 128 * 1_024)
+
+    send(worker, {
+      :engine_event,
+      run_ref,
+      LemonGateway.Event.action_event(%{
+        engine: "lemon",
+        phase: :started,
+        action:
+          LemonGateway.Event.action(%{
+            id: "tool_call-1",
+            kind: "file_change",
+            title: "Write big.txt",
+            detail: %{
+              name: "write",
+              tool_call_id: "call-1",
+              args: %{"path" => "big.txt", "content" => content}
+            }
+          })
+      })
+    })
+
+    assert_receive {:socket_request, ^socket, "node.invoke.event",
+                    %{"seq" => 1, "event" => %{"type" => "action"} = event} = params, tag, 30_000}
+
+    assert byte_size(Jason.encode!(params)) <= 64 * 1_024
+    assert event["action"]["id"] == "tool_call-1"
+    assert event["action"]["detail"]["tool_call_id"] == "call-1"
+    assert event["action"]["detail"]["args"]["path"] == "big.txt"
+    assert event["action"]["detail"]["args"]["content"] =~ "bytes omitted"
+
+    send(
+      worker,
+      {:execution_node_socket, socket, {:response, tag, {:ok, %{"received" => true, "seq" => 1}}}}
+    )
+
+    send(worker, {
+      :engine_event,
+      run_ref,
+      %{
+        __event__: :completed,
+        ok: true,
+        answer: "wrote",
+        error: nil,
+        usage: nil,
+        meta: nil,
+        resume: nil
+      }
+    })
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"result" => %{"completed" => %{"ok" => true, "answer" => "wrote"}}},
+                    {:invoke_result, "invoke-write"}, 30_000}
+
+    refute_received {:executor_cancelled, ^context}
+    Process.exit(context.runner_pid, :kill)
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "bounded unacknowledged non-delta events fail closed", %{tmp_dir: tmp_dir} do
     {:ok, worker} = start_worker(tmp_dir, token: "node-token")
     assert_receive {:socket_started, socket, _opts}
 
@@ -1246,7 +1429,19 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     })
 
     assert_receive {:executor_started, _request, _opts, ^worker, run_ref, context}
-    for _ <- 1..66, do: send(worker, {:engine_delta, run_ref, "x"})
+
+    for i <- 1..66 do
+      send(worker, {
+        :engine_event,
+        run_ref,
+        LemonGateway.Event.action_event(%{
+          engine: "lemon",
+          phase: :started,
+          action: LemonGateway.Event.action(%{id: "a#{i}", kind: "tool", title: "t", detail: %{}})
+        })
+      })
+    end
+
     assert_receive {:executor_cancelled, ^context}
     refute_receive {:socket_request, ^socket, "node.invoke.result", _, _, _}, 100
     assert_still_stopping(worker, "invoke-stream-bound")

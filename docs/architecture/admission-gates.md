@@ -15,7 +15,10 @@ Run directly under `RunSupervisor`; success acknowledges child existence, not
 executor start. A Run claims its engine session through `EngineSessionClaim`,
 checks the durable terminal fence, requests a permit, then rechecks terminal and
 cancellation state before invoking the executor. Claims fail immediately with
-`:session_in_use`, before capacity is consumed. Release is idempotent, and owner
+`:session_in_use` while the Run starts, before capacity is consumed, so
+`submit_execution/1` refuses the start synchronously and the router retries it
+within its pre-start deadline. Release happens once, after the terminal receipt
+persists and before it is published, and owner
 death releases Registry ownership and monitored permits.
 
 The old ThreadWorker, its supervisor/registry, Scheduler generation queue, and
@@ -61,6 +64,7 @@ separate purposes; none should be described as a substitute for the others.
 | `SessionCoordinatorSupervisor` | Distinct conversation key | Uncapped population; no idle-stop path | Coordinators are never stopped merely because idle. Processes accumulate per distinct conversation for the VM lifetime; bounded individual backlogs do not bound total memory. |
 | Router `RunSupervisor` | Global | `:lemon_router, :run_process_limit`, 500 | Supervisor `:max_children` becomes `:run_capacity_reached`; includes RunProcesses waiting for gateway capacity, not just executing runs. |
 | Router `RunProcess` / `SessionRegistry` | `session_key` | One live owner per session | `:session_busy`; coordinator retains/requeues work behind the surviving owner. Process death releases the name. |
+| Router output coalescers (`CoalescerSupervisor` / `CoalescerRegistry`, `ToolStatusSupervisor` / `ToolStatusRegistry`) | `{session_key, channel_id}` answer stream; `{session_key, channel_id}` status and `{session_key, channel_id, {:status_task, action_id}}` task surfaces | Started lazily by the first delta or action, never just to finalize; a process lives while its run streams plus a 5,000 ms idle retirement grace (`:lemon_router, :coalescer_retire_after_ms`) | A coalescer stops normally once idle for the grace and its run is finalized, never started, or has no live `RunProcess` (task surfaces: no live async subscriber), so the population is bounded by live runs and their task surfaces, not by conversations seen. An unreadable producer registry keeps the coalescer (fail closed). Finalizing drops the run's text and actions. Per process: mailbox 256 messages, 65,536 encoded bytes per admitted message, retained answer tail capped at that same per-message budget, at most 64 retained status actions per segment with only rendering/failure detail kept. |
 | Gateway `RunSupervisor` / `RunRegistry` | Global population; unique `run_id` | Uncapped supervisor; one live Run per run ID | Duplicate live submission acknowledges the existing child, not another executor. Waiting Runs count as children. Direct callers bypass router's 500-process cap. |
 | Gateway `EngineSessionClaim` | `{:engine_session, {:resume, token}}`, otherwise `{:engine_session, {:session, session_key}}` | One owner per key, including while waiting for capacity | Fail-fast `:session_in_use`; no queue or timeout, no permit held by the refused Run. |
 | Gateway `Slots` | Global permits; waiter identity `run_id` and Run pid | 2 executing Runs; FIFO waiter population and duration have no independent cap | Wait asynchronously until grant/cancel/death. Normal routed waiters are indirectly bounded by router RunProcesses; direct runtime waiters are not. A run blocked on its own `agent` children (sync run or join) lends its permit with `suspend/2` and re-enters at the front of the queue on `resume/3`, so delegation depth and fan-in cannot stall admission. ETS stats expose `in_flight` (lent permits excluded), `waitq`, `max`. |
@@ -78,6 +82,7 @@ Tool-specific resource limits are not additional top-level conversation queues.
 Source anchors for review (paths relative to the repository root):
 
 - `apps/lemon_router/lib/lemon_router/{run_orchestrator,session_coordinator,session_transitions,session_coordinator_supervisor,run_starter,run_process,application}.ex`
+- `apps/lemon_router/lib/lemon_router/{coalescer_ingress,stream_coalescer,tool_status_coalescer}.ex`
 - `apps/lemon_gateway/lib/lemon_gateway/{runtime,run,run_supervisor,slots,engine_session_claim}.ex`
 - `apps/lemon_core/lib/lemon_core/config/gateway.ex`
 - `apps/coding_agent/lib/coding_agent/{application,lane_queue,parallel,budget_tracker,budget_enforcer,process_manager}.ex`

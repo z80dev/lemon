@@ -12,20 +12,7 @@ defmodule LemonCore.EngineInfoBridgeTest do
     def get_transport(_id), do: nil
   end
 
-  defmodule GatewayConfigStub do
-    def replacement_config, do: %{bindings: [%{transport: :demo}]}
-  end
-
-  defmodule KeywordConfigStub do
-    def replacement_config, do: [enable_demo: true]
-  end
-
-  defmodule ListConfigStub do
-    def replacement_config, do: [%{transport: :demo}]
-  end
-
-  defmodule EmptyConfigStub do
-    def replacement_config, do: nil
+  defmodule SmsInboxStub do
   end
 
   setup do
@@ -51,7 +38,7 @@ defmodule LemonCore.EngineInfoBridgeTest do
       assert EngineInfoBridge.list_transports() == {:error, :unavailable}
       assert EngineInfoBridge.enabled_transports() == {:error, :unavailable}
       assert EngineInfoBridge.get_transport(:email) == {:error, :unavailable}
-      assert EngineInfoBridge.gateway_config() == :none
+      assert EngineInfoBridge.sms_inbox_preview_clear() == {:error, :unavailable}
     end
   end
 
@@ -59,11 +46,18 @@ defmodule LemonCore.EngineInfoBridgeTest do
     test "registers retained capabilities and leaves others alone" do
       assert EngineInfoBridge.configure(transport_registry: BridgeTransportRegistryStub) == :ok
       assert EngineInfoBridge.impl(:transport_registry) == BridgeTransportRegistryStub
-      assert EngineInfoBridge.impl(:gateway_config) == nil
+      assert EngineInfoBridge.impl(:sms_inbox) == nil
 
-      assert EngineInfoBridge.configure(gateway_config: GatewayConfigStub) == :ok
+      assert EngineInfoBridge.configure(sms_inbox: SmsInboxStub) == :ok
       assert EngineInfoBridge.impl(:transport_registry) == BridgeTransportRegistryStub
-      assert EngineInfoBridge.impl(:gateway_config) == GatewayConfigStub
+      assert EngineInfoBridge.impl(:sms_inbox) == SmsInboxStub
+    end
+
+    # #697: gateway config is read from `LemonCore.GatewayConfig`, not the bridge.
+    test "has no gateway config capability" do
+      assert EngineInfoBridge.configure(gateway_config: SmsInboxStub) == :ok
+      assert EngineInfoBridge.config() == %{}
+      refute function_exported?(EngineInfoBridge, :gateway_config, 0)
     end
 
     test "rejects a non-module value" do
@@ -96,32 +90,6 @@ defmodule LemonCore.EngineInfoBridgeTest do
       assert EngineInfoBridge.running?(:transport_registry)
       Agent.stop(BridgeTransportRegistryStub)
       refute EngineInfoBridge.running?(:transport_registry)
-    end
-  end
-
-  describe "gateway config capability" do
-    test "returns a map as-is" do
-      EngineInfoBridge.configure(gateway_config: GatewayConfigStub)
-
-      assert {:ok, %{bindings: [%{transport: :demo}]}} = EngineInfoBridge.gateway_config()
-    end
-
-    test "normalizes a keyword list into a map" do
-      EngineInfoBridge.configure(gateway_config: KeywordConfigStub)
-
-      assert EngineInfoBridge.gateway_config() == {:ok, %{enable_demo: true}}
-    end
-
-    test "treats a bare list as bindings, matching the previous reader" do
-      EngineInfoBridge.configure(gateway_config: ListConfigStub)
-
-      assert EngineInfoBridge.gateway_config() == {:ok, %{bindings: [%{transport: :demo}]}}
-    end
-
-    test "reports :none when the runtime holds no replacement config" do
-      EngineInfoBridge.configure(gateway_config: EmptyConfigStub)
-
-      assert EngineInfoBridge.gateway_config() == :none
     end
   end
 end
