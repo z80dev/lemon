@@ -201,7 +201,7 @@ defmodule LemonNamedAgentsSmoke do
 
     Application.put_env(:lemon_core, LemonCore.RunHistoryStore, path: Path.join(root, "history"))
     Application.put_env(:lemon_core, :bus_backend, :pubsub)
-    Application.put_env(:coding_agent, :agent_dir, Path.join(root, "agent"))
+    Application.put_env(:lemon_core, :agent_dir, Path.join(root, "agent"))
     Application.put_env(:coding_agent, :primary_session, nil)
     Application.put_env(:coding_agent, :task_store_path, Path.join(root, "tasks.dets"))
     Application.put_env(:coding_agent, :run_graph_path, Path.join(root, "run_graph.dets"))
@@ -216,7 +216,7 @@ defmodule LemonNamedAgentsSmoke do
     Application.put_env(:lemon_gateway, :health_enabled, false)
     Application.put_env(:lemon_gateway, :gateway_ingress_enabled, false)
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config,
+    Application.put_env(:lemon_core, :gateway_test_config,
       enable_telegram: false,
       max_concurrent_runs: 4,
       bindings: [],

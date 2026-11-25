@@ -18,7 +18,7 @@ on:
       - "mix.lock"
       - "apps/lemon_core/lib/lemon_core/runtime/**"
       - "apps/lemon_core/lib/mix/tasks/lemon.doctor.ex"
-      - "apps/lemon_mcp/**"
+      - "apps/lemon_skills/lib/lemon_mcp/**"
       - "apps/lemon_skills/lib/lemon_skills/mcp_source.ex"
       - "config/prod.exs"
       - "config/runtime.exs"
@@ -135,17 +135,7 @@ jobs:
             checks = %{
               client_loaded: client_loaded,
               source_loaded: source_loaded,
-              source_enabled: source_loaded and LemonSkills.McpSource.mcp_enabled?(),
-              application_loaded:
-                Enum.any?(Application.loaded_applications(), fn {app, _, _} ->
-                  app == :lemon_mcp
-                end),
-              application_not_started:
-                not Enum.any?(Application.started_applications(), fn {app, _, _} ->
-                  app == :lemon_mcp
-                end),
-              no_application_callback: Application.spec(:lemon_mcp, :mod) == [],
-              no_application_module: not Code.ensure_loaded?(LemonMCP.Application)
+              source_enabled: source_loaded and LemonSkills.McpSource.mcp_enabled?()
             }
 
             failures = for {name, false} <- checks, do: name

@@ -53,7 +53,10 @@ config :coding_agent, :async_followups, default_queue_mode: :followup
 # dependency on the agent product.
 config :lemon_gateway, :executor, CodingAgent.Executor
 
+# Composition-root bindings between apps that do not depend on each other.
+# LemonCore.Quality.ArchitecturePolicy lists them so they stay acyclic.
 config :lemon_router, :engine_runtime, LemonGateway.Runtime
+config :lemon_gateway, :xmtp_transport_module, LemonChannels.Adapters.Xmtp.Transport
 
 # `lemon-bot` on this machine serves http://127.0.0.1:4100 by default. Trust that one
 # literal-loopback product origin for native follow-up and cron admission callbacks so
@@ -208,6 +211,12 @@ config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads
 # here rather than in lemon_core so the platform never names a product's module.
 config :lemon_core, :runtime_endpoints, [
   {:web_port, :lemon_web, LemonWeb.Endpoint}
+]
+
+# Plain listener ports apply_ports/1 writes at boot, as
+# {port_field_on_the_Env_struct, otp_app, app_env_key}.
+config :lemon_core, :runtime_port_settings, [
+  {:control_port, :lemon_control_plane, :port}
 ]
 
 # Sample configuration:

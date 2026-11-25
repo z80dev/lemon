@@ -27,7 +27,7 @@ defmodule CodingAgent.ConfigTest do
   describe "agent_dir/0" do
     setup do
       original_env = System.get_env("LEMON_AGENT_DIR")
-      original_app = Application.get_env(:coding_agent, :agent_dir)
+      original_app = Application.get_env(:lemon_core, :agent_dir)
 
       on_exit(fn ->
         case original_env do
@@ -36,8 +36,8 @@ defmodule CodingAgent.ConfigTest do
         end
 
         case original_app do
-          nil -> Application.delete_env(:coding_agent, :agent_dir)
-          v -> Application.put_env(:coding_agent, :agent_dir, v)
+          nil -> Application.delete_env(:lemon_core, :agent_dir)
+          v -> Application.put_env(:lemon_core, :agent_dir, v)
         end
       end)
 
@@ -51,13 +51,13 @@ defmodule CodingAgent.ConfigTest do
 
     test "falls back to application env when LEMON_AGENT_DIR is not set", %{test_dir: test_dir} do
       System.delete_env("LEMON_AGENT_DIR")
-      Application.put_env(:coding_agent, :agent_dir, test_dir)
+      Application.put_env(:lemon_core, :agent_dir, test_dir)
       assert Config.agent_dir() == test_dir
     end
 
     test "defaults under user home directory when no overrides are set" do
       System.delete_env("LEMON_AGENT_DIR")
-      Application.delete_env(:coding_agent, :agent_dir)
+      Application.delete_env(:lemon_core, :agent_dir)
 
       result = Config.agent_dir()
 

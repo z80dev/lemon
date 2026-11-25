@@ -8,24 +8,13 @@ LemonMCP implements the client side of the Model Context Protocol (MCP), an open
 
 This library targets MCP protocol version **"2024-11-05"**.
 
-## Installation
+## Location and dependencies
 
-Add `lemon_mcp` to your mix dependencies:
-
-```elixir
-def deps do
-  [
-    {:lemon_mcp, in_umbrella: true}
-  ]
-end
-```
-
-## Dependencies
-
-- `lemon_core` (in_umbrella) - Shared RPC lifecycle/framing contracts, subprocess-group cleanup, request IDs, and the `:inets`/`:ssl` runtime used by the HTTP clients
-- `lemon_skills` (in_umbrella) - Hosts `LemonSkills.McpSource`, whose suite lives in this app's tests
-- `jason` - JSON encoding/decoding
-- `bandit` / `plug` (test only) - Local HTTP and SSE MCP server fixtures for the client tests
+The library lives in `lemon_skills` (`lib/lemon_mcp`); apps that need it depend
+on `lemon_skills`. It uses `lemon_core` (shared RPC lifecycle/framing contracts,
+subprocess-group cleanup, request IDs and the `:inets`/`:ssl` runtime), `jason`,
+`idna` and `mint`; `bandit` / `plug` back the local HTTP and SSE fixtures in
+tests only.
 
 ## Modules
 
@@ -38,15 +27,10 @@ end
 - `LemonMCP.HTTP.OAuth` - OAuth protected-resource / authorization-server metadata discovery, client-credentials token acquisition with form-post or HTTP Basic client authentication, refresh-token grant retry when a token response supplies a refresh token, authorization-code PKCE callback/token exchange for public clients, and injectable token-cache load/save hooks
 - `LemonMCP.Client.SSE` - legacy HTTP+SSE client for external MCP servers
 
-`lemon_mcp` is a library application: it has no application callback and starts
-no processes by default. Callers start and supervise the client and transport
-processes they use. Lemon's minimal and full OTP releases include the
-library with `:load`, which makes these modules available to dynamic consumers
-such as `LemonSkills.McpSource` without adding a no-op supervisor.
-Release smoke builds both profiles and evaluates this contract inside each
-packaged release. The artifact boot verifier repeats it against each min/full
-release tarball, including loaded-but-not-started application state and the
-absence of an application callback.
+The clients start no processes on their own. Callers start and supervise the
+client and transport processes they use. Release smoke builds both runtime
+profiles and checks that `LemonMCP.Client` and `LemonSkills.McpSource` load and
+that MCP is enabled inside each packaged release.
 
 ## Usage
 

@@ -230,22 +230,8 @@ defmodule LemonCore.Config.Tools do
     end
   end
 
-  # The old default :local is not an explicit choice. Preserve explicit backend
-  # environment selections and non-default application settings without making
-  # the historical default defeat auto detection.
-  defp legacy_browser_backend do
-    case Env.string("LEMON_BROWSER_BACKEND") do
-      nil ->
-        case Application.get_env(:lemon_browser, :backend) do
-          backend when backend in [nil, :local, "local"] -> nil
-          backend when is_atom(backend) -> Atom.to_string(backend)
-          backend -> backend
-        end
-
-      backend ->
-        backend
-    end
-  end
+  # An explicit legacy backend environment selection still names a provider.
+  defp legacy_browser_backend, do: Env.string("LEMON_BROWSER_BACKEND")
 
   # `[runtime.tools.computer_use]` is read by the optional lemon_computer_use
   # app, which applies its own environment overrides first. Values stay as

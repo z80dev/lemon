@@ -55,17 +55,8 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
   end
 
   defp available_model_catalog do
-    models_module = :"Elixir.LemonAi.Models"
-
-    models =
-      if Code.ensure_loaded?(models_module) and function_exported?(models_module, :list_models, 0) do
-        apply(models_module, :list_models, [])
-      else
-        fallback_model_entries()
-      end
-
     model_maps =
-      models
+      LemonAi.Models.list_models()
       |> Enum.map(&to_model_map/1)
       |> Enum.filter(&is_map/1)
 

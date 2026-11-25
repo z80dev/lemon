@@ -1,11 +1,9 @@
 defmodule Mix.Tasks.Lemon.Update do
   use Mix.Task
 
-  @builtin_seeder :"Elixir.LemonSkills.BuiltinSeeder"
-  @skills_migrator :"Elixir.LemonSkills.Migrator"
-
   alias LemonCore.Config.Modular
   alias LemonCore.Update.{ConfigMigrator, Remote, Version}
+  alias LemonSkills.{BuiltinSeeder, Migrator}
 
   @shortdoc "Update Lemon: config migration and bundled-skill sync"
 
@@ -184,31 +182,23 @@ defmodule Mix.Tasks.Lemon.Update do
   defp run_skill_sync(check_only?, verbose?) do
     shell = Mix.shell()
 
-    cond do
-      check_only? ->
-        if verbose?, do: shell.info("Skill sync: --check mode, skipping.")
-        :ok
+    if check_only? do
+      if verbose?, do: shell.info("Skill sync: --check mode, skipping.")
+      :ok
+    else
+      shell.info("Skill sync: refreshing bundled skills ...")
+      BuiltinSeeder.seed!()
 
-      Code.ensure_loaded?(@builtin_seeder) ->
-        shell.info("Skill sync: refreshing bundled skills ...")
-        apply(@builtin_seeder, :seed!, [])
+      case Migrator.migrate() do
+        {:ok, %{classified: n}} when n > 0 ->
+          shell.info("Skill sync: classified #{n} existing skill(s) with provenance.")
 
-        if Code.ensure_loaded?(@skills_migrator) do
-          case apply(@skills_migrator, :migrate, []) do
-            {:ok, %{classified: n}} when n > 0 ->
-              shell.info("Skill sync: classified #{n} existing skill(s) with provenance.")
+        _ ->
+          :ok
+      end
 
-            _ ->
-              :ok
-          end
-        end
-
-        shell.info("Skill sync: complete.")
-        :ok
-
-      true ->
-        if verbose?, do: shell.info("Skill sync: lemon_skills not available, skipping.")
-        :ok
+      shell.info("Skill sync: complete.")
+      :ok
     end
   end
 end

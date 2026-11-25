@@ -402,7 +402,8 @@ defmodule LemonCli.ProfileCommand do
     :exit, _ -> :ok
   end
 
-  defp agent_profiles_module, do: Module.concat(["LemonRouter", "AgentProfiles"])
+  # Reference-only seam: lemon_cli dispatches router-owned profile reads at runtime.
+  defp agent_profiles_module, do: LemonRouter.AgentProfiles
 
   defp control_plane_client do
     Application.get_env(:lemon_cli, :control_plane_client, LemonCli.ControlPlaneClient)

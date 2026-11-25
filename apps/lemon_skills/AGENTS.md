@@ -99,8 +99,8 @@ Coding-session/file tools belong in `coding_agent`. Usage lives in the
 
 ## Configuration and verification
 
-Global agent directory resolution is `LEMON_AGENT_DIR`, skills app env, coding
-agent app env, then `~/.lemon/agent`. The harness-compatible global skills path
+Global agent directory resolution is `LEMON_AGENT_DIR`, skills app env,
+`config :lemon_core, :agent_dir`, then `~/.lemon/agent`. The harness-compatible global skills path
 is `~/.agents/skills`; tests/isolated runtimes can set `LEMON_HARNESS_SKILLS_DIR`.
 Keep those shared locations aligned without copying configuration systems.
 
@@ -108,3 +108,23 @@ From the umbrella root: `mix test apps/lemon_skills/test`.
 Use injected `HttpClient` and temporary skill roots. Restore env/registry state.
 Exercise traversal/symlinks, changed-content approvals, scope precedence,
 deterministic search, stale confirmations and disabled/archive behavior.
+
+## MCP client library (`LemonMCP.*`)
+
+`lib/lemon_mcp` implements MCP clients for stdio, Streamable HTTP and legacy
+HTTP+SSE (see [MCP.md](MCP.md)). `McpSource` and `McpSession` call them
+directly; there is no dynamic module lookup or availability fallback.
+
+- The clients start no processes on their own. Callers start and supervise
+  every client/transport. Handshake is asynchronous; transport loss fails
+  waiting calls and the stdio transport terminates the server's whole process
+  group via `LemonCore.ProcessGroup.terminate/2`.
+- OAuth discovery sends metadata-only headers, binds PRM `resource` and AS
+  `issuer` to the configured server, pins every OAuth connection before a
+  credential is sent, and binds grants to issuer + client_id. A 401 refresh is
+  single-flight; interactive re-auth never runs on a request path.
+- HTTP/SSE requests run in per-request workers; a deadline kills the worker
+  before replying `:outcome_unknown`. Server-to-client requests (sampling
+  included) get method-not-found and no handshake advertises `sampling`.
+- Tests: `scripts/test path apps/lemon_skills/test/lemon_mcp` with the fixtures
+  in `test/support/mcp_fixture_server.ex`; Bandit/Plug stay test-only.

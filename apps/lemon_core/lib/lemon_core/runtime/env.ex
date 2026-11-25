@@ -155,17 +155,29 @@ defmodule LemonCore.Runtime.Env do
         {:web_port, :lemon_web, LemonWeb.Endpoint}
       ]
 
-  so a build that does not ship a given Phoenix app simply has no entry for it,
-  and this module keeps its place at the bottom of the dependency graph.
+  Plain listener ports are declared the same way as `{port_field, otp_app, key}`:
+
+      config :lemon_core, :runtime_port_settings, [
+        {:control_port, :lemon_control_plane, :port}
+      ]
+
+  so a build that does not ship a given app simply has no entry for it, and
+  this module keeps its place at the bottom of the dependency graph.
   Unknown port fields are ignored.
 
   Safe to call multiple times (idempotent).
   """
   @spec apply_ports(t()) :: :ok
   def apply_ports(%__MODULE__{} = env) do
-    apply_control_port(env.control_port)
-
     ports = Map.from_struct(env)
+
+    Enum.each(Application.get_env(:lemon_core, :runtime_port_settings, []), fn
+      {port_field, otp_app, key} ->
+        case Map.get(ports, port_field) do
+          port when is_integer(port) -> Application.put_env(otp_app, key, port)
+          _ -> :ok
+        end
+    end)
 
     Enum.each(runtime_endpoints(), fn {port_field, otp_app, endpoint} ->
       case Map.get(ports, port_field) do
@@ -203,10 +215,6 @@ defmodule LemonCore.Runtime.Env do
           _ -> default
         end
     end
-  end
-
-  defp apply_control_port(port) do
-    Application.put_env(:lemon_control_plane, :port, port)
   end
 
   defp apply_endpoint_port(otp_app, endpoint, port) do

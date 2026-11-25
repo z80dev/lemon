@@ -28,7 +28,7 @@ defmodule LemonRouter.MixProject do
     [
       {:lemon_ai, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
-      {:lemon_mcp, in_umbrella: true, runtime: false},
+      {:lemon_skills, in_umbrella: true},
       {:lemon_memory, in_umbrella: true},
       {:lemon_media, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},

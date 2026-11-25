@@ -49,8 +49,8 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 
 `mix lemon.quality` checks that local markdown links in tracked
 `docs/**/*.md` files resolve, that the generated dependency table in
-`docs/architecture_boundaries.md` is current, that every app's `deps/0` matches
-`LemonCore.Quality.ArchitecturePolicy`, and that no two test modules share a
+`docs/architecture_boundaries.md` is current, that the umbrella graph and every
+cross-app reference follow `LemonCore.Quality.ArchitecturePolicy`, and that no two test modules share a
 name. Add `--validate-config` to also validate the runtime config.
 
 `quality` needs `shellcheck`, `python3` and `node` on `PATH`. Client lanes reinstall
@@ -479,7 +479,7 @@ The remaining manual smoke scripts are not run by CI:
 `scripts/live_provider_ownership_smoke.exs`, and
 `scripts/live_cron_runtime_restart_smoke.exs`. MCP has no live smoke script: its
 client, transports and fixture server are covered by the deterministic
-`apps/lemon_mcp/test` suite (`scripts/test path apps/lemon_mcp/test`).
+`apps/lemon_skills/test/lemon_mcp` suite (`scripts/test path apps/lemon_skills/test/lemon_mcp`).
 
 ## Umbrella gotchas
 

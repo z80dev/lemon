@@ -2501,11 +2501,7 @@ defmodule CodingAgent.Session do
   # Browser identity belongs to the live invocation, never to resumed resources.
   defp close_browser_session(opts) do
     if is_integer(Keyword.get(opts, :tern_pane)) do
-      module = Module.concat(["LemonBrowser", "TernSession"])
-
-      if Code.ensure_loaded?(module) and function_exported?(module, :close, 1) do
-        apply(module, :close, [opts])
-      end
+      LemonBrowser.TernSession.close(opts)
     end
   end
 

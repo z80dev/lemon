@@ -25,7 +25,7 @@ defmodule LemonGateway.HealthTest do
   setup do
     Application.stop(:lemon_gateway)
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 1,
       enable_telegram: false
     })
@@ -34,11 +34,16 @@ defmodule LemonGateway.HealthTest do
     Application.put_env(:lemon_gateway, :commands, [])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    xmtp_binding = Application.fetch_env(:lemon_gateway, :xmtp_transport_module)
 
     on_exit(fn ->
       Application.stop(:lemon_gateway)
       Application.delete_env(:lemon_gateway, :health_checks)
-      Application.delete_env(:lemon_gateway, :xmtp_transport_module)
+
+      case xmtp_binding do
+        {:ok, module} -> Application.put_env(:lemon_gateway, :xmtp_transport_module, module)
+        :error -> Application.delete_env(:lemon_gateway, :xmtp_transport_module)
+      end
     end)
 
     :ok
@@ -74,7 +79,7 @@ defmodule LemonGateway.HealthTest do
   test "xmtp readiness check fails health when xmtp is enabled but not live" do
     Application.stop(:lemon_gateway)
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 1,
       enable_telegram: false,
       enable_xmtp: true,
@@ -143,7 +148,7 @@ defmodule LemonGateway.HealthTest do
 
     Application.put_env(:lemon_gateway, :xmtp_transport_module, transport_module)
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 1,
       enable_telegram: false,
       enable_xmtp: true

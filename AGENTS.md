@@ -70,7 +70,7 @@ blaming the change, and run the final premerge once on the integrated tree.
 | Skills, assistant tools and reviewed source learning | [lemon_skills](apps/lemon_skills/AGENTS.md) |
 | Durable memory and recall | [lemon_memory](apps/lemon_memory/README.md) |
 | Optional external Honcho memory | [lemon_honcho](apps/lemon_honcho/AGENTS.md) |
-| MCP client connections | [lemon_mcp](apps/lemon_mcp/AGENTS.md) |
+| MCP client library (`LemonMCP.*`, inside lemon_skills) | [lemon_skills](apps/lemon_skills/AGENTS.md) |
 | Browser driver | [lemon_browser](apps/lemon_browser/README.md) |
 | Media jobs | [lemon_media](apps/lemon_media/README.md) |
 | Language-server driver | [lemon_lsp](apps/lemon_lsp/README.md) |
@@ -101,8 +101,8 @@ blaming the change, and run the final premerge once on the integrated tree.
 5. Store domain wrappers are ordinary modules over the generic table API.
    Operator session/profile/memory operations must use their lifecycle service,
    not reimplement search, export, deletion or confirmation over raw tables.
-6. MCP is a client library loaded with release mode `:load`. Consumers supervise
-   their own clients/transports; it has no application callback.
+6. The MCP client library (`LemonMCP.*`) lives in `lemon_skills` and is called
+   directly; consumers supervise their own clients/transports.
 7. Honcho registers itself through platform seams. Platform apps must not acquire
    a dependency on the satellite integration.
 

@@ -11,7 +11,7 @@ defmodule LemonControlPlane.Methods.NullableUsageTest do
 
     limits =
       for key <- [:runs_limit, :tokens_limit, :cost_limit],
-          do: {key, Application.fetch_env(:lemon_control_plane, key)}
+          do: {key, Application.fetch_env(:lemon_core, key)}
 
     on_exit(fn ->
       if previous_summary,
@@ -20,15 +20,15 @@ defmodule LemonControlPlane.Methods.NullableUsageTest do
 
       for {key, value} <- limits do
         case value do
-          {:ok, original} -> Application.put_env(:lemon_control_plane, key, original)
-          :error -> Application.delete_env(:lemon_control_plane, key)
+          {:ok, original} -> Application.put_env(:lemon_core, key, original)
+          :error -> Application.delete_env(:lemon_core, key)
         end
       end
     end)
 
-    Application.put_env(:lemon_control_plane, :runs_limit, 10)
-    Application.put_env(:lemon_control_plane, :tokens_limit, 100)
-    Application.put_env(:lemon_control_plane, :cost_limit, 1.0)
+    Application.put_env(:lemon_core, :runs_limit, 10)
+    Application.put_env(:lemon_core, :tokens_limit, 100)
+    Application.put_env(:lemon_core, :cost_limit, 1.0)
 
     UsageStore.put_summary(:current, %{
       total_requests: 1,

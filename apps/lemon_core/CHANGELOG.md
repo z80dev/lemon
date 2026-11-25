@@ -8,11 +8,26 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Removed
 
+- `mix lemon.update` moved to lemon_skills, which owns the bundled-skill sync
+  it runs (#725).
 - **Breaking:** the `controller` and `hybrid` ids from
   `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
 
 ### Changed
 
+- **Breaking:** `LemonCore.Quality.ArchitecturePolicy` names roles (namespaces,
+  foundations, satellites, test kits, reference-only seams, config bindings)
+  instead of restating `mix.exs`; `allowed_direct_deps/0`,
+  `current_allowed_direct_deps/0`, `target_allowed_direct_deps/0` and the
+  target-drift report are removed. `ArchitectureCheck` adds
+  `lib_dependencies/1`, `test_dependencies/1` and `owner_for_module/1` (#725).
+- **Breaking:** lemon_core no longer reads other apps' env:
+  `LemonCore.Paths.agent_dir_override/0` reads `config :lemon_core, :agent_dir`,
+  usage quotas read `:lemon_core` keys, the gateway test replacement reads
+  `:lemon_core, :gateway_test_config`, the LCU probe ignores
+  `:lemon_computer_use` env (`:lcu_default_roots` isolates tests), browser
+  provider selection ignores `:lemon_browser, :backend`, and the control-plane
+  port is applied through `config :lemon_core, :runtime_port_settings` (#725).
 - `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
   fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
   instead of launching a browser (#660).

@@ -85,10 +85,9 @@ operator sockets. See [A2A](../user-guide/a2a-peers.md).
 | `lemon_cli` | Shared source/release command dispatch, setup and operator workflows |
 | `lemon_web` | Assistant Phoenix chat and management interface |
 | `lemon_memory` | Scoped durable memory, ingest/search and lifecycle management |
-| `lemon_skills` | Skill catalog/install/audit/curation and assistant-platform tools |
+| `lemon_skills` | Skill catalog/install/audit/curation, assistant-platform tools and the MCP client library (`LemonMCP.*`) |
 | `lemon_automation` | Cron/reminders/heartbeat policy, goal loops, kanban and blueprints |
 | `lemon_browser`, `lemon_media`, `lemon_lsp` | Supervised browser, media and language-server capabilities |
-| `lemon_mcp` | Client library for external MCP tools/resources/prompts |
 | `lemon_omp` | omp (oh-my-pi) delegate driver for external agent sessions; not an executor |
 | `lemon_computer_use` | Native app control through LCU (`cua_js` tools): transport, approval routing, lifecycle |
 | `lemon_honcho` | Optional satellite registering external memory/context/tools |

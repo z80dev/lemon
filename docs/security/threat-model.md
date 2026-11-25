@@ -467,12 +467,12 @@ policies.
 
 Lemon's package graph is enforced, not merely documented. The architecture
 check (`LemonCore.Quality.ArchitectureCheck`, run by `mix lemon.quality`) fails
-the build when an app's `deps/0` leaves the policy in
-`LemonCore.Quality.ArchitecturePolicy`, or when code under `apps/*/lib`
-references another app's namespace without a declared dependency. The only
-exemptions are the reference-only exceptions listed in that policy module
-(currently `lemon_gateway` → `lemon_ai`, `lemon_automation`), which can never
-authorize a `mix.exs` edge.
+the build when the declared graph breaks a rule in
+`LemonCore.Quality.ArchitecturePolicy`, or when code under `apps/*/lib` or a
+`config/*.exs` binding reaches another app (by alias, quoted module atom,
+literal `Module.concat` or app-env access) without a declared dependency. The
+only exemptions are the reference-only seams and config bindings listed in that
+policy module, which can never authorize a `mix.exs` edge.
 
 Apart from those listed exceptions, every cross-package reference in the tree
 is a declared dependency. For a security reviewer, this bounds blast radius and supply-chain reasoning: a published

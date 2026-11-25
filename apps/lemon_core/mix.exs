@@ -73,14 +73,14 @@ defmodule LemonCore.MixProject do
       files: ~w(lib priv c_src Makefile mix.exs README.md CHANGELOG.md LICENSE),
       # Tooling for the lemon repository itself stays out of the tarball: the
       # architecture/docs lint (`mix lemon.quality`), the managed-install
-      # self-updater (`mix lemon.update`), the repo's benchmark runner and task
-      # catalog. Nothing else in lib/ references these modules, and
+      # self-updater (`LemonCore.Update.*`), the repo's benchmark runner and
+      # task catalog. Nothing else in lib/ references these modules, and
       # scripts/verify_packages compiles the tarball without them.
       exclude_patterns: [
         ~r{^lib/lemon_core/(quality|update)/},
         # The compiled helper is built per platform by the consumer.
         ~r{^priv/(lemon_confined_fs|\.lemon_confined_fs\.platform)},
-        ~r{^lib/mix/tasks/lemon\.(quality|architecture\.docs|check_duplicate_tests|update|bench|help)\.ex$}
+        ~r{^lib/mix/tasks/lemon\.(quality|architecture\.docs|check_duplicate_tests|bench|help)\.ex$}
       ],
       links: %{
         "GitHub" => @source_url,

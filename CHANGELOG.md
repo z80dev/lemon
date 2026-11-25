@@ -107,6 +107,23 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- **Breaking:** the `lemon_mcp` app is folded into `lemon_skills`: `LemonMCP.*`
+  modules keep their names, `lemon_skills` calls the clients directly instead
+  of building module names at runtime, the `lemon_mcp: :load` release entry and
+  every `lemon_mcp` `runtime: false` edge are gone, and the McpSource suite runs
+  from `lemon_skills` (#725).
+- **Breaking:** the architecture check no longer mirrors `mix.exs`: it enforces
+  rules (foundations have no deps, satellites no dependents, test kits only
+  `only: :test`, acyclic graph, every lib edge referenced) and discovers quoted
+  `:"Elixir.*"` atoms, literal `Module.concat`, cross-app `Application` env
+  access and modules named in `config/*.exs` (#725).
+- **Breaking:** `config :coding_agent, :agent_dir` became
+  `config :lemon_core, :agent_dir`; usage quota keys (`:runs_limit`,
+  `:tokens_limit`, `:cost_limit`) moved from `:lemon_control_plane` to
+  `:lemon_core`; the `:lemon_browser, :backend` app env no longer selects a
+  browser provider; the test-only gateway replacement key is
+  `config :lemon_core, :gateway_test_config`; `mix lemon.update` moved to
+  `lemon_skills` (#725).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle

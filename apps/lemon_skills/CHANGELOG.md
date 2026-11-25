@@ -13,6 +13,10 @@
 
 ### Changed
 
+- **Breaking:** the MCP client library (`LemonMCP.*`, formerly the `lemon_mcp`
+  app) lives in lemon_skills; `McpSource`/`McpSession` call it directly and the
+  `:mcp_*_client_not_available` errors are gone. `mix lemon.update` moved here
+  from lemon_core (#725).
 - **Breaking:** media provider HTTP clients, the Google JWT exchange and the
   artifact writer moved to `lemon_media` (`LemonMedia.Providers`,
   `LemonMedia.GoogleAuth`, `LemonMedia.Artifact`); `MediaCommon.write_artifact/2`,

@@ -155,8 +155,8 @@ build ("Dependencies excluded from the package"). `scripts/verify_packages` and
 
 `lemon_core`'s package `exclude_patterns` leave this repository's tooling out of
 the tarball: `LemonCore.Quality.*`, `LemonCore.Update.*`, and the `lemon.quality`,
-`lemon.architecture.docs`, `lemon.check_duplicate_tests`, `lemon.update`,
-`lemon.bench` and `lemon.help` tasks.
+`lemon.architecture.docs`, `lemon.check_duplicate_tests`, `lemon.bench` and
+`lemon.help` tasks. `mix lemon.update` lives in `lemon_skills`.
 
 ## Proving the tarballs work
 

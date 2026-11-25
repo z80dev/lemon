@@ -151,10 +151,10 @@ MIX_ENV=prod mix do --app lemon_web phx.digest
 MIX_ENV=prod mix release lemon_runtime_full
 ```
 
-Both full and minimal runtime compositions assemble `lemon_mcp` with release
-mode `:load`. The library has no application callback and starts no processes;
-this entry makes its client modules available to `LemonSkills.McpSource` while
-the consuming application remains responsible for supervising each connection.
+The MCP client library ships inside `lemon_skills` (`LemonMCP.*`), so both full
+and minimal runtime compositions include it through that application. The
+clients start no processes on their own; `LemonSkills.McpSource` and other
+consumers supervise each connection they open.
 
 Both runtime profiles also bundle the local browser driver. A release step runs
 `npm ci` and `npm run build` in `clients/lemon-browser-node`, then stages `dist/`

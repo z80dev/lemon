@@ -766,17 +766,7 @@ boot_one_profile() {
       checks = %{
         client_loaded: Code.ensure_loaded?(LemonMCP.Client),
         source_loaded: Code.ensure_loaded?(LemonSkills.McpSource),
-        source_enabled: LemonSkills.McpSource.mcp_enabled?(),
-        application_loaded:
-          Enum.any?(Application.loaded_applications(), fn {app, _, _} ->
-            app == :lemon_mcp
-          end),
-        application_not_started:
-          not Enum.any?(Application.started_applications(), fn {app, _, _} ->
-            app == :lemon_mcp
-          end),
-        no_application_callback: Application.spec(:lemon_mcp, :mod) == [],
-        no_application_module: not Code.ensure_loaded?(LemonMCP.Application)
+        source_enabled: LemonSkills.McpSource.mcp_enabled?()
       }
 
       failures = for {name, false} <- checks, do: name

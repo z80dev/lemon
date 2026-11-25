@@ -117,9 +117,9 @@ Environment variables read by `lemon_browser` (from
 | `CAMOFOX_URL` / `CAMOFOX_API_KEY` | unset | Camofox REST/Firefox server and optional bearer key. A URL with embedded `user:password@` credentials is rejected; use `CAMOFOX_API_KEY`. |
 | `LEMON_BROWSER_EXECUTABLE` | unset | Chrome/Chromium executable for the local driver, if it is not discovered automatically. |
 
-The legacy backend can also be selected with the application environment key
-`:lemon_browser, :backend`. Use the unified provider setting above to keep
-diagnostics and model-facing tool availability consistent.
+Provider selection reads only the unified provider setting above and the legacy
+`LEMON_BROWSER_BACKEND` variable; the `:lemon_browser, :backend` application
+environment key no longer selects a provider.
 
 Managed profile settings also accept application config
 `config :lemon_browser, user_data_dir: "/dedicated/chrome-data", profile_directory: "Profile 1"`;

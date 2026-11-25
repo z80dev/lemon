@@ -88,9 +88,13 @@ defmodule LemonCore.Config.BrowserProviderTest do
     end
   end
 
+  test "the browser driver's application env does not select a provider" do
+    Application.put_env(:lemon_browser, :backend, :browserbase)
+    assert Tools.resolve(%{}).browser.provider == "auto"
+  end
+
   test "provider override wins over file and legacy backend choices" do
     System.put_env("LEMON_BROWSER_BACKEND", "camofox")
-    Application.put_env(:lemon_browser, :backend, :browserbase)
     System.put_env("LEMON_BROWSER_PROVIDER", "lcu")
     assert tools(%{"provider" => "relay"}).browser.provider == "lcu"
     assert Tools.resolve(%{}).browser.provider == "lcu"
@@ -111,18 +115,6 @@ defmodule LemonCore.Config.BrowserProviderTest do
     assert Tools.resolve(%{}).browser.provider == "cdp"
     assert tools(%{"provider" => "auto"}).browser.provider == "auto"
     assert tools(%{"provider" => "local"}).browser.provider == "local"
-  end
-
-  test "historical default local application backend does not defeat auto" do
-    for backend <- [:local, "local"] do
-      Application.put_env(:lemon_browser, :backend, backend)
-      assert Tools.resolve(%{}).browser.provider == "auto"
-    end
-
-    for backend <- [:camofox, "browserbase"] do
-      Application.put_env(:lemon_browser, :backend, backend)
-      assert Tools.resolve(%{}).browser.provider == to_string(backend)
-    end
   end
 
   test "existing browser backend settings survive provider resolution" do

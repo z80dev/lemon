@@ -74,12 +74,19 @@ defmodule LemonCore.BrowserProvider.LCUProbe do
 
     configured =
       Keyword.get(opts, :root) || System.get_env("LEMON_COMPUTER_USE_LCU_ROOT") ||
-        value(computer_use, :lcu_root) || Application.get_env(:lemon_computer_use, :lcu_root)
+        value(computer_use, :lcu_root)
 
     if is_binary(configured) and String.trim(configured) != "" do
       Path.expand(configured)
     else
-      candidates = [Path.expand("~/.local/share/lcu/current"), "/opt/lcu/current"]
+      # `:lcu_default_roots` only exists so test runs never probe a developer's
+      # installed LCU; installations configure `tools.computer_use.lcu_root`.
+      candidates =
+        Application.get_env(:lemon_core, :lcu_default_roots, [
+          Path.expand("~/.local/share/lcu/current"),
+          "/opt/lcu/current"
+        ])
+
       Enum.find(candidates, hd(candidates), &File.dir?/1)
     end
   end

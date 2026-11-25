@@ -6,16 +6,19 @@ defmodule CodingAgent.StatePathsTest do
   setup do
     root = Path.join(System.tmp_dir!(), "state-paths-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
-    keys = [:state_dir, :agent_dir]
-    old = Map.new(keys, &{&1, Application.fetch_env(:coding_agent, &1)})
+    old_state_dir = Application.fetch_env(:coding_agent, :state_dir)
+    old_agent_dir = Application.fetch_env(:lemon_core, :agent_dir)
     Application.delete_env(:coding_agent, :state_dir)
-    Application.put_env(:coding_agent, :agent_dir, root)
+    Application.put_env(:lemon_core, :agent_dir, root)
 
     on_exit(fn ->
-      Enum.each(old, fn
-        {key, {:ok, value}} -> Application.put_env(:coding_agent, key, value)
-        {key, :error} -> Application.delete_env(:coding_agent, key)
-      end)
+      restore = fn
+        app, key, {:ok, value} -> Application.put_env(app, key, value)
+        app, key, :error -> Application.delete_env(app, key)
+      end
+
+      restore.(:coding_agent, :state_dir, old_state_dir)
+      restore.(:lemon_core, :agent_dir, old_agent_dir)
 
       File.rm_rf!(root)
     end)
@@ -125,7 +128,7 @@ defmodule CodingAgent.StatePathsTest do
     for app <- [:elixir, :logger, :crypto],
         do: :peer.call(peer, Application, :ensure_all_started, [app])
 
-    :ok = :peer.call(peer, Application, :put_env, [:coding_agent, :agent_dir, root])
+    :ok = :peer.call(peer, Application, :put_env, [:lemon_core, :agent_dir, root])
 
     stores = [
       {CodingAgent.TaskStoreServer, :task_store_path, "tasks.dets"},

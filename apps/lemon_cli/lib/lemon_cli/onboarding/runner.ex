@@ -893,7 +893,7 @@ defmodule LemonCli.Onboarding.Runner do
   defp decode_oauth_payload(_), do: nil
 
   defp static_catalog_model_ids(%Provider{} = spec, api_key, discover? \\ true) do
-    models_module = Module.concat([:"Elixir.LemonAi", :Models])
+    models_module = LemonAi.Models
 
     with true <- Code.ensure_loaded?(models_module),
          true <- function_exported?(models_module, :get_models, 1),

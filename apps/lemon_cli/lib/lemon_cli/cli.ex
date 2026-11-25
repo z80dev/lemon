@@ -17,6 +17,10 @@ defmodule LemonCli.CLI do
   source and packaged installs.
   """
 
+  # Reference-only seam (LemonCore.Quality.ArchitecturePolicy): loaded at
+  # runtime by both releases and the source umbrella, never a Mix edge.
+  @compile {:no_warn_undefined, CodingAgent.ExecutionNode.CLI}
+
   alias LemonCli.CommandRegistry
   alias LemonCli.LocalRuntime
   alias LemonCli.Onboarding.LogSilencer
@@ -280,9 +284,10 @@ defmodule LemonCli.CLI do
   # node
   # ──────────────────────────────────────────────────────────────────────────
 
-  # lemon_cli does not depend on coding_agent; both runtime releases and the
-  # source umbrella load it, so resolve the node CLI at runtime.
-  defp execution_node_cli, do: Module.concat(["CodingAgent", "ExecutionNode", "CLI"])
+  # lemon_cli does not depend on coding_agent (a reference-only seam in
+  # LemonCore.Quality.ArchitecturePolicy); both runtime releases and the source
+  # umbrella load it, so the node CLI is dispatched at runtime.
+  defp execution_node_cli, do: CodingAgent.ExecutionNode.CLI
 
   defp run_node([command | args]) when command in ["join", "capabilities", "status"] do
     node_cli = execution_node_cli()
