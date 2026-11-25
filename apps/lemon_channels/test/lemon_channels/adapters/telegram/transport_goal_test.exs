@@ -1,7 +1,8 @@
 defmodule LemonChannels.Adapters.Telegram.TransportGoalTest do
   @moduledoc """
   `/goal continue` and `/goal loop once` through the real Telegram transport
-  against `LemonChannels.Telegram.FakeAPI`: the judge/continuation runs off the
+  against `LemonChannels.Telegram.FakeAPI` and the automation chat commands
+  behind `LemonCore.AutomationCommands`: the judge/continuation runs off the
   transport process, the chat gets an immediate acknowledgement and the result
   (or an unknown-outcome notice) as a follow-up.
   """
@@ -32,6 +33,20 @@ defmodule LemonChannels.Adapters.Telegram.TransportGoalTest do
     end
   end
 
+  # The automation provider with the goal loop manager replaced by `BlockingLoop`.
+  defmodule Commands do
+    @behaviour LemonCore.AutomationCommands
+
+    @impl true
+    def handle(command, args, opts),
+      do:
+        LemonAutomation.ChatCommands.handle(
+          command,
+          args,
+          Keyword.put(opts, :loop_module, BlockingLoop)
+        )
+  end
+
   @gateway_config_key :"Elixir.LemonGateway.Config"
   @chat 555_101
   @user 555_101
@@ -46,10 +61,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportGoalTest do
     root = Path.join(System.tmp_dir!(), "goal-chat-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
 
+    {:ok, _} = Application.ensure_all_started(:lemon_automation)
     previous_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
-    previous_loop = Application.get_env(:lemon_channels, :goal_loop_module)
+    previous_commands = LemonCore.AutomationCommands.provider()
     :persistent_term.put({BlockingLoop, :pid}, self())
-    Application.put_env(:lemon_channels, :goal_loop_module, BlockingLoop)
+    :ok = LemonCore.AutomationCommands.register(Commands)
 
     Application.put_env(:lemon_gateway, @gateway_config_key, %{
       telegram: %{bot_token: "fake-token", api_mod: FakeAPI},
@@ -62,7 +78,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportGoalTest do
       FakeAPI.reset()
       :persistent_term.erase({BlockingLoop, :pid})
       restore_env(:lemon_gateway, @gateway_config_key, previous_gateway)
-      restore_env(:lemon_channels, :goal_loop_module, previous_loop)
+      :ok = LemonCore.AutomationCommands.register(previous_commands)
       File.rm_rf!(root)
     end)
 

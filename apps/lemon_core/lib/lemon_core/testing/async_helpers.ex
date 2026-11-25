@@ -156,7 +156,7 @@ defmodule LemonCore.Testing.AsyncHelpers do
   Returns a reference that identifies the barrier.  Pass this reference to
   `arrive/1` and `await_barrier/2`.
   """
-  @spec barrier(pos_integer()) :: reference()
+  @spec barrier(pos_integer()) :: :ets.tid()
   def barrier(count) when is_integer(count) and count > 0 do
     ref = :ets.new(__MODULE__, [:set, :public])
     :ets.insert(ref, {:count, 0, count})
@@ -167,9 +167,9 @@ defmodule LemonCore.Testing.AsyncHelpers do
   Signals that a participant has arrived at the barrier.
   Thread-safe: uses ETS update_counter for atomic increment.
   """
-  @spec arrive(reference()) :: :ok
+  @spec arrive(:ets.tid()) :: :ok
   def arrive(ref) do
-    :ets.update_counter(ref, :count, {2, 1})
+    _ = :ets.update_counter(ref, :count, {2, 1})
     :ok
   end
 
@@ -178,7 +178,7 @@ defmodule LemonCore.Testing.AsyncHelpers do
   Multiple callers can safely call this on the same barrier. Its creator owns
   the unnamed ETS table, which is released when that process exits.
   """
-  @spec await_barrier(reference(), keyword()) :: :ok
+  @spec await_barrier(:ets.tid(), keyword()) :: :ok
   def await_barrier(ref, opts \\ []) do
     opts = Keyword.put_new(opts, :message, "barrier was never fully reached")
 

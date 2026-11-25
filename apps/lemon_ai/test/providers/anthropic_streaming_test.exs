@@ -874,23 +874,19 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
       refute Map.has_key?(body, "output_config")
       assert {:error, _} = EventStream.result(stream, 1_000)
 
-      effort_only = %{
-        adaptive
-        | adaptive_thinking: false,
-          reasoning_efforts: [:low, :high, :max],
-          compat: %{anthropic_effort_only: true}
-      }
+      # The `kimi` (API-key) catalog uses the same adaptive shape as `kimi_coding` (#525).
+      kimi = %{LemonAi.Models.get_model(:kimi, "k3") | base_url: adaptive.base_url}
 
       for {reasoning, effort} <- [medium: "low", max: "max"] do
         {:ok, stream} =
-          Anthropic.stream(effort_only, context, %StreamOptions{
+          Anthropic.stream(kimi, context, %StreamOptions{
             api_key: "test-key",
             reasoning: reasoning,
             temperature: 0.2
           })
 
         assert_receive {:request_body, body}, 1_000
-        refute Map.has_key?(body, "thinking")
+        assert body["thinking"] == %{"type" => "adaptive"}
         refute Map.has_key?(body, "temperature")
         assert body["output_config"] == %{"effort" => effort}
         assert {:error, _} = EventStream.result(stream, 1_000)

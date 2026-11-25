@@ -108,7 +108,7 @@ defmodule LemonRouter.VoiceReplyFallbackTest do
     event = Event.new(:run_completed, %{completed: %{ok: true, answer: "Transcript"}}, %{})
     assert :ok = LemonRouter.SurfaceManager.finalize_answer(state, event, %{})
     assert_receive {:dispatched, "voice-timeout:coalescer-final", stable_id}
-    assert_receive {:dispatched, "voice-timeout:finalize-fallback", ^stable_id}
+    assert_receive {:dispatched, "voice-timeout:terminal-answer", ^stable_id}
     assert_receive {:provider_waiting, provider, ^stable_id}
     refute_receive {:voice, _}
     send(provider, :release)

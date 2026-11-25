@@ -15,7 +15,7 @@ defmodule LemonControlPlane.Methods.SessionsCreate do
   def handle(params, _ctx) do
     with {:ok, key, cwd} <- NativeSessions.target(params),
          :ok <- canonical_key(key) do
-      case AgentRuntime.call(:session_create, [key, cwd], {:error, :unavailable}) do
+      case AgentRuntime.mutate(:session_create, [key, cwd]) do
         {:ok, %{"sessionId" => id, "created" => created}}
         when is_binary(id) and id != "" and is_boolean(created) ->
           {:ok, %{"sessionKey" => key, "sessionId" => id, "created" => created}}
@@ -23,8 +23,9 @@ defmodule LemonControlPlane.Methods.SessionsCreate do
         {:error, reason} ->
           NativeSessions.failure(reason)
 
+        # A malformed acknowledgement does not prove the session was not created.
         _ ->
-          NativeSessions.failure(:invalid_response)
+          NativeSessions.failure(:outcome_unknown)
       end
     end
   end

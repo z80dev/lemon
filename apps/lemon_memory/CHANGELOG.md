@@ -6,9 +6,24 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+**Release version: 0.3.0.**
+
 ### Changed
 
+- `LemonMemory.Ingest` publishes routing feedback only when `[features] routing_feedback`
+  is enabled, which is now off by default (#647).
+- **Breaking:** `LemonMemory.Store.delete_by_session/1,2` is synchronous and
+  transactional and returns `:ok | {:error, :memory_unavailable}` (it was a
+  cast). New `fetch_session_documents/2` (strict) and `restore_documents/2`
+  back `LemonMemory.SessionParticipant`, which deletes a session's documents
+  when the session is deleted (#692).
 - **Breaking:** `LemonMemory.Provider` is write-only: the `search/2` callback, `Providers.search/2` and `SessionSearch.search/2` are removed. `Project.search_history/4` also serves legacy contexts (no ownership claim), filtering owner, home, history kind and repository in SQL before the limit; unproven or partial claims stay `{:error, :unproven_context}` (#656).
+- **Breaking:** requires Elixir 1.17 (was `~> 1.15`); its exqlite 0.43
+  dependency requires 1.17. CI proves the floor on Elixir 1.17.3 / OTP 26.2
+  (#730).
+- Requires `lemon_core ~> 0.3.0` (was `~> 0.2`), derived from this package's own
+  version: the published packages share one 0.x release line and every minor
+  may break, so a sibling on another minor no longer resolves (#730).
 - Remove unused `ContextScope.private_metadata/1` and atom-key provider specifications' unused label field.
 - Consolidate byte-budget text clipping while preserving session-search grapheme boundaries.
 

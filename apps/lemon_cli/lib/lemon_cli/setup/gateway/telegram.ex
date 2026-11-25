@@ -383,8 +383,9 @@ defmodule LemonCli.Setup.Gateway.Telegram do
   defp secrets_status(io), do: Map.get(io, :secrets_status, &Secrets.status/0).()
   defp secret_get(io, key), do: Map.get(io, :secret_get, &Secrets.get/1).(key)
 
+  # A running runtime that owns the store receives the write over its control plane.
   defp secret_set(io, key, token),
-    do: Map.get(io, :secret_set, &Secrets.set(&1, &2, [])).(key, token)
+    do: Map.get(io, :secret_set, &LemonCli.SecretWriter.set(&1, &2, [])).(key, token)
 
   defp get_me(io, token), do: Map.get(io, :telegram_get_me, &api_get_me/1).(token)
 

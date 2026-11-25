@@ -5,7 +5,7 @@ defmodule CodingAgent.TaskRuntimeHelpers do
   """
 
   alias CodingAgent.TaskRuntime
-  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.TaskRuntime.Control
   alias LemonAgent.AbortSignal
 
   @doc """

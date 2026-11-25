@@ -215,7 +215,7 @@ defmodule LemonAi.Providers.AzureOpenAIResponses do
 
     # Add tools if present
     params =
-      if context.tools && context.tools != [] do
+      if context.tools != [] do
         Map.put(params, "tools", OpenAIResponsesShared.convert_tools(context.tools))
       else
         params
@@ -253,7 +253,7 @@ defmodule LemonAi.Providers.AzureOpenAIResponses do
     }
 
     # Add model-specific headers
-    headers = Map.merge(base_headers, model.headers || %{})
+    headers = Map.merge(base_headers, model.headers)
 
     # Add user-provided headers
     Map.merge(headers, opts.headers || %{})
@@ -273,7 +273,7 @@ defmodule LemonAi.Providers.AzureOpenAIResponses do
         |> Map.put("include", ["reasoning.encrypted_content"])
       else
         # GPT-5 workaround for disabling reasoning
-        model_name = String.downcase(model.name || "")
+        model_name = String.downcase(model.name)
 
         if String.starts_with?(model_name, "gpt-5") do
           juice_message = %{

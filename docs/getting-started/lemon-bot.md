@@ -77,15 +77,15 @@ Follow the terminal prompts:
    **Skip — set it up in the browser**.
 2. Pick a model. Lemon performs a live, non-generating readiness check; it does
    not send a chat message.
-3. Optionally enable HTTPS with Tailscale Serve, or supply an HTTPS URL whose
-   reverse proxy you already configured. **Keep local access only** is the
-   default; skipping leaves your network configuration unchanged.
-4. Optionally connect Telegram or Discord.
-5. After the last question, setup continues in the same terminal with
+3. Optionally connect Telegram or Discord.
+4. After the last question, setup continues in the same terminal with
    `lemon-bot up --this-machine`, which uses the Lemon on this computer,
    installs controller/backend/worker user services, creates the owner without
    a form, and enrolls this computer as a supervised worker. On macOS,
    persistence is **login**, not boot.
+
+Lemon Bot stays on loopback. To reach it from another device later, see
+[Give Lemon Bot an HTTPS address](#give-lemon-bot-an-https-address).
 
 The browser opens already signed in. On a Mac the notice is **Unlocked by your
 Mac login**. At **Create your first Bot**, choose **Create a Bot** and enter a
@@ -278,32 +278,30 @@ from another browser; network/tailnet access alone is not sign-in authority.
 
 ### Give Lemon Bot an HTTPS address
 
-Managed HTTPS requires an **installed release and a local controller**. Source
-startup does not load `~/.lemon/env`, and a backend's saved remote controller
-cannot be configured from this machine; those cases refuse without changing
-configuration. Use the [manual appendix](#appendix-manual-https-setup) instead.
+HTTPS is managed by the Lemon Bot CLI, `lemon-bot https`, on the computer that
+runs the Bot backend. It requires an **installed Lemon release and a local
+controller**. Source startup does not load `~/.lemon/env`, and a backend's saved
+remote controller cannot be configured from this machine; those cases refuse
+without changing configuration. Use the
+[manual appendix](#appendix-manual-https-setup) instead.
 
-Run on the computer that runs Lemon Bot:
+Start Lemon Bot first (`lemon-bot up`), then run it with the same `LEMON_BOT_*`
+environment the backend was installed with:
 
 ```bash
-lemon bot https enable --tailscale
+lemon-bot https enable --tailscale
 ```
 
-This configures Tailscale Serve for the loopback Bot backend, saves its HTTPS
-origin, updates both controller callback allowlists, approves exactly that origin
-for the backend's first-party private MCP tools in its existing operator
-configuration, and restarts the backend when its effective configuration changes.
-It resolves the backend's process environment without dropping the caller's
-service paths or existing callback allowlists, verifies instance identity,
-controller admission, execution's MCP destination policy and the running backend's
-loaded approval before marking the receipt active. A controller/launcher credential
-port mismatch is checked against the saved backend endpoint before any desired
-port override or settings change; select that controller's port with
-`LEMON_CONTROL_PLANE_PORT` when invoking the command.
-
-The command also refuses any difference between installed and desired controller
-endpoints: `lemon bot https` does not change the controller. Change it with
-`lemon service install` first, then enable HTTPS with the matching controller port.
+This configures Tailscale Serve for the loopback Bot backend, records an
+ownership receipt (`~/.lemon/bot-https.json`), adds the origin to both controller
+callback allowlists in `~/.lemon/env`, approves exactly that origin for the
+backend's first-party private MCP tools in its operator configuration, and
+restarts the controller and backend through the installed `lemon` launcher. It
+then verifies instance identity over HTTPS, the controller's own admission check
+(`doctor.run`), execution's MCP destination policy and the running backend's
+loaded approval before marking the receipt active. Existing callback allowlist
+entries are kept. The command never changes which controller the Bot uses; switch
+controllers with `lemon-bot --choose-lemon` first.
 
 Tailscale must already be installed and connected. It uses private
 tailnet access, **not Funnel**; it does not expose the controller operator port
@@ -313,29 +311,38 @@ If you already operate a TLS reverse proxy, route your chosen HTTPS origin to
 the loopback Bot backend (normally `http://127.0.0.1:4100`), then register it:
 
 ```bash
-lemon bot https enable --url https://bot.example.com
+lemon-bot https enable --url https://bot.example.com
 ```
 
 `--url` does not create the reverse proxy; you control who can reach that
 address. Use an exact HTTPS origin (scheme, host and optional port), with no
-path or trailing slash. There is **no public exposure by default**: setup
-defaults to local-only access, never enables HTTPS unattended, and Tailscale
+path or trailing slash. There is **no public exposure by default**: `lemon setup`
+leaves Lemon Bot on loopback, nothing enables HTTPS unattended, and Tailscale
 mode is tailnet-only.
 
 Inspect or undo the managed configuration:
 
 ```bash
-lemon bot https status
-lemon bot https disable
+lemon-bot https status
+lemon-bot https disable
 ```
 
-Disable removes only entries and routes owned by this tool; it preserves other
-configured origins and unrelated Tailscale routes, and restores a public URL that
+Disable removes only entries and routes the receipt owns; it preserves other
+configured origins and unrelated Tailscale routes, and keeps a public URL that
 was already configured before enable. It preserves existing env-file permissions
 and does not tear down an independently configured reverse proxy.
 
+Only one `lemon-bot https` change runs at a time. If enable or disable fails
+part-way, it says whether settings had already changed: the receipt keeps
+ownership of everything it recorded, so inspect with `lemon-bot https status`,
+fix the reported cause, then rerun enable or run disable.
+
+`lemon doctor` reports `bot.admission_origins` read-only: it checks the origin in
+`LEMON_BOT_PUBLIC_URL`, or else the one `lemon-bot https` published in its
+receipt, against both effective controller allowlists.
+
 **Bots created before the address changed will not reply at the new URL until
-their addresses are updated.** The enable summary and `lemon bot https status`
+their addresses are updated.** The enable summary and `lemon-bot https status`
 list affected Bots by name. Each Bot's actual owner must open **Bot → Settings
 → lifecycle panel → Update address** to move its callbacks to the current
 origin. Changing the backend's public URL alone does not update stored Bot
@@ -346,7 +353,7 @@ Keep the old origin allowed until affected Bots have moved; CLI-managed
 allowlist changes preserve other configured origins. This is separate from
 connecting an iPhone or advertising a node gateway.
 
-For the previous operator-managed procedure, see the
+For the operator-managed procedure, see the
 [manual HTTPS appendix](#appendix-manual-https-setup).
 
 If an operator is deliberately bootstrapping an unconfigured remote workspace

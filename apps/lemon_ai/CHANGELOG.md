@@ -10,6 +10,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- Typespecs corrected so the package is Dialyzer-clean (#734):
+  `LemonAi.EventStream.push/2` and `push_async/2` accept any event term;
+  `Types.AssistantMessage.t()` allows `nil` `usage` and `stop_reason`;
+  `Types.ModelCost.t()` costs are `number()`; `Providers.GoogleShared`
+  function-declaration types use string keys. No runtime change.
+- **Breaking:** requires Elixir 1.17 (was `~> 1.15`). The published packages
+  share one floor, which CI now proves on Elixir 1.17.3 / OTP 26.2 (#730).
 - **Breaking (0.3.0):** provider streaming is delta-only: events carry deltas,
   accumulation happens once, and deltas are coalesced (#571). Migration:
   consumers that read accumulated partial messages from every event must
@@ -42,6 +49,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Removed
 
+- **Breaking:** catalog compat flag `anthropic_effort_only` (its last users, the
+  `kimi` K3/`kimi-for-coding` entries, now use `adaptive_thinking`) (#525).
+  Migration: declare `adaptive_thinking` with `reasoning_efforts` instead.
 - Unused `LemonAi.Models.supports_xhigh?/1`, `models_equal?/2`,
   `adjust_max_tokens_for_thinking/3,4` and `get_model_ids/1` helpers. Use
   `supports_xhigh/1` and `get_models/1` for supported model queries.
@@ -63,6 +73,25 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonAi.Auth.KimiCodeOAuth.region/1`, `regions/0`, `region_for_base_url/1`
+  and `omp_provider/1` describe the China (kimi.com) and global (kimi.ai) Kimi
+  Code deployments; `login_device_flow/1` takes `:region`, and stored logins
+  record `auth_base_url` and refresh there. `LemonAi.Auth.OmpToken.resolve/2`
+  takes `provider: "kimi-code-global"` (#525).
+- `LemonAi.Providers.KimiCodeRanking.rank/2` orders several Kimi Code logins
+  by quota headroom, like omp's Kimi account ranking (#525).
+- `LemonAi.Providers.MoonshotToolSchema` normalizes tool parameters to Moonshot
+  Flavored JSON Schema, inlining local `$ref`s (cycle-safe, bounded) first;
+  `OpenAICompletions` applies it for Moonshot-native hosts
+  (`compat.moonshot_tool_schema`) (#525).
+- `LemonAi.Models.KimiCodeDiscovery` lists a Kimi Code account's models from
+  `/v1/models` (efforts, context, image input, per-family output caps), cached
+  per account; `Models.list_models/1` takes `:discover_kimi_code` and
+  `:kimi_code_*` options (#525).
+- The `kimi` K3 and `kimi-for-coding` catalog entries declare
+  `adaptive_thinking` like `kimi_coding` (#525).
+- Provider preconnect and opt-in request hedging with dispatcher telemetry
+  (`hedge_started`, `hedge_skipped`) (#567).
 - Provider preconnect (`LemonAi.preconnect/1`) (#567).
 - Opt-in OpenAI Responses over WebSocket with `previous_response_id` chaining
   (`responses_websocket = true`) (#566).

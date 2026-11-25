@@ -8,19 +8,21 @@ defmodule LemonGateway.Sms.AvailabilityTest do
   alias LemonGateway.Sms.Inbox
 
   @env_vars ~w(TWILIO_AUTH_TOKEN LEMON_SMS_WEBHOOK_ENABLED LEMON_SMS_WEBHOOK_PORT)
+  @replacement_key :"Elixir.LemonGateway.Config"
 
   setup do
-    LemonGateway.Test.AppIsolation.isolate_gateway([:gateway_ingress_enabled],
-      system_env: @env_vars
-    )
-
+    LemonGateway.Test.AppIsolation.isolate_gateway([@replacement_key], system_env: @env_vars)
     Enum.each(@env_vars, &System.delete_env/1)
 
     :ok
   end
 
   defp boot_with_ingress do
-    Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
+    Application.put_env(:lemon_gateway, @replacement_key, %{
+      max_concurrent_runs: 2,
+      ingress: %{enabled: true}
+    })
+
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     assert is_pid(Process.whereis(LemonGateway.IngressSupervisor))
   end

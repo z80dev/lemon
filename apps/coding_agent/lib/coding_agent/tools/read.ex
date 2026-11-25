@@ -4,7 +4,8 @@ defmodule CodingAgent.Tools.Read do
 
   Reads the contents of a file with support for:
   - Numbered physical text lines and full-byte snapshots for anchored edits
-  - Directories, in-memory archive members, PDF pages and notebook cells/outputs
+  - In-memory archive members, PDF pages and notebook cells/outputs; directories
+    are refused with a pointer to `ls`
   - Native image content with bounded proportional previews when a backend exists
   - Offset and limit parameters for partial reads, with format-specific continuation
   - Path line selectors (`file:50-80`, `file:5,19-25`, `file:50+20`, `file:50`, `file:-30`, `file:raw`)
@@ -88,8 +89,9 @@ defmodule CodingAgent.Tools.Read do
     %AgentTool{
       name: "read",
       description:
-        "Read files, directories, archives (archive.zip:member), PDFs, notebooks, images, and SQLite databases " <>
+        "Read files, archives (archive.zip:member), PDFs, notebooks, images, and SQLite databases " <>
           "(app.db lists tables; app.db:table, app.db:table:key, app.db:table?limit=&offset=&where=&order=, app.db?q=SELECT ...). " <>
+          "List directories with ls. " <>
           "Text files include a snapshot tag and 1-based lines; prefer edit with snapshot + edits " <>
           "to change line ranges without copying old text, including omitted lines while the tag is current. Use offset/limit or a path selector " <>
           "(file:50-80, file:50+20, file:50 from line 50, file:-30 last 30 lines, file:raw or " <>

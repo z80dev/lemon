@@ -110,13 +110,14 @@ defmodule LemonAgent.ModelRuntime.CredentialHealth do
 
   @impl true
   def init(:ok) do
-    :ets.new(@table, [
-      :named_table,
-      :public,
-      :set,
-      read_concurrency: true,
-      write_concurrency: true
-    ])
+    _ =
+      :ets.new(@table, [
+        :named_table,
+        :public,
+        :set,
+        read_concurrency: true,
+        write_concurrency: true
+      ])
 
     {:ok, %{}}
   end

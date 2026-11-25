@@ -2,7 +2,7 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
   @moduledoc """
   Real channel ingress (`LemonChannels.Runtime.submit_inbound/2` ->
   `LemonChannels.RunRequestBuilder` -> `LemonCore.RouterBridge.submit_run/1`)
-  must carry enough context for the channel policy, the group approval floor,
+  must carry enough context for the session policy, the group approval floor,
   sender identity and the channel cwd default to apply when the run is built.
   """
   use ExUnit.Case, async: false
@@ -59,15 +59,6 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
       assert tool_policy.approvals[tool] == :always,
              "expected #{tool} to require approval in a group, got #{inspect(tool_policy)}"
     end
-  end
-
-  test "a channel_policies row changes the effective policy of a real ingress run" do
-    LemonCore.PolicyStore.put_channel("telegram", %{blocked_tools: ["browser"]})
-    on_exit(fn -> LemonCore.Store.delete(:channel_policies, "telegram") end)
-
-    tool_policy = build_submission(peer_kind: :dm, peer_id: "4250").tool_policy
-
-    assert "browser" in tool_policy.blocked_tools
   end
 
   test "a Telegram DM is not subject to the group approval policy" do
@@ -183,7 +174,7 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
   end
 
   for channel <- ["telegram", "discord"] do
-    test "a #{channel} /new memory reflection in a group keeps the channel policy and floor" do
+    test "a #{channel} /new memory reflection in a group keeps the group approval floor" do
       channel = unquote(channel)
       chat_id = System.unique_integer([:positive])
 
@@ -196,10 +187,7 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
           peer_id: "-#{chat_id}"
         })
 
-      LemonCore.PolicyStore.put_channel(channel, %{blocked_tools: ["browser"]})
-
       on_exit(fn ->
-        LemonCore.Store.delete(:channel_policies, channel)
         LemonCore.RunStore.delete_history(session_key)
       end)
 
@@ -231,8 +219,7 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
                  nil,
                  %{
                    maybe_subscribe_to_run: fn _ -> :ok end,
-                   current_thread_generation: fn _, _, _ -> 0 end,
-                   maybe_put: fn map, key, value -> Map.put(map, key, value) end
+                   current_thread_generation: fn _, _, _ -> 0 end
                  }
                )
 
@@ -243,7 +230,6 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
         assert execution.tool_policy.approvals[tool] == :always
       end
 
-      assert "browser" in execution.tool_policy.blocked_tools
       assert execution.meta.channel_identity.sender_id == "100"
     end
   end

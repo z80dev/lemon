@@ -10,8 +10,44 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Read-scoped control-plane method `commands.list(cwd)` returns the file slash
+  commands the daemon would expand for a directory, advertised in `hello-ok`.
+  The TUI palette, `/help` and autocomplete now use it and `skills.list`
+  instead of scanning command, prompt and skill directories locally, so they
+  follow the daemon's configured agent directory and drop a deleted command
+  file on the next refresh. The palette no longer lists local prompt templates
+  (#718).
+- Gateway-native webhook, Twilio SMS and voice can now start from global
+  `[gateway.ingress]` TOML and per-surface settings, with
+  `LEMON_GATEWAY_INGRESS_ENABLED` as the startup override. The generic webhook
+  ships pre-registered; all three listeners remain opt-in (#698).
+- One-shot CLI commands beside a running runtime never become a second store
+  writer: their client store defers every write to the runtime that owns the
+  database, and `lemon secrets set|delete|import-env` and `lemon setup
+  gateway` token storage go through the new admin `secrets.set` /
+  `secrets.delete` control-plane methods; other store writes (provider
+  credentials in `lemon setup`/`lemon model`) refuse until `lemon stop` (#667).
+- `lemon secrets` is the only secrets command-line implementation; the
+  `mix lemon.secrets.*` tasks and their twin tests are removed (#717).
+- Kimi Code parity with omp (#525): with a `kimi_coding` credential the model
+  picker lists the account's models from `/coding/v1/models` (name, context,
+  image input, effort levels, per-family output caps), and `websearch` gains a
+  `kimi` provider (`POST /coding/v1/search`) that uses the Kimi Code login,
+  omp login or API key. The `kimi` (API-key) K3 and `kimi-for-coding` models now
+  send adaptive thinking with effort, like `kimi_coding`. Global (kimi.ai)
+  Kimi Code accounts sign in with `lemon model kimi-code --region global`
+  (also with `--auth omp`, which then reads omp's `kimi-code-global` login), and
+  a stored login refreshes at the host that issued it. Several Kimi Code logins
+  in a credential pool (or omp broker) are ordered for new sessions by quota
+  headroom, as omp does. Models using the OpenAI Chat Completions wire against
+  a Moonshot-native host send tool parameters as Moonshot Flavored JSON Schema.
 - `lemon browser stop` (admin control-plane method `browser.stop`) stops the
   local browser driver and the Chrome it launched (#660).
+- Operator WebSockets can watch one session at a time with `sessions.watch`.
+  The TUI uses that subscription to receive each native text delta once. The web
+  shell listens for lifecycle only, and terminal waiters no longer subscribe to
+  token streams. Run lifecycle events carry versioned run/attempt identities (#716, #86).
+
 - `lemon setup omp` reuses the provider logins and API keys omp already holds:
   it starts omp's auth broker as the new `omp-broker` service
   (`lemon service install omp-broker`) when none is running, lists omp's
@@ -107,6 +143,117 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- **Breaking:** `[features] routing_feedback` now defaults to `"off"`; set it to
+  `"on"` in the global config to record and use routing history. When enabled,
+  history no longer outranks `[defaults] model`: it is consulted only for
+  un-pinned runs, suggests only models with at least a 75% success rate, and
+  replaces the default only where the default itself was measured (5+ samples)
+  and did worse, so a changed default takes effect immediately. The router reads
+  the flag from the config cache instead of parsing TOML per submission, and
+  the history lookup is an index range scan (#647).
+- **Breaking (lemon_core package):** the `LemonCore.Testing*` harness is no
+  longer published with lemon_core; `use LemonCore.Testing.Case, with_store:
+  true` now actually starts the Store; the duplicate Elixir credential scrub
+  list (`HermeticEnv.credential_env_vars/0`, `scrub_unit_credentials!/1`,
+  `:test_credential_env_vars`) is removed in favour of the single list in
+  `scripts/test`; `LemonGateway.AsyncHelpers` is removed (#713).
+- **Breaking:** `session.detail` is now a routing projection only: `session`
+  carries the next run's model, provider, context window and thinking level
+  plus the durable agent, title/pin/archive state, run count and timestamps.
+  The `runs`, `runCount`, `summary`, `options` and `contentWithheld` blocks and
+  the `limit`/`historyLimit`/`eventLimit`/`toolCallLimit`/include parameters
+  are gone, and it no longer reads run history or scans the session directory,
+  so a TUI or web session switch costs point reads of that session's index,
+  metadata and policy rows. Run and event content come from `chat.history`,
+  `sessions.history` and `runs.timeline.get` (#700).
+- **Breaking:** learning reminder settings moved from `skills.json` to
+  `[skills.learning_nudge]` in `config.toml` (background review under
+  `[skills.learning_nudge.background_review]`, operator-only); a project
+  `.lemon/config.toml` can only turn reminders off or lengthen their intervals.
+  A `learning_nudge` object left in `skills.json` is no longer read and
+  `lemon doctor` warns about it. `skills.json` now holds only the `disabled`
+  list (#655).
+- One app list per runtime: `apps/lemon_core/priv/runtime_profiles.exs` is the
+  single source for the `lemon_runtime_min`/`lemon_runtime_full` releases, the
+  source launcher, `/healthz`, `lemon doctor` and `lemon setup runtime`, and a
+  test fails when they or the deployment docs drift. The minimal runtime is now
+  documented as what it is, the full runtime without the web UI (#726).
+- The packaged runtime refuses to boot, naming the fix, when its store backend
+  is not durable, `exqlite` is unavailable or a required `lemon_core` service
+  group is deselected, instead of running with run history silently off (#92).
+- **Breaking:** the control-plane `agent` method takes `sessionKey`, `agentId`,
+  `queueMode` and an optional fixed `runId`, rejects the old snake_case
+  spellings, returns the `chat.send` receipt (`runId`, `sessionKey`, `state`,
+  `effectiveMode`, `targetRunId`, `retrySafe`), and runs an `agentId` that names
+  a managed profile as that profile's chat in its own workspace (a caller `cwd`
+  is refused). A submit whose reply is lost keeps its fixed run ID, and a retry
+  with the same `idempotency_key` reconciles to that one run. `lemon print`
+  uses the new fields (#620).
+
+- Goal and kanban state, their agent tools and the `/goal`, `/kanban` and
+  `/remind` chat commands are owned by `lemon_automation`. The `kanban` and
+  `goal` tools register through the runtime tool registry like `cron` (same
+  schemas; they now follow it in tool order and their results are untrusted),
+  and channels reach the chat commands through `LemonCore.AutomationCommands`
+  instead of quoted module names. `config :lemon_core, :workspace_diagnostics`
+  names `LemonAutomation.GoalStore`/`KanbanStore`; the
+  `:goal_loop_module`, `:kanban_dispatcher_module` and `:reminder_cron_module`
+  lemon_channels settings are gone (#721, #729).
+- Bot HTTPS moved from the core CLI to the Lemon Bot CLI: run
+  `lemon-bot https enable --tailscale|--url HTTPS_ORIGIN`, `status` and
+  `disable` instead of `lemon bot https`. Existing `~/.lemon/bot-https.json`
+  receipts keep working. A failure after settings changed now says so instead of
+  reporting "locked; no concurrent changes". `lemon setup` no longer offers an
+  HTTPS step. `lemon doctor`'s read-only `bot.admission_origins` check also uses
+  the origin `lemon-bot https` published and the allowlists the admission owners
+  actually enforce (#723).
+- `LemonCore.Context` moved to `lemon_skills` as `LemonSkills.Context`; it no
+  longer ships in the published `lemon_core` package. `lemon context` and
+  `lemon learn` are unchanged (#724).
+- **Breaking (Hex packages):** the published packages are self-consistent and
+  `scripts/verify_packages` proves it by running them: the packaged doctor's
+  runtime check no longer calls the excluded `LemonCore.Update.Version` (build
+  identity is `LemonCore.BuildInfo.version/0`, `identity/0`, `describe/0`) and
+  no longer fails below Elixir 1.20.5 (the application floor is
+  `LemonCli.Doctor.Toolchain`'s `runtime.elixir`); sibling requirements are
+  `~> 0.3.0`, derived from each package's version, so they cannot resolve
+  across a 0.x minor (lemon_memory and lemon_platform_test join the 0.3.0
+  line); `PluginCase` leaves the lemon_platform_test package; and
+  `mix lemon.store.migrate_jsonl_to_sqlite` is removed (#730).
+- **Breaking (Hex packages):** the five published packages require Elixir 1.17
+  (was `~> 1.15`, which they did not meet: exqlite 0.43 requires 1.17 and they
+  call `String.replace_invalid`, Elixir 1.16; lemon_core did not compile on
+  1.15). `packaging.yml` now requires `scripts/verify_packages` on the floor,
+  Elixir 1.17.3 / OTP 26.2, and the script fails on functions the running
+  toolchain lacks or dependencies that refuse it (#730).
+- Duplicate test families are collapsed to one canonical file per module
+  (#732): EventStream, Loop, CircuitBreaker, CallDispatcher, ProviderRegistry,
+  Google/OpenAI Responses shared helpers, TextSanitizer, CodingAgent session,
+  extensions, bash executor and edit tests, about 23K fewer test lines.
+  `LemonAgent.EventStream` tests now cover only the facade's abort-signal,
+  `:agent` event format and cancel-grace options; queue, drop-strategy,
+  ownership and cancellation coverage lives with `LemonAi.EventStream`.
+  `mix lemon.check_duplicate_tests` (part of `mix lemon.quality`) now also
+  fails when an `_edge_cases`, `_additional_edge_cases`, `_comprehensive`,
+  `_extended` or `_consolidation` test file or module sits beside its
+  canonical test.
+- **Breaking:** channel model and thinking preferences live in
+  `LemonCore.PolicyStore`. Telegram and Discord `/model` for this session writes
+  the session row (`:model`, as `sessions.patch` does), so web, TUI and the
+  control plane show the same model the channel run uses; `/model` for future
+  sessions and `/thinking` write `PolicyStore` chat rows (thread, chat, account
+  or channel). Channels no longer put `model`, `model_scope`, `thinking_level`
+  or `thinking_scope` into run meta: `LemonRouter.ModelSelection` decides
+  request > session row > chat row > profile > default (thinking: request >
+  session row > chat row) from the session key, and `session.detail` reports
+  `modelSource: "chat"` for a chat default. Session reset and delete remove
+  every model and thinking override with the session row. `lemon policy` writes
+  the same chat rows; `--peer` without `--account` now names the `default`
+  account (it used to write a key nothing read) and `--thread` requires
+  `--peer`. Preferences stored in the removed `:model_policies`,
+  `:telegram_session_model`, `:telegram_default_model`,
+  `:telegram_default_thinking` and `:discord_session_model` tables are not
+  read: set them again with `/model`, `/thinking` or `lemon policy` (#714).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
@@ -116,7 +263,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   behind `LemonMedia.Providers.run/1` with one shared retry helper; Google
   service-account tokens are cached until expiry instead of re-signed per job.
   Channel voice-note transcription and voice replies and the gateway voice
-  call's ElevenLabs synthesis now call the `lemon_media` clients;
+  call's ElevenLabs synthesis and Deepgram streaming now call the `lemon_media` clients;
   transcription errors shown in chat carry a redacted provider error label
   instead of the raw provider message (#722).
 - **Breaking:** media tools (`media_generate_image`, `media_generate_speech`,
@@ -134,6 +281,31 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   longer crash a live session's append. `CodingAgent.SessionIndex` and
   `SessionManager.list_sessions/1` (no callers) are removed; leftover
   `.index.sqlite3` files in session directories are unused (#695).
+- `scripts/test coverage` runs each app in its own VM, so failures that only
+  appeared when one VM re-cover-compiled apps under running processes are
+  gone; paths select apps and other arguments go to every app's run (#499).
+- The Store bounds the `:runs` table and keeps full-table reads off its
+  process (#682). Run events go into a per-run buffer (first 200 + latest,
+  2,000 in all, `:events_dropped` counts the rest); `:runs` stores only the
+  summary and lifecycle metadata. The summary and frozen buffer expire
+  `:runs_retention_ms` (default 24 h) after finalization; a durable `:run_terminals` entry makes
+  `RunStore.fetch/1` return `{:error, :evicted}` so a finished run (also after a
+  restart) is never reopened by the gateway. `fetch_all/2`, `list/2`, the new
+  `fetch_keys/2` and `fetch_range/5`, and introspection listing read the backend
+  in the caller's process (SQLite: a private read-only WAL connection). Usage
+  pages read only the window's ledger occurrences, never `:runs`; router
+  session discovery reads session keys only. **Breaking** for `lemon_core`
+  callers: `:runs` cannot be listed whole, `UsageStore.fetch_runs/1` is gone,
+  and introspection listing errors are `{:error, :store_unavailable}`.
+  tab makes no service calls and kanban changes appear immediately. Each load
+  makes seven batched reads whatever the number of boards, goals and cron jobs
+  (`KanbanStore.list_tasks_for/2`, `KanbanDispatcher.status_many/2`,
+  `GoalLoopManager.status_many/1`, `CronManager.runs_for/2`) (#687).
+  session discovery reads session keys only, and session-maintenance previews
+  use a bounded metadata index. **Breaking** for `lemon_core` callers:
+  `:runs` cannot be listed whole, event readers must use `RunStore.get_with_events/1`,
+  `UsageStore.fetch_runs/1` is gone, and introspection listing errors are
+  `{:error, :store_unavailable}`.
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
@@ -211,8 +383,76 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Long-lived caches and tables (extension, web, capability, dedupe, auth) have
   supervised owners and survive their first caller; mutable `:persistent_term`
   use is removed (#595).
+- **Breaking:** `sessions.reset` is preview-first and confirmation-bound. A call
+  without `confirmToken` (or with `dryRun: true`) mutates nothing and returns a
+  redacted state digest (run-history count, chat state, session policy, ACP
+  metadata) plus a single-use server-side `confirmToken`; only `dryRun: false`
+  with that token resets, after re-verifying the live digest under the session
+  lifecycle fence. Each deletion is checked, and failures report
+  `retrySafe: false` without raw exception text. Clients that sent only
+  `sessionKey` must now preview and confirm. TUI `/reset` and `/session reset`
+  show the daemon preview in a confirmation modal that defaults to Cancel (#615).
 
 ### Fixed
+
+- `agent.wait` returns `UNAVAILABLE` when the run store cannot be read instead
+  of reporting a timeout, and no longer copies a raw exception message into its
+  error details (#620).
+- `agent.wait` no longer `inspect`s a non-text run error onto the wire: it
+  returns `{"kind", "status", "message"}` (provider HTTP status kept, message
+  redacted and bounded), a non-text answer is `null`, and `lemon print` renders
+  that object. `cron.run` allocates its cron run ID before calling the
+  scheduler, which claims exactly that ID, so an unknown outcome names the
+  `runId` to reconcile; a trigger blocked by an earlier unresolved run reports
+  `PRIOR_RUN_OUTCOME_UNKNOWN` with that run's `priorRunId` instead (#620).
+- Preserve committed run outcomes across restarts, retry pending completion
+  notifications and projections, and never report an already-completed run
+  as failed because answer presentation crashed (#75, #76, #77, #84).
+
+- `bin/lemon start` now starts Honcho memory and computer-use tools when they
+  are configured: the source runtime previously never started
+  `lemon_honcho` or `lemon_computer_use` (#726).
+- Runtime applications start as permanent applications, and `/healthz` answers
+  `503` naming the stopped applications instead of a constant `200`; `lemon
+  doctor` reports an expected application that failed to start or stopped
+  (#726).
+- `agent.wait` returns `UNAVAILABLE` when the run store cannot be read instead
+  of reporting a timeout, and no longer copies a raw exception message into its
+  error details (#620).
+- Source (`bin/lemon`) and packaged distributed runtimes start OTP's `rex`,
+  `global_name_server` and `global_group` again: `-kernel start_distribution
+  false` (#551) had dropped them, so every native session start failed on
+  `:global` and the weekly Product Smoke was red (#499).
+- `scripts/test quality` passes Credo again: the crash-report stand-in exception
+  is `LemonCore.StatusRedaction.RedactedCrashError` (#499).
+- The nightly offline latency lane names the failing boot and the probe's fixed
+  failure message (or only the exception module) instead of a bare "runtime
+  failed" (#499).
+- Dialyzer: the five published packages (`lemon_core`, `lemon_ai`,
+  `lemon_agent`, `lemon_memory`, `lemon_platform_test`) and the other gated apps
+  have zero findings; fixes include `Lemon.Reload` treating a successful code
+  change as an error and extension manifests reporting non-object JSON as
+  oversized (#499, #734).
+- Preemptive compaction compares the context of a run's latest provider call
+  (`context_tokens`, else the last call's cache-inclusive input) with the
+  threshold, never the run's cumulative usage: a run of five 20K-context calls
+  no longer compacts the next prompt because it spent 100K input tokens. Run
+  usage is one typed `LemonCore.Events.Usage` read by its canonical field names;
+  the router, control plane and usage ledger no longer probe alternative
+  spellings (`input_tokens`, `prompt_tokens`, `cache_read_input_tokens`, …),
+  so a history record stored under them reports unknown counters. The
+  completion's `tokens`/`cost_usd` duplicates of `total_tokens`/`cost.total`
+  and the clients' cumulative `contextTokens` fallback are gone (#669).
+- Deleting a session (`sessions.delete`, `lemon sessions delete`, prune)
+  removes every piece of state kept for it, not only chat state, policy and
+  run history: memory documents (recall and search no longer return a deleted
+  conversation), session-scoped approval grants, the session goal, Telegram and
+  Discord message indexes and model overrides, the web workspace, router
+  compaction and agent-messaging state, and native session journals with their
+  model pins. `verified: true` now means every owning store verified its
+  deletion; a failure restores all of them. `sessions.reset` also revokes the
+  session's approval grants and drops message indexes, pending selected
+  resumes and compaction markers that could resume the old conversation (#692).
 
 - One-shot CLI commands (`lemon doctor`, `config`, `secrets`, `usage`, `context`,
   `learn`, `learning`, `mcp`, `update`, `migrate`, `providers`, `setup`, and the
@@ -251,6 +491,24 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   was never read and is now ignored with a warning. Binding transports from
   config no longer create atoms, and TOML project roots resolve for channel
   bindings (#697).
+- Two follow-ups merged inside the router's 500 ms debounce window (or two
+  steers falling back together) now run: the merged run keeps the newest
+  message's execution context instead of the earlier one's, which the native
+  executor rejected as a run-ID mismatch, and a restart replays the merged
+  prompt instead of only the first message (#642).
+- Cron never announces a job or run change that failed to persist: when a
+  store write fails, `CronManager` emits no event, leaves its in-memory state
+  unchanged and returns `{:error, :store_unavailable}` (or
+  `{:error, :outcome_unknown}` when the write may have landed) from add,
+  update, model refresh, remove, run-now, wake and abort. A run is never
+  submitted, and a terminal never delivered or reported as an abort, unless
+  its write was confirmed (#87).
+- Skill disable state is the union of the global and project `skills.json`
+  lists: enabling a skill at project scope (blueprint activation, control-plane
+  `skills.enable`, `skill_manage restore`) no longer lifts a global disable or a
+  curator archive and no longer writes an empty list. `skills.json` writes are
+  atomic under a lock, and an unreadable or malformed file now hides every skill
+  instead of re-enabling all of them; `lemon doctor` reports it (#655).
 - Discord boots again: `lemon_channels` now starts `:gun`, which Nostrum needs
   for its gateway and REST connections; previously a configured bot token
   failed with `:noproc` and no Discord service started (#670).
@@ -268,7 +526,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   acknowledges slash commands and buttons on arrival (replies follow as edits
   or follow-ups), so a queued command no longer misses the 3 s window, and
   file transfers, thread creation and media preparation run beside the event
-  queue (#650).
+  queue. Telegram start-up, including a retry after another runtime released
+  the poller lock, reads the stored offset and resolves the bot identity
+  (`getMe`) in a supervised task, so a slow Telegram API no longer blocks
+  pairing or drains; allowlist changes made meanwhile apply once it starts
+  (#650).
 - Skill lockfile and audit-state writes wait up to ten seconds for their file
   lock instead of one, so concurrent skill installs in one runtime are no
   longer refused with `lock_timeout` while the lock is merely busy (#499).
@@ -356,8 +618,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   transport for the whole judge and continuation (or crash it on a call
   timeout): the chat gets an immediate acknowledgement and the verdict and run ID
   as a follow-up; a timeout is reported as an unknown outcome (#659).
-- Media jobs never outlive their tool call: a timeout, abort or caller exit kills
-  the job (cancelling its provider request) and records it `cancelled` instead
+- Media jobs never outlive their tool call: on timeout, abort or caller exit the
+  supervised job owner kills the provider task and records it `cancelled` instead
   of leaving it `running` and billing after the tool reported failure; the wait
   uses one fixed deadline that unrelated messages cannot extend, and the
   timeout error names the job id (#664).
@@ -476,6 +738,37 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   parser (`LemonSkills.Frontmatter`); a rule or skill manifest that repeats a
   frontmatter key, or a rule whose frontmatter exceeds 16 KiB (skills: 64 KiB),
   is rejected with a warning instead of resolving last-wins (#671).
+- The `lsp` tool starts one language server per workspace instead of one per
+  member project: the outermost Mix umbrella, Cargo, npm/yarn/pnpm, Go or uv
+  workspace inside the working directory is the root (else the nearest marker).
+  `LemonLsp.ServerManager` keeps at most eight servers live, evicting the
+  least-recently-used one without an in-flight request and failing with
+  `{:error, :lsp_session_limit}` when all are busy; `status/0` and the doctor
+  report `max_active_count` beside `active_count` (#690).
+- The `lsp` tool refuses a non-UTF-8 file with a clear error instead of crashing
+  the language-server session it shares with other leases, restarting it and
+  telling the model to retry. `LemonLsp.ServerManager` returns
+  `{:error, :invalid_document_encoding}` for such documents,
+  `{:error, :invalid_message_encoding}` for unencodable messages, and
+  `{:error, {:session_crashed, class}}` (never the raw exit reason) for any other
+  session exit during a call (#663).
+- Session reset no longer exits its caller with a call timeout when aborting
+  the active run takes most of the session's 5-second abort wait (#499).
+  once the receipt is recorded (on a remote source node through its new
+  `memory.transfer.release` worker method), when any document it captured is
+  deleted, erased by scope or aged out, and after the new `transfer_ttl_ms`
+  Store setting (default 24 hours, capped at `retention_ms`) (#623).
+- The Store publishes a table as read-cached only after its warm-up read
+  succeeded, and clears the published list when a store starts or stops. A table
+  whose warm-up failed stays uncached, so reads reach the backend and surface
+  its error instead of an empty mirror (`RunStore.list_sessions`, channel known
+  targets and gateway progress no longer read as empty). SQLite table reads
+  decode every row and report the number of corrupt rows (#618).
+- Fixed-ID run receipts distinguish definite rejection from unknown admission.
+  Router-owner loss reconciles unclaimed handoffs without replay, and queued
+  runs recheck durable cancellation before starting (#81).
+  Receipts remain terminal after run history is evicted; when the router is
+  stopped, an unresolved handoff cannot be mistaken for a definitive outcome.
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
@@ -505,6 +798,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
+- ACP no longer keeps a shadow session table that wrote resume tokens back into
+  `ChatState`: ACP session metadata lives on the canonical
+  `SessionMetadataStore` record, so `SessionLifecycle.delete/2` removes it and
+  ACP touches after a reset never recreate chat state. A store write failure
+  after prompt submission returns the run ID with `retrySafe: false` instead of
+  raising. ACP sessions created before this release are not carried over;
+  start a new ACP session (#652).
 - The local browser driver never starts a request after its deadline, never
   overlaps an abandoned one and re-runs only read-only methods after a closed
   tab. A side-effecting browser action (click, type, navigate, upload, ...)
@@ -600,10 +900,23 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   restarted owner can neither lose nor repeat it), a crashed owner adopts its
   live worker and session (a second crash terminalizes the child), and terminal
   children are pruned after five minutes (#634).
+- A joined task's status, output and error, the Agent Hub and child
+  messaging now all read the task's stored record; a run-graph row or owner
+  phase can no longer report a task differently from its stored result. A
+  completed child that is later cancelled or whose owner gave up stays
+  "completed" (#634).
 - Task slots are re-entrant per lineage, so a child that waits on its own
   descendants no longer deadlocks the eight-slot pool; `/bg` sessions use their
   own `background_run_max_concurrency` pool; joins without a timeout yield after
   `task_join_timeout_ms` (default 30 minutes) instead of waiting forever (#631).
+- A Redirect or stream-rule injection no longer cancels the children launched in
+  that run or aborts its task joins; only an abort does (#633).
+- A task cancelled before it started (or whose parent died) now terminalizes its
+  run graph, budget and progress binding too, so a later join returns at once;
+  completion notices come from the stored task record ("was cancelled" when a
+  cancellation won), a child cancelled by its parent's abort sends none, joins
+  suppress the notice of every task they returned, and a completed child shows
+  "completed" in the Agent Hub after a restart instead of "failed" (#673).
 - Control-plane reads fail closed: an unreadable store or runtime makes
   `exec.approvals.get`, `config.get`, `logs.tail`, `sessions.preview`,
   `chat.history`, `session.detail`, `cron.runs`, the task lists, ACP session
@@ -663,6 +976,84 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** the disabled-by-default WASM tool stack and the `tool_auth` tool
+  are retired (#707). Decision: epic #543 kept comparable surfaces opt-in
+  (#598, #600, #604); this one is retired instead because it had no consumer.
+  It shipped only Ethereum Foundry wrappers that CI never built, and keeping
+  it would have needed trust-gated loading, non-overwriting secret import, a
+  monitored sidecar and a real exec timeout. `tool_auth` was
+  registered in every session even with WASM off and could overwrite a named
+  secret from an environment variable. Removed: the `native/` Rust runtime and
+  tool crates, `CodingAgent.Wasm.*`, `CodingAgent.Session.WasmBridge`,
+  `CodingAgent.Tools.ToolAuth`, the `wasm-runtime` CI job, `LEMON_WASM_*`
+  variables, the `wasm` extension-manifest host type and `docs/tools/wasm.md`.
+  `[runtime.tools.wasm]` is no longer read; delete it. Tool precedence is now
+  built-in > extension > MCP. OSV no longer scans the deleted `native/` Cargo
+  lockfiles, and their three accepted RUSTSEC findings are removed from
+  `osv-scanner.toml`.
+- **Breaking:** the `config.get` and `config.set` control-plane methods and
+  their `:system_config` store. Nothing read the stored values (setting
+  `logLevel` changed only what `config.get` reported); configuration lives in
+  `config.toml` (#712).
+
+- **Breaking:** the opt-in session advisor (#600) is retired: `CodingAgent.Advisor`,
+  its `AdvisorSupervisor` child and the `advisor:` session option are removed.
+  No shipped caller enabled it; `start_session(advisor: ...)` now fails with
+  `{:error, {:unsupported_option, :advisor}}` instead of starting a reviewer (#705).
+- **Breaking:** `LemonAgent.Proxy` (SSE proxy `stream_fn`) and `LemonAgent.Context`
+  (size estimates, truncation, `make_transform/1`) are deleted together with
+  `docs/context.md`, the `req` dependency of `lemon_agent` and the
+  `[:lemon_agent, :context, :size | :warning | :truncated]` telemetry events. The
+  agent loop no longer JSON-encodes the whole history before every request (#708).
+- **Breaking:** `bin/lemon-control-plane` is removed; use `./bin/lemon start`
+  or `./bin/lemon daemon`. `./bin/lemon-gateway` now runs `./bin/lemon start`
+  (node name `lemon_gateway` by default): it reuses a healthy runtime on the
+  control port instead of starting a second router and duplicate Telegram and
+  Discord adapters, starts the full runtime when none is running, and no longer
+  runs `mix deps.get` (#701).
+- **Breaking:** the WhatsApp channel adapter, its Node/Baileys bridge
+  (`whatsapp_bridge.mjs`), renderer, access-control helpers and model-policy
+  child, plus the router's `whatsapp` tool-status branches. It had no
+  `[gateway.whatsapp]` config path, so no deployment could start it, yet it was
+  registered and reported as a configured channel. Every remaining built-in
+  adapter is startable from canonical config; the shared Node port bridge keeps
+  only XMTP's automatic restart mode (#699).
+- **Breaking:** the OpenAI-compatible `/v1` API (`/v1/models`,
+  `/v1/chat/completions`, `/v1/responses`, `/v1/runs`), the single-shot HTTP
+  `POST /acp` endpoint, `LEMON_OPENAI_COMPAT_API_TOKEN` (and its
+  `LEMON_OPENAI_COMPAT_TOKEN` alias), `LEMON_OPENAI_COMPAT_IMAGE_URL_*`,
+  `LEMON_ACP_API_TOKEN` and `LEMON_CONTROL_PLANE_REMOTE_HTTP`. No in-repo or
+  known external client used them and support policy made no compatibility
+  commitment. Editors use `lemon acp` over the unchanged loopback `/acp/ws`;
+  off-loopback peers reach only `/ws` and `/healthz` (#711).
+- **Breaking:** `lemon bot https`; use `lemon-bot https` (#723).
+- **Breaking:** write-only and unreachable tool features (#706): the
+  `report_issue` tool, `read file.json?q=` JSON queries, `write` into archive
+  members (`bundle.zip:member`) and SQLite tables (`app.db:table`), the
+  `notes://` URL scheme, `FEATURE_REQUIREMENTS.json` progress (the `requirements`
+  block of `sessions.active.list` harness snapshots) and the write-only todo ETS
+  projection. `todo` is the only todo tool, `ls` the only directory listing
+  (`read <dir>` now points at `ls`), and `extensions_status` is status-only: its
+  `reload` action, which a model turn could never run, is gone.
+
+- `LemonChannels.ModelPolicy`, `LemonChannels.ModelPolicyStore`,
+  `LemonChannels.ModelPolicy.Route`, `LemonChannels.ModelPolicy.CLI` (now
+  `LemonCore.PolicyStore.CLI`), the Telegram `StateStore` session-model,
+  default-model and default-thinking accessors, the Discord session-model table
+  and the WhatsApp session-model ETS owner (#714).
+- **Breaking:** the unwritten policy scopes. `LemonCore.PolicyStore` keeps only
+  the session row (`fetch_session/1`, `put_session/2`, `update_session/2`,
+  `delete_session/1`); `put_agent/2`, `fetch_agent/1`, `put_channel/2`,
+  `fetch_channel/1`, `put_runtime/1`, `fetch_runtime/0` and `delete_runtime/0`
+  are gone, and the router no longer reads `:agent_policies`,
+  `:channel_policies` or `:runtime_policy` (nothing ever wrote them). Admission
+  reads the session row once per run for model, thinking level and tool policy.
+  The exec-approval node grants (`get_/put_node_policy`), the global and node
+  policy maps (`fetch_global_policy_map/0`, `get_/put_node_policy_map`) and the
+  `list_*_policies/0` helpers are removed; `exec.approvals.get` drops its
+  always-empty `policy` field, `summary.policyCount` and
+  `summary.cleanup.includesPolicy`. A guard test fails when a policy table is
+  read without a production writer (#709).
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.
@@ -708,9 +1099,31 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `Messages.get_text/1`, `get_tool_calls/1` and `total_tokens/1`; coding
   messages are `LemonAi.Types` structs plus `CustomMessage` and
   `BranchSummaryMessage` (#629).
+- Uninvoked and broken proof scripts under `scripts/`: the offline named-agent,
+  approval-recovery, multimodal-retry, task-worktree, provider-auth,
+  stopped-plan and four duplicate probe-wrapper smokes,
+  `scripts/verify_github_release_artifacts` and unused LSP fixtures. Their
+  probes now live in the consuming apps' `test/support/probes`; ExUnit covers
+  their scenarios. The manual, loopback-only
+  `scripts/live_provider_ownership_smoke.exs` stays and loads its probe from there.
+  `scripts/test quality` now runs every retained script self-test, the
+  crash-model mutation-anchor check and a check that each umbrella module
+  named by `scripts/*.exs` exists (#704).
 
 ### Security
 
+- The OSV dependency scan is a gate: it uses OSV-Scanner 2.7.1 (2.3.5 failed
+  against the current OSV API and reported "No issues found"), scans every
+  shipped lockfile including `apps/lemon_web/assets` and `products/lemon_bot`,
+  and fails on any finding not accepted, with a reason and expiry, in
+  `osv-scanner.toml` (#734).
+- db_connection 2.10.2 → 2.10.3 (EEF-CVE-2026-133555: code execution through
+  the `:log` option of a forged `DBConnection.Stream`), found by the OSV gate.
+- phoenix 1.8.16 → 1.8.17 (EEF-CVE-2026-128361, EEF-CVE-2026-129344) and
+  phoenix_live_view 1.2.13 → 1.2.15 (EEF-CVE-2026-126334: a LiveView joined
+  without a `url` skipped its `live_session` `on_mount` hooks, which gate the
+  LemonWeb operator pages); LemonWeb's vendored Phoenix and LiveView client
+  bundles match the new releases, and their OSV acceptances are removed.
 - Archive reads and in-place archive writes (`read`/`write` on `x.zip:member`,
   `.tar`, `.tar.gz`, `.tgz`) and SVGZ decoding now inflate through one
   streaming, abort-aware bound: members are rejected as soon as decoded bytes
@@ -718,6 +1131,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   write-side rebuilds stop at `:format_max_decoded_bytes` (256 MiB), and
   archives over `:format_max_archive_entries` are refused, so a zip/gzip bomb
   can no longer exhaust node memory (#678).
+- Delegated and requested tool policies can no longer weaken their parent
+  (#71, #72, #73): a request, child or execution-node wire policy cannot waive
+  an approval gate that depends on call arguments (for example `write` with
+  `diagnostics` under `approval_mode = "write"`) with a per-tool `never`, and
+  cannot enable `workspace_read_exempt` the parent or operator policy lacks.
+  Router admission narrows operator layers with a request's `tool_policy`
+  instead of layering it.
 - Model file tools, browser and media outputs and checkpoint restore refuse
   Lemon operator state (`~/.lemon`, the agent directory, configured
   config/key/store/checkpoint/bot paths, extension roots) and the toolchain

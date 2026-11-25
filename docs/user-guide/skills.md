@@ -59,28 +59,26 @@ contribute to these reminders. Counters are isolated by live session process and
 reset when that session exits or Lemon restarts; historical transcripts are not
 scanned to rebuild them.
 
-Customize `learning_nudge` in `~/.lemon/agent/skills.json`. A project's
-`.lemon/skills.json` can only narrow it: set `enabled` to `false` or raise the
-intervals; other project keys, including `background_review`, are ignored:
+Customize reminders under `[skills.learning_nudge]` in `~/.lemon/config.toml`.
+A project's `.lemon/config.toml` can only narrow it: set `enabled` to `false` or
+raise the intervals; a project `background_review` table is ignored:
 
-```json
-{
-  "learning_nudge": {
-    "enabled": true,
-    "memory_turn_interval": 10,
-    "skill_tool_threshold": 15
-  }
-}
+```toml
+[skills.learning_nudge]
+enabled = true
+memory_turn_interval = 10
+skill_tool_threshold = 15
 ```
 
 Set `enabled` to `false` to disable both reminders. Thresholds must be positive
-integers; invalid values use the defaults. These are **skills.json** settings,
-not TOML settings. See the [configuration reference](../config.md#learning-reminders-skillsjson).
+integers; an invalid value is a configuration error. A `learning_nudge` object
+left in an older `skills.json` is no longer read and `lemon doctor` warns about
+it. See the [configuration reference](../config.md#learning-reminders).
 
 ### Optional background review
 
-To review a finished run silently instead of inserting a reminder, add
-`"background_review": {"enabled": true}` inside `learning_nudge`. This is **off
+To review a finished run silently instead of inserting a reminder, set
+`enabled = true` under `[skills.learning_nudge.background_review]`. This is **off
 by default**. The same turn/tool thresholds apply at run completion. Eligible
 sessions require a verified private memory owner; legacy, unverified, subagent,
 cron/sub-session and internal-followup runs do not trigger reviews.
@@ -101,7 +99,7 @@ audits. It cannot run other tools, unpin/delete/promote skills or send messages.
 Defaults are one review per session per five minutes, never concurrent, at most
 three tool-use turns and a 60-second timeout. Counters/limits are volatile and
 reset with the live session/runtime. Triggers blocked by a limit are not queued.
-See [all review settings](../config.md#learning-reminders-skillsjson).
+See [all review settings](../config.md#learning-reminders).
 
 
 ---
@@ -796,7 +794,7 @@ State files sit beside `skills.json` in `~/.lemon/agent/` (global) or
 
 | File | Contents |
 |---|---|
-| `skills.json` | Per-scope skill settings: `disabled` list, per-skill config, `learning_nudge` |
+| `skills.json` | Skill state: the `disabled` list. Global and project lists are united; an unreadable file hides every skill until repaired (`lemon doctor` reports it) |
 | `skills.lock.json` | Install provenance (descriptive): source, trust level, content/bundle hashes, audit status |
 | `skills.audit.json` | Detailed audit results and load authorizations (global; project state lives in `~/.lemon/agent/skill_audits/`) |
 | `skills.usage.json` | Load/write counters and lifecycle state |

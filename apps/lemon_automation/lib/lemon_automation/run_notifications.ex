@@ -4,7 +4,7 @@ defmodule LemonAutomation.RunNotifications do
   terminal facts to channels. Channels owns rendering, durable delivery and
   platform authorization; automation never calls an adapter or builds buttons.
   """
-  alias LemonAgent.Workspace.{GoalStore, KanbanStore}
+  alias LemonAutomation.{GoalStore, KanbanStore}
   alias LemonAutomation.{CronDelivery, CronJob, CronStore}
   alias LemonCore.ChannelSupervision
   alias LemonCore.Config.Modular

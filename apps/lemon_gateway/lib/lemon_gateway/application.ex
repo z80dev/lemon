@@ -6,8 +6,8 @@ defmodule LemonGateway.Application do
   permits, run supervisors, and the health check server. Gateway settings are
   read live from `LemonCore.GatewayConfig`; there is no config process.
 
-  Gateway-owned ingress (transport, SMS, voice) is off by default and
-  starts only when `:gateway_ingress_enabled` is set for `:lemon_gateway`. See
+  Gateway-owned ingress (webhook, SMS, voice) is off by default and
+  starts only when `[gateway.ingress] enabled` is true. See
   `LemonGateway.IngressSupervisor`.
   """
 
@@ -83,6 +83,7 @@ defmodule LemonGateway.Application do
   end
 
   defp gateway_ingress_enabled? do
-    Application.get_env(:lemon_gateway, :gateway_ingress_enabled, false)
+    ingress = LemonCore.GatewayConfig.get(:ingress)
+    LemonCore.GatewayConfig.fetch(ingress, :enabled, false) == true
   end
 end

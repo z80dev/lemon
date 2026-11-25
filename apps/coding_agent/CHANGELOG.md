@@ -2,8 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- `CodingAgent.SessionSupervisor.start_session/1` takes `:supervisor` (and the
+  session's `:registry`); `stop_session/2`, `lookup/2` and `list_sessions/1`
+  take the same targets, defaulting to the application's tree. The supervisor
+  suites now exercise the real module instead of an in-file copy (#733).
+
 ### Changed
 
+- **Breaking:** native run completions carry a `LemonCore.Events.Usage`, and each
+  usage occurrence's `usage` is one too (`Executor.Usage.occurrence/1`,
+  `Session.Presentation.build_usage/1`). The completion no longer duplicates
+  `total_tokens`/`cost.total` as `tokens`/`cost_usd`, and occurrences no longer
+  copy alternative counter spellings (#669).
 - Journal format: assistant entries' `system-prompt-digest` is now version 2, a
   `{digest, plan_revision}` reference to a `lemon.prompt_snapshot` custom entry
   written once per digest on the branch (`base_prompt` only when a plan overlay
@@ -11,6 +23,24 @@
   `PromptJournal.append_reply/3`; version 1 inline snapshots are still read (#676).
 
 ### Removed
+
+- **Breaking:** the WASM sidecar stack (`CodingAgent.Wasm.*`,
+  `CodingAgent.Session.WasmBridge`, the `{:wasm_host_tool_invoke, ...}` session
+  calls, the `:wasm_tools`/`:wasm_status` registry options and the `wasm_*`
+  session fields) and the `tool_auth` tool (`CodingAgent.Tools.ToolAuth`) are
+  retired (#707). `ToolRegistry.tool_conflict_report/2` no longer returns
+  `wasm_count` or `wasm`, and `ControlPlaneProvider.wasm_sidecar_running?/0` is
+  gone.
+- **Breaking:** removed `CodingAgent.Advisor`, the `CodingAgent.AdvisorSupervisor`
+  child and the session's internal `:advisor_context` call; `advisor:` session
+  options are refused with `{:error, {:unsupported_option, :advisor}}` (#705).
+- **Breaking:** removed `Tools.FeatureRequirements`, `InternalUrls.NotesProtocol`,
+  `Tools.TodoStore`/`TodoStoreOwner`, `Tools.TodoRead`/`TodoWrite`,
+  `Tools.ReportIssue`, `Tools.ReadJson`, `Tools.WriteArchive` and
+  `Tools.WriteSqlite`; the pure todo views are `Tools.Todo.progress/1`,
+  `actionable/1`, `result_details/1` and `normalize/1`. `read` refuses
+  directories (use `ls`); `extensions_status` drops its `action`/`reload`
+  parameter; `Progress.snapshot/2` drops `features` (#706).
 
 - **Breaking:** removed `CodingAgent.SessionIndex`, `SessionManager.list_sessions/1`
   and `SessionEntry.session_info/2`; journal appends, checkpoints and
@@ -26,6 +56,13 @@
   pending messages and bridges its progress to the parent run. `Control` remains
   the authenticated API; `register/6`, `attach_worker/1` and `complete/1` are
   replaced by `register/2` and `launch/3` (#634).
+- **Breaking:** the task runtime moved from `CodingAgent.Tools.Task.*` to
+  `CodingAgent.TaskRuntime.*` (`Control`, `Async`, `Runner`, `Restore`,
+  `Followup`, `Hub`); invocation-authority inheritance and parent narrowing
+  moved from `Tools.Task.Params` to `Tools.Task.InvocationAuthority`
+  (`inherited_execution_context/2`, `restrict_to_parent/3`,
+  `child_execution_context/3`, `parent_session_state/1`). No aliases remain
+  (#634).
 
 ### Fixed
 
@@ -120,6 +157,26 @@
   accepted during recovery waits for it. Agent events before the accepted
   prompt's `{:agent_start}` are fenced off, and `prompt/3` is busy while a
   prompt is pending dispatch.
+- A parent's redirect signal (Redirect or stream-rule injection) no longer
+  cancels its task children or ends their joins; only an abort does (#633).
+- `CodingAgent.Session.reset/1` waits longer than the session's own 5-second
+  abort wait, so a slow abort returns `:ok` or `{:error, :busy}` instead of
+  exiting the caller with a call timeout while the reset may still finish (#499).
+- Execution nodes advertise `memory.transfer.release`, bound to the source node,
+  so the controller deletes a node's frozen memory-transfer snapshot once the
+  destination receipt is recorded rather than waiting for the Store TTL (#623).
+- Early cancellation (before launch, by parent abort or on parent death) runs
+  the turn's finalizer at once, terminalizing TaskStore, RunGraph, budget and
+  progress binding. Followup notices derive from the stored terminal record
+  (failure reasons bounded to 1,000 characters) and are skipped for
+  parent-abort cancellations; joins and `wait` suppress every returned task's
+  notice. A completed but unresumable child has a `:completed` owner phase, and
+  the Agent Hub prefers a terminal stored status (#673).
+- `TaskRuntime.status/2`, `TaskRuntime.Hub` and task joins take a task's
+  status, output and error from its `TaskStore` record; owner phases and
+  `RunGraph` rows only report liveness and coordinate joins. Task records are
+  written before their run rows on launch failure and delegated completion
+  (#634).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller

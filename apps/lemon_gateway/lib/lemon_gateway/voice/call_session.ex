@@ -29,8 +29,8 @@ defmodule LemonGateway.Voice.CallSession do
 
   require Logger
 
-  alias LemonGateway.Voice.{AudioConversion, Config, DeepgramClient}
-  alias LemonMedia.Providers.Speech
+  alias LemonGateway.Voice.{AudioConversion, Config, DeepgramCall}
+  alias LemonMedia.Providers.{DeepgramStream, Speech}
 
   defstruct [
     :call_sid,
@@ -173,7 +173,7 @@ defmodule LemonGateway.Voice.CallSession do
   def handle_event(:cast, _event, :closing, _data), do: :keep_state_and_data
 
   def handle_event(:cast, {:audio_from_twilio, audio}, _state, data) do
-    if data.deepgram_ws_pid, do: DeepgramClient.send_audio(data.deepgram_ws_pid, audio)
+    if data.deepgram_ws_pid, do: DeepgramStream.send_audio(data.deepgram_ws_pid, audio)
 
     {:keep_state, %{data | last_activity_at: DateTime.utc_now()},
      [{{:timeout, :silence}, data.silence_timeout_ms, :inactive}]}
@@ -262,8 +262,8 @@ defmodule LemonGateway.Voice.CallSession do
 
     # The session owns the call: close its Deepgram socket and the Twilio stream
     # however it ends (hang-up, silence, max duration, crash).
-    DeepgramClient.stop(data.deepgram_ws_pid)
-    if is_binary(data.call_sid), do: DeepgramClient.stop_for_call(data.call_sid)
+    DeepgramCall.stop(data.deepgram_ws_pid)
+    if is_binary(data.call_sid), do: DeepgramCall.stop_for_call(data.call_sid)
     if is_pid(data.twilio_ws_pid), do: send(data.twilio_ws_pid, :call_ended)
 
     Logger.info("Call session terminated: #{data.call_sid}")

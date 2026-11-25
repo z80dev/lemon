@@ -4,115 +4,41 @@ defmodule LemonControlPlane.HTTP.Router do
 
   Provides:
   - `/ws` - WebSocket endpoint for the control plane protocol
+  - `/acp/ws` - operator-authenticated ACP WebSocket used by `lemon acp`
   - `/healthz` - Health check endpoint (HTTP GET)
+
+  Remote peers reach only `GET /ws` and `GET /healthz`.
   """
 
-  use Plug.Router
+  # `call/2` options reach routes as `conn.assigns.router_opts`.
+  use Plug.Router, copy_opts_to_assign: :router_opts
 
   alias LemonControlPlane.Auth.Authorize
-  alias LemonControlPlane.ListenerPolicy
   alias LemonControlPlane.HTTP.RequestOrigin
   alias LemonControlPlane.Protocol.Errors
 
   plug(Plug.Logger, log: :debug)
   plug(:require_trusted_host)
   plug(:restrict_non_loopback)
-  plug(Plug.Parsers, parsers: [:json], pass: ["application/json"], json_decoder: Jason)
   plug(:match)
   plug(:dispatch)
 
+  # Liveness: healthy only while every application of the runtime profile is
+  # started (LemonCore.Runtime.Health.runtime_status/1). The router's `:health`
+  # option is passed to runtime_status/1.
   get "/healthz" do
-    send_resp(conn, 200, Jason.encode!(%{ok: true}))
-  end
+    health_opts = Keyword.get(conn.assigns.router_opts, :health, [])
 
-  get "/v1/health" do
-    with_openai_auth(conn, fn conn, _auth ->
-      json(conn, 200, LemonControlPlane.OpenAICompat.health())
-    end)
-  end
+    case LemonCore.Runtime.Health.runtime_status(health_opts) do
+      %{ok: true} ->
+        send_resp(conn, 200, Jason.encode!(%{ok: true}))
 
-  get "/v1/capabilities" do
-    with_openai_auth(conn, fn conn, _auth ->
-      json(conn, 200, LemonControlPlane.OpenAICompat.capabilities())
-    end)
-  end
+      %{error: :unknown_profile} ->
+        send_resp(conn, 503, Jason.encode!(%{ok: false, error: "unknown_runtime_profile"}))
 
-  get "/v1/models" do
-    with_openai_auth(conn, fn conn, _auth ->
-      json(conn, 200, LemonControlPlane.OpenAICompat.models())
-    end)
-  end
-
-  get "/v1/models/*model_id" do
-    with_openai_auth(conn, fn conn, _auth ->
-      model_id
-      |> Enum.join("/")
-      |> LemonControlPlane.OpenAICompat.model()
-      |> send_openai_result(conn)
-    end)
-  end
-
-  post "/v1/chat/completions" do
-    with_openai_auth(conn, fn conn, auth ->
-      if LemonControlPlane.OpenAICompat.stream_requested?(conn.body_params) do
-        conn.body_params
-        |> LemonControlPlane.OpenAICompat.chat_completion_stream(auth)
-        |> send_openai_stream(conn, :chat)
-      else
-        conn.body_params
-        |> LemonControlPlane.OpenAICompat.chat_completion(auth)
-        |> send_openai_result(conn)
-      end
-    end)
-  end
-
-  post "/v1/responses" do
-    with_openai_auth(conn, fn conn, auth ->
-      if LemonControlPlane.OpenAICompat.stream_requested?(conn.body_params) do
-        conn.body_params
-        |> LemonControlPlane.OpenAICompat.response_stream(auth)
-        |> send_openai_stream(conn, :response)
-      else
-        conn.body_params
-        |> LemonControlPlane.OpenAICompat.response(auth)
-        |> send_openai_result(conn)
-      end
-    end)
-  end
-
-  get "/v1/responses/:response_id" do
-    with_openai_auth(conn, fn conn, auth ->
-      response_id
-      |> LemonControlPlane.OpenAICompat.stored_response(auth)
-      |> send_openai_result(conn)
-    end)
-  end
-
-  get "/v1/runs/:run_id" do
-    with_openai_auth(conn, fn conn, auth ->
-      run_id
-      |> LemonControlPlane.OpenAICompat.run_status(auth)
-      |> send_openai_result(conn)
-    end)
-  end
-
-  post "/v1/runs/:run_id/cancel" do
-    with_openai_auth(conn, fn conn, auth ->
-      run_id
-      |> LemonControlPlane.OpenAICompat.cancel_run(auth)
-      |> send_openai_result(conn)
-    end)
-  end
-
-  post "/acp" do
-    with_acp_auth(conn, fn conn, auth ->
-      conn.body_params
-      |> LemonControlPlane.ACP.handle_jsonrpc(
-        scopes: auth.scopes,
-        principal: Authorize.principal_id(auth)
-      )
-      |> send_acp_result(conn)
-    end)
+      %{profile: profile, missing: missing} ->
+        send_resp(conn, 503, Jason.encode!(%{ok: false, profile: profile, missing: missing}))
+    end
   end
 
   get "/acp/ws" do
@@ -137,12 +63,12 @@ defmodule LemonControlPlane.HTTP.Router do
     params = %{"role" => "operator", "auth" => %{"token" => bearer_token(conn)}}
 
     case Authorize.from_params(params, local?: local?) do
-      {:ok, %{role: :operator, scopes: scopes} = auth} ->
+      {:ok, %{role: :operator, scopes: scopes}} ->
         if Enum.all?([:read, :write, :approvals, :content], &(&1 in scopes)) do
           conn
           |> WebSockAdapter.upgrade(
             LemonControlPlane.ACP.Connection,
-            [scopes: scopes, principal: Authorize.principal_id(auth)],
+            [scopes: scopes],
             timeout: :infinity
           )
           |> halt()
@@ -192,278 +118,13 @@ defmodule LemonControlPlane.HTTP.Router do
   end
 
   match _ do
-    if List.first(conn.path_info) == "v1" do
-      send_openai_result({:error, {404, "Not found"}}, conn)
-    else
-      http_error(conn, 404, Errors.not_found("Not found"))
-    end
-  end
-
-  defp send_openai_result({:ok, body}, conn), do: json(conn, 200, body)
-
-  defp send_openai_result({:error, {status, message}}, conn) do
-    json(conn, status, %{
-      "error" => %{
-        "message" => message,
-        "type" => openai_error_type(status)
-      }
-    })
-  end
-
-  defp openai_error_type(status) when status >= 500, do: "server_error"
-  defp openai_error_type(_status), do: "invalid_request_error"
-
-  defp send_acp_result({:ok, body}, conn), do: json(conn, 200, body)
-  defp send_acp_result(:noreply, conn), do: send_resp(conn, 204, "")
-
-  defp send_openai_stream({:ok, result}, conn, kind) do
-    topic = LemonCore.Bus.run_topic(result.run_id)
-    :ok = LemonCore.Bus.subscribe(topic)
-
-    conn =
-      conn
-      |> put_resp_content_type("text/event-stream")
-      |> put_resp_header("cache-control", "no-cache")
-      |> put_resp_header("x-accel-buffering", "no")
-      |> send_chunked(200)
-
-    try do
-      with {:ok, conn} <- stream_start(conn, result, kind),
-           {:ok, conn} <-
-             stream_loop(conn, result, kind, stream_deadline_ms(result.stream_timeout_ms)) do
-        conn
-      else
-        {:error, _reason} -> conn
-      end
-    after
-      LemonCore.Bus.unsubscribe(topic)
-    end
-  end
-
-  defp send_openai_stream({:error, _reason} = error, conn, _kind),
-    do: send_openai_result(error, conn)
-
-  defp stream_start(conn, result, kind) do
-    chunk(conn, sse_data(stream_start_object(result, kind)))
-  end
-
-  defp stream_loop(conn, result, kind, deadline_ms) do
-    case stream_remaining_timeout_ms(deadline_ms) do
-      0 ->
-        chunk(conn, sse_data(%{"error" => %{"message" => "stream timed out"}}))
-
-      timeout_ms ->
-        receive do
-          %LemonCore.Event{type: :delta, payload: payload} ->
-            text = map_get(payload, :text) || ""
-
-            stream_delta(conn, result, kind, text)
-            |> then(fn
-              {:ok, conn} -> stream_loop(conn, result, kind, deadline_ms)
-              error -> error
-            end)
-
-          %LemonCore.Event{type: :engine_action, payload: payload} ->
-            stream_tool_progress(conn, result, kind, payload)
-            |> then(fn
-              {:ok, conn} -> stream_loop(conn, result, kind, deadline_ms)
-              error -> error
-            end)
-
-          %LemonCore.Event{type: :run_completed, payload: payload} ->
-            stream_completed(conn, result, kind, payload)
-
-          %{type: :run_completed, payload: payload} ->
-            stream_completed(conn, result, kind, payload)
-        after
-          timeout_ms ->
-            chunk(conn, sse_data(%{"error" => %{"message" => "stream timed out"}}))
-        end
-    end
-  end
-
-  defp stream_deadline_ms(timeout_ms) when is_integer(timeout_ms) and timeout_ms > 0 do
-    System.monotonic_time(:millisecond) + timeout_ms
-  end
-
-  defp stream_deadline_ms(_timeout_ms), do: System.monotonic_time(:millisecond)
-
-  defp stream_remaining_timeout_ms(deadline_ms) do
-    max(deadline_ms - System.monotonic_time(:millisecond), 0)
-  end
-
-  defp stream_delta(conn, result, :chat, text) do
-    chunk(conn, sse_data(chat_stream_chunk(result, %{"content" => text}, nil)))
-  end
-
-  defp stream_delta(conn, result, :response, text) do
-    chunk(conn, sse_event("response.output_text.delta", response_delta_chunk(result, text)))
-  end
-
-  defp stream_tool_progress(conn, result, :chat, payload) do
-    chunk(conn, sse_event("lemon.tool_progress", tool_progress_chunk(result, payload, :chat)))
-  end
-
-  defp stream_tool_progress(conn, result, :response, payload) do
-    chunk(
-      conn,
-      sse_event("response.tool_progress", tool_progress_chunk(result, payload, :response))
-    )
-  end
-
-  defp stream_completed(conn, result, :chat, payload) do
-    completed = map_get(payload, :completed) || payload
-    finish_reason = if map_get(completed, :ok) == false, do: "error", else: "stop"
-
-    with {:ok, conn} <- chunk(conn, sse_data(chat_stream_chunk(result, %{}, finish_reason))) do
-      chunk(conn, "data: [DONE]\n\n")
-    end
-  end
-
-  defp stream_completed(conn, result, :response, payload) do
-    completed = map_get(payload, :completed) || payload
-    status = if map_get(completed, :ok) == false, do: "failed", else: "completed"
-
-    with {:ok, conn} <-
-           chunk(conn, sse_event("response.completed", response_done_chunk(result, status))) do
-      chunk(conn, "data: [DONE]\n\n")
-    end
-  end
-
-  defp stream_start_object(result, :chat) do
-    %{
-      "id" => "chatcmpl_#{result.run_id}",
-      "object" => "chat.completion.chunk",
-      "created" => System.system_time(:second),
-      "model" => result.model,
-      "choices" => [%{"index" => 0, "delta" => %{"role" => "assistant"}, "finish_reason" => nil}],
-      "lemon" => stream_lemon_metadata(result)
-    }
-  end
-
-  defp stream_start_object(result, :response) do
-    %{
-      "type" => "response.created",
-      "response" => %{
-        "id" => "resp_#{result.run_id}",
-        "object" => "response",
-        "status" => "in_progress",
-        "model" => result.model
-      },
-      "lemon" => stream_lemon_metadata(result)
-    }
-  end
-
-  defp chat_stream_chunk(result, delta, finish_reason) do
-    %{
-      "id" => "chatcmpl_#{result.run_id}",
-      "object" => "chat.completion.chunk",
-      "created" => System.system_time(:second),
-      "model" => result.model,
-      "choices" => [%{"index" => 0, "delta" => delta, "finish_reason" => finish_reason}],
-      "lemon" => stream_lemon_metadata(result)
-    }
-  end
-
-  defp response_delta_chunk(result, text) do
-    %{
-      "type" => "response.output_text.delta",
-      "response_id" => "resp_#{result.run_id}",
-      "delta" => text,
-      "lemon" => stream_lemon_metadata(result)
-    }
-  end
-
-  defp response_done_chunk(result, status) do
-    %{
-      "type" => "response.completed",
-      "response" => %{
-        "id" => "resp_#{result.run_id}",
-        "status" => status,
-        "model" => result.model
-      },
-      "lemon" => stream_lemon_metadata(result)
-    }
-  end
-
-  defp tool_progress_chunk(result, payload, kind) do
-    action = map_get(payload, :action) || %{}
-
-    %{
-      "type" => tool_progress_type(kind),
-      "id" => "#{tool_progress_prefix(kind)}_#{result.run_id}",
-      "object" => tool_progress_object(kind),
-      "action" => %{
-        "id" => map_get(action, :id),
-        "kind" => atom_to_string(map_get(action, :kind)),
-        "title" => map_get(action, :title)
-      },
-      "phase" => atom_to_string(map_get(payload, :phase)),
-      "ok" => map_get(payload, :ok),
-      "message" => truncate_string(map_get(payload, :message), 240),
-      "lemon" => stream_lemon_metadata(result)
-    }
-  end
-
-  defp tool_progress_type(:chat), do: "lemon.tool_progress"
-  defp tool_progress_type(:response), do: "response.tool_progress"
-
-  defp tool_progress_prefix(:chat), do: "chatcmpl"
-  defp tool_progress_prefix(:response), do: "resp"
-
-  defp tool_progress_object(:chat), do: "chat.completion.tool_progress"
-  defp tool_progress_object(:response), do: "response.tool_progress"
-
-  defp stream_lemon_metadata(result) do
-    %{
-      "runId" => result.run_id,
-      "sessionKey" => result.session_key
-    }
-  end
-
-  defp sse_data(data), do: "data: #{Jason.encode!(data)}\n\n"
-  defp sse_event(event, data), do: "event: #{event}\n" <> sse_data(data)
-
-  defp with_openai_auth(conn, fun) do
-    case api_auth_result(conn, :openai, "LEMON_OPENAI_COMPAT_API_TOKEN") do
-      {:ok, auth} -> fun.(conn, auth)
-      {:error, status, message} -> send_openai_result({:error, {status, message}}, conn)
-    end
-  end
-
-  defp with_acp_auth(conn, fun) do
-    case api_auth_result(conn, :acp, "LEMON_ACP_API_TOKEN") do
-      {:ok, auth} ->
-        fun.(conn, auth)
-
-      {:error, status, message} ->
-        error =
-          if status == 401, do: Errors.unauthorized(message), else: Errors.forbidden(message)
-
-        http_error(conn, status, error)
-    end
-  end
-
-  defp api_auth_result(conn, api, env) do
-    case Authorize.authenticate_api(api, presented_openai_token(conn), conn.remote_ip) do
-      {:ok, auth} ->
-        {:ok, auth}
-
-      {:error, reason} ->
-        missing? = reason == :missing
-        message = token_auth_message(missing?, env) |> operator_auth_message()
-        {:error, if(missing?, do: 401, else: 403), message}
-    end
+    http_error(conn, 404, Errors.not_found("Not found"))
   end
 
   defp restrict_non_loopback(conn, _opts) do
-    remote_apis = ListenerPolicy.remote_http_apis()
-
     allowed? =
       Authorize.loopback_address?(conn.remote_ip) or
-        (conn.method == "GET" and conn.request_path in ["/ws", "/healthz"]) or
-        (:openai in remote_apis and List.first(conn.path_info) == "v1") or
-        (:acp in remote_apis and List.first(conn.path_info) == "acp")
+        (conn.method == "GET" and conn.request_path in ["/ws", "/healthz"])
 
     if allowed?, do: conn, else: conn |> http_error(404, Errors.not_found("Not found")) |> halt()
   end
@@ -472,19 +133,9 @@ defmodule LemonControlPlane.HTTP.Router do
     json(conn, status, %{"error" => Errors.to_payload(error)})
   end
 
-  defp token_auth_message(missing?, env) do
-    reason = if missing?, do: "required", else: "invalid"
-
-    "Authorization token is #{reason}. Send Authorization: Bearer <token> (or x-api-key) using the token configured by #{env}."
-  end
-
   defp operator_auth_message(reason) do
     reason <>
       " Send Authorization: Bearer <token> using LEMON_CONTROL_PLANE_OPERATOR_TOKEN or the launcher's ~/.lemon/run/control-plane-<port>.token file."
-  end
-
-  defp presented_openai_token(conn) do
-    bearer_token(conn) || api_key_header(conn)
   end
 
   defp bearer_token(conn) do
@@ -496,27 +147,6 @@ defmodule LemonControlPlane.HTTP.Router do
       _ -> nil
     end
   end
-
-  defp api_key_header(conn) do
-    conn
-    |> get_req_header("x-api-key")
-    |> List.first()
-  end
-
-  defp map_get(nil, _key), do: nil
-
-  defp map_get(map, key) when is_map(map) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
-
-  defp atom_to_string(value) when is_atom(value), do: Atom.to_string(value)
-  defp atom_to_string(value), do: value
-
-  defp truncate_string(value, max) when is_binary(value) and byte_size(value) > max do
-    String.slice(value, 0, max) <> "..."
-  end
-
-  defp truncate_string(value, _max), do: value
 
   defp json(conn, status, body) do
     conn

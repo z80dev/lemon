@@ -95,19 +95,6 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
-      name: "bot",
-      summary: "Manage Lemon Bot's HTTPS callback address",
-      usage:
-        "lemon bot https enable [--tailscale | --url HTTPS_ORIGIN]\nlemon bot https status\nlemon bot https disable",
-      subcommands: [
-        %{name: "https", summary: "Enable, inspect, or disable the managed HTTPS address"}
-      ],
-      options: [
-        option("--tailscale", ["--tailscale"], "Create a private Tailscale Serve HTTPS route"),
-        option("--url HTTPS_ORIGIN", ["--url"], "Use an existing HTTPS reverse proxy")
-      ]
-    },
-    %{
       name: "connect",
       summary: "Pair an iPhone with an already-running Lemon Bot backend",
       usage: "lemon connect iphone --backend ORIGIN [--origin HTTPS_ORIGIN]",
@@ -254,6 +241,11 @@ defmodule LemonCli.CommandRegistry do
           "--codex-auth-path PATH",
           ["--codex-auth-path"],
           "Auth file for --auth codex-cli only"
+        ),
+        option(
+          "--region china|global",
+          ["--region"],
+          "Kimi Code deployment (global = kimi.ai accounts)"
         ),
         option(
           "--non-interactive",
@@ -416,7 +408,8 @@ defmodule LemonCli.CommandRegistry do
         option("--json", ["--json"], "Emit redacted source readiness JSON")
       ],
       details: [
-        "rotate-key previews by default and changes nothing. Applying requires the exact preview token, refuses while a Lemon runtime is running, and re-encrypts every stored secret under a new master key written to the Keychain entry or key file that supplied the current one."
+        "rotate-key previews by default and changes nothing. Applying requires the exact preview token, refuses while a Lemon runtime is running, and re-encrypts every stored secret under a new master key written to the Keychain entry or key file that supplied the current one.",
+        "While a running runtime owns the store, set, delete and import-env send the write to it over the control plane (admin scope) instead of writing the store directly."
       ]
     },
     %{
@@ -969,16 +962,16 @@ defmodule LemonCli.CommandRegistry do
     ),
     runtime(
       "policy",
-      LemonChannels.ModelPolicy.CLI,
-      "Manage model policies",
+      LemonCore.PolicyStore.CLI,
+      "Manage chat model and thinking defaults",
       "lemon policy <list|set|get|clear> [channel] [options]",
       [
         option("--account ID", ["--account", "-a"], "Channel account"),
         option("--peer ID", ["--peer", "-p"], "Peer or chat"),
         option("--thread ID", ["--thread", "-t"], "Thread or topic"),
-        option("--model MODEL", ["--model", "-m"], "Model override"),
-        option("--thinking LEVEL", ["--thinking"], "Thinking override"),
-        option("--reason TEXT", ["--reason", "-r"], "Policy metadata reason"),
+        option("--model MODEL", ["--model", "-m"], "Model default"),
+        option("--thinking LEVEL", ["--thinking"], "Thinking default"),
+        option("--reason TEXT", ["--reason", "-r"], "Reason stored with the row"),
         option("--all", ["--all"], "Clear all policies for the channel")
       ],
       subcommands(~w(list set get clear))

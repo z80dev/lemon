@@ -11,8 +11,9 @@ defmodule LemonCore.Bus do
   after publication is a semver-major change:
 
   - `"run:<run_id>"` - Events for a specific run
-  - `"session:<session_key>"` - Events for a specific session, including everything the
-    router forwards from that session's run topics
+  - `"run_done:<run_id>"` - Only the authoritative, persisted run completion
+  - `"run_lifecycle"` - Run start, completion and abnormal owner notices, without output deltas
+  - `"session:<session_key>"` - Cursor batches and other events for a specific session
   - `"cron"` - Cron/automation events
   - `"exec_approvals"` - Execution approval request/resolution events
   - `"system"` - System-wide events (config reload, secret changes, talk mode)
@@ -260,6 +261,29 @@ defmodule LemonCore.Bus do
   @spec run_topic(run_id :: binary()) :: binary()
   def run_topic(run_id) when is_binary(run_id) do
     "run:#{run_id}"
+  end
+
+  @doc "Terminal-only topic for consumers waiting on a specific run."
+  def run_done_topic(run_id) when is_binary(run_id), do: "run_done:#{run_id}"
+
+  @doc "Lifecycle-only topic for observers of all runs."
+  def run_lifecycle_topic, do: "run_lifecycle"
+
+  @doc """
+  Publish a run lifecycle event. The owner must persist a completion before
+  publishing it. The same envelope is delivered on each applicable topic.
+  """
+  def publish_run_lifecycle(%LemonCore.Event{type: type, meta: %{run_id: run_id}} = event)
+      when type in [:run_started, :run_completed, :run_failed] and is_binary(run_id) do
+    broadcast(run_topic(run_id), event)
+    broadcast(run_lifecycle_topic(), event)
+
+    if type != :run_failed and is_binary(event.meta[:session_key]) do
+      broadcast(session_topic(event.meta.session_key), event)
+    end
+
+    if type == :run_completed, do: broadcast(run_done_topic(run_id), event)
+    :ok
   end
 
   @doc """

@@ -23,6 +23,10 @@ test('help lists up/open without creating state; up dispatch validates its own a
     };
     const help = await invoke(['--help']); expect(help.exitCode).toBe(0);
     expect(help.stdout).toContain('lemon-bot up [--json]'); expect(help.stdout).toContain('lemon-bot open');
+    expect(help.stdout).toContain('lemon-bot https enable --tailscale | --url HTTPS_ORIGIN | status | disable');
+    const https = await invoke(['https', '--help']); expect(https.exitCode).toBe(0);
+    expect(https.stdout).toContain('lemon-bot https disable');
+    expect((await invoke(['https', 'enable', '--url', 'http://bot.example.test'])).exitCode).toBe(2);
     expect(await stat(join(HOME, '.lemon')).catch(() => null)).toBeNull();
     expect((await invoke(['up', '--unsupported'])).exitCode).toBe(2);
     const up = await invoke(['up', '--json', '--no-open']);

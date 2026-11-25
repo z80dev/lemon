@@ -40,7 +40,6 @@ defmodule CodingAgent.Application do
         {LemonCore.TaskSupervisor, name: CodingAgent.Search.TaskSupervisor},
         CodingAgent.Search.SingleFlight
       ]),
-      CodingAgent.Tools.TodoStoreOwner,
       CodingAgent.Tools.Bash.ShellState,
       CodingAgent.Session.UserPrompt,
       CodingAgent.MutationLock,
@@ -54,7 +53,6 @@ defmodule CodingAgent.Application do
         {DynamicSupervisor,
          name: CodingAgent.ExecutionNode.ToolSession.Supervisor, strategy: :one_for_one}
       ]),
-      CodingAgent.Wasm.SidecarSupervisor,
       {LemonCore.TaskSupervisor, name: CodingAgent.TaskSupervisor},
       {CodingAgent.TaskStoreServer, name: CodingAgent.TaskStoreServer},
       CodingAgent.AsyncFollowups,
@@ -76,7 +74,6 @@ defmodule CodingAgent.Application do
         {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
         CodingAgent.SessionSupervisor
       ]),
-      {DynamicSupervisor, name: CodingAgent.AdvisorSupervisor, strategy: :one_for_one},
       LemonCore.Supervision.subtree(CodingAgent.BackgroundRun.Tree, [
         {Registry, keys: :unique, name: CodingAgent.BackgroundRun.Registry},
         CodingAgent.BackgroundRun.Supervisor
@@ -97,6 +94,13 @@ defmodule CodingAgent.Application do
       {:ok, _supervisor} = ok ->
         CodingAgent.Search.Registry.init()
         register_control_plane_provider()
+
+        :ok =
+          LemonCore.SessionLifecycle.Participant.register(
+            :native_sessions,
+            CodingAgent.SessionParticipant
+          )
+
         maybe_start_primary_session()
         ok
 
@@ -111,8 +115,8 @@ defmodule CodingAgent.Application do
       :ok ->
         :ok
 
-      other ->
-        Logger.debug("agent runtime provider not registered: #{inspect(other)}")
+      {:error, reason} ->
+        Logger.error("agent runtime provider not registered: #{reason}")
         :ok
     end
   end

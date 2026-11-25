@@ -9,9 +9,7 @@
  * Enter applies the model to the focused session (`sessions.patch`). Ctrl+G
  * toggles "also make it the default", which sets `[defaults] provider` and
  * `model` in the daemon's `config.toml` — the keys `lemon setup provider
- * --set-default` writes — editing those keys in place. The daemon's
- * `config.set` is a free-form key/value store its router never reads, so
- * persisting there would look like it worked and change nothing.
+ * --set-default` writes — editing those keys in place.
  *
  * On a native (TSP) surface the picker is one stage: every model, grouped by
  * provider under the sheet's group headings, with the provider's mark, the

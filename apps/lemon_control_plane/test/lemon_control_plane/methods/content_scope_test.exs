@@ -12,7 +12,6 @@ defmodule LemonControlPlane.Methods.ContentScopeTest do
   use ExUnit.Case, async: false
 
   alias LemonAutomation.{CronManager, CronRun, CronStore}
-  alias LemonControlPlane.ConfigStore
   alias LemonControlPlane.Methods.Registry
   alias LemonControlPlane.TestSupport.SessionCleanup
   alias LemonCore.{RunStore, Store}
@@ -173,7 +172,7 @@ defmodule LemonControlPlane.Methods.ContentScopeTest do
   end
 
   describe "session.detail" do
-    test "read-only callers get no prompt, answer, previews, raw events or run record", c do
+    test "is a routing projection with no run content for either scope", c do
       {key, _run_id} = session(c.token)
 
       params = %{
@@ -183,20 +182,12 @@ defmodule LemonControlPlane.Methods.ContentScopeTest do
         "includeRunRecord" => true
       }
 
-      detail = dispatch("session.detail", params, read_only())
-      assert_withheld(detail)
-      assert [run] = detail["runs"]
-      assert run["ok"] == false
-      assert run["eventCount"] == 1
-      assert run["toolCallCount"] == 1
-      assert detail["options"]["includeFullText"] == false
-      assert detail["summary"]["cleanup"]["includesMessageBodies"] == false
-    end
-
-    test "operator.content callers get full text", c do
-      {key, _run_id} = session(c.token)
-      params = %{"sessionKey" => key, "includeFullText" => true, "includeRawEvents" => true}
-      assert_content(dispatch("session.detail", params, with_content()))
+      for ctx <- [read_only(), with_content()] do
+        detail = dispatch("session.detail", params, ctx)
+        assert_withheld(detail)
+        assert detail["session"]["sessionKey"] == key
+        refute Map.has_key?(detail, "runs")
+      end
     end
   end
 
@@ -334,54 +325,5 @@ defmodule LemonControlPlane.Methods.ContentScopeTest do
     assert result["summary"]["cleanup"]["includesLogMessages"] == false
 
     assert_content(dispatch("logs.tail", %{}, with_content()))
-  end
-
-  describe "config.get" do
-    setup c do
-      nested = "contentScopeNested#{c.token}"
-      text = "contentScopeText#{c.token}"
-      credential = "sk-" <> String.duplicate("c", 40)
-
-      :ok = ConfigStore.put(nested, [%{"api_key" => "private-value"}, %{"label" => @content}])
-      :ok = ConfigStore.put(text, "OPENAI_API_KEY=#{credential} #{@unlabelled}")
-
-      on_exit(fn ->
-        Store.delete(:system_config, nested)
-        Store.delete(:system_config, text)
-      end)
-
-      %{nested: nested, text: text, credential: credential}
-    end
-
-    test "read scope sees only explicitly public fields", c do
-      all = dispatch("config.get", %{}, read_only())
-      refute Map.has_key?(all, c.nested)
-      refute Map.has_key?(all, c.text)
-      refute Jason.encode!(all) =~ "private-value"
-      assert_withheld(all)
-
-      single = dispatch("config.get", %{"key" => c.nested}, read_only())
-      assert single["value"] == nil
-      assert single["summary"]["valueReturned"] == false
-      refute Jason.encode!(single) =~ "private-value"
-
-      assert %{"value" => _} = dispatch("config.get", %{"key" => "logLevel"}, read_only())
-    end
-
-    test "admin scope gets values through the shared projector", c do
-      admin = %{auth: %{role: :operator, scopes: [:read, :admin]}}
-
-      nested = dispatch("config.get", %{"key" => c.nested}, admin)
-      assert [%{"api_key" => "[REDACTED]"}, %{"label" => @content}] = nested["value"]
-
-      text = dispatch("config.get", %{"key" => c.text}, admin)
-      refute text["value"] =~ c.credential
-      assert text["value"] =~ "[REDACTED]"
-
-      all = dispatch("config.get", %{}, admin)
-      refute Jason.encode!(all) =~ "private-value"
-      refute Jason.encode!(all) =~ c.credential
-      assert all[c.nested] == nested["value"]
-    end
   end
 end

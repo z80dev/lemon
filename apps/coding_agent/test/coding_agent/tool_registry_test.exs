@@ -396,23 +396,6 @@ defmodule CodingAgent.ToolRegistryTest do
     |> String.to_integer()
   end
 
-  defp wasm_tool(name, opts) do
-    description = Keyword.get(opts, :description, "WASM #{name}")
-    label = Keyword.get(opts, :label, "WASM #{name}")
-    capabilities = Keyword.get(opts, :capabilities, %{})
-    path = Keyword.get(opts, :path, "/tmp/#{name}.wasm")
-
-    tool = %LemonAgent.Types.AgentTool{
-      name: name,
-      description: description,
-      parameters: %{"type" => "object", "properties" => %{}, "required" => []},
-      label: label,
-      execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
-    }
-
-    {name, tool, {:wasm, %{name: name, path: path, capabilities: capabilities}}}
-  end
-
   defp mcp_tool(name, opts \\ []) do
     label = Keyword.get(opts, :label, "MCP #{name}")
     server = Keyword.get(opts, :server, :fixture)
@@ -448,7 +431,6 @@ defmodule CodingAgent.ToolRegistryTest do
       assert "lsp_diagnostics" in names
       assert "bash" in names
       assert "todo" in names
-      assert "kanban" in names
       assert "peer" in names
 
       for tab_tool <- ~w(browser_tabs browser_tab_open browser_tab_activate browser_tab_close) do
@@ -470,6 +452,30 @@ defmodule CodingAgent.ToolRegistryTest do
       assert "media_analyze_image" in names
       assert "media_generate_video" in names
       assert "parent_question" in names
+    end
+
+    test "the automation runtime contributes kanban, goal and cron after the built-ins",
+         %{tmp_dir: tmp_dir} do
+      {:ok, _} = Application.ensure_all_started(:lemon_automation)
+
+      tools = ToolRegistry.get_tools(tmp_dir, include_extensions: false, include_mcp: false)
+      names = Enum.map(tools, & &1.name)
+      last_builtin = Enum.find_index(names, &(&1 == "extensions_status"))
+
+      for name <- ~w(kanban goal cron) do
+        assert Enum.find_index(names, &(&1 == name)) > last_builtin
+      end
+
+      for {name, module} <- [
+            kanban: LemonAutomation.Tools.Kanban,
+            goal: LemonAutomation.Tools.Goal
+          ] do
+        offered = Enum.find(tools, &(&1.name == Atom.to_string(name)))
+        shipped = module.tool(tmp_dir, [])
+
+        assert {offered.label, offered.description, offered.parameters} ==
+                 {shipped.label, shipped.description, shipped.parameters}
+      end
     end
 
     test "built-in tool schemas are well-formed JSON object schemas", %{tmp_dir: tmp_dir} do
@@ -498,12 +504,12 @@ defmodule CodingAgent.ToolRegistryTest do
     end
 
     test "respects disabled option", %{tmp_dir: tmp_dir} do
-      tools = ToolRegistry.get_tools(tmp_dir, disabled: ["bash", "write", "kanban"])
+      tools = ToolRegistry.get_tools(tmp_dir, disabled: ["bash", "write", "todo"])
 
       names = Enum.map(tools, & &1.name)
       refute "bash" in names
       refute "write" in names
-      refute "kanban" in names
+      refute "todo" in names
       assert "read" in names
     end
 
@@ -586,10 +592,7 @@ defmodule CodingAgent.ToolRegistryTest do
       end
       """)
 
-      opts = [
-        mcp_tools: [mcp_tool("mcp_tuple_tool")],
-        wasm_tools: [wasm_tool("wasm_tuple_tool", [])]
-      ]
+      opts = [mcp_tools: [mcp_tool("mcp_tuple_tool")]]
 
       tuples = ToolRegistry.get_tool_tuples(tmp_dir, opts)
 
@@ -598,7 +601,6 @@ defmodule CodingAgent.ToolRegistryTest do
       assert sources["read"] == :builtin
       assert sources["tuple_ext_tool"] == {:extension, TupleSourceExtension}
       assert sources["mcp_tuple_tool"] == {:mcp, :fixture}
-      assert match?({:wasm, _}, sources["wasm_tuple_tool"])
 
       # The refactor pin: get_tools/2 is exactly this with the source dropped.
       assert Enum.map(tuples, fn {_name, tool, _source} -> tool.name end) ==
@@ -954,113 +956,31 @@ defmodule CodingAgent.ToolRegistryTest do
     end
   end
 
-  describe "wasm precedence and conflict reporting" do
-    test "built-in tools win over wasm tools", %{tmp_dir: tmp_dir} do
-      wasm_inventory = [wasm_tool("read", label: "WASM Read")]
+  describe "retired WASM surface (#707)" do
+    test "tool_auth is not a built-in and WASM inventories are not registered", %{
+      tmp_dir: tmp_dir
+    } do
+      refute "tool_auth" in ToolRegistry.builtin_tool_names()
+      refute LemonCore.ToolCatalog.reserved?("tool_auth")
 
-      assert {:ok, tool} = ToolRegistry.get_tool(tmp_dir, "read", wasm_tools: wasm_inventory)
-      refute tool.label == "WASM Read"
-    end
+      fixture = %LemonAgent.Types.AgentTool{
+        name: "wasm_fixture",
+        description: "Retired WASM tool",
+        parameters: %{},
+        label: "WASM fixture",
+        execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
+      }
 
-    test "wasm tools shadow extension tools", %{tmp_dir: tmp_dir} do
-      ext_dir = Path.join(tmp_dir, ".lemon/extensions")
-      File.mkdir_p!(ext_dir)
-
-      extension_code = """
-      defmodule WasmShadowedExtension do
-        @behaviour CodingAgent.Extensions.Extension
-
-        @impl true
-        def name, do: "wasm-shadowed"
-
-        @impl true
-        def version, do: "1.0.0"
-
-        @impl true
-        def tools(_cwd) do
-          [
-            %LemonAgent.Types.AgentTool{
-              name: "wasm_shadow_test",
-              description: "From extension",
-              parameters: %{},
-              label: "Extension Tool",
-              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
-            }
-          ]
-        end
-      end
-      """
-
-      File.write!(Path.join(ext_dir, "wasm_shadowed_extension.ex"), extension_code)
-
-      wasm_inventory =
-        [wasm_tool("wasm_shadow_test", description: "From wasm", label: "WASM Tool")]
-
-      assert {:ok, tool} =
-               ToolRegistry.get_tool(tmp_dir, "wasm_shadow_test", wasm_tools: wasm_inventory)
-
-      assert tool.label == "WASM Tool"
-
-      :code.purge(WasmShadowedExtension)
-      :code.delete(WasmShadowedExtension)
-    end
-
-    test "tool_conflict_report includes wasm counts and sources", %{tmp_dir: tmp_dir} do
-      ext_dir = Path.join(tmp_dir, ".lemon/extensions")
-      File.mkdir_p!(ext_dir)
-
-      extension_code = """
-      defmodule WasmConflictExtension do
-        @behaviour CodingAgent.Extensions.Extension
-
-        @impl true
-        def name, do: "wasm-conflict"
-
-        @impl true
-        def version, do: "1.0.0"
-
-        @impl true
-        def tools(_cwd) do
-          [
-            %LemonAgent.Types.AgentTool{
-              name: "shared_wasm_name",
-              description: "From extension",
-              parameters: %{},
-              label: "Extension Shared",
-              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
-            }
-          ]
-        end
-      end
-      """
-
-      File.write!(Path.join(ext_dir, "wasm_conflict_extension.ex"), extension_code)
-
-      wasm_inventory = [
-        wasm_tool("read", label: "WASM Read"),
-        wasm_tool("shared_wasm_name", label: "WASM Shared")
-      ]
-
-      report =
-        ToolRegistry.tool_conflict_report(tmp_dir,
-          wasm_tools: wasm_inventory,
-          wasm_status: %{enabled: true, running: true}
+      # A stale caller option must not reintroduce the retired tool source.
+      tuples =
+        ToolRegistry.get_tool_tuples(tmp_dir,
+          wasm_tools: [{fixture.name, fixture, {:wasm, %{name: fixture.name}}}]
         )
 
-      assert report.wasm_count >= 1
-      assert report.wasm.enabled == true
-
-      assert Enum.any?(report.conflicts, fn conflict ->
-               conflict.tool_name == "shared_wasm_name" and
-                 match?({:wasm, _}, conflict.winner)
-             end)
-
-      assert Enum.any?(report.conflicts, fn conflict ->
-               conflict.tool_name == "read" and conflict.winner == :builtin
-             end)
-
-      :code.purge(WasmConflictExtension)
-      :code.delete(WasmConflictExtension)
+      names = Enum.map(tuples, &elem(&1, 0))
+      refute "tool_auth" in names
+      refute "wasm_fixture" in names
+      refute Enum.any?(tuples, &match?({_, _, {:wasm, _}}, &1))
     end
   end
 

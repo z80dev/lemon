@@ -1,7 +1,6 @@
 defmodule LemonAgent.LoopTest do
   use ExUnit.Case, async: true
 
-  alias LemonAgent.AbortSignal
   alias LemonAgent.EventStream
   alias LemonAgent.Loop
   alias LemonAgent.Test.Mocks
@@ -18,6 +17,7 @@ defmodule LemonAgent.LoopTest do
     AssistantMessage,
     StreamOptions,
     TextContent,
+    ThinkingContent,
     ToolCall,
     ToolResultMessage,
     UserMessage
@@ -50,6 +50,26 @@ defmodule LemonAgent.LoopTest do
     }
   end
 
+  # One tool-call turn followed by a final "Done" reply.
+  defp tool_turn_config(tool_calls, opts \\ []) do
+    responses = [
+      Mocks.assistant_message_with_tool_calls(tool_calls),
+      Mocks.assistant_message("Done")
+    ]
+
+    simple_config(Keyword.put(opts, :stream_fn, Mocks.mock_stream_fn(responses)))
+  end
+
+  defp tool(name, execute) do
+    %AgentTool{
+      name: name,
+      description: name,
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: name,
+      execute: execute
+    }
+  end
+
   defp user_message(text) do
     %UserMessage{
       role: :user,
@@ -58,72 +78,40 @@ defmodule LemonAgent.LoopTest do
     }
   end
 
-  # ============================================================================
-  # agent_loop/5 Tests
-  # ============================================================================
-
-  describe "agent_loop/5" do
-    test "returns an EventStream" do
-      context = simple_context()
-      response = Mocks.assistant_message("Hello!")
-      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      stream = Loop.agent_loop([user_message("Hi")], context, config, nil, nil)
-
-      assert is_pid(stream)
-    end
-
-    test "returns new messages in agent_end" do
-      context = simple_context()
-      response = Mocks.assistant_message("Hello back!")
-      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      prompt = user_message("Hi there")
-      stream = Loop.agent_loop([prompt], context, config, nil, nil)
-
-      {:ok, messages} = EventStream.result(stream)
-
-      # Should contain the prompt and the assistant response
-      assert messages != []
-
-      # Find the assistant message
-      assistant_msg = Enum.find(messages, fn m -> Map.get(m, :role) == :assistant end)
-      assert assistant_msg != nil
-    end
-
-    test "handles simple text response" do
-      context = simple_context()
-      response = Mocks.assistant_message("I'm doing well, thank you!")
-      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      stream = Loop.agent_loop([user_message("How are you?")], context, config, nil, nil)
-      events = EventStream.events(stream) |> Enum.to_list()
-
-      # Check we have message events
-      message_starts = Enum.filter(events, fn e -> match?({:message_start, _}, e) end)
-      message_ends = Enum.filter(events, fn e -> match?({:message_end, _}, e) end)
-
-      assert message_starts != []
-      assert message_ends != []
-    end
+  defp run(prompt_text, context, config) do
+    Loop.stream([user_message(prompt_text)], context, config) |> Enum.to_list()
   end
 
+  defp tool_ends(events), do: for({:tool_execution_end, _, _, _, _} = event <- events, do: event)
+
+  defp index_of(events, type), do: Enum.find_index(events, &(elem(&1, 0) == type))
+
   # ============================================================================
-  # stream/4 Tests
+  # agent_loop/5 and stream/4
   # ============================================================================
 
-  describe "stream/4" do
-    test "includes agent lifecycle events" do
-      context = simple_context()
-      response = Mocks.assistant_message("Response")
+  describe "agent_loop/5 and stream/4" do
+    test "emits an ordered lifecycle and returns the prompts and reply as new messages" do
+      response = Mocks.assistant_message("Unicode: \u{1F600} Tab: \t Newline: \n")
+      prompts = [user_message("First message"), user_message("Second message")]
       config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
-      events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
+      stream = Loop.agent_loop(prompts, simple_context(), config, nil, nil)
+      assert is_pid(stream)
 
-      event_types = Enum.map(events, fn e -> elem(e, 0) end)
+      events = EventStream.events(stream) |> Enum.to_list()
 
-      assert :agent_start in event_types
-      assert :agent_end in event_types
+      assert {:agent_start} = hd(events)
+      assert {:agent_end, messages} = List.last(events)
+      assert messages == prompts ++ [response]
+
+      assert for({:message_start, %UserMessage{} = message} <- events, do: message) == prompts
+      starts = for {:message_start, message} <- events, do: message
+      ends = for {:message_end, message} <- events, do: message
+      assert length(starts) == 3
+      assert length(ends) == 3
+      assert index_of(events, :turn_start) < index_of(events, :message_start)
+      assert index_of(events, :turn_end) < index_of(events, :agent_end)
     end
 
     test "emits a tool schema snapshot for the run" do
@@ -131,7 +119,7 @@ defmodule LemonAgent.LoopTest do
       response = Mocks.assistant_message("Response")
       config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
-      events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
+      events = run("Test", context, config)
 
       assert [
                {:agent_start},
@@ -147,23 +135,12 @@ defmodule LemonAgent.LoopTest do
     end
 
     test "emits explicit loop state transitions for a tool turn" do
-      tool_response =
-        Mocks.assistant_message_with_tool_calls([
-          Mocks.tool_call("echo", %{"text" => "hello"}, id: "call_state")
-        ])
-
-      final_response = Mocks.assistant_message("Done")
-      {:ok, responses} = Agent.start_link(fn -> [tool_response, final_response] end)
-
-      stream_fn = fn _model, _llm_context, _options ->
-        response = Agent.get_and_update(responses, fn [response | rest] -> {response, rest} end)
-        Mocks.mock_stream_fn_single_direct(response).(nil, nil, nil)
-      end
-
       context = simple_context(tools: [Mocks.echo_tool()])
-      config = simple_config(stream_fn: stream_fn)
 
-      events = Loop.stream([user_message("Echo")], context, config) |> Enum.to_list()
+      config =
+        tool_turn_config([Mocks.tool_call("echo", %{"text" => "hello"}, id: "call_state")])
+
+      events = run("Echo", context, config)
 
       transitions =
         for {:loop_state_transition, from, to, _meta} <- events, do: {from, to}
@@ -182,22 +159,20 @@ defmodule LemonAgent.LoopTest do
 
     test "uses configured tool schema snapshot for provider schema and execution" do
       parent = self()
-      echo_tool = Mocks.echo_tool()
-      snapshot = ToolSchemaSnapshot.new([echo_tool])
+      snapshot = ToolSchemaSnapshot.new([Mocks.echo_tool()])
       context = simple_context(tools: [Mocks.add_tool()])
 
-      tool_response =
-        Mocks.assistant_message_with_tool_calls([
-          Mocks.tool_call("echo", %{"text" => "snapshotted"}, id: "call_snapshot")
+      canned =
+        Mocks.mock_stream_fn([
+          Mocks.assistant_message_with_tool_calls([
+            Mocks.tool_call("echo", %{"text" => "snapshotted"}, id: "call_snapshot")
+          ]),
+          Mocks.assistant_message("Done")
         ])
 
-      final_response = Mocks.assistant_message("Done")
-      {:ok, responses} = Agent.start_link(fn -> [tool_response, final_response] end)
-
-      stream_fn = fn _model, llm_context, _options ->
+      stream_fn = fn model, llm_context, options ->
         send(parent, {:provider_tools, Enum.map(llm_context.tools, & &1.name)})
-        response = Agent.get_and_update(responses, fn [response | rest] -> {response, rest} end)
-        Mocks.mock_stream_fn_single_direct(response).(nil, nil, nil)
+        canned.(model, llm_context, options)
       end
 
       config = simple_config(tool_schema_snapshot: snapshot, stream_fn: stream_fn)
@@ -232,8 +207,7 @@ defmodule LemonAgent.LoopTest do
       context = simple_context(tools: [Mocks.echo_tool()])
       config = simple_config(stream_fn: stream_fn, max_tool_turns: 1)
 
-      stream = Loop.agent_loop([user_message("Loop until stopped")], context, config, nil, nil)
-      events = EventStream.events(stream) |> Enum.to_list()
+      events = run("Loop until stopped", context, config)
 
       assert Agent.get(call_counter, & &1) == 1
 
@@ -257,78 +231,74 @@ defmodule LemonAgent.LoopTest do
     end
 
     test "accepts stream_fn returning stream directly" do
-      context = simple_context()
       response = Mocks.assistant_message("Direct stream response")
       config = simple_config(stream_fn: Mocks.mock_stream_fn_single_direct(response))
 
-      events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
+      assert {:agent_end, [_prompt, ^response]} =
+               run("Test", simple_context(), config) |> List.last()
+    end
 
-      assert {:agent_end, _messages} = List.last(events)
+    test "independent loops sharing tools run concurrently" do
+      context = simple_context(tools: [Mocks.add_tool()])
+
+      tasks =
+        for i <- 1..3 do
+          Task.async(fn ->
+            config =
+              tool_turn_config([Mocks.tool_call("add", %{"a" => i, "b" => 2}, id: "call_#{i}")])
+
+            EventStream.result(Loop.agent_loop([user_message("Add")], context, config, nil, nil))
+          end)
+        end
+
+      for {{:ok, messages}, i} <- Enum.with_index(Task.await_many(tasks, 5000), 1) do
+        assert [%ToolResultMessage{details: %{sum: sum}}] =
+                 Enum.filter(messages, &match?(%ToolResultMessage{}, &1))
+
+        assert sum == i + 2
+      end
     end
   end
 
   # ============================================================================
-  # agent_loop_continue/4 Tests
+  # agent_loop_continue/4 and stream_continue/3
   # ============================================================================
 
   describe "agent_loop_continue/4" do
-    test "raises error when context has no messages" do
-      context = simple_context()
-      config = simple_config()
-
-      assert_raise ArgumentError, ~r/no messages in context/, fn ->
-        Loop.agent_loop_continue(context, config, nil, nil)
+    test "rejects contexts without a continuable last message" do
+      for {messages, pattern} <- [
+            {[], ~r/no messages in context/},
+            {[user_message("Hi"), Mocks.assistant_message("Hello")],
+             ~r/Cannot continue from message role: assistant/}
+          ] do
+        assert_raise ArgumentError, pattern, fn ->
+          Loop.agent_loop_continue(simple_context(messages: messages), simple_config(), nil, nil)
+        end
       end
     end
 
-    test "raises error when last message is assistant" do
-      assistant_msg = Mocks.assistant_message("Previous response")
-      context = simple_context(messages: [user_message("Hi"), assistant_msg])
-      config = simple_config()
+    test "continues from a trailing user or tool_result message" do
+      call = Mocks.tool_call("previous_tool", %{}, id: "call_existing")
 
-      assert_raise ArgumentError, ~r/Cannot continue from message role: assistant/, fn ->
-        Loop.agent_loop_continue(context, config, nil, nil)
+      histories = [
+        [user_message("Please continue")],
+        [
+          user_message("Original"),
+          Mocks.assistant_message_with_tool_calls([call]),
+          Mocks.tool_result_message("call_existing", "previous_tool", "Previous result")
+        ]
+      ]
+
+      for history <- histories do
+        response = Mocks.assistant_message("Continuing")
+        config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
+        stream = Loop.agent_loop_continue(simple_context(messages: history), config, nil, nil)
+
+        assert {:ok, [^response]} = EventStream.result(stream)
       end
     end
 
-    test "continues from tool_result message" do
-      tool_result = %ToolResultMessage{
-        role: :tool_result,
-        tool_call_id: "call_123",
-        tool_name: "test_tool",
-        content: [%TextContent{type: :text, text: "Result"}],
-        is_error: false,
-        timestamp: System.system_time(:millisecond)
-      }
-
-      context = simple_context(messages: [user_message("Test"), tool_result])
-      response = Mocks.assistant_message("Processed the tool result")
-      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      stream = Loop.agent_loop_continue(context, config, nil, nil)
-      events = EventStream.events(stream) |> Enum.to_list()
-
-      assert {:agent_start} = hd(events)
-    end
-
-    test "continues from user message" do
-      context = simple_context(messages: [user_message("Please continue")])
-      response = Mocks.assistant_message("Continuing...")
-      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      stream = Loop.agent_loop_continue(context, config, nil, nil)
-
-      {:ok, messages} = EventStream.result(stream)
-      assert List.last(messages) == response
-    end
-  end
-
-  # ============================================================================
-  # stream_continue/3 Tests
-  # ============================================================================
-
-  describe "stream_continue/3" do
-    test "returns an Enumerable" do
+    test "stream_continue/3 emits the reply as the only new message" do
       context = simple_context(messages: [user_message("Start")])
       response = Mocks.assistant_message("Continue")
       config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
@@ -338,224 +308,117 @@ defmodule LemonAgent.LoopTest do
       assert {:message_end, response} in events
       assert {:agent_end, [response]} in events
     end
-  end
 
-  # ============================================================================
-  # Event Sequencing Tests
-  # ============================================================================
+    test "rejects invalid tool transcripts before calling the model" do
+      parent = self()
 
-  describe "event sequencing" do
-    test "emits events in correct order for simple request" do
-      context = simple_context()
-      response = Mocks.assistant_message("Response text")
-      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
+      invalid_context =
+        simple_context(
+          messages: [
+            %UserMessage{role: :user, content: "read the file"},
+            %AssistantMessage{
+              role: :assistant,
+              content: [%ToolCall{id: "call_missing", name: "read", arguments: %{}}]
+            },
+            %UserMessage{role: :user, content: "continue before tool result"}
+          ]
+        )
 
-      events = Loop.stream([user_message("Hello")], context, config) |> Enum.to_list()
-      event_types = Enum.map(events, fn e -> elem(e, 0) end)
+      stream_fn = fn _model, _llm_context, _options ->
+        send(parent, :stream_called)
+        raise "stream should not be called for an invalid transcript"
+      end
 
-      # Should start with agent_start
-      assert hd(event_types) == :agent_start
+      config = simple_config(stream_fn: stream_fn)
+      stream = Loop.agent_loop_continue(invalid_context, config, nil, nil)
 
-      # Should have turn_start before messages
-      turn_start_idx = Enum.find_index(event_types, &(&1 == :turn_start))
-      first_message_start_idx = Enum.find_index(event_types, &(&1 == :message_start))
+      assert {:error, {:invalid_tool_transcript, violations}, _partial} =
+               EventStream.result(stream)
 
-      assert turn_start_idx != nil
-      assert first_message_start_idx != nil
-      assert turn_start_idx < first_message_start_idx
-
-      # Should end with agent_end
-      assert List.last(event_types) == :agent_end
-    end
-
-    test "emits message_start and message_end for each message" do
-      context = simple_context()
-      response = Mocks.assistant_message("Response")
-      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      events = Loop.stream([user_message("Input")], context, config) |> Enum.to_list()
-
-      message_starts = Enum.filter(events, fn e -> match?({:message_start, _}, e) end)
-      message_ends = Enum.filter(events, fn e -> match?({:message_end, _}, e) end)
-
-      # At minimum, should have prompt message and assistant response
-      assert message_starts != []
-      assert message_ends != []
-
-      # Each message_start should have a corresponding message_end
-      assert length(message_starts) == length(message_ends)
-    end
-
-    test "emits turn_end after turn completes" do
-      context = simple_context()
-      response = Mocks.assistant_message("Done")
-      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
-      event_types = Enum.map(events, fn e -> elem(e, 0) end)
-
-      assert :turn_end in event_types
-
-      # turn_end should come before agent_end
-      turn_end_idx = Enum.find_index(event_types, &(&1 == :turn_end))
-      agent_end_idx = Enum.find_index(event_types, &(&1 == :agent_end))
-
-      assert turn_end_idx < agent_end_idx
+      assert Enum.any?(violations, &(&1.type == :missing_tool_result))
+      refute_receive :stream_called, 50
     end
   end
 
   # ============================================================================
-  # Tool Execution Tests
+  # Tool Execution
   # ============================================================================
 
-  describe "tool execution events" do
-    test "emits tool_execution_start and tool_execution_end" do
-      echo_tool = Mocks.echo_tool()
-      context = simple_context(tools: [echo_tool])
-
-      tool_call = Mocks.tool_call("echo", %{"text" => "hello"}, id: "call_001")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("I echoed your message")
+  describe "tool execution" do
+    test "reports tool start and end events and records results in transcript order" do
+      context = simple_context(tools: [Mocks.echo_tool()])
 
       config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
+        tool_turn_config([Mocks.tool_call("echo", %{"text" => "test input"}, id: "call_1")])
 
-      events = Loop.stream([user_message("Echo hello")], context, config) |> Enum.to_list()
-      event_types = Enum.map(events, fn e -> elem(e, 0) end)
+      events = run("Echo", context, config)
 
-      assert :tool_execution_start in event_types
-      assert :tool_execution_end in event_types
+      assert {:tool_execution_start, "call_1", "echo", %{"text" => "test input"}} in events
+
+      assert [{:tool_execution_end, "call_1", "echo", %AgentToolResult{}, false}] =
+               tool_ends(events)
+
+      assert {:agent_end, messages} = List.last(events)
+      assert Enum.map(messages, & &1.role) == [:user, :assistant, :tool_result, :assistant]
+
+      assert [%ToolResultMessage{trust: :untrusted}] =
+               Enum.filter(messages, &(&1.role == :tool_result))
     end
 
-    test "tool_execution_start includes tool name and arguments" do
-      echo_tool = Mocks.echo_tool()
-      context = simple_context(tools: [echo_tool])
+    test "failing, crashing and unknown tools become error results without stopping the loop" do
+      failing = [
+        {Mocks.error_tool(), %{"message" => "Intentional error"}, ~r/Intentional error/},
+        {tool("raising", fn _, _, _, _ -> raise "Intentional exception" end), %{},
+         ~r/Intentional exception/},
+        {tool("exiting", fn _, _, _, _ -> exit(:intentional_crash) end), %{},
+         ~r/intentional_crash/},
+        {tool("throwing", fn _, _, _, _ -> throw(:intentional_throw) end), %{},
+         ~r/intentional_throw/},
+        {tool("weird", fn _, _, _, _ -> {:unexpected, "weird_value"} end), %{}, ~r/Unexpected/}
+      ]
 
-      tool_call = Mocks.tool_call("echo", %{"text" => "test input"}, id: "call_002")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Done")
+      calls =
+        for {%AgentTool{name: name}, args, _} <- failing,
+            do: Mocks.tool_call(name, args, id: "call_#{name}")
 
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
+      calls = calls ++ [Mocks.tool_call("unknown_tool", %{}, id: "call_unknown_tool")]
 
-      events = Loop.stream([user_message("Echo test")], context, config) |> Enum.to_list()
+      expected =
+        for({tool, _, pattern} <- failing, do: {tool.name, pattern}) ++
+          [{"unknown_tool", ~r/not found/}]
 
-      tool_start =
-        Enum.find(events, fn e ->
-          match?({:tool_execution_start, _, _, _}, e)
-        end)
+      context = simple_context(tools: Enum.map(failing, &elem(&1, 0)))
+      events = run("Run failing tools", context, tool_turn_config(calls))
 
-      assert tool_start != nil
-      {:tool_execution_start, id, name, args} = tool_start
-      assert id == "call_002"
-      assert name == "echo"
-      assert args == %{"text" => "test input"}
+      for {name, pattern} <- expected do
+        call_id = "call_#{name}"
+
+        assert {:tool_execution_end, ^call_id, _, %AgentToolResult{} = result, true} =
+                 Enum.find(tool_ends(events), &(elem(&1, 1) == call_id))
+
+        assert [%TextContent{text: text}] = result.content
+        assert text =~ pattern
+      end
+
+      assert {:agent_end, _} = List.last(events)
     end
 
-    test "tool_execution_end includes result and is_error flag" do
-      echo_tool = Mocks.echo_tool()
-      context = simple_context(tools: [echo_tool])
+    test "a parallel batch settles every call independently" do
+      context = simple_context(tools: [Mocks.echo_tool(), Mocks.error_tool()])
 
-      tool_call = Mocks.tool_call("echo", %{"text" => "hello"}, id: "call_003")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Complete")
+      calls =
+        for(i <- 1..10, do: Mocks.tool_call("echo", %{"text" => "message #{i}"}, id: "call_#{i}")) ++
+          [Mocks.tool_call("error_tool", %{"message" => "fail"}, id: "call_err")]
 
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
+      ends = run("Echo many", context, tool_turn_config(calls)) |> tool_ends()
 
-      events = Loop.stream([user_message("Echo")], context, config) |> Enum.to_list()
-
-      tool_end =
-        Enum.find(events, fn e ->
-          match?({:tool_execution_end, _, _, _, _}, e)
-        end)
-
-      assert tool_end != nil
-      {:tool_execution_end, id, name, result, is_error} = tool_end
-      assert id == "call_003"
-      assert name == "echo"
-      assert %AgentToolResult{} = result
-      assert is_error == false
-    end
-
-    test "handles tool that returns error" do
-      error_tool = Mocks.error_tool()
-      context = simple_context(tools: [error_tool])
-
-      tool_call =
-        Mocks.tool_call("error_tool", %{"message" => "Intentional error"}, id: "call_err")
-
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Handled the error")
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
-
-      events = Loop.stream([user_message("Trigger error")], context, config) |> Enum.to_list()
-
-      tool_end =
-        Enum.find(events, fn e ->
-          match?({:tool_execution_end, "call_err", _, _, _}, e)
-        end)
-
-      assert tool_end != nil
-      {:tool_execution_end, _, _, result, is_error} = tool_end
-      assert is_error == true
-      assert %AgentToolResult{} = result
-    end
-
-    test "handles unknown tool gracefully" do
-      context = simple_context(tools: [])
-
-      tool_call = Mocks.tool_call("unknown_tool", %{}, id: "call_unknown")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Tool not found")
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
-
-      events = Loop.stream([user_message("Use unknown tool")], context, config) |> Enum.to_list()
-
-      tool_end =
-        Enum.find(events, fn e ->
-          match?({:tool_execution_end, "call_unknown", _, _, _}, e)
-        end)
-
-      assert tool_end != nil
-      {:tool_execution_end, _, _, result, is_error} = tool_end
-      assert is_error == true
-
-      [%TextContent{text: error_text}] = result.content
-      assert error_text =~ "not found"
-    end
-
-    test "executes multiple tool calls in parallel" do
-      add_tool = Mocks.add_tool()
-      context = simple_context(tools: [add_tool])
-
-      tool_call1 = Mocks.tool_call("add", %{"a" => 1, "b" => 2}, id: "call_1")
-      tool_call2 = Mocks.tool_call("add", %{"a" => 3, "b" => 4}, id: "call_2")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call1, tool_call2])
-      final_response = Mocks.assistant_message("Results: 3 and 7")
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
-
-      events = Loop.stream([user_message("Add numbers")], context, config) |> Enum.to_list()
-
-      tool_ends =
-        Enum.filter(events, fn e ->
-          match?({:tool_execution_end, _, _, _, _}, e)
-        end)
-
-      assert length(tool_ends) == 2
+      assert length(ends) == 11
+      assert for({:tool_execution_end, id, _, _, true} <- ends, do: id) == ["call_err"]
     end
 
     test "passes exactly one tool_result per tool call into the next model turn" do
       parent = self()
-      add_tool = Mocks.add_tool()
-      echo_tool = Mocks.echo_tool()
-      context = simple_context(tools: [add_tool, echo_tool])
+      context = simple_context(tools: [Mocks.add_tool(), Mocks.echo_tool()])
 
       tool_call1 = Mocks.tool_call("add", %{"a" => 1, "b" => 2}, id: "call_add")
       tool_call2 = Mocks.tool_call("echo", %{"text" => "hello"}, id: "call_echo")
@@ -609,63 +472,71 @@ defmodule LemonAgent.LoopTest do
       assert Enum.all?(tool_result_indices, &(&1 < final_answer_index))
     end
 
-    test "rejects invalid tool transcripts before calling the model" do
-      parent = self()
+    test "large and empty tool output is passed through unchanged" do
+      large_text = String.duplicate("x", 50_000)
 
-      invalid_context =
-        simple_context(
-          messages: [
-            %UserMessage{role: :user, content: "read the file"},
-            %AssistantMessage{
-              role: :assistant,
-              content: [%ToolCall{id: "call_missing", name: "read", arguments: %{}}]
-            },
-            %UserMessage{role: :user, content: "continue before tool result"}
-          ]
-        )
+      tools = [
+        tool("large_output", fn _, _, _, _ ->
+          %AgentToolResult{content: [%TextContent{type: :text, text: large_text}]}
+        end),
+        tool("empty_output", fn _, _, _, _ -> %AgentToolResult{content: []} end)
+      ]
 
-      stream_fn = fn _model, _llm_context, _options ->
-        send(parent, :stream_called)
-        raise "stream should not be called for an invalid transcript"
-      end
+      calls = [
+        Mocks.tool_call("large_output", %{}, id: "call_large"),
+        Mocks.tool_call("empty_output", %{}, id: "call_empty")
+      ]
 
-      config = simple_config(stream_fn: stream_fn)
-      stream = Loop.agent_loop_continue(invalid_context, config, nil, nil)
+      events = run("Outputs", simple_context(tools: tools), tool_turn_config(calls))
 
-      assert {:error, {:invalid_tool_transcript, violations}, _partial} =
-               EventStream.result(stream)
+      assert [
+               {:tool_execution_end, "call_large", _,
+                %{content: [%TextContent{text: ^large_text}]}, false},
+               {:tool_execution_end, "call_empty", _, %{content: []}, false}
+             ] = tool_ends(events)
 
-      assert Enum.any?(violations, &(&1.type == :missing_tool_result))
-      refute_receive :stream_called, 50
+      assert {:agent_end, _} = List.last(events)
     end
 
     test "emits tool_execution_update for streaming tools" do
-      streaming_tool = Mocks.streaming_tool()
-      context = simple_context(tools: [streaming_tool])
-
-      tool_call = Mocks.tool_call("streaming_tool", %{"count" => 3}, id: "call_stream")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Streaming done")
+      context = simple_context(tools: [Mocks.streaming_tool()])
 
       config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
-
-      events = Loop.stream([user_message("Stream tool")], context, config) |> Enum.to_list()
+        tool_turn_config([Mocks.tool_call("streaming_tool", %{"count" => 3}, id: "call_stream")])
 
       updates =
-        Enum.filter(events, fn e ->
-          match?({:tool_execution_update, "call_stream", _, _, _}, e)
-        end)
+        for {:tool_execution_update, "call_stream", _, _, _} = event <-
+              run("Stream tool", context, config),
+            do: event
 
       assert length(updates) == 3
+    end
+
+    test "propagates untrusted trust from tool results" do
+      untrusted_tool =
+        tool("untrusted_echo", fn _id, %{"text" => text}, _signal, _on_update ->
+          %AgentToolResult{content: [%TextContent{type: :text, text: text}], trust: :untrusted}
+        end)
+
+      config =
+        tool_turn_config([
+          Mocks.tool_call("untrusted_echo", %{"text" => "from web"}, id: "call_untrusted")
+        ])
+
+      context = simple_context(tools: [untrusted_tool])
+      stream = Loop.agent_loop([user_message("Run untrusted tool")], context, config, nil, nil)
+      {:ok, messages} = EventStream.result(stream)
+
+      assert [%ToolResultMessage{trust: :untrusted}] =
+               Enum.filter(messages, &match?(%{tool_call_id: "call_untrusted"}, &1))
     end
   end
 
   # ============================================================================
-  # Steering Messages Tests
+  # Steering and Follow-up Messages
   # ============================================================================
 
-  describe "steering messages" do
+  describe "steering and follow-up messages" do
     test "applies queued system prompt to follow-up turns" do
       parent = self()
       context = simple_context(system_prompt: "base prompt")
@@ -675,31 +546,17 @@ defmodule LemonAgent.LoopTest do
         system_prompt: "follow-up prompt"
       }
 
-      {:ok, responses} =
-        Agent.start_link(fn ->
-          [Mocks.assistant_message("first"), Mocks.assistant_message("second")]
-        end)
-
       {:ok, follow_up_queue} = Agent.start_link(fn -> [follow_up] end)
 
-      stream_fn = fn _model, llm_context, _options ->
+      canned =
+        Mocks.mock_stream_fn([
+          Mocks.assistant_message("first"),
+          Mocks.assistant_message("second")
+        ])
+
+      stream_fn = fn model, llm_context, options ->
         send(parent, {:seen_system_prompt, llm_context.system_prompt})
-
-        response =
-          Agent.get_and_update(responses, fn
-            [head | tail] -> {head, tail}
-            [] -> {Mocks.assistant_message("done"), []}
-          end)
-
-        {:ok, stream} = LemonAi.EventStream.start_link()
-
-        Task.start(fn ->
-          LemonAi.EventStream.push(stream, {:start, response})
-          LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
-          LemonAi.EventStream.complete(stream, response)
-        end)
-
-        {:ok, stream}
+        canned.(model, llm_context, options)
       end
 
       get_follow_up = fn ->
@@ -711,16 +568,14 @@ defmodule LemonAgent.LoopTest do
 
       config = simple_config(stream_fn: stream_fn, get_follow_up_messages: get_follow_up)
 
-      Loop.stream([user_message("initial")], context, config) |> Enum.to_list()
+      run("initial", context, config)
 
       assert_receive {:seen_system_prompt, "base prompt"}
       assert_receive {:seen_system_prompt, "follow-up prompt"}
     end
 
     test "does not skip tool calls when steering messages arrive" do
-      echo_tool = Mocks.echo_tool()
-      context = simple_context(tools: [echo_tool])
-
+      context = simple_context(tools: [Mocks.echo_tool()])
       steering_message = user_message("Interrupt now")
       {:ok, call_counter} = Agent.start_link(fn -> 0 end)
 
@@ -732,378 +587,261 @@ defmodule LemonAgent.LoopTest do
         end)
       end
 
-      tool_call1 = Mocks.tool_call("echo", %{"text" => "first"}, id: "call_1")
-      tool_call2 = Mocks.tool_call("echo", %{"text" => "second"}, id: "call_2")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call1, tool_call2])
-      final_response = Mocks.assistant_message("Done")
+      calls = [
+        Mocks.tool_call("echo", %{"text" => "first"}, id: "call_1"),
+        Mocks.tool_call("echo", %{"text" => "second"}, id: "call_2")
+      ]
 
-      config =
-        simple_config(
-          get_steering_messages: get_steering,
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+      events =
+        run("Run tools", context, tool_turn_config(calls, get_steering_messages: get_steering))
 
-      events = Loop.stream([user_message("Run tools")], context, config) |> Enum.to_list()
-
-      tool_ends =
-        Enum.filter(events, fn e ->
-          match?({:tool_execution_end, _, _, _, _}, e)
-        end)
-
-      assert length(tool_ends) == 2
+      assert length(tool_ends(events)) == 2
+      assert {:agent_end, _} = List.last(events)
     end
-  end
 
-  # ============================================================================
-  # Follow-up Messages Tests
-  # ============================================================================
-
-  describe "follow-up messages" do
-    test "processes follow-up messages after agent would stop" do
-      context = simple_context()
-
-      # Queue a follow-up message
-      follow_up_message = user_message("One more thing...")
-      follow_up_queue = Agent.start_link(fn -> [follow_up_message] end) |> elem(1)
+    test "each follow-up batch starts another turn after the agent would stop" do
+      follow_ups = [[user_message("First follow-up")], [user_message("Second follow-up")]]
+      {:ok, queue} = Agent.start_link(fn -> follow_ups end)
 
       get_follow_up = fn ->
-        Agent.get_and_update(follow_up_queue, fn
+        Agent.get_and_update(queue, fn
+          [head | tail] -> {head, tail}
           [] -> {[], []}
-          messages -> {messages, []}
         end)
       end
 
-      response1 = Mocks.assistant_message("First response")
-      response2 = Mocks.assistant_message("Follow-up response")
+      responses = for i <- 1..3, do: Mocks.assistant_message("Response #{i}")
 
       config =
         simple_config(
           get_follow_up_messages: get_follow_up,
-          stream_fn: Mocks.mock_stream_fn([response1, response2])
+          stream_fn: Mocks.mock_stream_fn(responses)
         )
 
-      events = Loop.stream([user_message("Start")], context, config) |> Enum.to_list()
+      events = run("Start", simple_context(), config)
 
-      # Should have multiple turns
-      turn_starts = Enum.filter(events, fn e -> match?({:turn_start}, e) end)
-      assert turn_starts != []
+      assert Enum.count(events, &match?({:turn_start}, &1)) == 3
+      assert {:agent_end, messages} = List.last(events)
+
+      assert for(%UserMessage{content: content} <- messages, do: content) ==
+               ["Start", "First follow-up", "Second follow-up"]
     end
   end
 
   # ============================================================================
-  # Transform Context Tests
+  # Context Callbacks and Failures
   # ============================================================================
 
-  describe "transform_context" do
-    test "transform_context can return {:ok, messages}" do
-      context = simple_context()
+  describe "context callbacks and failures" do
+    test "accepted transform_context and convert_to_llm results reach the model" do
+      response = Mocks.assistant_message("Ok")
 
-      transform_fn = fn messages, _signal ->
-        {:ok, messages}
+      for overrides <- [
+            [transform_context: fn messages, _signal -> {:ok, messages} end],
+            [convert_to_llm: fn _messages -> [] end],
+            [convert_to_llm: fn _messages -> {:ok, []} end]
+          ] do
+        config =
+          simple_config([stream_fn: Mocks.mock_stream_fn_single(response)] ++ overrides)
+
+        assert {:agent_end, [_prompt, ^response]} =
+                 run("Test", simple_context(), config) |> List.last()
       end
+    end
 
-      response = Mocks.assistant_message("Response")
+    test "callback and provider failures end the run with their original reason" do
+      cases = [
+        {[stream_fn: Mocks.mock_stream_fn_error(:api_unavailable)], :api_unavailable},
+        {[convert_to_llm: fn _messages -> {:error, :bad_convert} end], :bad_convert},
+        {[transform_context: fn _messages, _signal -> {:error, :bad_transform} end],
+         :bad_transform},
+        {[stream_fn: fn _, _, _ -> {:unexpected, "weird result"} end],
+         {:invalid_stream, {:unexpected, "weird result"}}},
+        {[stream_fn: fn _, _, _ -> nil end], {:invalid_stream, nil}}
+      ]
 
-      config =
-        simple_config(
-          transform_context: transform_fn,
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+      for {overrides, expected_reason} <- cases do
+        stream =
+          Loop.agent_loop(
+            [user_message("Test")],
+            simple_context(),
+            simple_config(overrides),
+            nil,
+            nil
+          )
 
-      events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
+        assert {:error, ^expected_reason, _partial} = EventStream.result(stream)
+      end
+    end
 
-      assert {:agent_end, _} = List.last(events)
+    test "a raising stream_fn ends the run with an error" do
+      config = simple_config(stream_fn: fn _, _, _ -> raise "Intentional crash" end)
+      stream = Loop.agent_loop([user_message("Test")], simple_context(), config, nil, nil)
+
+      assert {:error, _reason, _partial} = EventStream.result(stream)
     end
   end
 
   # ============================================================================
-  # Error Handling Tests
+  # Assistant Terminal Responses
   # ============================================================================
 
-  describe "error handling" do
-    test "handles stream function returning error" do
-      context = simple_context()
+  describe "assistant terminal responses" do
+    test "empty and thinking-only stop responses become an assistant error after continuations" do
+      empty = %{Mocks.assistant_message("") | content: []}
 
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn_error(:api_unavailable))
-
-      stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
-
-      {:error, reason, _partial} = EventStream.result(stream)
-      assert reason == :api_unavailable
-    end
-
-    test "propagates convert_to_llm errors without wrapping" do
-      context = simple_context()
-
-      config =
-        simple_config(convert_to_llm: fn _messages -> {:error, :bad_convert} end)
-
-      stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
-
-      {:error, reason, _partial} = EventStream.result(stream)
-      assert reason == :bad_convert
-    end
-
-    test "propagates transform_context errors without wrapping" do
-      context = simple_context()
-
-      config =
-        simple_config(transform_context: fn _messages, _signal -> {:error, :bad_transform} end)
-
-      stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
-
-      {:error, reason, _partial} = EventStream.result(stream)
-      assert reason == :bad_transform
-    end
-
-    test "catches exceptions in tool execution" do
-      bad_tool = %AgentTool{
-        name: "bad_tool",
-        description: "A tool that throws",
-        parameters: %{},
-        label: "Bad",
-        execute: fn _id, _params, _signal, _on_update ->
-          raise "Intentional exception"
-        end
+      thinking_only = %{
+        Mocks.assistant_message("")
+        | content: [%ThinkingContent{type: :thinking, thinking: "internal reasoning"}]
       }
 
-      context = simple_context(tools: [bad_tool])
+      for {response, assistant_count} <- [{empty, 1}, {thinking_only, 4}] do
+        config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
+        stream = Loop.agent_loop([user_message("Test")], simple_context(), config, nil, nil)
 
-      tool_call = Mocks.tool_call("bad_tool", %{}, id: "call_bad")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Handled")
+        assert {:error, {:assistant_error, "empty_assistant_response"}, %{new_messages: messages}} =
+                 EventStream.result(stream)
 
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
+        assistants = Enum.filter(messages, &match?(%AssistantMessage{}, &1))
+        assert length(assistants) == assistant_count
 
-      events = Loop.stream([user_message("Use bad tool")], context, config) |> Enum.to_list()
+        assert %{stop_reason: :error, error_message: "empty_assistant_response"} =
+                 List.last(assistants)
 
-      tool_end =
-        Enum.find(events, fn e ->
-          match?({:tool_execution_end, "call_bad", _, _, _}, e)
-        end)
-
-      assert tool_end != nil
-      {:tool_execution_end, _, _, result, is_error} = tool_end
-      assert is_error == true
-      [%TextContent{text: error_text}] = result.content
-      assert error_text =~ "Intentional exception"
-    end
-  end
-
-  # ============================================================================
-  # API Key Resolution Tests
-  # ============================================================================
-
-  describe "get_api_key" do
-    test "accepts atom providers by retrying with string" do
-      context = simple_context()
-      response = Mocks.assistant_message("Ok")
-      parent = self()
-
-      stream_fn = fn model, llm_context, options ->
-        send(parent, {:api_key, options.api_key})
-        Mocks.mock_stream_fn_single(response).(model, llm_context, options)
+        assert [%TextContent{text: "The provider returned an empty assistant response."}] =
+                 List.last(assistants).content
       end
-
-      get_api_key = fn
-        "mock_provider" -> "from_fn"
-        _ -> nil
-      end
-
-      config =
-        simple_config(
-          get_api_key: get_api_key,
-          stream_options: %StreamOptions{api_key: "fallback"},
-          stream_fn: stream_fn
-        )
-
-      _events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
-
-      assert_receive {:api_key, "from_fn"}
     end
-  end
 
-  # ============================================================================
-  # Cancellation Handling Tests
-  # ============================================================================
-
-  describe "canceled streams" do
-    test "emits aborted message when stream is canceled" do
-      context = simple_context()
+    test "a stream that completes without a done event finalizes the partial message" do
+      partial_response = Mocks.assistant_message("Partial")
 
       stream_fn = fn _model, _context, _options ->
         {:ok, stream} = LemonAi.EventStream.start_link()
 
         Task.start(fn ->
-          partial = Mocks.assistant_message("Partial response")
+          LemonAi.EventStream.push(stream, {:start, partial_response})
+          LemonAi.EventStream.complete(stream, partial_response)
+        end)
+
+        {:ok, stream}
+      end
+
+      config = simple_config(stream_fn: stream_fn)
+      stream = Loop.agent_loop([user_message("Test")], simple_context(), config, nil, nil)
+
+      assert {:ok, [_prompt, %AssistantMessage{content: [%TextContent{text: "Partial"}]}]} =
+               EventStream.result(stream)
+    end
+
+    test "error stop reasons end the loop with an assistant error" do
+      error_response = Mocks.assistant_message("Error occurred", stop_reason: :error)
+
+      mid_stream_error = fn _model, _context, _options ->
+        partial = Mocks.assistant_message("Partial", stop_reason: :error)
+        {:ok, stream} = LemonAi.EventStream.start_link()
+
+        Task.start(fn ->
           LemonAi.EventStream.push(stream, {:start, partial})
+          LemonAi.EventStream.push(stream, {:text_start, 0})
+          LemonAi.EventStream.push(stream, {:error, :rate_limited, partial})
+          LemonAi.EventStream.complete(stream, partial)
+        end)
+
+        {:ok, stream}
+      end
+
+      for stream_fn <- [Mocks.mock_stream_fn_single(error_response), mid_stream_error] do
+        events = run("Test", simple_context(), simple_config(stream_fn: stream_fn))
+
+        assert {:turn_end, %{stop_reason: :error}, _} =
+                 Enum.find(events, &match?({:turn_end, _, _}, &1))
+
+        assert {:error, :assistant_error, %{new_messages: _}} = List.last(events)
+      end
+    end
+
+    test "an aborted stop reason ends the loop without agent_end" do
+      aborted_response = Mocks.assistant_message("Aborted", stop_reason: :aborted)
+      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(aborted_response))
+
+      events = run("Test", simple_context(), config)
+
+      assert {:canceled, :assistant_aborted} = List.last(events)
+      refute Enum.any?(events, &match?({:agent_end, _}, &1))
+    end
+
+    test "a provider-canceled stream becomes an aborted assistant message" do
+      stream_fn = fn _model, _context, _options ->
+        {:ok, stream} = LemonAi.EventStream.start_link()
+
+        Task.start(fn ->
+          LemonAi.EventStream.push(stream, {:start, Mocks.assistant_message("Partial response")})
           LemonAi.EventStream.cancel(stream, :aborted)
         end)
 
         {:ok, stream}
       end
 
-      config =
-        simple_config(stream_fn: stream_fn)
+      stream =
+        Loop.agent_loop(
+          [user_message("Test")],
+          simple_context(),
+          simple_config(stream_fn: stream_fn),
+          nil,
+          nil
+        )
 
-      stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
       events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
-      result = EventStream.result(stream)
-      events = Task.await(events_task, 5000)
-      assert {:error, {:canceled, :assistant_aborted}} = result
+      assert {:error, {:canceled, :assistant_aborted}} = EventStream.result(stream)
 
-      final_assistant =
-        Enum.find_value(events, fn
-          {:turn_end, message, _tool_results} ->
-            if Map.get(message, :role) == :assistant, do: message
+      assert %{stop_reason: :aborted, error_message: error_message} =
+               Enum.find_value(Task.await(events_task, 5000), fn
+                 {:message_end, %{role: :assistant} = message} -> message
+                 _ -> nil
+               end)
 
-          _ ->
-            nil
-        end) ||
-          Enum.find_value(events, fn
-            {:message_end, message} -> if Map.get(message, :role) == :assistant, do: message
-            _ -> nil
-          end)
-
-      if final_assistant do
-        assert final_assistant.stop_reason == :aborted
-        assert String.contains?(final_assistant.error_message || "", "canceled")
-      end
+      assert error_message =~ "canceled"
     end
   end
 
   # ============================================================================
-  # Abort Signal Tests
+  # API Key Resolution
   # ============================================================================
 
-  describe "abort signal" do
-    test "short-circuits streaming when signal is already aborted" do
-      context = simple_context()
+  describe "get_api_key" do
+    test "resolves the provider key as an atom, then a string, then the stream option" do
       parent = self()
+      response = Mocks.assistant_message("Ok")
 
       stream_fn = fn model, llm_context, options ->
-        send(parent, :stream_called)
-
-        Mocks.mock_stream_fn_single(Mocks.assistant_message("Should not run")).(
-          model,
-          llm_context,
-          options
-        )
+        send(parent, {:api_key, options.api_key})
+        Mocks.mock_stream_fn_single(response).(model, llm_context, options)
       end
 
-      signal = AbortSignal.new()
-      :ok = AbortSignal.abort(signal)
+      cases = [
+        {fn
+           :mock_provider -> "atom_key"
+           _ -> nil
+         end, "atom_key"},
+        {fn
+           "mock_provider" -> "string_key"
+           _ -> nil
+         end, "string_key"},
+        {fn _provider -> nil end, "fallback"}
+      ]
 
-      config = simple_config(stream_fn: stream_fn)
+      for {get_api_key, expected} <- cases do
+        config =
+          simple_config(
+            get_api_key: get_api_key,
+            stream_options: %StreamOptions{api_key: "fallback"},
+            stream_fn: stream_fn
+          )
 
-      stream = Loop.agent_loop([user_message("Test")], context, config, signal, nil)
-      events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
-      result = EventStream.result(stream)
-      events = Task.await(events_task, 5000)
-
-      assert result in [
-               {:error, {:canceled, :assistant_aborted}},
-               {:error, :stream_not_found},
-               {:error, :stream_closed}
-             ]
-
-      final_assistant =
-        Enum.find_value(events, fn
-          {:turn_end, message, _tool_results} ->
-            if Map.get(message, :role) == :assistant, do: message
-
-          _ ->
-            nil
-        end) ||
-          Enum.find_value(events, fn
-            {:message_end, message} -> if Map.get(message, :role) == :assistant, do: message
-            _ -> nil
-          end)
-
-      if final_assistant do
-        assert final_assistant.stop_reason == :aborted
+        run("Test", simple_context(), config)
+        assert_receive {:api_key, ^expected}
       end
-
-      refute_receive :stream_called
-    end
-  end
-
-  # ============================================================================
-  # Result Collection Tests
-  # ============================================================================
-
-  describe "result collection" do
-    test "result includes all new messages" do
-      context = simple_context()
-      response = Mocks.assistant_message("Hello!")
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      prompt = user_message("Hi")
-      stream = Loop.agent_loop([prompt], context, config, nil, nil)
-
-      {:ok, messages} = EventStream.result(stream)
-
-      # Should have at least the prompt
-      assert messages != []
-    end
-
-    test "result includes tool results" do
-      echo_tool = Mocks.echo_tool()
-      context = simple_context(tools: [echo_tool])
-
-      tool_call = Mocks.tool_call("echo", %{"text" => "test"}, id: "call_tr")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Done")
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
-
-      stream = Loop.agent_loop([user_message("Echo")], context, config, nil, nil)
-
-      {:ok, messages} = EventStream.result(stream)
-
-      # Should include tool result message
-      tool_results = Enum.filter(messages, fn m -> Map.get(m, :role) == :tool_result end)
-      assert tool_results != []
-      assert Enum.all?(tool_results, &(&1.trust == :untrusted))
-    end
-
-    test "propagates untrusted trust from tool results" do
-      untrusted_tool = %AgentTool{
-        name: "untrusted_echo",
-        description: "Returns untrusted output",
-        parameters: %{"type" => "object"},
-        label: "Untrusted Echo",
-        execute: fn _id, %{"text" => text}, _signal, _on_update ->
-          %AgentToolResult{
-            content: [%TextContent{type: :text, text: text}],
-            trust: :untrusted
-          }
-        end
-      }
-
-      context = simple_context(tools: [untrusted_tool])
-
-      tool_call = Mocks.tool_call("untrusted_echo", %{"text" => "from web"}, id: "call_untrusted")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Done")
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
-
-      stream = Loop.agent_loop([user_message("Run untrusted tool")], context, config, nil, nil)
-      {:ok, messages} = EventStream.result(stream)
-
-      tool_results =
-        Enum.filter(messages, fn m ->
-          Map.get(m, :role) == :tool_result and Map.get(m, :tool_call_id) == "call_untrusted"
-        end)
-
-      assert [%ToolResultMessage{trust: :untrusted}] = tool_results
     end
   end
 end

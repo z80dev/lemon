@@ -176,8 +176,7 @@ defmodule CodingAgent.ToolDisclosureTest do
         fat("read", :builtin, 3_000),
         tuple("bash", :builtin),
         tuple("mcp_srv_one", {:mcp, :srv}),
-        tuple("ext_tool", {:extension, SomeExtension}),
-        tuple("wasm_tool", {:wasm, %{name: "wasm_tool", path: "/tmp/w.wasm"}})
+        tuple("ext_tool", {:extension, SomeExtension})
       ]
 
       extras = [tool("extra_one")]
@@ -192,10 +191,10 @@ defmodule CodingAgent.ToolDisclosureTest do
       assert names(tools) == ["read", "bash", "extra_one", "tool_search", "tool_invoke"]
 
       assert report.active == true
-      assert report.total_tools == 6
+      assert report.total_tools == 5
       assert report.disclosed_count == 3
-      assert report.hidden_count == 3
-      assert report.hidden_names == ["ext_tool", "mcp_srv_one", "wasm_tool"]
+      assert report.hidden_count == 2
+      assert report.hidden_names == ["ext_tool", "mcp_srv_one"]
     end
 
     test "the same input produces a byte-identical tool array", ctx do

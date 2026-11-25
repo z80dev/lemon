@@ -229,21 +229,29 @@ defmodule CodingAgent.Tools.WebGuardTest do
   end
 
   test "http requests carry no TLS options and use the default timeout" do
+    started = System.monotonic_time(:millisecond)
+
     assert {:ok, %{status: 200}, _} =
              WebGuard.guarded_get("http://plain.example.com/docs",
                send: observing(self(), ok()),
                resolve_host: fn "plain.example.com" -> {:ok, [@public]} end
              )
 
+    finished = System.monotonic_time(:millisecond)
     assert_receive {:request, request}
     assert request.scheme == "http"
     assert request.address == @public
     assert request.path == "/docs"
-    assert request.timeout_ms == 30_000
+    # The hop deadline is the default 30 s from when the request began;
+    # `timeout_ms` is what remained of it when the transport was called.
+    assert request.deadline in (started + 30_000)..(finished + 30_000)
+    assert request.timeout_ms in (30_000 - (finished - started))..30_000
     assert request.ssl == []
   end
 
   test "passes timeout_ms and max_body_bytes through to the transport" do
+    started = System.monotonic_time(:millisecond)
+
     assert {:ok, _, _} =
              WebGuard.guarded_get("https://example.com/",
                send: observing(self(), ok()),
@@ -252,7 +260,9 @@ defmodule CodingAgent.Tools.WebGuardTest do
                max_body_bytes: 99
              )
 
-    assert_receive {:request, %{timeout_ms: 1_234, max_body_bytes: 99}}
+    finished = System.monotonic_time(:millisecond)
+    assert_receive {:request, %{max_body_bytes: 99} = request}
+    assert request.deadline in (started + 1_234)..(finished + 1_234)
   end
 
   test "respects cacertfile override when provided" do

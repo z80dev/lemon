@@ -4,7 +4,7 @@ defmodule CodingAgent.Extensions.ToolHooks do
   `:on_tool_result` hooks around session tool execution.
 
   `CodingAgent.ExtensionLifecycle` applies this wrapper to every session tool
-  (built-in, extension, MCP, WASM, extra and custom tools, including those
+  (built-in, extension, MCP, extra and custom tools, including those
   hidden behind the `tool_invoke` disclosure bridge) after approval wrapping.
   The resulting order, outermost first, is: secret placeholder restore →
   extension tool hooks → approval → tool. Tools are returned unchanged when no

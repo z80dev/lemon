@@ -126,6 +126,94 @@ defmodule LemonRouter.SubmissionBuilderTest do
     assert submission.execution_request.meta[:thinking_level] == :high
   end
 
+  describe "channel chat defaults" do
+    alias LemonCore.{PolicyStore, SessionKey}
+
+    setup do
+      chat_id = "-100#{System.unique_integer([:positive])}"
+
+      key =
+        SessionKey.channel_peer(%{
+          agent_id: "test",
+          channel_id: "telegram",
+          account_id: "default",
+          peer_kind: :group,
+          peer_id: chat_id,
+          thread_id: "77"
+        })
+
+      chat = {"telegram", "default", chat_id, nil}
+      topic = {"telegram", "default", chat_id, "77"}
+
+      on_exit(fn ->
+        PolicyStore.delete_session(key)
+        PolicyStore.delete_chat(chat)
+        PolicyStore.delete_chat(topic)
+      end)
+
+      %{key: key, chat: chat, topic: topic}
+    end
+
+    test "a thread session inherits its chat's model and its topic's thinking level", ctx do
+      {:ok, _} =
+        PolicyStore.update_chat(ctx.chat, fn _ ->
+          %{model: "chat-model", thinking_level: "low"}
+        end)
+
+      {:ok, _} = PolicyStore.update_chat(ctx.topic, fn _ -> %{thinking_level: "high"} end)
+
+      assert {:ok, submission} =
+               SubmissionBuilder.build(
+                 request(ctx.key, %{agent_id: "test"}),
+                 orchestrator_state()
+               )
+
+      assert submission.execution_request.meta[:model] == "chat-model"
+      assert submission.execution_request.meta[:model_explicit] == true
+      assert submission.execution_request.meta[:thinking_level] == :high
+    end
+
+    test "the session row outranks the chat defaults; a request outranks both", ctx do
+      {:ok, _} =
+        PolicyStore.update_chat(ctx.chat, fn _ ->
+          %{model: "chat-model", thinking_level: "low"}
+        end)
+
+      :ok = PolicyStore.put_session(ctx.key, %{model: "session-model", thinking_level: "medium"})
+
+      assert {:ok, submission} =
+               SubmissionBuilder.build(
+                 request(ctx.key, %{agent_id: "test"}),
+                 orchestrator_state()
+               )
+
+      assert submission.execution_request.meta[:model] == "session-model"
+      assert submission.execution_request.meta[:thinking_level] == :medium
+
+      assert {:ok, submission} =
+               SubmissionBuilder.build(
+                 request(ctx.key, %{
+                   agent_id: "test",
+                   model: "request-model",
+                   meta: %{thinking_level: "xhigh"}
+                 }),
+                 orchestrator_state()
+               )
+
+      assert submission.execution_request.meta[:model] == "request-model"
+      assert submission.execution_request.meta[:thinking_level] == :xhigh
+    end
+
+    test "a non-channel session ignores chat rows" do
+      key = unique_session_key("no-chat")
+
+      assert {:ok, submission} =
+               SubmissionBuilder.build(request(key, %{agent_id: "oracle"}), orchestrator_state())
+
+      assert submission.execution_request.meta[:model] == "profile-model"
+    end
+  end
+
   test "top-level request model overrides profile model" do
     session_key = unique_session_key("model")
 

@@ -117,4 +117,23 @@ defmodule CodingAgent.Tools.Task.ResultTest do
     assert text == "Final answer"
     assert details.status == "completed"
   end
+
+  test "a join reports the stored record, not a disagreeing run graph row" do
+    run_id = CodingAgent.RunGraph.new_run(%{type: :task, description: "Stored truth"})
+    task_id = TaskStore.new_task(%{description: "Stored truth", run_id: run_id})
+
+    TaskStore.finish(task_id, %AgentToolResult{
+      content: [%TextContent{text: "stored answer"}],
+      details: %{status: "completed"}
+    })
+
+    # A stale or racing writer marked the run failed; it does not decide the task.
+    CodingAgent.RunGraph.fail(run_id, "run row disagrees")
+
+    assert %AgentToolResult{details: %{tasks: [task]}} =
+             Result.do_join(%{"task_ids" => [task_id]})
+
+    assert %{status: "completed", output: "stored answer"} = task
+    refute task[:error]
+  end
 end

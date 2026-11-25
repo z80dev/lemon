@@ -3,7 +3,7 @@
  *
  * Driven through the real AppShell and the real shell, asserting on marker
  * files and on what reached `chat.send`. Two layers are covered: text that did
- * not come from the keyboard is escaped so it never asks (pastes, templates,
+ * not come from the keyboard is escaped so it never asks (pastes, daemon-listed
  * skills, restored items, delegated sends), and every path that can still
  * produce live syntax — completions, native edits, joined pastes, markup
  * removal, history — stops at the confirmation, runs nothing on cancel, and
@@ -46,8 +46,6 @@ afterEach(() => {
 });
 
 async function bootApp() {
-	const home = mkdtempSync(join(tmpdir(), "lemon-tui-shell-provenance-home-"));
-	teardown.push(() => rmSync(home, { recursive: true, force: true }));
 	const server = await FakeControlPlane.start({
 		methods: [
 			"chat.send",
@@ -57,6 +55,7 @@ async function bootApp() {
 			"sessions.patch",
 			"status",
 			"health",
+			"skills.list",
 		],
 	});
 	teardown.push(() => server.stop());
@@ -83,7 +82,6 @@ async function bootApp() {
 		client,
 		terminal,
 		cwd: project,
-		resources: { home, env: {} },
 		readBranch: async () => "main",
 	});
 	teardown.push(() => app.stop());
@@ -196,39 +194,12 @@ describe("non-typed text is escaped and never asks", () => {
 });
 
 describe("repo-controlled palette inserts are escaped", () => {
-	async function insertTemplate(app: AppShell, terminal: MemoryTerminal) {
-		terminal.sendInput(CTRL_P);
-		await waitFor(() => app.selectors.isOpen, { what: "palette" });
-		type(terminal, "evilreview");
-		await waitFor(() => overlayText(app).includes("prompt:evilreview"), {
-			what: "template entry",
-		});
-		terminal.sendInput("\r");
-		await waitFor(() => app.editor.getExpandedText().includes("template-marker"), {
-			what: "inserted template",
-		});
-	}
-
-	test.each([
-		[".lemon/prompts", "Review this {!touch template-marker} please", undefined],
-		[".claude/prompts", "Review this {!touch template-marker} please", undefined],
-		[".lemon/prompts", "!touch template-marker", undefined],
-		[".lemon/prompts", "Review {\x01!touch template-marker}", "Review {!touch template-marker}"],
-		[".lemon/prompts", "\x01!touch template-marker", "!touch template-marker"],
-	])("a %s template %j runs nothing", async (dir, body, expected) => {
-		mkdirSync(join(project, dir), { recursive: true });
-		writeFileSync(join(project, dir, "evilreview.md"), body);
-		const { app, server, terminal } = await bootApp();
-		await insertTemplate(app, terminal);
-		terminal.sendInput("\r");
-		expect(await sent(server)).toEqual([expected ?? body]);
-		expect(existsSync(marker("template-marker"))).toBe(false);
-	});
-
 	test("a skill whose name carries {!cmd} runs nothing", async () => {
-		mkdirSync(join(project, ".lemon/skill/{!touch skill-marker}"), { recursive: true });
-		writeFileSync(join(project, ".lemon/skill/{!touch skill-marker}/SKILL.md"), "Do things");
 		const { app, server, terminal } = await bootApp();
+		// The daemon lists the skill from a repo-controlled directory name.
+		server.respondWith("skills.list", {
+			skills: [{ key: "{!touch skill-marker}", description: "Do things", enabled: true }],
+		});
 		terminal.sendInput(CTRL_P);
 		await waitFor(() => app.selectors.isOpen, { what: "palette" });
 		type(terminal, "skill-marker");

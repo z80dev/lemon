@@ -797,8 +797,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
   defp settings(providers) do
     %SettingsManager{
       default_thinking_level: :medium,
-      providers: providers,
-      tools: %{wasm: %{enabled: false}}
+      providers: providers
     }
   end
 

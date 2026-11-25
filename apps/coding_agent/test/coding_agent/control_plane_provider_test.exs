@@ -11,8 +11,7 @@ defmodule CodingAgent.ControlPlaneProviderTest do
   alias CodingAgent.Session.MessageSerialization
   alias CodingAgent.Session.Presentation
   alias CodingAgent.SessionManager.SessionEntry
-  alias CodingAgent.Tools.TodoStore
-  alias CodingAgent.Tools.TodoWrite
+  alias CodingAgent.Tools.Todo
   alias LemonAgent.Test.Mocks
 
   defmodule DirectCompactSession do
@@ -582,8 +581,7 @@ defmodule CodingAgent.ControlPlaneProviderTest do
                ControlPlaneProvider.session_fork(context.source, context.cwd, context.destination)
     end
 
-    test "todo projections follow live navigation, cache loss, durable resume and fork",
-         context do
+    test "todo projections follow live navigation, durable resume and fork", context do
       opts = [
         cwd: context.cwd,
         workspace_dir: Path.join(context.cwd, "workspace"),
@@ -597,9 +595,10 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       empty_leaf = CodingAgent.Session.get_state(pid).session_manager.leaf_id
 
       first =
-        TodoWrite.execute(
+        Todo.execute(
           "first",
           %{
+            "action" => "write",
             "todos" => [
               %{"id" => "done", "content" => "Done", "status" => "completed"},
               %{"id" => "next", "content" => "Next", "status" => "pending"}
@@ -612,9 +611,6 @@ defmodule CodingAgent.ControlPlaneProviderTest do
 
       assert %LemonAgent.Types.AgentToolResult{} = first
       first_leaf = CodingAgent.Session.get_state(pid).session_manager.leaf_id
-      native_id = context.session.header.id
-      TodoStore.delete(native_id)
-      TodoStore.put(context.source, [%{"status" => "completed"}])
 
       assert {:ok, first_todos, _} =
                ControlPlaneProvider.session_todos(context.source, context.cwd)
@@ -634,7 +630,6 @@ defmodule CodingAgent.ControlPlaneProviderTest do
                CodingAgent.Session.navigate_tree(pid, first_leaf, summarize_abandoned: false)
 
       stop_supervised!(CodingAgent.Session)
-      TodoStore.delete(native_id)
 
       assert {:ok, ^first_todos, {0, ^first_leaf}} =
                ControlPlaneProvider.session_todos(context.source, context.cwd)
@@ -652,15 +647,12 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       assert {:ok, ^first_todos, _} = CodingAgent.Session.todos(resumed)
 
       assert %LemonAgent.Types.AgentToolResult{} =
-               TodoWrite.execute("clear", %{"todos" => []}, nil, nil, resumed)
+               Todo.execute("clear", %{"action" => "write", "todos" => []}, nil, nil, resumed)
 
       assert {:ok, [], _} = ControlPlaneProvider.session_todos(context.source, context.cwd)
 
       assert {:ok, ^first_todos, _} =
                ControlPlaneProvider.session_todos(context.destination, context.cwd)
-
-      TodoStore.delete(context.source)
-      TodoStore.delete(native_id)
     end
 
     test "manual compaction works after the native session process has stopped", context do

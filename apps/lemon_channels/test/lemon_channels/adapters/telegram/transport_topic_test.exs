@@ -5,7 +5,6 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.BindingResolver
   alias LemonChannels.Telegram.TriggerMode
-  alias LemonChannels.Telegram.StateStore
   alias LemonCore.ChatScope
   alias LemonCore.ProjectBindingStore
 
@@ -296,8 +295,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
     assert_receive {:inbound, inbound}, 1_200
     assert inbound.message.text == "hello"
-    assert inbound.meta[:thinking_level] == "high"
-    assert inbound.meta[:thinking_scope] == :topic
+    # The run carries no channel-chosen thinking level; the router resolves the
+    # topic default from the session key's PolicyStore chat route.
+    refute Map.has_key?(inbound.meta, :thinking_level)
+
+    assert {:ok, %{thinking_level: "high"}} =
+             LemonCore.PolicyStore.resolve_chat(inbound.meta[:session_key])
+
     assert inbound.meta[:topic_id] == topic_id
 
     stored = ModelPolicyAdapter.default_thinking_preference("default", chat_id, topic_id)
@@ -309,8 +313,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     topic_id = 104
     msg_id = System.unique_integer([:positive])
 
-    _ =
-      StateStore.put_default_thinking({"default", chat_id, topic_id}, %{thinking_level: "medium"})
+    :ok =
+      ModelPolicyAdapter.put_default_thinking_preference("default", chat_id, topic_id, "medium")
 
     MockAPI.set_updates([
       topic_message_update(chat_id, topic_id, "/thinking clear", msg_id + 1)
@@ -324,7 +328,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
     assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}
     assert clear_msg == "Cleared thinking level override for this topic."
-    assert StateStore.get_default_thinking({"default", chat_id, topic_id}) == nil
+    assert ModelPolicyAdapter.default_thinking_preference("default", chat_id, topic_id) == nil
   end
 
   test "/trigger mentions in a group requires mentions for follow-up messages" do

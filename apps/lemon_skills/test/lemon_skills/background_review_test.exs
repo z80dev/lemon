@@ -2,7 +2,8 @@ defmodule LemonSkills.BackgroundReviewTest do
   use ExUnit.Case, async: false
 
   alias LemonAi.Types.{AssistantMessage, Model, TextContent}
-  alias LemonSkills.{BackgroundReview, Config, LearningNudge}
+  alias LemonSkills.{BackgroundReview, LearningNudge}
+  alias LemonSkills.TestSupport.LearningNudgeConfig
   alias LemonSkills.Synthesis.DraftStore
   alias LemonSkills.Tools.SkillManage
 
@@ -12,9 +13,11 @@ defmodule LemonSkills.BackgroundReviewTest do
     target = self()
     supervisor = start_supervised!(LemonCore.TaskSupervisor.child_spec(max_children: 1))
 
-    # Review settings are operator skills.json settings; isolate the global file.
+    # Review settings are operator config.toml settings; isolate the global
+    # config and the agent directory (drafts, usage).
     previous_agent_dir = System.get_env("LEMON_AGENT_DIR")
     System.put_env("LEMON_AGENT_DIR", Path.join(cwd, "agent"))
+    LearningNudgeConfig.isolate!(cwd)
 
     on_exit(fn ->
       if previous_agent_dir,
@@ -534,8 +537,8 @@ defmodule LemonSkills.BackgroundReviewTest do
     end
   end
 
-  defp configure(_ctx, settings),
-    do: Config.save_config(%{"learning_nudge" => settings})
+  defp configure(ctx, settings),
+    do: LearningNudgeConfig.put_operator!(ctx.request.cwd, settings)
 
   defp turn(ctx), do: LearningNudge.contribute(ctx.request, server: ctx.server)
 

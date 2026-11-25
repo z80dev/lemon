@@ -69,20 +69,28 @@ defmodule LemonMedia.MediaJobSupervisor do
 
     with {:ok, queued_job} <- MediaJobs.record(Map.put(attrs, :status, :queued), record_opts) do
       worker_attrs = Map.put(attrs, :job_id, queued_job.job_id)
-      caller = self()
 
-      case LemonCore.TaskSupervisor.async_nolink(__MODULE__, fn ->
-             watch_caller(caller, worker_attrs, record_opts)
-             MediaJobWorker.run(attrs: worker_attrs, opts: opts)
-           end) do
+      case start_worker(self(), worker_attrs, opts, deadline) do
         {:ok, task} ->
           await(task, deadline, aborted?, worker_attrs, record_opts)
 
         {:error, reason}
         when reason in [:task_capacity_reached, :task_supervisor_unavailable] ->
-          record_terminal(worker_attrs, record_opts, :failed, reason)
+          _ = record_terminal(worker_attrs, record_opts, :failed, reason)
           {:error, reason}
       end
+    end
+  end
+
+  defp start_worker(caller, attrs, opts, deadline) do
+    case Process.whereis(__MODULE__) do
+      nil ->
+        {:error, :task_supervisor_unavailable}
+
+      supervisor ->
+        LemonCore.TaskSupervisor.async_nolink(supervisor, fn ->
+          MediaJobWorker.run(caller, supervisor, attrs, opts, deadline)
+        end)
     end
   end
 
@@ -91,58 +99,31 @@ defmodule LemonMedia.MediaJobSupervisor do
 
     cond do
       remaining <= 0 ->
-        cancel(task, :timeout, attrs, record_opts)
+        collect(task, :infinity, attrs, record_opts)
 
       aborted?.() ->
-        cancel(task, :aborted, attrs, record_opts)
+        send(task.pid, {:abort, self()})
+        collect(task, :infinity, attrs, record_opts)
 
       true ->
-        case Task.yield(task, min(remaining, @poll_ms)) do
+        case collect(task, min(remaining, @poll_ms), attrs, record_opts) do
           nil -> await(task, deadline, aborted?, attrs, record_opts)
-          {:ok, result} -> result
-          {:exit, _reason} -> exited(attrs, record_opts)
+          result -> result
         end
     end
   end
 
-  defp cancel(task, reason, attrs, record_opts) do
-    case Task.shutdown(task, :brutal_kill) do
-      {:ok, result} ->
-        result
-
-      {:exit, _reason} ->
-        exited(attrs, record_opts)
-
-      nil ->
-        {:ok, job} = record_terminal(attrs, record_opts, :cancelled, reason)
-        {:error, {:cancelled, reason, job}}
+  defp collect(task, timeout, attrs, record_opts) do
+    case Task.yield(task, timeout) do
+      {:ok, result} -> result
+      {:exit, _reason} -> exited(attrs, record_opts)
+      nil -> nil
     end
   end
 
   defp exited(attrs, record_opts) do
     {:ok, job} = record_terminal(attrs, record_opts, :failed, :job_exited)
     {:error, {:failed, job}}
-  end
-
-  # Kills the job and records it cancelled when the waiting caller dies, so an
-  # aborted tool call cannot leave a provider request running.
-  defp watch_caller(caller, attrs, record_opts) do
-    job = self()
-
-    spawn(fn ->
-      caller_ref = Process.monitor(caller)
-      job_ref = Process.monitor(job)
-
-      receive do
-        {:DOWN, ^caller_ref, :process, _pid, _reason} ->
-          Process.exit(job, :kill)
-          receive do: ({:DOWN, ^job_ref, :process, _pid, _reason} -> :ok)
-          record_terminal(attrs, record_opts, :cancelled, :caller_exited)
-
-        {:DOWN, ^job_ref, :process, _pid, _reason} ->
-          :ok
-      end
-    end)
   end
 
   defp record_terminal(attrs, record_opts, status, reason) do

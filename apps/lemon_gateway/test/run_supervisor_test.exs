@@ -1,7 +1,7 @@
 defmodule LemonGateway.RunSupervisorTest do
   use ExUnit.Case, async: false
 
-  import LemonGateway.AsyncHelpers, only: [assert_eventually: 1]
+  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1]
 
   alias LemonGateway.{ExecutionRequest, Run, RunSupervisor, Slots}
 

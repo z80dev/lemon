@@ -1,6 +1,6 @@
 defmodule LemonRouter.IngressProvenancePolicyTest do
   @moduledoc """
-  Channel policy follows authenticated provenance (`meta.channel_context`), not
+  The group approval floor follows authenticated provenance (`meta.channel_context`), not
   the submission origin. Webhook and A2A ingress submit as `:webhook` and
   `:control_plane`; their producers derive `webhook`/`a2a` provenance from the
   authenticated integration or peer (`LemonGateway.WebhookChannelProvenanceTest`,
@@ -14,20 +14,9 @@ defmodule LemonRouter.IngressProvenancePolicyTest do
   alias LemonCore.{RunRequest, SessionKey, ToolPolicy}
   alias LemonRouter.SubmissionBuilder
 
-  setup do
-    on_exit(fn ->
-      for channel <- ["webhook", "a2a"], do: LemonCore.Store.delete(:channel_policies, channel)
-    end)
-
-    :ok
-  end
-
   @floor_tools ~w(bash write edit patch hashline_edit)
 
-  test "untrusted webhook and A2A provenance get the approval floor with no channel rows" do
-    assert LemonCore.PolicyStore.fetch_channel("webhook") == {:ok, nil}
-    assert LemonCore.PolicyStore.fetch_channel("a2a") == {:ok, nil}
-
+  test "untrusted webhook and A2A provenance get the approval floor" do
     for request <- [
           webhook_request(webhook_context("deploys")),
           a2a_request(a2a_context())
@@ -52,30 +41,18 @@ defmodule LemonRouter.IngressProvenancePolicyTest do
     end
   end
 
-  test "a webhook run with integration provenance gets the webhook channel policy" do
-    :ok = LemonCore.PolicyStore.put_channel("webhook", %{blocked_tools: ["bash"]})
-
-    assert {:ok, policy} = build_policy(webhook_request(webhook_context("deploys")))
-    refute ToolPolicy.allowed?(policy, "bash")
-    assert ToolPolicy.allowed?(policy, "read")
-  end
-
   test "a webhook run without provenance is refused, not run unrestricted" do
     assert {:error, :missing_channel_provenance} = build_policy(webhook_request(nil))
   end
 
-  test "webhook provenance cannot name another channel to escape the webhook policy" do
-    :ok = LemonCore.PolicyStore.put_channel("webhook", %{blocked_tools: ["bash"]})
+  test "webhook provenance cannot name another channel" do
     spoofed = %{webhook_context("deploys") | channel_id: "telegram"}
 
     assert {:error, :missing_channel_provenance} = build_policy(webhook_request(spoofed))
   end
 
-  test "an A2A run keeps the a2a channel policy and the peer allow-list" do
-    :ok = LemonCore.PolicyStore.put_channel("a2a", %{blocked_tools: ["bash"]})
-
+  test "an A2A run keeps the peer allow-list" do
     assert {:ok, policy} = build_policy(a2a_request(a2a_context()))
-    refute ToolPolicy.allowed?(policy, "bash")
     assert ToolPolicy.allowed?(policy, "read")
     refute ToolPolicy.allowed?(policy, "write")
   end

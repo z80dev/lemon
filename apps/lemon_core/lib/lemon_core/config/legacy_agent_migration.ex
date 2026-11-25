@@ -4,9 +4,9 @@ defmodule LemonCore.Config.LegacyAgentMigration do
 
   Earlier terminal clients persisted their default model and theme by
   rewriting `config.toml` with an `[agent]` table. Lemon reads such a file as
-  a legacy alias, so it never stops the runtime from booting, and
-  `LemonCore.Update.ConfigMigrator` rewrites the file when setup,
-  `lemon config migrate` or an update runs.
+  a legacy alias, so it never stops the runtime from booting, and the Lemon
+  application rewrites the file when setup, `lemon config migrate` or an
+  update runs.
 
   The mapping, shared by the in-memory alias and the file rewrite:
 

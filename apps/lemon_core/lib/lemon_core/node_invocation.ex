@@ -359,7 +359,7 @@ defmodule LemonCore.NodeInvocation do
 
   @impl true
   def terminate(_reason, state) do
-    Process.cancel_timer(state.timer_ref)
+    _ = Process.cancel_timer(state.timer_ref)
     Process.demonitor(state.recipient_ref, [:flush])
     Process.demonitor(state.node_ref, [:flush])
     Enum.each(state.controls, fn {_, control} -> cleanup_control(control) end)
@@ -407,7 +407,7 @@ defmodule LemonCore.NodeInvocation do
     cancel_remote(state, reason)
     if result, do: send(state.recipient, {:lemon_node_result, state.id, result})
     finish_controls(state, if(result, do: :terminal, else: reason))
-    Process.cancel_timer(state.timer_ref)
+    _ = Process.cancel_timer(state.timer_ref)
     state = %{state | controls: %{}}
 
     if is_nil(state.activity) do
@@ -463,7 +463,7 @@ defmodule LemonCore.NodeInvocation do
 
   defp cleanup_control(control) do
     Registry.unregister(NodeRegistry.Invocations, {:control, control.id})
-    Process.cancel_timer(control.timer_ref)
+    _ = Process.cancel_timer(control.timer_ref)
     Process.demonitor(control.recipient_ref, [:flush])
   end
 

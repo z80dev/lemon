@@ -1,7 +1,7 @@
 defmodule LemonMemory.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.3.0"
   @source_url "https://github.com/z80dev/lemon"
 
   # This file ships verbatim in the hex tarball, so it must not read anything
@@ -16,15 +16,18 @@ defmodule LemonMemory.MixProject do
               File.regular?(Path.expand("../../mix.exs", __DIR__)) and
               System.get_env("LEMON_HEX_PUBLISH") not in ["1", "true"]
 
-  # What a published release requires of its sibling Lemon packages.
-  @lemon_requirement "~> 0.2"
+  # What a published release requires of its sibling Lemon packages. The
+  # published packages ship together on one 0.x release line and every 0.x
+  # minor may break, so the requirement is derived from @version and admits
+  # patch releases of the same minor only ("~> 0.3.0" for 0.3.x; never 0.4).
+  @lemon_requirement with {:ok, v} <- Version.parse(@version), do: "~> #{v.major}.#{v.minor}.0"
 
   def project do
     [
       app: :lemon_memory,
       version: @version,
       test_pattern: "*_test.exs",
-      elixir: "~> 1.15",
+      elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       # Floor, not a target: `SessionSearch` now has a direct suite, but
       # `mix lemon.memory` is still untested, so the threshold stays where the

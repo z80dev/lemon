@@ -39,7 +39,7 @@ defmodule LemonCore.Store.Hooks do
 
   require Logger
 
-  @type kind :: :finalize_run_hooks | :cached_tables
+  @type kind :: :finalize_run_hooks | :cached_tables | :run_events
   @type hook :: {module(), atom()} | {module(), atom(), [term()]} | (term() -> any())
 
   @doc """
@@ -103,24 +103,43 @@ defmodule LemonCore.Store.Hooks do
   Runs hooks outside the Store under a shared caller-policy budget.
 
   `:store_hook_budget_ms` in `:lemon_core` defaults to 5,000 milliseconds.
-  Persistence has completed; a timed-out hook is killed, not retried.
-  Retrying finalization delivers again, so hooks must remain idempotent.
+  Persistence has completed; a timed-out hook is killed and its failure is
+  returned to the finalization owner for repair. Hooks must remain idempotent.
   """
   def invoke_bounded([], _payload, _context), do: :ok
 
   def invoke_bounded(hooks, payload, context) do
     budget = Application.get_env(:lemon_core, :store_hook_budget_ms, 5_000)
-    {pid, ref} = spawn_monitor(fn -> invoke(hooks, payload, context) end)
+    result_ref = make_ref()
+    caller = self()
+
+    {pid, ref} =
+      spawn_monitor(fn ->
+        result =
+          Enum.reduce(hooks, :ok, fn hook, acc ->
+            case safe_invoke(hook, payload, context) do
+              :ok -> acc
+              error -> error
+            end
+          end)
+
+        send(caller, {result_ref, result})
+      end)
+
     {:ok, timer} = :timer.kill_after(budget, pid)
 
     try do
       receive do
         {:DOWN, ^ref, :process, ^pid, :killed} ->
           Logger.warning("[LemonCore.Store.Hooks] finalize hook budget exhausted")
-          :ok
+          {:error, :hook_timeout}
+
+        {^result_ref, result} ->
+          Process.demonitor(ref, [:flush])
+          result
 
         {:DOWN, ^ref, :process, ^pid, _reason} ->
-          :ok
+          {:error, :hook_failed}
       end
     after
       :timer.cancel(timer)
@@ -147,8 +166,10 @@ defmodule LemonCore.Store.Hooks do
   end
 
   defp safe_invoke(hook, payload, context) do
-    apply_hook(hook, payload)
-    :ok
+    case apply_hook(hook, payload) do
+      {:error, _} -> {:error, :hook_failed}
+      _ -> :ok
+    end
   rescue
     exception ->
       log_failure(
@@ -156,11 +177,11 @@ defmodule LemonCore.Store.Hooks do
         Exception.format(:error, exception, __STACKTRACE__)
       )
 
-      :ok
+      {:error, :hook_failed}
   catch
     kind, reason ->
       log_failure(hook_context(context, hook), Exception.format(kind, reason, __STACKTRACE__))
-      :ok
+      {:error, :hook_failed}
   end
 
   defp apply_hook(fun, payload) when is_function(fun, 1), do: fun.(payload)

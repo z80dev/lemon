@@ -43,6 +43,10 @@ defmodule LemonAutomation.CronManagerUnavailableTest do
       assert catch_exit(CronManager.runs("cron_nonexistent")) != nil
     end
 
+    test "runs_for/2 exits when CronManager is not running" do
+      assert catch_exit(CronManager.runs_for(["cron_nonexistent"])) != nil
+    end
+
     test "update/2 exits when CronManager is not running" do
       assert catch_exit(CronManager.update("cron_nonexistent", %{enabled: false})) != nil
     end

@@ -37,8 +37,6 @@ defmodule LemonChannels.Application do
       LemonChannels.UserPromptSurface,
       LemonChannels.ApprovalPromptTracker,
       LemonChannels.Pairing,
-      # Volatile WhatsApp session overrides outlive command/transport callers
-      LemonChannels.Adapters.WhatsApp.ModelPolicyAdapter,
       # Optional inbound HTTP listener; binds a port only when configured
       LemonChannels.InboundHttp,
       # AdapterSupervisor plus the starter that (re)starts configured adapters
@@ -52,6 +50,11 @@ defmodule LemonChannels.Application do
     # Channels own their store tables: the store does not know Telegram
     # exists, so we ask it to mirror our hot index into its read cache.
     LemonCore.Store.register_cached_table(KnownTargetStore.table())
+
+    :ok =
+      LemonCore.SessionLifecycle.Participant.register(:channels, LemonChannels.SessionParticipant,
+        operations: [:delete, :reset]
+      )
 
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
@@ -97,7 +100,7 @@ defmodule LemonChannels.Application do
   def start_adapter(adapter_module, opts \\ []) do
     adapter_spec = Supervisor.child_spec(adapter_module.child_spec(opts), [])
 
-    if adapter_module.id() in ["telegram", "xmtp", "whatsapp"] do
+    if adapter_module.id() in ["telegram", "xmtp"] do
       LemonChannels.Registry.record_status(adapter_module.id(), :configured)
     end
 

@@ -87,6 +87,11 @@ defmodule LemonCore.ProviderManagementTest do
     def device_start(_, _), do: raise("OFFLINE_DEVICE_TOKEN_EXCEPTION")
   end
 
+  defmodule MalformedDeviceMock do
+    def device_start(_, _), do: {:ok, %{"status" => "not-a-status"}}
+    def device_poll(_, _), do: {:ok, %{"status" => "not-a-status"}}
+  end
+
   defmodule OfflineBindingMock do
     def device_complete(%{"sessionId" => "foreign-session"}, _),
       do: {:error, :provider_binding_rejected}
@@ -263,7 +268,7 @@ defmodule LemonCore.ProviderManagementTest do
 
     logs =
       capture_log(fn ->
-        assert {:error, :unavailable} =
+        assert {:error, :outcome_unknown} =
                  ProviderManagement.execute("api_key.set", args,
                    node_id: "redaction",
                    service: RaisingOfflineMock
@@ -512,7 +517,7 @@ defmodule LemonCore.ProviderManagementTest do
   test "device exceptions are classified without token-bearing errors or logs" do
     logs =
       capture_log(fn ->
-        assert {:error, :unavailable} =
+        assert {:error, :outcome_unknown} =
                  ProviderManagement.execute("device.start", device_params(),
                    node_id: "device-node",
                    service: RaisingOfflineMock
@@ -520,6 +525,16 @@ defmodule LemonCore.ProviderManagementTest do
       end)
 
     refute logs =~ "OFFLINE_DEVICE_TOKEN_EXCEPTION"
+  end
+
+  test "a malformed acknowledgement leaves the mutation outcome unknown but not a read" do
+    opts = [node_id: "device-node", service: MalformedDeviceMock]
+
+    assert {:error, :outcome_unknown} =
+             ProviderManagement.execute("device.start", device_params(), opts)
+
+    assert {:error, :unavailable} =
+             ProviderManagement.execute("device.poll", device_params(), opts)
   end
 
   test "check and import operations execute through registered service with exact target binding" do

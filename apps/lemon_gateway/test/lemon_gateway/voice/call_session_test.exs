@@ -193,9 +193,22 @@ defmodule LemonGateway.Voice.CallSessionTest do
       :ok
     end
 
-    test "Deepgram client child spec is never restarted" do
-      spec = LemonGateway.Voice.DeepgramClient.child_spec(call_sid: "CA1", session_pid: self())
-      assert spec.restart == :temporary
+    test "gateway builds a temporary media stream and routes provider callbacks to the call" do
+      spec = LemonGateway.Voice.DeepgramCall.child_spec(call_sid: "CA1", session_pid: self())
+
+      assert %{
+               restart: :temporary,
+               start: {LemonMedia.Providers.DeepgramStream, :start_link, [opts]}
+             } =
+               spec
+
+      assert opts[:name] == {:via, Registry, {LemonGateway.Voice.DeepgramRegistry, "CA1"}}
+      opts[:on_connect].(self())
+      assert_receive {:"$gen_cast", {:register_deepgram_ws, _pid}}
+
+      result = %{"type" => "Results", "is_final" => false}
+      opts[:on_transcript].(result)
+      assert_receive {:"$gen_cast", {:transcript, ^result}}
     end
 
     test "self-terminating session closes its Deepgram socket and the Twilio stream", context do

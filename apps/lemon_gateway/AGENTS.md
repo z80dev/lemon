@@ -3,7 +3,7 @@
 Gateway owns execution slots, launch isolation, native run lifecycle, cancellation
 and resume. Router owns collect/follow-up/steer/interrupt semantics. Channels owns
 messaging adapters; gateway-native SMS/voice/webhook ingress remains opt-in through
-`:gateway_ingress_enabled`. See [README](README.md).
+`[gateway.ingress]`. See [README](README.md).
 
 ## Executor and lifecycle
 
@@ -37,8 +37,8 @@ Webhook mutation boundaries are deliberately conservative:
 
 - Derive `meta.channel_context` (`channel_id: "webhook"`) from the integration
   whose token authenticated the request, never from the payload; the router
-  applies the `webhook` channel policy from it and refuses `:webhook` requests
-  without it. Authentication is not content trust: classify the integration
+  applies the approval floor from it and refuses `:webhook` requests without
+  it. Authentication is not content trust: classify the integration
   `peer_kind: :automation` (group approval floor) unless the operator's global
   config sets a literal `trusted_automation = true` on that integration.
 - Reserve idempotency keys atomically before submission. Hash the caller's key

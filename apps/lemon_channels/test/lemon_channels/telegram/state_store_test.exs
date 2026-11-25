@@ -5,9 +5,6 @@ defmodule LemonChannels.Telegram.StateStoreTest do
   alias LemonCore.Store
 
   @tables [
-    :telegram_session_model,
-    :telegram_default_model,
-    :telegram_default_thinking,
     :telegram_selected_resume,
     :telegram_thread_generation
   ]
@@ -20,28 +17,15 @@ defmodule LemonChannels.Telegram.StateStoreTest do
     :ok
   end
 
-  test "persists and deletes session and default preferences" do
-    session_key = "telegram:session:model"
-    scope_key = {"default", 123, 456}
+  test "model and thinking preferences are not stored here" do
+    Code.ensure_loaded!(StateStore)
 
-    assert :ok = StateStore.put_session_model(session_key, "gpt-5")
-    assert StateStore.get_session_model(session_key) == "gpt-5"
-    assert :ok = StateStore.delete_session_model(session_key)
-    assert StateStore.get_session_model(session_key) == nil
-
-    default_model = %{provider: "openai", model: "gpt-5"}
-    thinking = %{thinking_level: "high"}
-
-    assert :ok = StateStore.put_default_model(scope_key, default_model)
-    assert StateStore.get_default_model(scope_key) == default_model
-
-    assert :ok = StateStore.put_default_thinking(scope_key, thinking)
-    assert StateStore.get_default_thinking(scope_key) == thinking
-
-    assert :ok = StateStore.delete_default_model(scope_key)
-    assert :ok = StateStore.delete_default_thinking(scope_key)
-    assert StateStore.get_default_model(scope_key) == nil
-    assert StateStore.get_default_thinking(scope_key) == nil
+    for fun <- ~w(get_session_model put_session_model delete_session_model get_default_model
+                  put_default_model delete_default_model get_default_thinking
+                  put_default_thinking delete_default_thinking)a do
+      refute Enum.any?(0..2, &function_exported?(StateStore, fun, &1)),
+             "StateStore.#{fun} is a second model policy plane"
+    end
   end
 
   test "persists selected resume and thread generation state" do

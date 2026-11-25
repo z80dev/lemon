@@ -61,6 +61,15 @@ The canonical [getting-started guide](../../../docs/getting-started/lemon-bot.md
 
 Native/CLI local sign-in uses `POST /v1/auth/local` with the same user's private `DATA_DIR/local-access.key`. The backend re-reads that key per request; an empty instance creates a passwordless owner and workspace. This returns an ordinary bounded product session, not operator authority. Apple clients' credential-storage and transport details are in the [Apple README](../apple/README.md#connect-the-mac-app).
 
+`lemon-bot https enable --tailscale|--url HTTPS_ORIGIN`, `status` and `disable`
+manage this backend's HTTPS address on a machine with an installed Lemon and a
+local controller: the owned Tailscale Serve route, the controller callback
+allowlists in `~/.lemon/env`, `approvedPrivateMcpOrigins` in the operator
+config, and the controller/backend restart through the `lemon` launcher. Every
+change is recorded first in the ownership receipt `~/.lemon/bot-https.json`;
+disable reverts only recorded changes. See
+[Give Lemon Bot an HTTPS address](../../../docs/getting-started/lemon-bot.md#give-lemon-bot-an-https-address).
+
 `lemon-bot readdress --status --json` inspects saved per-Bot native admission and
 lifecycle state without signing in, reading encryption keys or contacting the
 controller. Set `LEMON_BOT_PUBLIC_URL` to the effective service origin when calling

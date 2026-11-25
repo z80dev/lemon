@@ -9,13 +9,13 @@ defmodule LemonAutomation.GoalContinuation do
   events are observed.
 
   The continuation runs only under the goal's recorded
-  `LemonAgent.Workspace.GoalAuthority`: its tool policy is confined to the
+  `LemonAutomation.GoalAuthority`: its tool policy is confined to the
   recorded policy and its target is re-resolved inside the recorded root.
   A goal without valid authority, or whose target changed, is not submitted.
   """
 
   alias LemonAutomation.RunCompletionWaiter
-  alias LemonAgent.Workspace.{GoalAuthority, GoalStore}
+  alias LemonAutomation.{GoalAuthority, GoalStore}
 
   @spec continue_once(binary(), keyword()) ::
           {:ok, map()} | {:error, :not_found | :paused | :completed | :budget_exhausted | term()}

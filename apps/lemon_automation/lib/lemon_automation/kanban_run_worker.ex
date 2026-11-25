@@ -2,7 +2,7 @@ defmodule LemonAutomation.KanbanRunWorker do
   @moduledoc """
   Runs one leased kanban card through the router.
 
-  Work runs only under the board's recorded `LemonAgent.Workspace.KanbanAuthority`;
+  Work runs only under the board's recorded `LemonAutomation.KanbanAuthority`;
   a board without one is quarantined and nothing is submitted. The worker tool
   policy is that authority's policy intersected with the card's recorded
   creator/editor policies, and always blocks delegation tools that would not
@@ -11,7 +11,7 @@ defmodule LemonAutomation.KanbanRunWorker do
   only when a lease-guarded dispatcher run recorded it for this exact card.
   """
 
-  alias LemonAgent.Workspace.{KanbanAuthority, KanbanStore}
+  alias LemonAutomation.{KanbanAuthority, KanbanStore}
   alias LemonAutomation.{KanbanWorktree, RunCompletionWaiter}
   alias LemonCore.{Id, SessionKey, ToolPolicy}
 

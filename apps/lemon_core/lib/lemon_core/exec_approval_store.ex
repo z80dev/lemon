@@ -1,6 +1,16 @@
 defmodule LemonCore.ExecApprovalStore do
   @moduledoc """
-  Typed wrapper for execution approval policy and lifecycle records.
+  Typed wrapper for execution approval memory and lifecycle records.
+
+  ## Approval memory, not policy
+
+  The `:exec_approvals_policy*` rows remember approvals an operator granted
+  through `exec.approval.resolve` (`approve_global`, `approve_agent`,
+  `approve_session`) so an identical tool action is not asked again. They are
+  written only by `LemonCore.ExecApprovals` when it resolves a request and
+  never restrict anything: tool policy lives in `LemonCore.PolicyStore` and
+  agent profiles. Each table here has that one writer; a table with readers and
+  no writer is rejected by `LemonCore.PolicyTablesWriterGuardTest`.
 
   Terminal records retain only identity, a snapshot digest and the verified
   decision. Pending accessors exclude them; a completed ID cannot be reused
@@ -30,9 +40,6 @@ defmodule LemonCore.ExecApprovalStore do
   @global_policy_table :exec_approvals_policy
   @agent_policy_table :exec_approvals_policy_agent
   @session_policy_table :exec_approvals_policy_session
-  @node_policy_table :exec_approvals_policy_node
-  @global_policy_map_table :exec_approvals_policy_map
-  @node_policy_map_table :exec_approvals_policy_node_map
   @pending_table :exec_approvals_pending
 
   @session_owners_table :exec_approval_session_owners
@@ -56,14 +63,11 @@ defmodule LemonCore.ExecApprovalStore do
   def get_global_policy(tool, action_hash),
     do: Store.get(@global_policy_table, {tool, action_hash})
 
-  @spec put_global_policy(term(), term(), map()) :: :ok
+  @spec put_global_policy(term(), term(), map()) :: :ok | {:error, term()}
   def put_global_policy(tool, action_hash, value),
     do: Store.put(@global_policy_table, {tool, action_hash}, value)
 
-  @spec list_global_policies() :: list()
-  def list_global_policies, do: Store.list(@global_policy_table)
-
-  @doc "Read global tool/action approvals without interpreting store failure as none."
+  @doc "Read remembered global approvals without interpreting store failure as none."
   @spec fetch_global_policies() :: {:ok, list()} | {:error, :store_unavailable}
   def fetch_global_policies, do: Store.fetch_all(@global_policy_table)
 
@@ -71,50 +75,47 @@ defmodule LemonCore.ExecApprovalStore do
   def get_agent_policy(agent_id, tool, action_hash),
     do: Store.get(@agent_policy_table, {agent_id, tool, action_hash})
 
-  @spec put_agent_policy(term(), term(), term(), map()) :: :ok
+  @spec put_agent_policy(term(), term(), term(), map()) :: :ok | {:error, term()}
   def put_agent_policy(agent_id, tool, action_hash, value),
     do: Store.put(@agent_policy_table, {agent_id, tool, action_hash}, value)
-
-  @spec list_agent_policies() :: list()
-  def list_agent_policies, do: Store.list(@agent_policy_table)
 
   @spec get_session_policy(term(), term(), term()) :: map() | nil
   def get_session_policy(session_key, tool, action_hash),
     do: Store.get(@session_policy_table, {session_key, tool, action_hash})
 
-  @spec put_session_policy(term(), term(), term(), map()) :: :ok
+  @spec put_session_policy(term(), term(), term(), map()) :: :ok | {:error, term()}
   def put_session_policy(session_key, tool, action_hash, value),
     do: Store.put(@session_policy_table, {session_key, tool, action_hash}, value)
 
-  @spec list_session_policies() :: list()
-  def list_session_policies, do: Store.list(@session_policy_table)
+  @doc """
+  Strictly read every session-scope grant of `session_key`, including grants
+  isolated by an invocation context of that session.
+  """
+  @spec fetch_session_grants(binary()) :: {:ok, [{term(), map()}]} | {:error, :store_unavailable}
+  def fetch_session_grants(session_key) when is_binary(session_key) do
+    with {:ok, entries} <- Store.fetch_all(@session_policy_table) do
+      grants = Enum.filter(entries, fn {key, _grant} -> session_grant_key?(key, session_key) end)
+      {:ok, Enum.sort_by(grants, &elem(&1, 0))}
+    end
+  end
 
-  @spec get_node_policy(binary(), term(), term()) :: map() | nil
-  def get_node_policy(node_id, tool, action_hash),
-    do: Store.get(@node_policy_table, {node_id, tool, action_hash})
+  @doc "Delete one session-scope grant by its exact policy key."
+  @spec delete_session_grant(term()) :: :ok | {:error, term()}
+  def delete_session_grant(key), do: Store.delete(@session_policy_table, key)
 
-  @spec put_node_policy(binary(), term(), term(), map()) :: :ok
-  def put_node_policy(node_id, tool, action_hash, value),
-    do: Store.put(@node_policy_table, {node_id, tool, action_hash}, value)
+  @doc "Write back one session-scope grant read by `fetch_session_grants/1`."
+  @spec restore_session_grant(term(), map()) :: :ok | {:error, term()}
+  def restore_session_grant(key, grant), do: Store.put(@session_policy_table, key, grant)
 
-  @spec list_node_policies() :: list()
-  def list_node_policies, do: Store.list(@node_policy_table)
+  defp session_grant_key?({session_key, _tool, _hash}, session_key), do: true
 
-  @doc "Read the global tool policy map; `{:ok, nil}` only when none is stored."
-  @spec fetch_global_policy_map() :: {:ok, map() | nil} | {:error, :store_unavailable}
-  def fetch_global_policy_map, do: Store.fetch(@global_policy_map_table, :global)
+  defp session_grant_key?(
+         {{:invocation_context, session_key, _context}, _tool, _hash},
+         session_key
+       ),
+       do: true
 
-  @spec put_global_policy_map(map()) :: :ok
-  def put_global_policy_map(value) when is_map(value),
-    do: Store.put(@global_policy_map_table, :global, value)
-
-  @spec get_node_policy_map(binary()) :: map() | nil
-  def get_node_policy_map(node_id) when is_binary(node_id),
-    do: Store.get(@node_policy_map_table, node_id)
-
-  @spec put_node_policy_map(binary(), map()) :: :ok
-  def put_node_policy_map(node_id, value) when is_binary(node_id) and is_map(value),
-    do: Store.put(@node_policy_map_table, node_id, value)
+  defp session_grant_key?(_key, _session_key), do: false
 
   @spec put_pending(binary(), map()) :: :ok
   def put_pending(approval_id, value) when is_binary(approval_id) and is_map(value),

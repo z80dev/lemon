@@ -5,7 +5,6 @@ defmodule LemonChannels.RuntimeTest do
   import ExUnit.CaptureLog
 
   alias LemonChannels.Adapters.Telegram.Transport.SessionRouting, as: TelegramSessionRouting
-  alias LemonChannels.Adapters.WhatsApp.Transport.SessionRouting, as: WhatsAppSessionRouting
   alias LemonChannels.Runtime
   alias LemonCore.RouterBridge
 
@@ -146,12 +145,6 @@ defmodule LemonChannels.RuntimeTest do
         peer: %{kind: :dm, thread_id: nil}
       }
 
-      whatsapp_inbound = %{
-        meta: %{agent_id: "private-agent", user_msg_id: "wa-77"},
-        message: %{reply_to_id: nil},
-        peer: %{kind: :dm, thread_id: nil}
-      }
-
       log =
         capture_log(fn ->
           assert TelegramSessionRouting.maybe_mark_fork_when_busy(
@@ -160,20 +153,12 @@ defmodule LemonChannels.RuntimeTest do
                    123_456,
                    nil
                  ) == telegram_inbound
-
-          assert WhatsAppSessionRouting.maybe_mark_fork_when_busy(
-                   "private-account",
-                   whatsapp_inbound,
-                   "private-peer",
-                   nil
-                 ) == whatsapp_inbound
         end)
 
       assert log =~ "session busy check unavailable failure_class=query_error"
       refute log =~ "sensitive-router-query"
       refute log =~ "private-agent"
       refute log =~ "private-account"
-      refute log =~ "private-peer"
       refute log =~ "123456"
     end
 

@@ -478,7 +478,7 @@ defmodule LemonCore.Net.HTTP do
             {:ok, conn, ref}
 
           error ->
-            Mint.HTTP.close(conn)
+            _ = Mint.HTTP.close(conn)
             error
         end
 
@@ -709,7 +709,7 @@ defmodule LemonCore.Net.HTTP do
                }}
 
             error ->
-              Mint.HTTP.close(conn)
+              _ = Mint.HTTP.close(conn)
               error
           end
         end

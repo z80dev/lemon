@@ -834,19 +834,45 @@ describe("sessions and history", () => {
 	});
 
 	test.each(["/session reset", "/reset"])(
-		"%s previews, then resets the daemon's copy only for the exact key",
+		"%s previews via dryRun and resets only after interactive confirmation",
 		async (command) => {
-			harness.server.respondWith("sessions.reset", {
-				success: true,
-				sessionKey: "tui-session",
-				summary: { sessionKey: "tui-session", reset: true },
-			});
+			harness.server.onMethod(
+				"sessions.reset",
+				(params: { sessionKey: string; dryRun?: boolean }) =>
+					params.dryRun !== false
+						? {
+								dryRun: true,
+								success: true,
+								sessionKey: params.sessionKey,
+								confirmToken: "tok-cmd-reset",
+								digest: "1122334455667788",
+								preview: {
+									runHistoryCount: 3,
+									hasChatState: true,
+									hasSessionPolicy: false,
+								},
+							}
+						: {
+								dryRun: false,
+								success: true,
+								sessionKey: params.sessionKey,
+								summary: { sessionKey: params.sessionKey, reset: true, verified: true },
+							},
+			);
 			await harness.run(command);
-			expect(harness.server.requestsFor("sessions.reset")).toHaveLength(0);
-			expect(harness.host.text).toContain("reset preview · tui-session");
-			await harness.run(`${command} --confirm tui-session`);
+			expect(harness.server.requestsFor("sessions.reset")).toHaveLength(1);
 			expect(harness.server.requestsFor("sessions.reset")[0].params).toEqual({
 				sessionKey: "tui-session",
+				dryRun: true,
+			});
+			const picker = harness.host.pickers.at(-1)!;
+			expect(picker.items[0]!.value).toBe("cancel");
+			await picker.onSelect(picker.items[1]!);
+			expect(harness.server.requestsFor("sessions.reset")).toHaveLength(2);
+			expect(harness.server.requestsFor("sessions.reset")[1].params).toEqual({
+				sessionKey: "tui-session",
+				dryRun: false,
+				confirmToken: "tok-cmd-reset",
 			});
 			expect(harness.host.text).toContain("verified reset of tui-session");
 		},

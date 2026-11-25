@@ -6,21 +6,17 @@ This guide documents Lemon's long-running harness primitives used to keep coding
 
 Long-running implementation tasks can drift when the agent has no durable task model. Lemon now provides:
 
-- feature requirement files (`FEATURE_REQUIREMENTS.json`)
 - todo dependency/progress tracking
 - checkpoint/resume snapshots plus preview filesystem rollback snapshots
 
 ## Core modules
 
-- `CodingAgent.Tools.FeatureRequirements`
-  - Generate/save/load/update feature requirement files
-  - Compute requirement progress and next actionable features
 - `CodingAgent.Session.Todos`
   - Branch-scoped todo journal: each successful `todo` write appends the complete
     list to the session history, so rewind, navigation, resume and forks agree
-- `CodingAgent.Tools.TodoStore`
-  - ETS projection of each session's selected-branch list for out-of-session readers
-  - Progress stats and actionable todo filtering with dependency + priority semantics
+- `CodingAgent.Tools.Todo`
+  - The `todo` tool plus pure progress stats and actionable filtering with
+    dependency + priority semantics, used by control-plane summaries
 - `CodingAgent.Checkpoint`
   - Create/list/resume/delete checkpoint files under `System.tmp_dir()/lemon_checkpoints`
   - Resume returns checkpointed todos as data; it does not replace a session's list
@@ -68,8 +64,8 @@ paths, or credential-bearing details.
 ## Validation commands
 
 ```bash
-scripts/test path apps/coding_agent/test/coding_agent/tools/feature_requirements_test.exs \
-  apps/coding_agent/test/coding_agent/tools/todo_store_test.exs \
+scripts/test path apps/coding_agent/test/coding_agent/tools/todo_views_test.exs \
+  apps/coding_agent/test/coding_agent/tools/todo_write_test.exs \
   apps/coding_agent/test/coding_agent/session/todo_journal_test.exs \
   apps/coding_agent/test/coding_agent/checkpoint_test.exs
 ```

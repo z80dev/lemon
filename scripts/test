@@ -80,13 +80,14 @@ Canonical test lanes:
              downstream apps to test files naming a module defined in a changed file
   premerge   Stop-on-failure diff checks: [--base REF] (default: origin/main); runs `changed --narrow`:
              changed apps whole, downstream apps only tests naming a changed module
-  quality    CI check lane: compile -Werror, format check, credo, skip-tag guard, shellcheck, launcher
-             script tests, changelog guard, selector self-test, docs source-reference check, skill lint,
+  quality    CI check lane: compile -Werror, format check, credo, skip-tag guard, shellcheck, launcher,
+             CLI, node-join, tunnel and release-verifier script tests, changelog guard, selector
+             self-test, docs source-reference check, crash-model mutation anchors, skill lint,
              mix lemon.quality, focused quality tests;
              [--base REF] (PR CI) limits format/credo to files changed since REF unless the diff is full scope
   clients    CI client lane: tui (typecheck, lint, bun test) and lemon-browser-node (typecheck, lint, build, vitest)
   lemon_bot  Lemon Bot backend tests, web production build and isolated web tests
-  coverage   Nightly lane: ExUnit excluding integration with --cover (per-app coverage thresholds)
+  coverage   Nightly lane: ExUnit excluding integration with --cover, one VM per app (per-app coverage thresholds)
   eval-fast  Small deterministic eval harness run: mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}
   live-eval  Opt-in provider-backed eval run: mix lemon.eval --live-model --iterations ${LEMON_EVAL_ITERATIONS:-3}
   smoke      Product-smoke pointer: run scripts/product_smoke_local locally; CI definition is .github/workflows/product-smoke.yml
@@ -224,11 +225,55 @@ run_fast() {
   mix test --exclude integration "$@"
 }
 
+# One VM per app. In a shared umbrella VM, Mix re-cover-compiles every app
+# (cover:stop, then cover:start) under processes the earlier apps started, so
+# funs those processes hold point at purged code and fail (badfun/badarg) only
+# under --cover. `apps/<app>/...` arguments select apps and their paths; every
+# other argument goes to each app's run. No paths: every app with tests.
 run_coverage() {
   ensure_repo_root
   setup_test_env
   mix compile --warnings-as-errors
-  mix test --exclude integration --cover "$@"
+  local arg app dir seen selected=() paths=() flags=() failed=()
+  for arg in "$@"; do
+    case "$arg" in
+      apps/*)
+        app="${arg#apps/}"
+        app="${app%%/*}"
+        seen=0
+        for dir in ${selected[@]+"${selected[@]}"}; do
+          if [ "$dir" = "$app" ]; then seen=1; fi
+        done
+        if [ "$seen" = 0 ]; then selected+=("$app"); fi
+        paths+=("$arg") ;;
+      *) flags+=("$arg") ;;
+    esac
+  done
+  if [ "${#selected[@]}" -eq 0 ]; then
+    for dir in apps/*/test; do
+      if [ -d "$dir" ]; then
+        app="${dir#apps/}"
+        selected+=("${app%%/*}")
+        paths+=("$dir")
+      fi
+    done
+  fi
+  for app in "${selected[@]}"; do
+    local app_paths=()
+    for arg in "${paths[@]}"; do
+      case "$arg" in
+        "apps/$app" | "apps/$app"/*) app_paths+=("$arg") ;;
+      esac
+    done
+    printf '\n==> coverage: %s\n' "$app"
+    if ! mix test --exclude integration --cover ${flags[@]+"${flags[@]}"} "${app_paths[@]}"; then
+      failed+=("$app")
+    fi
+  done
+  if [ "${#failed[@]}" -gt 0 ]; then
+    echo "coverage failed for: ${failed[*]}" >&2
+    return 1
+  fi
 }
 
 # ExUnit skip tags hide tests forever. Tests that need an optional host tool
@@ -290,14 +335,23 @@ run_quality() {
   check_skipped_tests
   scripts/check_changelog
   python3 scripts/test_changed_tests.py
+  python3 scripts/test_ci_gates.py
+  python3 scripts/check_crash_model_mutations.py --anchors
   node --test scripts/check_docs_source_refs.test.mjs
   node scripts/check_docs_source_refs.mjs
   run_shellcheck
   bash scripts/test_lemon_tui_auth.sh
   bash scripts/test_lemon_launcher_reuse.sh
   bash scripts/test_lemon_launcher_master_key.sh
+  bash scripts/test_lemon_launcher_cookie.sh
   bash scripts/test_launcher_dotenv.sh
+  bash scripts/test_bind_loopback_launchers.sh
+  bash scripts/test_lemon_cli_stdio.sh
   bash scripts/test_lemonup.sh
+  python3 scripts/test_join_node.py
+  python3 scripts/test_lemon_tunnel.py
+  python3 scripts/test_verify_apple_release.py
+  python3 scripts/test_verify_release_artifacts.py
   mix lemon.skill.lint
   mix lemon.quality
   mix test apps/lemon_core/test/lemon_core/quality apps/lemon_evals/test/lemon_evals/harness_test.exs

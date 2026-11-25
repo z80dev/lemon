@@ -20,6 +20,7 @@ defmodule LemonCore.Application do
   - `LemonCore.UsageLedger` - Serialized per-run usage/cost aggregation (finalize-run hook)
   - `LemonCore.RuntimeOwner` - Holds the cross-VM ownership lock of a
     file-backed store; only its holder reconciles other runtimes' records
+  - `LemonCore.TerminalOutbox` - Replays durable run-completion projections
   - `LemonCore.ExecApprovalExpiry` - Expires pending exec approvals whose run or
     session ended (finalize-run hook)
   - `LemonCore.Secrets.SourceTaskSupervisor` - Bounded external-source tasks
@@ -35,7 +36,7 @@ defmodule LemonCore.Application do
 
   ## Boot modes
 
-  `config :lemon_core, :boot_mode` selects the tree; `children/1` lists it.
+  `config :lemon_core, :boot_mode` selects the tree; `children/2` lists it.
 
   - `:runtime` (default) - the daemon, node workers and tests: everything above.
   - `:client` - one-shot CLI commands (`LemonCore.CLI.start/2`): no
@@ -43,18 +44,43 @@ defmodule LemonCore.Application do
     `recover: false` and refuses resolution), Store sweeps, `RunHistoryStore`,
     `ConfigReloader`, `Watcher` or `Drain` (so no SIGTERM trap; `Drain.phase/0`
     reads `:serving`). A client VM therefore never expires, sweeps or reloads
-    state owned by a running daemon.
+    state owned by a running daemon. Its Store starts with `defer_to_runtime:
+    true`: while a live runtime owns the database it refuses every mutation
+    with `{:error, :runtime_owned}`; commands then ask that runtime to write
+    over the control plane, or refuse, rather than become a second writer.
   - `:read_only_client` - `:client` whose Store also refuses every mutation
     (`{:error, :read_only}`), for one-shot commands that only read.
 
-  `LemonCore.RunHistoryStore` is only started when the optional `:exqlite`
-  dependency is present. Durable memory lives in the `lemon_memory` app and
+  ## Service groups
+
+  `config :lemon_core, :services` selects which groups of the tree start (see
+  `service_groups/0`); every group starts when it is unset, which is what the
+  packaged Lemon runtime uses.
+
+  - `:core` (always) - `RuntimeCache`, `RuntimeLatch`, dedupe, the Bus,
+    `ConfigCache`, `Store` and the secrets helpers: what the published
+    packages (`lemon_ai`, `lemon_agent`, `lemon_memory`) need.
+  - `:runtime_control` - the assistant runtime's control services: `Drain`,
+    `ACPClientBridge`, `NodeRegistry`, `RuntimeOwner`, `SessionActivity`,
+    `TerminalOutbox`, `UsageLedger`, `ExecApprovalExpiry` and the config reloader.
+  - `:run_history` - `RunHistoryStore` (needs the optional `:exqlite`).
+
+  A library consumer that only uses the agent and store APIs selects
+  `config :lemon_core, :services, [:core]` and starts none of the runtime's
+  control processes. Durable memory lives in the `lemon_memory` app and
   supervises itself.
+
+  A product declares the capabilities it cannot run without in
+  `config :lemon_core, :required_capabilities`; in the `:runtime` boot mode
+  this application refuses to start when one is unavailable (see
+  `LemonCore.Capabilities`).
 
   ## Configuration
 
   The application reads configuration from the application environment:
 
+  - `:lemon_core, :services` - The service groups to start (see above)
+  - `:lemon_core, :required_capabilities` - Capabilities checked at boot
   - `:lemon_core, LemonCore.ConfigCache` - Options passed to ConfigCache
   - `:lemon_core, :logging` - File logging configuration (optional)
   - `:lemon_core, :logger` - `:logger` handlers to attach at boot (e.g. the
@@ -74,6 +100,11 @@ defmodule LemonCore.Application do
 
   require Logger
 
+  @typedoc "A group of lemon_core services; see the moduledoc."
+  @type service_group :: :core | :runtime_control | :run_history
+
+  @service_groups [:core, :runtime_control, :run_history]
+
   @impl true
   def start(_type, _args) do
     # Strip conversation content from OTP crash reports before any handler
@@ -83,7 +114,7 @@ defmodule LemonCore.Application do
     # Attach any :logger handlers configured under :lemon_core, :logger (see
     # config/runtime.exs). A no-op when nothing is configured there.
     drop_unloadable_handlers()
-    Logger.add_handlers(:lemon_core)
+    _ = Logger.add_handlers(:lemon_core)
 
     # If configured, install a log-to-file handler early so dropped/errored
     # messages can be diagnosed even when stdout/stderr isn't persisted.
@@ -94,11 +125,15 @@ defmodule LemonCore.Application do
     # logs an error when `ps` (needed to verify other holders) is missing.
     _ = LemonCore.Service.Identity.boot_check()
     mode = boot_mode()
+    groups = service_groups()
 
     opts = [strategy: :one_for_one, name: LemonCore.Supervisor]
 
-    with {:ok, pid} <- Supervisor.start_link(children(mode), opts) do
-      if mode == :runtime, do: :ok = LemonCore.Drain.maybe_install_signal_trap()
+    with :ok <- check_capabilities(mode, groups),
+         {:ok, pid} <- Supervisor.start_link(children(mode, groups), opts) do
+      if mode == :runtime and :runtime_control in groups,
+        do: :ok = LemonCore.Drain.maybe_install_signal_trap()
+
       {:ok, pid}
     end
   end
@@ -112,63 +147,131 @@ defmodule LemonCore.Application do
     end
   end
 
+  @doc """
+  The service groups this node starts, in a fixed order: `:core` plus the
+  groups listed in `config :lemon_core, :services`, or every group when that
+  is unset.
+
+  Raises `ArgumentError` for a value that is not a list of known groups.
+  """
+  @spec service_groups() :: [service_group()]
+  def service_groups do
+    case Application.fetch_env(:lemon_core, :services) do
+      :error ->
+        @service_groups
+
+      {:ok, groups} when is_list(groups) ->
+        case groups -- @service_groups do
+          [] ->
+            Enum.filter(@service_groups, &(&1 == :core or &1 in groups))
+
+          unknown ->
+            raise ArgumentError,
+                  "config :lemon_core, :services names unknown service groups " <>
+                    "#{inspect(unknown)}; known: #{inspect(@service_groups)}"
+        end
+
+      {:ok, other} ->
+        raise ArgumentError,
+              "config :lemon_core, :services must be a list of service groups, got: " <>
+                inspect(other)
+    end
+  end
+
+  # Only a runtime boot is a product boot; one-shot clients never require
+  # capabilities.
+  defp check_capabilities(:runtime, groups) do
+    case LemonCore.Capabilities.check(LemonCore.Capabilities.required(), groups) do
+      :ok ->
+        :ok
+
+      {:error, {:missing_capability, capability, reason}} ->
+        Logger.error(
+          "lemon_core refuses to start: this product requires the " <>
+            "#{inspect(capability)} capability, but #{reason}"
+        )
+
+        {:error, {:missing_capability, capability}}
+    end
+  end
+
+  defp check_capabilities(_client_mode, _groups), do: :ok
+
   @doc false
-  @spec children(:runtime | :client | :read_only_client) :: [
+  @spec children(:runtime | :client | :read_only_client, [service_group()]) :: [
           Supervisor.child_spec() | module() | tuple()
         ]
-  def children(mode) when mode in [:runtime, :client, :read_only_client] do
+  def children(mode, groups \\ service_groups())
+      when mode in [:runtime, :client, :read_only_client] do
+    for {group, child} <- grouped_children(mode, groups), group in groups, do: child
+  end
+
+  defp grouped_children(mode, groups) do
     runtime? = mode == :runtime
     config_cache_opts = Application.get_env(:lemon_core, LemonCore.ConfigCache, [])
 
     store =
       case mode do
-        :runtime -> [LemonCore.Store]
-        :client -> [{LemonCore.Store, sweep: false}]
-        :read_only_client -> [{LemonCore.Store, sweep: false, read_only: true}]
+        :runtime -> LemonCore.Store
+        :client -> {LemonCore.Store, sweep: false, defer_to_runtime: true}
+        :read_only_client -> {LemonCore.Store, sweep: false, read_only: true}
       end
 
     [
-      LemonCore.RuntimeCache,
-      LemonCore.RuntimeLatch,
-      {DynamicSupervisor, strategy: :one_for_one, name: LemonCore.Dedupe.Supervisor},
-      LemonCore.Bus.child_spec_for_backend()
+      core: LemonCore.RuntimeCache,
+      core: LemonCore.RuntimeLatch,
+      core: {DynamicSupervisor, strategy: :one_for_one, name: LemonCore.Dedupe.Supervisor},
+      core: LemonCore.Bus.child_spec_for_backend()
     ] ++
-      if(runtime?, do: [LemonCore.Drain], else: []) ++
+      if(runtime?, do: [runtime_control: LemonCore.Drain], else: []) ++
       [
-        LemonCore.ACPClientBridge,
-        LemonCore.NodeRegistry,
-        {LemonCore.ConfigCache, config_cache_opts}
+        runtime_control: LemonCore.ACPClientBridge,
+        runtime_control: LemonCore.NodeRegistry,
+        core: {LemonCore.ConfigCache, config_cache_opts},
+        core: store
       ] ++
-      store ++
-      if(runtime?, do: [LemonCore.RuntimeOwner], else: []) ++
+      owner_children(mode) ++
+      if(runtime?, do: [runtime_control: LemonCore.TerminalOutbox], else: []) ++
       [
-        LemonCore.SessionActivity,
-        LemonCore.Secrets.Usage,
-        LemonCore.UsageLedger,
-        {LemonCore.ExecApprovalExpiry, recover: runtime?},
-        LemonCore.TaskSupervisor.child_spec(name: LemonCore.Secrets.SourceTaskSupervisor),
-        LemonCore.Secrets.SourceCache
+        runtime_control: LemonCore.SessionActivity,
+        core: LemonCore.Secrets.Usage,
+        runtime_control: LemonCore.UsageLedger,
+        runtime_control: {LemonCore.ExecApprovalExpiry, recover: runtime?},
+        core: LemonCore.TaskSupervisor.child_spec(name: LemonCore.Secrets.SourceTaskSupervisor),
+        core: LemonCore.Secrets.SourceCache
       ] ++
+      if(runtime? and :run_history in groups, do: run_history_children(), else: []) ++
       if(runtime?,
-        do: sqlite_children() ++ [LemonCore.ConfigReloader, LemonCore.ConfigReloader.Watcher],
+        do: [
+          runtime_control: LemonCore.ConfigReloader,
+          runtime_control: LemonCore.ConfigReloader.Watcher
+        ],
         else: []
       )
   end
 
+  # The ownership process starts before every other store writer. A writable
+  # client holds the locks too; a read-only client writes nothing.
+  defp owner_children(:runtime), do: [runtime_control: LemonCore.RuntimeOwner]
+  defp owner_children(:client), do: [core: {LemonCore.RuntimeOwner, client: true}]
+  defp owner_children(:read_only_client), do: []
+
   # RunHistoryStore needs the SQLite NIF. `:exqlite` is an optional dependency,
-  # so without it the rest of lemon_core still boots and run history reads exit
-  # with `:noproc`.
-  defp sqlite_children do
+  # so without it the rest of lemon_core still boots and run history is
+  # unavailable: a product that needs it requires the :run_history capability.
+  defp run_history_children do
     if Code.ensure_loaded?(Exqlite.Sqlite3) do
-      [LemonCore.RunHistoryStore]
+      [run_history: LemonCore.RunHistoryStore]
     else
       Logger.warning(
         "exqlite is not available, so LemonCore.RunHistoryStore was not started: " <>
-          "run history is silently disabled (reads return empty and finalize-run " <>
-          "hooks that persist history do nothing). Durable memory has the same " <>
-          "requirement in lemon_memory. :exqlite is an optional dependency of " <>
-          "lemon_core, so declare it yourself to enable these: " <>
-          "{:exqlite, \"~> 0.34\"}."
+          "run history is unavailable (LemonCore.RunHistoryStore.fetch/2 returns " <>
+          "{:error, :unavailable} and finalize-run hooks that persist history do " <>
+          "nothing). Durable memory has the same requirement in lemon_memory. " <>
+          ":exqlite is an optional dependency of lemon_core, so declare it yourself " <>
+          "to enable these: {:exqlite, \"~> 0.34\"}. A product that cannot run " <>
+          "without run history should require it: config :lemon_core, " <>
+          ":required_capabilities, [:run_history]."
       )
 
       []

@@ -43,9 +43,7 @@
       "high",
       "max"
     ],
-    "compat": {
-      "anthropic_effort_only": true
-    }
+    "adaptive_thinking": true
   },
   "kimi-k2-thinking": {
     "id": "kimi-k2-thinking",
@@ -176,9 +174,7 @@
       "high",
       "max"
     ],
-    "compat": {
-      "anthropic_effort_only": true
-    }
+    "adaptive_thinking": true
   },
   "k3": {
     "id": "k3",
@@ -204,9 +200,7 @@
       "high",
       "max"
     ],
-    "compat": {
-      "anthropic_effort_only": true
-    }
+    "adaptive_thinking": true
   },
   "k3.1-pro": {
     "id": "k3.1-pro",
@@ -232,9 +226,7 @@
       "high",
       "max"
     ],
-    "compat": {
-      "anthropic_effort_only": true
-    }
+    "adaptive_thinking": true
   },
   "k3-256k": {
     "id": "k3-256k",
@@ -260,9 +252,7 @@
       "high",
       "max"
     ],
-    "compat": {
-      "anthropic_effort_only": true
-    }
+    "adaptive_thinking": true
   },
   "kimi-for-coding-highspeed": {
     "id": "kimi-for-coding-highspeed",

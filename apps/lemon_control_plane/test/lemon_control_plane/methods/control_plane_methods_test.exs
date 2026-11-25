@@ -52,8 +52,12 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       key = "agent-submit-#{System.unique_integer([:positive, :monotonic])}"
 
       LemonCore.Idempotency.put(:agent, key, %{
-        "run_id" => "run_cached",
-        "session_key" => "agent:builder:main"
+        "runId" => "run_cached",
+        "sessionKey" => "agent:builder:main",
+        "state" => "accepted",
+        "effectiveMode" => "new_run",
+        "targetRunId" => "run_cached",
+        "retrySafe" => false
       })
 
       on_exit(fn -> LemonCore.Idempotency.delete(:agent, key) end)
@@ -62,8 +66,8 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
         Agent.handle(
           %{
             "prompt" => "private prompt body",
-            "agent_id" => "builder",
-            "queue_mode" => "steer",
+            "agentId" => "builder",
+            "queueMode" => "steer",
             "model" => "openai:gpt-4.1",
             "project_memory_capture" => false,
             "idempotency_key" => key
@@ -71,7 +75,7 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
           %{}
         )
 
-      assert result["run_id"] == "run_cached"
+      assert result["runId"] == "run_cached"
       assert result["summary"]["agentId"] == "builder"
       assert result["summary"]["sessionKey"] == "agent:builder:main"
       assert result["summary"]["runId"] == "run_cached"
@@ -308,6 +312,52 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       assert result["ok"] == false
       assert result["summary"]["cleanup"]["redactsSensitiveAnswerValues"] == true
       assert result["summary"]["cleanup"]["includesSecretValues"] == false
+    end
+
+    # #620: a non-text run error is projected, never `inspect`ed: the HTTP
+    # status (which eval classification reads) and a redacted message survive,
+    # raw headers, terms and non-text answers do not.
+    test "handle/2 projects structured run errors without rendering raw terms" do
+      secret = "WAIT_HEADER_SECRET_#{System.unique_integer([:positive])}"
+      body_secret = "WAIT_BODY_BEARER_#{System.unique_integer([:positive])}"
+
+      cases = [
+        {{:http_error, 429, "rate_limit_exceeded Bearer #{body_secret}", [{"x-api-key", secret}]},
+         fn error ->
+           assert error["kind"] == "http_error"
+           assert error["status"] == 429
+           assert error["message"] =~ "rate_limit_exceeded"
+         end},
+        {%RuntimeError{message: "provider stream closed"},
+         fn error ->
+           assert error == %{"kind" => "RuntimeError", "message" => "provider stream closed"}
+         end},
+        {%{reason: :overloaded, status_code: 529, headers: %{"authorization" => secret}},
+         fn error -> assert error == %{"kind" => "overloaded", "status" => 529} end},
+        {{make_ref(), self()}, fn error -> assert error == %{"kind" => "error"} end}
+      ]
+
+      for {term, check} <- cases do
+        run_id = "run_wait_structured_#{System.unique_integer([:positive, :monotonic])}"
+        session_key = "agent:wait:structured:#{System.unique_integer([:positive])}"
+
+        LemonCore.RunStore.finalize(run_id, %{
+          completed: %{run_id: run_id, ok: false, answer: {:partial, secret}, error: term},
+          session_key: session_key
+        })
+
+        on_exit(fn -> LemonCore.RunStore.delete_session(session_key) end)
+
+        assert {:ok, result} =
+                 AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, @operator_ctx)
+
+        json = result |> Jason.encode!() |> Jason.decode!()
+        check.(json["error"])
+        assert json["answer"] == nil
+        refute Jason.encode!(json) =~ secret
+        refute Jason.encode!(json) =~ body_secret
+        refute Jason.encode!(json) =~ "#Reference"
+      end
     end
   end
 

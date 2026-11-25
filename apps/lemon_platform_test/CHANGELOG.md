@@ -13,6 +13,20 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 ### Removed
 
 - **Breaking:** `ProviderCase` no longer probes `search/2` (the callback left `LemonMemory.Provider`); `hostile_queries/0`, the `:queries` option and the registry fan-out search test are removed. The suite checks the behaviour declaration, `put/2` and registration (#656).
+**Release version: 0.3.0.**
+
+### Changed
+
+- **Breaking:** requires Elixir 1.17 (was `~> 1.15`), the floor of the packages
+  it tests. CI proves it on Elixir 1.17.3 / OTP 26.2 (#730).
+- **Breaking:** `PluginCase` is no longer in the Hex package. Its target,
+  `lemon_channels`, is not published, so no Hex consumer could use it; a path
+  dependency on `apps/lemon_platform_test` in a lemon checkout still provides
+  it (#730).
+- Optional sibling packages are required as `~> 0.3.0` (was `~> 0.2`), derived
+  from this package's own version, and a missing one is named with that
+  requirement: every 0.x minor may break, so a sibling on another minor no
+  longer resolves (#730).
 
 ## [0.2.0] - 2026-10-13
 

@@ -132,7 +132,7 @@ defmodule LemonMemory.Document do
     {provider, model} = extract_model(summary)
 
     %__MODULE__{
-      doc_id: "mem_#{LemonCore.Id.uuid()}",
+      doc_id: "mem_run_" <> Base.encode16(:crypto.hash(:sha256, run_id_str), case: :lower),
       run_id: run_id_str,
       session_key: session_key,
       agent_id: agent_id,

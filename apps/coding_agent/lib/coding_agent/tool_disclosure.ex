@@ -11,7 +11,7 @@ defmodule CodingAgent.ToolDisclosure do
   handful of MCP servers can easily add tens of thousands of tokens of schema
   that the model reads on every turn and almost never calls. This module keeps
   built-in tools fully disclosed under the legacy chat profile and replaces
-  the MCP/extension/WASM long tail with two bridge tools. Cwd-scoped coding
+  the MCP/extension long tail with two bridge tools. Cwd-scoped coding
   sessions default to the coding profile, which also defers optional capabilities:
 
     * `tool_search` — query a frozen per-session catalog, get back names,
@@ -46,7 +46,7 @@ defmodule CodingAgent.ToolDisclosure do
   The `profile` setting decides which tools are eligible for deferral:
 
     * `:legacy` (chat default) — the behaviour described above: built-ins stay
-      disclosed, the MCP/extension/WASM long tail is deferred only once the
+      disclosed, the MCP/extension long tail is deferred only once the
       estimated schema cost exceeds `budget_tokens`.
     * `:coding` (coding default) — only the coding core tools
       and explicitly `pinned` names stay disclosed; every other tool the
@@ -372,7 +372,7 @@ defmodule CodingAgent.ToolDisclosure do
 
   Returns `%{tools: [AgentTool.t()], catalog: catalog(), report: report()}`.
   `catalog` is the frozen, wrapped runtime inventory shared by disclosure and
-  WASM host resolution; it is not a second registry lookup. When disclosure does
+  eval bridge resolution; it is not a second registry lookup. When disclosure does
   not activate, `tools` is `registry tools ++ extra_tools` — the exact list the
   caller would have built without this module.
   """
@@ -544,8 +544,8 @@ defmodule CodingAgent.ToolDisclosure do
 
   # A pin always wins. Otherwise the profile decides: the legacy profile keeps
   # every built-in (satellite tools merged in by the registry included)
-  # disclosed and defers only the long tail that arrives from MCP servers,
-  # extensions and WASM modules; the coding profile classifies by capability and
+  # disclosed and defers only the long tail that arrives from MCP servers and
+  # extensions; the coding profile classifies by capability and
   # defers whatever is outside the coding core, whatever its origin.
   defp deferrable?({name, _tool, source}, %{profile: profile, pinned: pinned}) do
     name not in pinned and profile_defers?(profile, name, source)
@@ -555,12 +555,11 @@ defmodule CodingAgent.ToolDisclosure do
   defp profile_defers?(:code_mode, name, _source), do: name not in @code_mode_core
   defp profile_defers?(:legacy, _name, {:mcp, _}), do: true
   defp profile_defers?(:legacy, _name, {:extension, _}), do: true
-  defp profile_defers?(:legacy, _name, {:wasm, _}), do: true
   defp profile_defers?(:legacy, _name, _source), do: false
 
   # Identity of what the session can see and call: every exposed tool in wire
   # order, every deferred tool by name, their sources (which carry MCP approval
-  # modes and WASM metadata) and the session's authority. Hashed, so the digest
+  # modes) and the session's authority. Hashed, so the digest
   # can be logged and compared without leaking schemas, descriptions or policy.
   defp catalog_identity(profile, exposed, hidden, authority) do
     term = {
@@ -910,7 +909,6 @@ defmodule CodingAgent.ToolDisclosure do
   defp source_label({:mcp, meta}) when is_map(meta), do: "mcp:configured"
   defp source_label({:mcp, server}), do: "mcp:#{server}"
   defp source_label({:extension, module}), do: "extension:#{inspect(module)}"
-  defp source_label({:wasm, _meta}), do: "wasm"
   defp source_label(other), do: inspect(other)
 
   # ============================================================================
@@ -1089,7 +1087,7 @@ defmodule CodingAgent.ToolDisclosure do
     kind, reason -> {:error, "Tool '#{name}' crashed: " <> inspect({kind, reason})}
   end
 
-  defp source_kind({kind, _meta}) when kind in [:mcp, :extension, :wasm], do: kind
+  defp source_kind({kind, _meta}) when kind in [:mcp, :extension], do: kind
   defp source_kind(source) when is_atom(source), do: source
   defp source_kind(_source), do: :unknown
 

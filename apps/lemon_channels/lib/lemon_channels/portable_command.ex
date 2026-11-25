@@ -151,25 +151,30 @@ defmodule LemonChannels.PortableCommand do
   end
 
   defp render_tasks do
-    tasks =
-      runtime_call(:list_tasks, [], [])
-      |> Enum.map(&task_row/1)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.sort_by(& &1.updated_at, :desc)
-      |> Enum.take(@default_limit)
+    case LemonCore.AgentRuntime.query(:list_tasks, []) do
+      tasks when is_list(tasks) ->
+        tasks
+        |> Enum.map(&task_row/1)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.sort_by(& &1.updated_at, :desc)
+        |> Enum.take(@default_limit)
+        |> render_task_rows()
 
-    case tasks do
-      [] ->
-        "No native Lemon agents or delegated tasks are currently recorded."
-
-      rows ->
-        lines =
-          Enum.map(rows, fn row ->
-            "• #{row.id} — #{row.status}#{if(row.description == "", do: "", else: ": " <> row.description)}"
-          end)
-
-        Enum.join(["Lemon agents/tasks (#{length(rows)})" | lines], "\n")
+      _unavailable ->
+        "Lemon task state is unavailable right now."
     end
+  end
+
+  defp render_task_rows([]),
+    do: "No native Lemon agents or delegated tasks are currently recorded."
+
+  defp render_task_rows(rows) do
+    lines =
+      Enum.map(rows, fn row ->
+        "• #{row.id} — #{row.status}#{if(row.description == "", do: "", else: ": " <> row.description)}"
+      end)
+
+    Enum.join(["Lemon agents/tasks (#{length(rows)})" | lines], "\n")
   end
 
   defp task_row({task_id, record}) when is_map(record) do
@@ -184,27 +189,26 @@ defmodule LemonChannels.PortableCommand do
 
   defp task_row(_), do: nil
 
-  defp compact(context) do
-    with session_key when is_binary(session_key) and session_key != "" <- context[:session_key],
-         :ok <- runtime_call(:compact_session, [session_key, []], {:error, :unavailable}) do
-      {:ok, "Compacted the current Lemon session context."}
-    else
-      nil ->
-        {:error, "No current session is available to compact."}
-
-      "" ->
-        {:error, "No current session is available to compact."}
+  defp compact(%{session_key: session_key}) when is_binary(session_key) and session_key != "" do
+    case LemonCore.AgentRuntime.mutate(:compact_session, [session_key, []]) do
+      :ok ->
+        {:ok, "Compacted the current Lemon session context."}
 
       {:error, :session_not_found} ->
         {:error, "The current session is not live; nothing was compacted."}
+
+      {:error, :outcome_unknown} ->
+        {:error, outcome_unknown("Session compaction")}
 
       {:error, _} ->
         {:error, "Session compaction is unavailable right now."}
 
       _ ->
-        {:error, "Session compaction is unavailable right now."}
+        {:error, outcome_unknown("Session compaction")}
     end
   end
+
+  defp compact(_), do: {:error, "No current session is available to compact."}
 
   defp render_help(filter, surface) do
     commands =
@@ -274,21 +278,24 @@ defmodule LemonChannels.PortableCommand do
       |> maybe_put(:model, context[:model])
       |> maybe_put(:thinking_level, context[:thinking_level])
 
-    case runtime_call(:background_start, [prompt, opts], {:error, :unavailable}) do
-      {:ok, %{id: id}} when is_binary(id) ->
+    case LemonCore.AgentRuntime.mutate(:background_start, [prompt, opts]) do
+      {:ok, %{id: id}} when is_binary(id) and id != "" ->
         background_started_result(id)
 
-      {:ok, %{"id" => id}} when is_binary(id) ->
+      {:ok, %{"id" => id}} when is_binary(id) and id != "" ->
         background_started_result(id)
 
       {:error, :unavailable} ->
         {:error, "Background runs are unavailable in this Lemon runtime."}
 
+      {:error, :outcome_unknown} ->
+        {:error, outcome_unknown("Background run start")}
+
       {:error, _reason} ->
         {:error, "Background run could not be started. Check Lemon runtime logs."}
 
       _ ->
-        {:error, "Background run failed to start."}
+        {:error, outcome_unknown("Background run start")}
     end
   end
 
@@ -347,11 +354,14 @@ defmodule LemonChannels.PortableCommand do
       {:error, :unavailable} ->
         {:error, "Background runs are unavailable in this Lemon runtime."}
 
+      {:error, :outcome_unknown} ->
+        {:error, outcome_unknown("Background run cancellation")}
+
       {:error, _reason} ->
         {:error, "Background run could not be cancelled. Check Lemon runtime logs."}
 
       _ ->
-        {:error, "Background run could not be cancelled."}
+        {:error, outcome_unknown("Background run cancellation")}
     end
   end
 
@@ -360,8 +370,11 @@ defmodule LemonChannels.PortableCommand do
       nil ->
         {:error, :not_found}
 
+      session_key when function == :background_cancel_scoped ->
+        LemonCore.AgentRuntime.mutate(function, args_fn.(session_key))
+
       session_key ->
-        runtime_call(function, args_fn.(session_key), {:error, :unavailable})
+        LemonCore.AgentRuntime.query(function, args_fn.(session_key))
     end
   end
 
@@ -439,7 +452,7 @@ defmodule LemonChannels.PortableCommand do
       session_key when is_binary(session_key) and session_key != "" ->
         opts = maybe_put([], :timeout_ms, context[:timeout_ms])
 
-        case runtime_call(:side_query, [session_key, question, opts], {:error, :unavailable}) do
+        case LemonCore.AgentRuntime.query(:side_query, [session_key, question, opts]) do
           {:ok, answer} when is_binary(answer) ->
             {:ok, answer}
 
@@ -465,9 +478,9 @@ defmodule LemonChannels.PortableCommand do
     |> then(&"Usage: #{&1}")
   end
 
-  defp runtime_call(function, args, fallback) do
-    LemonCore.AgentRuntime.call(function, args, fallback)
-  end
+  # A reached runtime mutation that failed may already have applied.
+  defp outcome_unknown(operation),
+    do: "#{operation} outcome is unknown; check its state before retrying."
 
   defp get(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, to_string(key))
   defp get(_, _), do: nil

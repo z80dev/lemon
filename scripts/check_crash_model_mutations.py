@@ -4,6 +4,8 @@
 Run only in an idle worktree: each mutant temporarily patches one production file.
 All original bytes are restored, including on SIGINT/SIGTERM or a failed command.
 No git state, dependency manifests, or unrelated source files are changed.
+`--anchors` only checks that every mutation anchor still matches exactly once;
+`scripts/test quality` runs it so refactors cannot silently disable a mutant.
 """
 
 import os
@@ -52,8 +54,8 @@ MUTATIONS = [
     (
         "ReplayOnce",
         "apps/lemon_router/lib/lemon_router/restart_carryover.ex",
-        "case submit.(item.request) do",
-        "case submit.(Map.put(item.request, :run_id, LemonCore.Id.run_id())) do",
+        "    submit.(request)\n  catch",
+        "    submit.(Map.put(request, :run_id, LemonCore.Id.run_id()))\n  catch",
         ROUTER_TEST,
     ),
     (
@@ -87,7 +89,26 @@ def interrupt(_signum, _frame):
     raise KeyboardInterrupt
 
 
+def anchor_errors():
+    errors = []
+    for name, relative, needle, _replacement, _test in MUTATIONS:
+        count = (ROOT / relative).read_text().count(needle)
+        if count != 1:
+            errors.append(f"{name}: expected exactly one mutation anchor in {relative}, found {count}")
+    return errors
+
+
 def main():
+    args = sys.argv[1:]
+    if args not in ([], ["--anchors"]):
+        sys.exit("usage: check_crash_model_mutations.py [--anchors]")
+    errors = anchor_errors()
+    if errors:
+        sys.exit("\n".join(errors))
+    if args == ["--anchors"]:
+        print(f"PASS: {len(MUTATIONS)} mutation anchors each match exactly once", flush=True)
+        return
+
     signal.signal(signal.SIGTERM, interrupt)
     baseline = run_tests([CODING_TEST, ROUTER_TEST, OUTBOX_TEST])
     if baseline.returncode != 0:
@@ -97,8 +118,6 @@ def main():
         path = ROOT / relative
         original = path.read_bytes()
         source = original.decode()
-        if source.count(needle) != 1:
-            sys.exit(f"{name}: expected exactly one mutation anchor in {relative}")
         mutated = source.replace(needle, replacement).encode()
         try:
             path.write_bytes(mutated)

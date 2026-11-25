@@ -2,17 +2,19 @@
 
 Contract-test kit for Lemon's extension behaviours.
 
-Three ExUnit case templates run the platform's compliance suites against *your*
+ExUnit case templates run the platform's compliance suites against *your*
 implementation of a Lemon behaviour:
 
 | Behaviour | Case template |
 | --- | --- |
 | `LemonCore.Store.Backend` | `LemonPlatformTest.BackendCase` |
-| `LemonChannels.Plugin` | `LemonPlatformTest.PluginCase` |
 | `LemonMemory.Provider` | `LemonPlatformTest.ProviderCase` |
+| `LemonCore.Events` payloads | `LemonPlatformTest.EventsCase` |
 
-`PluginCase` targets `lemon_channels`, which is not published to Hex; outside this
-repository it needs a path dependency on a lemon checkout.
+The lemon repository also carries `PluginCase` for channel adapters. Its target
+app, `lemon_channels`, is not published to Hex, so `PluginCase` is not in the Hex
+package; a path dependency on `apps/lemon_platform_test` in a lemon checkout
+provides it.
 
 ```elixir
 defmodule MyApp.RedisBackendComplianceTest do
@@ -78,10 +80,12 @@ runtime. Add the app your case targets alongside the kit:
 
 | Case / tool | Add |
 | --- | --- |
-| `BackendCase`, `EventsCase` | `{:lemon_core, "~> 0.2", only: :test}` |
-| `ProviderCase` | `{:lemon_memory, "~> 0.2", only: :test}` |
-| `FakeLLM` | `{:lemon_ai, "~> 0.2", only: :test}` and `{:lemon_agent, "~> 0.2", only: :test}` |
-| `PluginCase` | `lemon_channels`, which is not published to Hex: a path dependency on `apps/lemon_channels` in a lemon checkout |
+| `BackendCase`, `EventsCase` | `{:lemon_core, "~> 0.3.0", only: :test}` |
+| `ProviderCase` | `{:lemon_memory, "~> 0.3.0", only: :test}` |
+| `FakeLLM` | `{:lemon_ai, "~> 0.3.0", only: :test}` and `{:lemon_agent, "~> 0.3.0", only: :test}` |
+
+The published packages share one release line and each 0.x minor may break, so
+require them at the same minor as `lemon_platform_test`.
 
 Forget one and the case raises at compile time naming the package to add.
 

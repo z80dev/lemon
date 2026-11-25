@@ -17,7 +17,7 @@ Skills live one per directory at `<skills-root>/<skill-key>/SKILL.md`:
 - **Project skills**: `.lemon/skill/<skill-name>/SKILL.md`, plus `.agents/skills`, `.omp/skills`, `.claude/skills`, `.codex/skills` and `.github/skills` between the working directory and the repository root
 - **Global skills**: `~/.lemon/agent/skill/<skill-name>/SKILL.md`, plus `~/.agents/skills`, `~/.omp/agent/skills`, `~/.claude/skills` and `~/.codex/skills`
 
-Project skills override global skills with the same key. The exact precedence, the `LEMON_AGENT_DIR` / `LEMON_*_SKILLS_DIR` overrides and isolation behavior are described in the [skills user guide](user-guide/skills.md#discovery-and-precedence). Per-scope settings live in `skills.json` (global `~/.lemon/agent/skills.json`, project `<cwd>/.lemon/skills.json`): its `disabled` list is managed by `LemonSkills.enable/2` and `LemonSkills.disable/2`.
+Project skills override global skills with the same key. The exact precedence, the `LEMON_AGENT_DIR` / `LEMON_*_SKILLS_DIR` overrides and isolation behavior are described in the [skills user guide](user-guide/skills.md#discovery-and-precedence). Per-scope skill state lives in `skills.json` (global `~/.lemon/agent/skills.json`, project `<cwd>/.lemon/skills.json`): its `disabled` list is managed by `LemonSkills.enable/2` and `LemonSkills.disable/2`. The effective disabled set is the global list united with the project list, so a project can only add keys. A present file that cannot be read or decoded fails closed: every skill reads as disabled until it is repaired, and `lemon doctor` reports it. Settings (`[skills.learning_nudge]`) live in `config.toml`.
 
 ### SKILL.md Format
 
@@ -197,7 +197,7 @@ Enable or disable a skill.
 :ok = LemonSkills.disable("my-skill")
 ```
 
-**Options:** `:global` (default `true`) selects the global or project `skills.json`; `:cwd` is the project directory (needed for `global: false`). Disabled skills are listed as `disabled` and omitted from the prompt.
+**Options:** `:global` (default `true`) selects the global or project `skills.json`; `:cwd` is the project directory (needed for `global: false`). Disabled skills are listed as `disabled` and omitted from the prompt. Writes are atomic (mode 0600) under the file's lock, and `enable/2` writes nothing when the key is not in that scope's list. `enable/2` returns `{:error, :archived}` for a skill the scope's usage sidecar marks archived (restore it first) and, at project scope, `{:error, :disabled_globally}` for a skill disabled in the global list; a project writer never lifts either.
 
 ### refresh/1
 
@@ -922,9 +922,8 @@ The external-tool import alone is controlled by `LEMON_MCP_EXTERNAL_DISCOVERY` /
 When tool names conflict, the precedence order is:
 
 1. Built-in tools (highest priority)
-2. WASM tools
-3. Extension tools
-4. MCP tools (lowest priority)
+2. Extension tools
+3. MCP tools (lowest priority)
 
 MCP tools with conflicting names will be shadowed by tools from other sources.
 

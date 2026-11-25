@@ -203,7 +203,7 @@ defmodule CodingAgent.AsyncFollowups do
       Map.get(
         context,
         :run_orchestrator,
-        CodingAgent.Tools.Task.Followup.default_run_orchestrator()
+        CodingAgent.TaskRuntime.Followup.default_run_orchestrator()
       )
     )
   end

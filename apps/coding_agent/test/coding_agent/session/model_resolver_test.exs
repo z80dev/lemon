@@ -1,10 +1,10 @@
 Code.require_file(
-  "../../../../../scripts/support/custom_pool_discovery_probe.exs",
+  "../../support/probes/custom_pool_discovery_probe.exs",
   __DIR__
 )
 
 Code.require_file(
-  "../../../../../scripts/support/preset_native_scope_probe.exs",
+  "../../support/probes/preset_native_scope_probe.exs",
   __DIR__
 )
 
@@ -50,7 +50,7 @@ defmodule CodingAgent.Session.ModelResolverTest do
     File.mkdir_p!(home)
     on_exit(fn -> File.rm_rf!(home) end)
 
-    report = LemonScripts.CustomPoolDiscoveryProbe.run!(home)
+    report = CodingAgent.TestSupport.CustomPoolDiscoveryProbe.run!(home)
     assert report.loopback_requests == 5
     assert report.principals == [:a, :b, :c, :missing]
   end
@@ -65,7 +65,7 @@ defmodule CodingAgent.Session.ModelResolverTest do
     File.mkdir_p!(home)
     on_exit(fn -> File.rm_rf!(home) end)
 
-    report = LemonScripts.PresetNativeScopeProbe.run!(home)
+    report = CodingAgent.TestSupport.PresetNativeScopeProbe.run!(home)
     assert report.failures == []
     assert report.loopback_requests == 12
   end

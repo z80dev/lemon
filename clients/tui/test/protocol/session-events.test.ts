@@ -64,6 +64,25 @@ describe("versioned session event wire boundaries", () => {
 		}
 	});
 
+	test("validates versioned wire identity while accepting unversioned legacy batches", () => {
+		const batch = {
+			cursor,
+			schemaVersion: 1 as const,
+			eventId: `${cursor.streamId}:${cursor.seq}`,
+			sequence: cursor.seq,
+			attemptId: "run:attempt:1",
+			events: [],
+		};
+		expect(parseSessionEventBatch(batch, "session")).toBe(batch);
+		expect(() => parseSessionEventBatch({ ...batch, schemaVersion: 2 }, "session")).toThrow(
+			"unsupported session event schema version",
+		);
+		expect(() => parseSessionEventBatch({ ...batch, eventId: "other" }, "session")).toThrow(
+			"invalid session event identity",
+		);
+		expect(parseSessionEventBatch({ cursor, events: [] }, "session").cursor).toBe(cursor);
+	});
+
 	test("rejects malformed cursor fields", () => {
 		for (const value of [
 			{ ...cursor, seq: -1 },

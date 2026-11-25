@@ -407,7 +407,7 @@ defmodule LemonCore.Update.RemoteTest do
     end
 
     test "update_available? is true when the manifest version is newer than current" do
-      current = LemonCore.Update.Version.current()
+      current = LemonCore.BuildInfo.version()
       artifacts = [artifact("pkg.tar.gz", "p", "linux-x86_64", "aa", 1)]
       base_url = start_server(manifest_router(manifest("~#{current}~newer", artifacts)))
 

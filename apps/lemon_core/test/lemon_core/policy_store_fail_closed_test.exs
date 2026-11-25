@@ -43,7 +43,7 @@ defmodule LemonCore.PolicyStoreFailClosedTest do
     end
   end
 
-  @policy_tables [:agent_policies, :channel_policies, :session_policies, :runtime_policy]
+  @policy_tables [:session_policies]
 
   setup do
     {:ok, _} = Application.ensure_all_started(:lemon_core)
@@ -56,14 +56,10 @@ defmodule LemonCore.PolicyStoreFailClosedTest do
     end)
 
     id = "fail-closed-#{System.unique_integer([:positive])}"
-    :ok = PolicyStore.put_agent(id, %{deny: ["bash"]})
-    :ok = PolicyStore.put_channel(id, %{deny: ["bash"]})
     :ok = PolicyStore.put_session(id, %{tool_policy: %{deny: ["bash"]}})
 
     on_exit(fn ->
       FaultBackend.clear()
-      Store.delete(:agent_policies, id)
-      Store.delete(:channel_policies, id)
       Store.delete(:session_policies, id)
     end)
 
@@ -71,20 +67,14 @@ defmodule LemonCore.PolicyStoreFailClosedTest do
   end
 
   test "strict reads distinguish a confirmed absent policy from a stored one", %{id: id} do
-    assert {:ok, %{deny: ["bash"]}} = PolicyStore.fetch_agent(id)
-    assert {:ok, %{deny: ["bash"]}} = PolicyStore.fetch_channel(id)
     assert {:ok, %{tool_policy: %{deny: ["bash"]}}} = PolicyStore.fetch_session(id)
     assert {:ok, nil} = PolicyStore.fetch_session(id <> "-absent")
-    assert {:ok, _runtime_or_nil} = PolicyStore.fetch_runtime()
   end
 
   test "a backend error is store_unavailable, never an absent policy", %{id: id} do
     FaultBackend.set(Map.new(@policy_tables, &{&1, :error}))
 
-    assert PolicyStore.fetch_agent(id) == {:error, :store_unavailable}
-    assert PolicyStore.fetch_channel(id) == {:error, :store_unavailable}
     assert PolicyStore.fetch_session(id) == {:error, :store_unavailable}
-    assert PolicyStore.fetch_runtime() == {:error, :store_unavailable}
   end
 
   @tag timeout: 30_000
@@ -109,8 +99,8 @@ defmodule LemonCore.PolicyStoreFailClosedTest do
   test "the lenient readers are gone, so no caller can collapse a failure into nil" do
     Code.ensure_loaded!(PolicyStore)
 
-    for fun <- [:get_agent, :get_channel, :get_session, :get_runtime] do
-      refute function_exported?(PolicyStore, fun, 0) or function_exported?(PolicyStore, fun, 1),
+    for fun <- [:get_session] do
+      refute function_exported?(PolicyStore, fun, 1),
              "PolicyStore.#{fun} still collapses read failures into an absent policy"
     end
   end

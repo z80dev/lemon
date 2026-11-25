@@ -48,6 +48,7 @@ include the full status counts and complete plan as well as the actionable list.
 Open-task titles exclude completed and abandoned items.
 
 Session branch navigation, rewind and resume restore the journaled plan, including
-its statuses and optional notes. The in-memory TodoStore is a projection, not a
-second authority. ACP plan updates preserve Lemon's five statuses and optional
-phase/blocker fields as well.
+its statuses and optional notes; the session journal is the only store. ACP plan
+updates preserve Lemon's five statuses and optional phase/blocker fields as well.
+`todo` is the only todo tool: older sessions' `todowrite` results are still read
+as plan history, but `todoread`/`todowrite` are not offered.

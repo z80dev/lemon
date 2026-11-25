@@ -342,10 +342,6 @@ Initial stable 1.0 support targets:
   labels. `usage.cost` remains a bounded display of known-cost subtotals,
   exposes `knownCostSubtotal`/`incomplete`, and is not an enforcement ledger.
   No prompts, response bodies, filesystem paths or credentials appear in records.
-- config diagnostics through `config.get` and `config.set`. Stored config keys
-  that look like API keys, tokens, passwords, secrets, credentials, or private
-  keys are returned as bounded redaction objects in single-key and full-config
-  reads, and sensitive `config.set` responses do not echo the submitted value.
 - model catalog diagnostics through read-only `models.list`. The response
   includes provider/capability counts, source metadata, and cleanup flags while
   omitting credential and secret values.

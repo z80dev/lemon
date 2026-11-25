@@ -9,15 +9,14 @@ defmodule LemonGateway.Executor do
 
   Executors send lifecycle events to the supplied sink as
   `{:engine_event, run_ref, event}` and streamed text as
-  `{:engine_delta, run_ref, text}`. Control operations that an executor cannot
-  perform must return `{:error, :unsupported}`. `cancel/1` only requests
-  cancellation and must not block: the Run keeps its permit and engine-session
-  claim until the executor process exits or the 15-second drain deadline passes.
+  `{:engine_delta, run_ref, text}`. With `canonical_delta: true` a local
+  executor may send its already-translated `LemonCore.Event` delta instead
+  of a bare string. Unsupported control operations return `{:error, :unsupported}`.
+  `cancel/1` only requests cancellation and must not block: the Run keeps its
+  permit and engine-session claim until the executor exits or the drain deadline passes.
   """
 
   alias LemonGateway.ExecutionRequest
-
-  @required_callbacks [start_run: 3, cancel: 1, steer: 2, redirect: 2]
 
   @type run_opts :: keyword()
   @type cancel_context :: term()
@@ -57,25 +56,21 @@ defmodule LemonGateway.Executor do
 
   @doc """
   Validates that a module is loadable and implements the native executor
-  contract.
+  contract, through the shared runtime-seam behaviour check.
   """
   @spec validate(module()) :: :ok | {:error, validation_error()}
   def validate(module) when is_atom(module) do
-    if Code.ensure_loaded?(module) do
-      case missing_callbacks(module) do
-        [] -> :ok
-        callbacks -> {:error, {:executor_missing_callbacks, module, callbacks}}
-      end
-    else
-      {:error, {:executor_not_loadable, module}}
+    case LemonCore.RuntimeSeam.validate(module, __MODULE__) do
+      :ok ->
+        :ok
+
+      {:error, {:missing_callbacks, ^module, callbacks}} ->
+        {:error, {:executor_missing_callbacks, module, callbacks}}
+
+      {:error, _not_loadable} ->
+        {:error, {:executor_not_loadable, module}}
     end
   end
 
   def validate(configured), do: {:error, {:invalid_executor, configured}}
-
-  defp missing_callbacks(module) do
-    Enum.reject(@required_callbacks, fn {function, arity} ->
-      function_exported?(module, function, arity)
-    end)
-  end
 end

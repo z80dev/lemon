@@ -44,6 +44,9 @@ defmodule LemonAi.Providers.OpenAICompletions do
   - `requires_mistral_tool_ids` - Normalize tool IDs to 9 alphanumeric chars
   - `thinking_format` - "openai" (default) or "zai"
   - `open_router_routing` - OpenRouter provider-routing object, or `nil` to omit it
+  - `moonshot_tool_schema` - Normalize tool parameters to Moonshot Flavored JSON
+    Schema (`LemonAi.Providers.MoonshotToolSchema`); detected for Moonshot/Kimi
+    native hosts
   """
 
   @behaviour LemonAi.Provider
@@ -68,6 +71,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
   alias LemonAi.Models.Presets
 
   alias LemonAi.Providers.{
+    MoonshotToolSchema,
     OpenAIResponsesShared,
     OpenCodeGoSession,
     RequestHeaders,
@@ -330,7 +334,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
   defp cache_routing_headers(_model, _opts), do: %{}
 
   defp build_copilot_headers(context) do
-    messages = context.messages || []
+    messages = context.messages
     last_message = List.last(messages)
 
     is_agent_call =
@@ -438,7 +442,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   defp maybe_add_max_tokens(params, model, opts, %{max_tokens_field: field}) do
     default_max_tokens =
-      if model.provider in [:zai, "zai"] or String.contains?(model.base_url || "", "api.z.ai"),
+      if model.provider in [:zai, "zai"] or String.contains?(model.base_url, "api.z.ai"),
         do: model.max_tokens
 
     max_tokens = opts.max_tokens || default_max_tokens
@@ -453,9 +457,9 @@ defmodule LemonAi.Providers.OpenAICompletions do
   defp maybe_add_temperature(params, %{temperature: temp}),
     do: Map.put(params, "temperature", temp)
 
-  defp maybe_add_tools(params, %{tools: tools}, _compat)
+  defp maybe_add_tools(params, %{tools: tools}, compat)
        when is_list(tools) and tools != [] do
-    Map.put(params, "tools", convert_tools(tools))
+    Map.put(params, "tools", convert_tools(tools, compat))
   end
 
   defp maybe_add_tools(params, %{messages: messages}, _compat) do
@@ -536,8 +540,6 @@ defmodule LemonAi.Providers.OpenAICompletions do
       params
     end
   end
-
-  defp maybe_add_openrouter_routing(params, _model, _compat), do: params
 
   defp has_tool_history?(messages) do
     Enum.any?(messages, fn
@@ -927,14 +929,18 @@ defmodule LemonAi.Providers.OpenAICompletions do
     end
   end
 
-  defp convert_tools(tools) do
+  defp convert_tools(tools, compat) do
     Enum.map(tools, fn %Tool{name: name, description: description, parameters: parameters} ->
       %{
         "type" => "function",
         "function" => %{
           "name" => name,
           "description" => description,
-          "parameters" => parameters,
+          "parameters" =>
+            if(compat.moonshot_tool_schema,
+              do: MoonshotToolSchema.normalize(parameters),
+              else: parameters
+            ),
           "strict" => false
         }
       }
@@ -974,13 +980,15 @@ defmodule LemonAi.Providers.OpenAICompletions do
         Map.get(model_compat, :requires_mistral_tool_ids, detected.requires_mistral_tool_ids),
       thinking_format: Map.get(model_compat, :thinking_format, detected.thinking_format),
       open_router_routing:
-        Map.get(model_compat, :open_router_routing, detected.open_router_routing)
+        Map.get(model_compat, :open_router_routing, detected.open_router_routing),
+      moonshot_tool_schema:
+        Map.get(model_compat, :moonshot_tool_schema, detected.moonshot_tool_schema)
     }
   end
 
   defp detect_compat(model) do
     provider = model.provider
-    base_url = model.base_url || ""
+    base_url = model.base_url
 
     is_zai = provider in [:zai, "zai"] || String.contains?(base_url, "api.z.ai")
 
@@ -1017,7 +1025,8 @@ defmodule LemonAi.Providers.OpenAICompletions do
       requires_thinking_as_text: is_mistral,
       requires_mistral_tool_ids: is_mistral,
       thinking_format: if(is_zai, do: "zai", else: "openai"),
-      open_router_routing: %{}
+      open_router_routing: %{},
+      moonshot_tool_schema: MoonshotToolSchema.native_host?(model.base_url)
     }
   end
 

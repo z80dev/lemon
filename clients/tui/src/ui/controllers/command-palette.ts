@@ -3,10 +3,9 @@ import { type KeyId, matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { CLOSE_ACTION } from "@oh-my-pi/pi-tui/native/picker";
 import {
 	commandPaletteEntries,
-	discoverPaletteResources,
+	daemonSkillEntries,
 	type PaletteDiscovery,
 	type PaletteEntry,
-	type PaletteSourceOptions,
 	rankPaletteEntries,
 } from "../../commands/palette-source.ts";
 import { type CommandContext, parseCommandLine } from "../../commands/registry.ts";
@@ -25,8 +24,6 @@ export interface CommandPaletteHost {
 	repaint(): void;
 	notice(text: string, level?: NoticeLevel): void;
 	bindingKeys?: (action: LemonKeybinding) => KeyId[];
-	/** Local filesystem configuration, not the daemon's remote/profile workspace. */
-	resources?: Omit<PaletteSourceOptions, "cwd">;
 }
 
 // Discovery selections execute only read-only actions and existing
@@ -62,7 +59,6 @@ const COMMAND_KEYS: Record<string, LemonKeybinding> = {
 const KIND_GROUPS: Record<PaletteEntry["kind"], { id: string; label: string; icon: string }> = {
 	command: { id: "command", label: "Commands", icon: "terminal" },
 	skill: { id: "skill", label: "Skills", icon: "sparkles" },
-	template: { id: "template", label: "Prompts", icon: "doc" },
 };
 
 const PALETTE_COLUMNS: PickerSheet["columns"] = [{ id: "keys", format: "dim", priority: 1 }];
@@ -99,8 +95,7 @@ export function insertPaletteEntry(entry: PaletteEntry, draft: string): string {
 	if (entry.kind === "command") {
 		return `${entry.insertText}${remainder ? ` ${remainder}` : " "}`;
 	}
-	if (entry.kind === "skill") return `${entry.insertText}${remainder}`;
-	return `${entry.insertText}${remainder ? `\n\n${remainder}` : ""}`;
+	return `${entry.insertText}${remainder}`;
 }
 
 export class CommandPalette {
@@ -136,7 +131,7 @@ export class CommandPalette {
 		this.#loading = true;
 		const query = filter ?? this.#draft.match(/^\s*\/([^\s/]*)/)?.[1] ?? "";
 		this.#overlay = new PickerOverlay({
-			title: "commands · skills · prompts",
+			title: "commands · skills",
 			items: rankPaletteEntries(this.#entries, query),
 			filter: query,
 			// Ranking includes aliases and gives exact aliases priority.
@@ -146,7 +141,7 @@ export class CommandPalette {
 					? "enter submits exact command / inserts match · esc keeps typed query"
 					: "enter inserts / opens action · esc keeps draft",
 			detail: () =>
-				this.#loading ? "Discovering local skills and prompts…" : this.#resources.issues,
+				this.#loading ? "Loading commands and skills from the daemon…" : this.#resources.issues,
 			onFilterChange: (value) => {
 				const prefix = value.match(/^(\S+)\s/);
 				if (
@@ -179,30 +174,20 @@ export class CommandPalette {
 			sheet: {
 				icon: "terminal",
 				noun: "commands",
-				placeholder: "Search commands, skills and prompts…",
+				placeholder: "Search commands and skills…",
 				columns: PALETTE_COLUMNS,
-				empty: "No command, skill or prompt matches",
+				empty: "No command or skill matches",
 				actions: () => [confirmAction(mode === "typed-slash" ? "Submit" : "Insert"), CLOSE_ACTION],
 			},
 		});
 		this.#close = this.#host.present(this.#overlay);
-		try {
-			const [resources, fileCommandIssues] = await Promise.all([
-				discoverPaletteResources({
-					...this.#host.resources,
-					cwd: ctx.cwd ?? process.cwd(),
-				}),
-				ctx.registry.refreshFileCommands(),
-			]);
-			if (generation !== this.#generation) return;
-			this.#resources = { ...resources, issues: [...resources.issues, ...fileCommandIssues] };
-		} catch {
-			if (generation !== this.#generation) return;
-			this.#resources = {
-				entries: [],
-				issues: ["Local resource discovery failed; command results remain available."],
-			};
-		}
+		// Both reads go to the daemon, which owns command and skill discovery.
+		const [skills, fileCommandIssues] = await Promise.all([
+			daemonSkillEntries(ctx.methods, ctx.cwd ?? process.cwd()),
+			ctx.registry.refreshFileCommands(),
+		]);
+		if (generation !== this.#generation) return;
+		this.#resources = { ...skills, issues: [...skills.issues, ...fileCommandIssues] };
 		this.#loading = false;
 		this.#entries = withNative(
 			[...commandPaletteEntries(this.#host.context()), ...this.#resources.entries],

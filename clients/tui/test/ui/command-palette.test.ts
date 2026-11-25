@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/key-hint-format";
+import { daemonFileCommands, type PaletteEntry } from "../../src/commands/palette-source.ts";
+import type { DaemonFileCommand } from "../../src/protocol/types.ts";
 import { CommandPalette } from "../../src/ui/controllers/command-palette.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
@@ -17,8 +19,11 @@ let closed: number;
 beforeEach(async () => {
 	initTheme({ colorLevel: 3 });
 	root = await mkdtemp(join(tmpdir(), "lemon-palette-ui-"));
-	await mkdir(join(root, ".git"));
 	harness = await createHarness({ cwd: root });
+	// The app's file-command source: the daemon's commands.list for this cwd.
+	harness.registry.setFileCommandSource(() => daemonFileCommands(harness.methods, root));
+	serveCommands([]);
+	harness.server.respondWith("skills.list", { skills: [], summary: { truncated: false } });
 	closed = 0;
 	palette = new CommandPalette({
 		context: () => harness.context(),
@@ -29,7 +34,6 @@ beforeEach(async () => {
 		},
 		repaint: () => {},
 		notice: (text, level) => harness.host.notice(text, level),
-		resources: { home: root, env: {} },
 	});
 });
 
@@ -41,6 +45,17 @@ afterEach(async () => {
 	invalidateThemeAdapters();
 });
 
+function serveCommands(commands: DaemonFileCommand[]): void {
+	harness.server.respondWith("commands.list", { commands, truncated: false });
+}
+
+/** File-command entries in palette order: exactly what the daemon listed. */
+function fileEntries(): string[] {
+	return (palette.overlay?.items ?? [])
+		.filter((item) => (item as PaletteEntry).command?.group === "file commands")
+		.map((item) => item.label);
+}
+
 describe("draft preservation", () => {
 	test("native hints show effective keys and omit unbound actions after resource discovery", async () => {
 		palette = new CommandPalette({
@@ -50,7 +65,6 @@ describe("draft preservation", () => {
 			present: () => () => {},
 			repaint: () => {},
 			notice: (text, level) => harness.host.notice(text, level),
-			resources: { home: root, env: {} },
 			bindingKeys: (action) => (action === "lemon.picker.model" ? ["alt+p"] : []),
 		});
 		await palette.open();
@@ -100,19 +114,10 @@ describe("draft preservation", () => {
 		expect(harness.host.draft).toBe("continue editing this");
 	});
 
-	test("inserts a real template body and keeps draft text, without expansion or autosend", async () => {
-		await mkdir(join(root, ".lemon/prompts"), { recursive: true });
-		await writeFile(join(root, ".lemon/prompts/reviewer.md"), "Review the following $1:");
-		harness.host.draft = "my unsubmitted code";
-		await palette.open("reviewer");
-		palette.overlay?.handleInput("\r");
-		expect(harness.host.draft).toBe("Review the following $1:\n\nmy unsubmitted code");
-		expect(harness.host.deliveries).toEqual([]);
-	});
-
 	test("skill inserts the native tool instruction and task draft", async () => {
-		await mkdir(join(root, ".lemon/skill/native-review"), { recursive: true });
-		await writeFile(join(root, ".lemon/skill/native-review/SKILL.md"), "Review code");
+		harness.server.respondWith("skills.list", {
+			skills: [{ key: "native-review", description: "Review code", enabled: true }],
+		});
 		harness.host.draft = "/native-review check this change";
 		await palette.open("native-review");
 		palette.overlay?.handleInput("\r");
@@ -325,15 +330,57 @@ describe("capabilities and discovery", () => {
 		}
 	});
 
-	test("failed local discovery is visible, not an empty-success message", async () => {
-		await mkdir(join(root, ".lemon"));
-		await writeFile(join(root, ".lemon/prompts"), "not a directory");
+	test("failed daemon discovery is visible, not an empty-success message", async () => {
+		harness.server.failWith("skills.list", "UNAVAILABLE", "Skill registry is unavailable");
+		harness.server.failWith("commands.list", "UNAVAILABLE", "Slash commands are unavailable");
 		await palette.open();
-		expect(renderPlain(palette.overlay?.render(110) ?? [])).toContain("Cannot discover resources");
+		const text = renderPlain(palette.overlay?.render(110) ?? []);
+		expect(text).toContain("Skill discovery failed");
+		expect(text).toContain("File command discovery failed");
 		expect(palette.overlay?.items.some((item) => item.value === "command:help")).toBe(true);
 	});
 
-	test("closing during filesystem discovery cannot reopen the overlay", async () => {
+	test("file commands equal the daemon's commands.list for the palette's cwd", async () => {
+		serveCommands([
+			{ name: "deploy", description: "Deploy from the custom agent dir", argumentHint: "[env]" },
+			{ name: "git:commit", description: "", argumentHint: null },
+			{ name: "help", description: "shadowed by the built-in", argumentHint: null },
+		]);
+		await palette.open();
+		expect(harness.server.requestsFor("commands.list").map((request) => request.params)).toEqual([
+			{ cwd: root },
+		]);
+		// Built-ins win a name collision; everything else is listed as served.
+		expect(fileEntries()).toEqual(["/deploy [env]", "/git:commit"]);
+	});
+
+	test("a command deleted on the daemon disappears on the next refresh", async () => {
+		serveCommands([
+			{ name: "deploy", description: "", argumentHint: null },
+			{ name: "review", description: "", argumentHint: null },
+		]);
+		await palette.open();
+		expect(fileEntries()).toEqual(["/deploy", "/review"]);
+		palette.close();
+		serveCommands([{ name: "deploy", description: "", argumentHint: null }]);
+		await palette.open();
+		expect(fileEntries()).toEqual(["/deploy"]);
+		expect(harness.registry.has("review")).toBe(false);
+	});
+
+	test("a failed refresh keeps the last daemon list and says so", async () => {
+		serveCommands([{ name: "deploy", description: "", argumentHint: null }]);
+		await palette.open();
+		palette.close();
+		harness.server.failWith("commands.list", "UNAVAILABLE", "Slash commands are unavailable");
+		await palette.open();
+		expect(fileEntries()).toEqual(["/deploy"]);
+		expect(renderPlain(palette.overlay?.render(110) ?? [])).toContain(
+			"File command discovery failed",
+		);
+	});
+
+	test("closing during daemon discovery cannot reopen the overlay", async () => {
 		const opening = palette.open();
 		palette.close();
 		await opening;

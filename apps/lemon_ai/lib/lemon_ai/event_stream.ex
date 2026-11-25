@@ -188,7 +188,7 @@ defmodule LemonAi.EventStream do
   The call waits without a timeout; stream lifecycle timers still apply.
   Use `push_async/2` if you don't need backpressure feedback.
   """
-  @spec push(t(), event()) :: :ok | {:error, :overflow | :canceled}
+  @spec push(t(), term()) :: :ok | {:error, :overflow | :canceled}
   def push(stream, event) do
     GenServer.call(stream, {:push, event}, :infinity)
   catch
@@ -230,7 +230,7 @@ defmodule LemonAi.EventStream do
   dropped silently on overflow. With `:error` strategy, overflow events
   are still dropped but a warning is logged.
   """
-  @spec push_async(t(), event()) :: :ok
+  @spec push_async(t(), term()) :: :ok
   def push_async(stream, event) do
     GenServer.cast(stream, {:push, event})
   end
@@ -813,20 +813,21 @@ defmodule LemonAi.EventStream do
     # handle_info clause sees it). Run the full cancel path when the stream is
     # not finished so waiters are notified and the attached task — typically
     # the provider HTTP streaming task — is shut down instead of orphaned.
-    if state.done or state.canceled do
-      if state.task_pid && Process.alive?(state.task_pid) do
-        Process.exit(state.task_pid, :brutal_kill)
-      end
-    else
-      cancel_reason =
-        case reason do
-          :shutdown -> :shutdown
-          {:shutdown, _} -> :shutdown
-          _ -> :owner_down
+    _ =
+      if state.done or state.canceled do
+        if state.task_pid && Process.alive?(state.task_pid) do
+          Process.exit(state.task_pid, :brutal_kill)
         end
+      else
+        cancel_reason =
+          case reason do
+            :shutdown -> :shutdown
+            {:shutdown, _} -> :shutdown
+            _ -> :owner_down
+          end
 
-      _ = do_cancel(state, cancel_reason)
-    end
+        do_cancel(state, cancel_reason)
+      end
 
     :ok
   end
@@ -856,8 +857,8 @@ defmodule LemonAi.EventStream do
   defp remaining(timeout, elapsed), do: max(timeout - elapsed, 0)
 
   defp cancel_timeouts(state) do
-    if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
-    if state.idle_timeout_ref, do: Process.cancel_timer(state.idle_timeout_ref)
+    _ = if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
+    _ = if state.idle_timeout_ref, do: Process.cancel_timer(state.idle_timeout_ref)
     :ok
   end
 
@@ -865,7 +866,7 @@ defmodule LemonAi.EventStream do
   defp reset_idle_timeout(%{canceled: true} = state), do: state
 
   defp reset_idle_timeout(state) do
-    if state.idle_timeout_ref, do: Process.cancel_timer(state.idle_timeout_ref)
+    _ = if state.idle_timeout_ref, do: Process.cancel_timer(state.idle_timeout_ref)
 
     %{
       state
@@ -1072,21 +1073,22 @@ defmodule LemonAi.EventStream do
   end
 
   defp shutdown_attached_task(pid, grace_ms) when is_pid(pid) do
-    if Process.alive?(pid) do
-      Process.exit(pid, :shutdown)
+    _ =
+      if Process.alive?(pid) do
+        Process.exit(pid, :shutdown)
 
-      spawn(fn ->
-        ref = Process.monitor(pid)
+        spawn(fn ->
+          ref = Process.monitor(pid)
 
-        receive do
-          {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
-        after
-          grace_ms ->
-            Process.exit(pid, :kill)
-            Process.demonitor(ref, [:flush])
-        end
-      end)
-    end
+          receive do
+            {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+          after
+            grace_ms ->
+              Process.exit(pid, :kill)
+              Process.demonitor(ref, [:flush])
+          end
+        end)
+      end
 
     :ok
   end

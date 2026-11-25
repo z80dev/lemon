@@ -28,7 +28,7 @@ defmodule CodingAgent.Session.Planning do
   alias CodingAgent.Session.ModelResolver
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
-  alias CodingAgent.Tools.{Edit, Write, WriteArchive, WriteSqlite}
+  alias CodingAgent.Tools.{Edit, Write}
   alias LemonAgent.ModelRuntime.SessionPins
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -326,7 +326,7 @@ defmodule CodingAgent.Session.Planning do
   end
 
   @doc """
-  Apply the current plan gate to one authorized WASM host target.
+  Apply the current plan gate to one authorized eval bridge target.
 
   Unlike `tools/3`, this does not add plan-only tools or proposal capabilities
   to the host inventory; it only reuses the normal target's execution guard.
@@ -563,7 +563,6 @@ defmodule CodingAgent.Session.Planning do
   defp todo_read?("todo", %{"action" => action}),
     do: action in ["read", "progress", "actionable"]
 
-  defp todo_read?("todoread", _params), do: true
   defp todo_read?(_name, _params), do: false
 
   defp plan_only_tool(name, context) do
@@ -617,9 +616,8 @@ defmodule CodingAgent.Session.Planning do
   defp plan_write?(_name, _params, _context), do: false
 
   defp plan_file?(path, context) do
-    is_nil(WriteArchive.target(path)) and is_nil(WriteSqlite.target(path)) and
-      (path == context.plan_path or
-         (Path.dirname(path) == context.plan_dir and Path.extname(path) == ".md"))
+    path == context.plan_path or
+      (Path.dirname(path) == context.plan_dir and Path.extname(path) == ".md")
   end
 
   # Plan files are session-private server storage: write them locally even when

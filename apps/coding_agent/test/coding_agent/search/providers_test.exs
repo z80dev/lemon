@@ -8,6 +8,7 @@ defmodule CodingAgent.Search.ProvidersTest do
     Jina,
     Kagi,
     Keenable,
+    Kimi,
     Perplexity,
     Searxng,
     Tavily
@@ -317,6 +318,64 @@ defmodule CodingAgent.Search.ProvidersTest do
 
       assert {:error, %{"error" => "missing_keenable_api_key"}} =
                Keenable.available?(:search, %{api_key: ""})
+    end
+
+    test "Kimi posts a Kimi Code search with bearer + fingerprint and maps results" do
+      parent = self()
+
+      http_post = fn "https://kimi.example/coding/v1/search", opts ->
+        send(parent, {:kimi, opts[:json]})
+        assert {"authorization", "Bearer kimi-secret"} in opts[:headers]
+        assert List.keymember?(opts[:headers], "x-msh-platform", 0)
+
+        {:ok,
+         %Req.Response{
+           status: 200,
+           body: %{
+             "search_results" => [
+               %{
+                 "url" => "https://a.example",
+                 "title" => " A ",
+                 "snippet" => "",
+                 "content" => "body text",
+                 "date" => "2026-10-30",
+                 "site_name" => "Example"
+               },
+               %{"title" => "missing url"}
+             ]
+           }
+         }}
+      end
+
+      context = %{
+        api_key: "kimi-secret",
+        base_url: "https://kimi.example/coding/",
+        timeout_ms: 100,
+        http_post: http_post
+      }
+
+      assert {:ok, payload} = Kimi.search(@request, context)
+
+      assert_received {:kimi,
+                       %{
+                         "text_query" => "lemon agents",
+                         "limit" => 3,
+                         "enable_page_crawling" => false,
+                         "timeout_seconds" => 30
+                       }}
+
+      assert [%{"url" => "https://a.example", "title" => "A"} = result] = payload["results"]
+      assert result["description"] =~ "body text"
+      assert payload["provider"] == "kimi"
+      refute inspect(payload) =~ "kimi-secret"
+
+      failing = fn _url, _opts -> {:ok, %Req.Response{status: 401, body: "unauthorized"}} end
+
+      assert {:error, "Kimi API error (401): unauthorized"} =
+               Kimi.search(@request, %{context | http_post: failing})
+
+      assert {:error, %{"error" => "missing_kimi_api_key"}} =
+               Kimi.available?(:search, %{api_key: nil})
     end
 
     test "Kagi reads V1 result buckets in order and caps the count" do

@@ -1,18 +1,19 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
-# lemon-gateway - Launch Lemon's Telegram runtime from source.
+# lemon-gateway - start Lemon's runtime from source under the gateway node name.
 #
 # Usage:
-#   ./bin/lemon-gateway [--debug] [--name <name@host> | --sname <name>] [--no-distribution]
+#   ./bin/lemon-gateway [--debug] [--port N] [--web-port N]
+#                       [--name <name@host> | --sname <name>] [--no-distribution]
 #
-# Reads configuration from:
-#   ~/.lemon/config.toml
-#   <project>/.lemon/config.toml (project preferences only; see docs/config.md)
-# Also loads:
-#   ~/.lemon/.env, or $LEMON_DOTENV_DIR/.env when set. Never the launch
-#   directory: a cloned repository's .env must not override operator config.
+# This is `./bin/lemon start` with the distributed node name defaulting to
+# lemon_gateway (LEMON_GATEWAY_NODE_NAME). The gateway, router and channel
+# adapters run only inside that one runtime, so this shares its health probe,
+# start lock, compile and node registration sequence: a healthy runtime on the
+# control port is reused, never joined by a second router or adapter set, and
+# dependencies are never fetched. See `./bin/lemon start --help`.
 #
-set -e
+set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_PATH" ]; do
@@ -20,191 +21,7 @@ while [ -L "$SCRIPT_PATH" ]; do
   SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
   [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
 done
-
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
-LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-export LEMON_PATH="$LEMON_ROOT"
-
-show_help() {
-  cat << 'EOF'
-Usage: ./bin/lemon-gateway [options]
-
-Options:
-  --debug                 Enable debug logging
-  --name <name@host>      Start as a distributed long-name node
-  --sname <name>          Start as a distributed short-name node (default: lemon_gateway)
-  --no-distribution       Disable distributed node startup
-  --help, -h              Show this help
-
-Environment overrides:
-  LEMON_GATEWAY_NODE_NAME      Default node name when using distribution (default: lemon_gateway)
-  LEMON_GATEWAY_NODE_COOKIE    Override the per-install ~/.lemon/cookie
-  LEMON_GATEWAY_COOKIE         Legacy fallback cookie env var
-  RELEASE_COOKIE              Fallback distribution cookie (never use argv)
-  LEMON_DOTENV_DIR             Directory whose .env file should be loaded (default: ~/.lemon)
-EOF
-}
-
-DEBUG=""
-NODE_MODE=""
-NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon_gateway}"
-NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-${RELEASE_COOKIE:-}}}"
-DISTRIBUTED=1
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --debug)
-      DEBUG="1"
-      shift
-      ;;
-    --name)
-      if [[ -z "${2:-}" ]]; then
-        echo "Missing value for --name" >&2
-        exit 1
-      fi
-
-      NODE_MODE="name"
-      NODE_NAME="$2"
-      shift 2
-      ;;
-    --sname)
-      if [[ -z "${2:-}" ]]; then
-        echo "Missing value for --sname" >&2
-        exit 1
-      fi
-
-      NODE_MODE="sname"
-      NODE_NAME="$2"
-      shift 2
-      ;;
-    --no-distribution)
-      DISTRIBUTED=0
-      shift
-      ;;
-    --help|-h)
-      show_help
-      exit 0
-      ;;
-    *)
-      echo "Unknown option: $1" >&2
-      show_help >&2
-      exit 1
-      ;;
-  esac
-done
-
-if [[ -z "$NODE_MODE" ]]; then
-  if [[ "$NODE_NAME" == *"@"* ]]; then
-    NODE_MODE="name"
-  else
-    NODE_MODE="sname"
-  fi
-fi
-
-# Match the primary launcher's local-only distribution defaults.
-export ERL_EPMD_ADDRESS="${ERL_EPMD_ADDRESS:-127.0.0.1}"
-if [[ "$NODE_MODE" != "name" ]]; then
-  case "${ELIXIR_ERL_OPTIONS:-}" in
-    *inet_dist_use_interface*) ;;
-    *) export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-}${ELIXIR_ERL_OPTIONS:+ }-kernel inet_dist_use_interface {127,0,0,1}" ;;
-  esac
-fi
-
-if [[ "$DISTRIBUTED" == "1" && -z "$NODE_COOKIE" ]]; then
-  (
-    umask 077
-    mkdir -p "$HOME/.lemon"
-    [ -s "$HOME/.lemon/cookie" ] || openssl rand -hex 32 > "$HOME/.lemon/cookie"
-    chmod 600 "$HOME/.lemon/cookie"
-  ) || exit 1
-  NODE_COOKIE="$(cat "$HOME/.lemon/cookie")"
-fi
-
-if [[ "$DISTRIBUTED" == "1" ]] && [[ -z "$NODE_COOKIE" ]]; then
-  echo "Distributed mode requires a non-empty cookie. Set LEMON_GATEWAY_NODE_COOKIE or RELEASE_COOKIE." >&2
-  exit 1
-fi
-
-cd "$LEMON_ROOT"
-
-if [[ -n "$DEBUG" ]]; then
-  export LEMON_DEBUG=1
-fi
-
-export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$HOME/.lemon}"
-
-# Some macOS environments deny keychain reads from long-lived BEAM processes
-# (security error code 36: user interaction not allowed). The item read here is
-# passed to the runtime's keychain provider only; the runtime still resolves
-# keychain, env var and key file in its configured order and fails on
-# conflicting keys, exactly like the CLI.
-if [[ -z "${LEMON_SECRETS_KEYCHAIN_PRELOAD:-}" ]] && command -v security >/dev/null 2>&1; then
-  KEYCHAIN_CANDIDATES=()
-
-  append_keychain_candidate() {
-    local candidate="$1"
-    local existing=""
-
-    candidate="${candidate#"${candidate%%[![:space:]]*}"}"
-    candidate="${candidate%\"}"
-    candidate="${candidate#\"}"
-
-    if [[ -z "$candidate" || ! -f "$candidate" ]]; then
-      return
-    fi
-
-    for existing in "${KEYCHAIN_CANDIDATES[@]}"; do
-      if [[ "$existing" == "$candidate" ]]; then
-        return
-      fi
-    done
-
-    KEYCHAIN_CANDIDATES+=("$candidate")
-  }
-
-  append_keychain_candidate "$(security default-keychain -d user 2>/dev/null | head -n 1 || true)"
-
-  while IFS= read -r keychain_line; do
-    append_keychain_candidate "$keychain_line"
-  done < <(security list-keychains -d user 2>/dev/null || true)
-
-  append_keychain_candidate "$HOME/Library/Keychains/login.keychain-db"
-
-  for keychain_path in "${KEYCHAIN_CANDIDATES[@]}"; do
-    if MASTER_KEY_FROM_KEYCHAIN="$(security find-generic-password -s "Lemon Secrets" -a default -w "$keychain_path" 2>/dev/null)"; then
-      if [[ -n "$MASTER_KEY_FROM_KEYCHAIN" ]]; then
-        export LEMON_SECRETS_KEYCHAIN_PRELOAD="$MASTER_KEY_FROM_KEYCHAIN"
-        echo "[lemon-gateway] Preloaded secrets master key from keychain."
-        break
-      fi
-    fi
-  done
-fi
-
-mix deps.get
-mix compile
-
-echo "[lemon-gateway] Starting Telegram runtime (Ctrl-C to stop)..."
-# Telegram polling and delivery are owned by lemon_channels (Telegram adapter + outbox),
-# while run orchestration lives in lemon_router and execution lives in lemon_gateway.
-# `--no-start` is important in umbrella projects: it prevents Mix from starting every
-# OTP application in the umbrella (e.g. the control plane on :4040) implicitly.
-if [[ "$DISTRIBUTED" == "1" ]]; then
-  if [[ "$NODE_MODE" == "name" ]]; then
-    REMSH_TARGET="$NODE_NAME"
-  else
-    SHORT_HOST="$(hostname -s 2>/dev/null || hostname)"
-    REMSH_TARGET="${NODE_NAME}@${SHORT_HOST}"
-  fi
-
-  echo "[lemon-gateway] Distributed node: --$NODE_MODE $NODE_NAME"
-  echo "[lemon-gateway] Remote shell target: $REMSH_TARGET"
-  echo "[lemon-gateway] Attach using the guarded source remsh in docs/security/threat-model.md#distribution-cookie"
-  export RELEASE_COOKIE="$NODE_COOKIE"
-  exec elixir --erl "-kernel start_distribution false -nocookie" "--$NODE_MODE" "$NODE_NAME" \
-    -r "$LEMON_ROOT/apps/lemon_cli/lib/lemon_cli/distribution.ex" -e 'LemonCli.Distribution.boot()' \
-    -S mix run --no-start --no-halt -e 'LemonCore.Dotenv.load_and_log(System.get_env("LEMON_DOTENV_DIR")); Application.ensure_all_started(:lemon_gateway); Application.ensure_all_started(:lemon_router); Application.ensure_all_started(:lemon_channels)'
-else
-  echo "[lemon-gateway] Distribution disabled (--no-distribution); remote attach is unavailable."
-  exec mix run --no-start --no-halt -e 'LemonCore.Dotenv.load_and_log(System.get_env("LEMON_DOTENV_DIR")); Application.ensure_all_started(:lemon_gateway); Application.ensure_all_started(:lemon_router); Application.ensure_all_started(:lemon_channels)'
-fi
+export LEMON_GATEWAY_NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon_gateway}"
+exec "$SCRIPT_DIR/lemon" start "$@"

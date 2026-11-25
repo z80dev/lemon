@@ -82,6 +82,26 @@ defmodule LemonChannels.Telegram.ResumeIndexStore do
     :ok
   end
 
+  @doc """
+  Strictly read the message-index rows of one session: every message mapped to
+  `session_key` and the resume rows of those messages, as
+  `LemonCore.SessionLifecycle.StoreRows` rows.
+  """
+  @spec fetch_session_rows(binary()) ::
+          {:ok, [LemonCore.SessionLifecycle.StoreRows.row()]} | {:error, :store_unavailable}
+  def fetch_session_rows(session_key) when is_binary(session_key) do
+    with {:ok, sessions} <- Store.fetch_all(@session_table),
+         {:ok, resumes} <- Store.fetch_all(@resume_table) do
+      keys = for {key, ^session_key} <- sessions, into: MapSet.new(), do: key
+
+      {:ok,
+       for({key, value} <- sessions, MapSet.member?(keys, key), do: {@session_table, key, value}) ++
+         for({key, value} <- resumes, MapSet.member?(keys, key), do: {@resume_table, key, value})}
+    else
+      _unreadable -> {:error, :store_unavailable}
+    end
+  end
+
   defp clear_table_thread(table, account_id, chat_id, thread_id, max_generation) do
     table
     |> Store.list()

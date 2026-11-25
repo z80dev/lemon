@@ -94,8 +94,8 @@ defmodule LemonGateway.Transports.Webhook.Submission do
   end
 
   # Provenance derived from the token-authenticated integration, never from the
-  # payload: the router applies the `webhook` channel policy from it whatever
-  # the submission origin. A token authenticates the integration, not the
+  # payload: the router applies the approval floor from it whatever the
+  # submission origin. A token authenticates the integration, not the
   # content it relays, so the run gets the group approval floor (any peer kind
   # but `:dm`) unless the operator's global config marks this integration
   # `trusted_automation = true` (a literal boolean; gateway sections are

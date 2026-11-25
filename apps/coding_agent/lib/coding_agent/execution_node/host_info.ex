@@ -155,7 +155,7 @@ defmodule CodingAgent.ExecutionNode.HostInfo do
     end
   end
 
-  defp version, do: LemonCore.Update.Version.current()
+  defp version, do: LemonCore.BuildInfo.version()
 
   # Measurement failures fail the whole host snapshot, not fabricated metrics.
   defp command(name, args) do

@@ -4,8 +4,8 @@
 external-content tools:
 
 - `websearch`: query registered providers. Bundled providers are Brave
-  (default), Exa, Perplexity Sonar, Tavily, Kagi, Jina, Keenable, keyless
-  DuckDuckGo, and user-hosted SearXNG.
+  (default), Exa, Perplexity Sonar, Tavily, Kagi, Jina, Keenable, Kimi Code,
+  keyless DuckDuckGo, and user-hosted SearXNG.
 - `webfetch`: extract readable content through registered providers. Guarded
   direct extraction is the default and optionally falls back to Firecrawl.
   Direct extraction converts PDF responses to `=== Page N ===` text with the
@@ -101,6 +101,7 @@ direct extraction are terminal and never fall back through a remote extractor.
 | `kagi` | search (V1 API: web, then video/news/infobox buckets) | `KAGI_API_KEY` or `runtime.tools.web.search.providers.kagi.api_key` |
 | `jina` | search (`s.jina.ai`) | `JINA_API_KEY` or `runtime.tools.web.search.providers.jina.api_key` |
 | `keenable` | search | `KEENABLE_API_KEY` or `runtime.tools.web.search.providers.keenable.api_key` |
+| `kimi` | search (Kimi Code `POST /coding/v1/search`) | `KIMI_SEARCH_API_KEY`/`MOONSHOT_SEARCH_API_KEY`, `runtime.tools.web.search.providers.kimi.api_key`, else the `kimi_coding` model credential (`lemon model kimi-code` login, omp login or Kimi Code API key) and its `base_url`. A Moonshot Open Platform key is rejected by the service. |
 | `duckduckgo` | keyless search | none |
 | `searxng` | search | `runtime.tools.web.search.providers.searxng.base_url` |
 | `direct` | extract | built in; guarded HTTP plus readability |
@@ -280,7 +281,7 @@ Key resolution behavior:
 ```toml
 [runtime.tools.web.search]
 enabled = true
-provider = "brave"                    # brave | exa | perplexity | tavily | kagi | jina | keenable | duckduckgo | searxng | extension id
+provider = "brave"                    # brave | exa | perplexity | tavily | kagi | jina | keenable | kimi | duckduckgo | searxng | extension id
 max_results = 5
 timeout_seconds = 30
 cache_ttl_minutes = 15

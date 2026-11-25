@@ -1,6 +1,6 @@
 defmodule CodingAgent.InternalUrls do
   @moduledoc """
-  Router for internal `notes://`, `skill://` and `artifact://` URLs.
+  Router for internal `local://`, `skill://` and `artifact://` URLs.
 
   Skill keys and bundle-relative paths preserve case. A bare skill reference
   selects `SKILL.md`; path segments may percent-encode spaces and Unicode.
@@ -11,7 +11,7 @@ defmodule CodingAgent.InternalUrls do
   segments, every segment lstat-checked (symlinks, FIFOs and devices refused)
   and a byte cap. The registered bundle root itself may be a symlink.
 
-  Notes retain their session-scoped protocol semantics. Skill lookup uses the
+  `local://` names one file in the session's scratch directory. Skill lookup uses the
   LemonSkills registry and the shared `LemonSkills.Status.loadable?/2` gate, so
   disabled, audit-blocked and unauthorized skills (no operator-side audit pass
   or approval for the exact live bundle) are refused. Artifact
@@ -19,14 +19,10 @@ defmodule CodingAgent.InternalUrls do
   return `{:error, :unknown_protocol}`.
   """
 
-  alias CodingAgent.InternalUrls.NotesProtocol
-
   @type result :: {:ok, String.t()} | {:error, String.t() | atom()}
 
   @doc "Returns whether a URL uses a recognized internal protocol."
   @spec internal_url?(term()) :: boolean()
-  def internal_url?("notes://" <> _), do: true
-
   def internal_url?(path) when is_binary(path) do
     String.valid?(path) and
       Regex.match?(~r/\A(?:skill|artifact|local|proc|issue|pr|history):/i, path)
@@ -37,14 +33,11 @@ defmodule CodingAgent.InternalUrls do
   @doc """
   Resolves an internal URL using workspace and session options.
 
-  `:cwd` supplies the working directory. Notes and artifacts also require
-  `:session_id`; protocol-specific options are passed through unchanged.
+  `:cwd` supplies the working directory. Local and artifact references also
+  use the session scope in `opts`; protocol-specific options are passed through
+  unchanged.
   """
   @spec resolve(String.t(), keyword()) :: result()
-  def resolve("notes://" <> _ = uri, opts) do
-    NotesProtocol.resolve(uri, opts)
-  end
-
   def resolve("local://" <> name, opts) do
     with true <- valid_segment?(name),
          {:ok, directory} <- CodingAgent.Artifacts.spill_dir(Keyword.fetch!(opts, :cwd), opts),

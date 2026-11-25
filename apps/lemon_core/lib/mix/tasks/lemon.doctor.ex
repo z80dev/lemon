@@ -37,7 +37,8 @@ defmodule Mix.Tasks.Lemon.Doctor do
 
   @impl true
   def run(args) do
-    Mix.Tasks.Lemon.Secrets.ensure_started!()
+    Mix.Task.run("loadpaths")
+    LemonCore.CLI.start!(:lemon_core, store: :read_only)
 
     {opts, _rest, _invalid} =
       OptionParser.parse(args,

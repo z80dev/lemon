@@ -2,7 +2,8 @@ defmodule CodingAgent.Tools.ErrorCopyTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Result, Followup}
+  alias CodingAgent.TaskRuntime.Followup
+  alias CodingAgent.Tools.Task.Result
 
   test "failed task polling, retrieval and followup never render tuple reasons" do
     reason = {:provider_failed, %{private: :detail}}

@@ -2,7 +2,7 @@ defmodule LemonAutomation.GoalContinuationTest do
   use ExUnit.Case, async: false
 
   alias LemonAutomation.GoalContinuation
-  alias LemonAgent.Workspace.GoalStore
+  alias LemonAutomation.GoalStore
 
   defmodule GoalRouterOk do
     @moduledoc false
@@ -38,7 +38,7 @@ defmodule LemonAutomation.GoalContinuationTest do
              GoalStore.set(session_key, "Ship Hermes parity",
                agent_id: "agent_1",
                cwd: ".",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, params} = GoalContinuation.build_params(goal, "run_preview")
@@ -51,10 +51,10 @@ defmodule LemonAutomation.GoalContinuationTest do
     assert params.cwd == Path.expand(".")
     # Goal runs never get goal, cron or any other delegation tool.
     assert Enum.sort(params.tool_policy.blocked_tools) ==
-             Enum.sort(LemonAgent.Workspace.GoalAuthority.delegation_tools())
+             Enum.sort(LemonAutomation.GoalAuthority.delegation_tools())
 
     assert {:ok, params.meta.cwd_identity} ==
-             LemonAgent.Workspace.KanbanAuthority.directory_identity(params.cwd)
+             LemonAutomation.KanbanAuthority.directory_identity(params.cwd)
 
     assert params.run_id == "run_preview"
     assert params.meta.goal_id == goal.id
@@ -82,7 +82,7 @@ defmodule LemonAutomation.GoalContinuationTest do
 
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Pause me",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, _paused} = GoalStore.pause(session_key)
@@ -107,7 +107,7 @@ defmodule LemonAutomation.GoalContinuationTest do
   test "does not mutate the goal when router submit fails", %{session_key: session_key} do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Fail safely",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:error, :busy} =
@@ -123,9 +123,7 @@ defmodule LemonAutomation.GoalContinuationTest do
 
   test "waited completion persists result and counts acceptance once", %{session_key: key} do
     assert {:ok, _} =
-             GoalStore.set(key, "Implement",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
-             )
+             GoalStore.set(key, "Implement", authority: LemonAutomation.GoalAuthority.operator())
 
     assert {:ok, %{goal: goal, completion: {:ok, "implemented"}}} =
              GoalContinuation.continue_once(key,
@@ -144,7 +142,7 @@ defmodule LemonAutomation.GoalContinuationTest do
   test "one-shot submission never adopts a different run id", %{session_key: key} do
     assert {:ok, _} =
              GoalStore.set(key, "Fixed identity",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:error, {:submission_outcome_unknown, "fixed"}} =

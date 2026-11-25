@@ -69,6 +69,50 @@ defmodule CodingAgent.Tools.WebSearchTest do
     assert hd(payload["results"])["url"] == "https://example.com/keyless"
   end
 
+  test "kimi searches with the Kimi Code model credential and its endpoint" do
+    test_pid = self()
+
+    http_post = fn url, opts ->
+      send(test_pid, {:kimi_post, url, opts[:headers]})
+
+      {:ok,
+       %Req.Response{
+         status: 200,
+         body: %{"search_results" => [%{"url" => "https://k.example", "title" => "K"}]}
+       }}
+    end
+
+    tool =
+      WebSearch.tool("/tmp",
+        http_post: http_post,
+        kimi_code_credential: fn -> {"kimi-login-token", "https://kimi.example/coding"} end
+      )
+
+    payload =
+      tool.execute.("id", %{"query" => "kimi lemon", "provider" => "kimi"}, nil, nil)
+      |> decode_payload()
+
+    assert payload["provider_used"] == "kimi"
+    assert hd(payload["results"])["url"] == "https://k.example"
+    assert_received {:kimi_post, "https://kimi.example/coding/v1/search", headers}
+    assert {"authorization", "Bearer kimi-login-token"} in headers
+    refute inspect(payload) =~ "kimi-login-token"
+
+    missing =
+      WebSearch.tool("/tmp", http_post: http_post, kimi_code_credential: fn -> {nil, nil} end)
+
+    result =
+      missing.execute.(
+        "id",
+        %{"query" => "kimi other", "provider" => "kimi", "fallbackProviders" => []},
+        nil,
+        nil
+      )
+
+    assert inspect(result) =~ "missing_kimi_api_key"
+    refute_received {:kimi_post, _, _}
+  end
+
   test "rejects an unknown request-selected provider" do
     tool = WebSearch.tool("/tmp")
 

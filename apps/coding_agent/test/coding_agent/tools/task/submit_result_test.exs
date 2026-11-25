@@ -1,7 +1,8 @@
 defmodule CodingAgent.Tools.Task.SubmitResultTest do
   use ExUnit.Case, async: false
 
-  alias CodingAgent.Tools.Task.{Execution, Runner, StructuredOutput}
+  alias CodingAgent.TaskRuntime.Runner
+  alias CodingAgent.Tools.Task.{Execution, StructuredOutput}
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.AgentToolResult
 

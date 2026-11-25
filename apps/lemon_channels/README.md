@@ -1,6 +1,6 @@
 # LemonChannels
 
-Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, XMTP, WhatsApp, and email), a router-facing semantic delivery dispatcher, channel-owned presentation state, a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization that submits canonical `LemonCore.RunRequest` structs to the router.
+Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, XMTP, and email), a router-facing semantic delivery dispatcher, channel-owned presentation state, a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization that submits canonical `LemonCore.RunRequest` structs to the router.
 
 Nostrum is an included application: its dependencies are loaded normally, while the configured Discord adapter owns and supervises its process tree.
 
@@ -41,7 +41,7 @@ Nostrum is an included application: its dependencies are loaded normally, while 
 Channel adapters also use `LemonCore.RouterBridge` for busy-session and active-run queries. They must not read router-internal session registries or read models directly.
 
 Router acceptance is the inbound delivery boundary. Telegram, Discord,
-WhatsApp, and XMTP hold provisional transport dedupe markers until submission
+and XMTP hold provisional transport dedupe markers until submission
 finishes and emit progress reactions or typing signals only after `:ok`.
 Definite rejections release those markers so a repeated platform event can be
 submitted again. `{:error, :outcome_unknown}` and
@@ -64,7 +64,7 @@ without claiming acceptance.
 All volatile channel deduplication uses `LemonCore.Dedupe.Ets`: provisional
 inbound claims use atomic `insert_new`, while the outbox's policy wrapper only
 marks confirmed deliveries and restores durable receipt TTLs. Telegram and
-Discord keep their configured TTLs; WhatsApp retains its 20-minute TTL; XMTP
+Discord keep their configured TTLs; XMTP
 retains its last 2,000 accepted or uncertain inbound identities (without a TTL).
 The core supervisor owns these volatile ETS tables; transport initialization
 clears its inbound table. This does not replace email's durable compare-and-swap
@@ -122,8 +122,7 @@ written part of the admission. The outbox reserves bounded capacity and retries
 only that same idempotent storage operation before dispatching it. An enqueue
 timeout likewise means unknown admission, never permission for a caller resend.
 Telegram's direct-send fallback runs only when the Outbox is unavailable or
-definitely rejected a full queue. WhatsApp command acknowledgement timeouts are
-also outcome-unknown rather than safe-to-retry failures.
+definitely rejected a full queue.
 
 Outbox limits are caller policies, configured under
 `config :lemon_channels, LemonChannels.Outbox`: `max_queue_size` defaults to
@@ -240,7 +239,6 @@ LemonChannels.Application
 +-- LemonChannels.Outbox.Dedupe           (GenServer - confirmed-key cleanup policy)
 +-- Outbox.WorkerSupervisor               (Task.Supervisor - max_children delivery cap)
 +-- LemonChannels.Outbox                  (GenServer - delivery queue)
-+-- WhatsApp.ModelPolicyAdapter           (GenServer - session-override ETS owner)
 +-- LemonChannels.InboundHttp             (Supervisor - optional HTTP listener)
 |   +-- InboundHttp.Routes                (GenServer - config registration only)
 +-- LemonChannels.AdapterSupervision      (Supervisor - rest_for_one)
@@ -255,9 +253,6 @@ LemonChannels.Application
     |       |   +-- Discord.Transport             (GenServer - event lifecycle)
     |       |   +-- Discord.Transport.Consumer    (Nostrum consumer)
     |       +-- XMTP.Transport                    (if configured, GenServer + Port)
-    |       +-- WhatsApp.Supervisor               (if configured)
-    |           +-- WhatsApp.AsyncSupervisor      (Task.Supervisor)
-    |           +-- WhatsApp.Transport            (GenServer + Port)
     +-- AdapterSupervision.Starter        (starts configured adapters)
 ```
 
@@ -267,10 +262,6 @@ When another runtime holds a Telegram bot's poller lock, the Telegram transport 
 
 Named volatile dedupe tables belong to `LemonCore.Dedupe.Owner` workers under
 the core dynamic supervisor, not short-lived callers or channel transports.
-The application-owned `WhatsApp.ModelPolicyAdapter` child owns session model
-overrides. Session override reads/writes use ETS directly; they never create a
-table in a short-lived command process. An unavailable owner is an explicit
-failure, and owner restart clears those ephemeral overrides.
 
 ```elixir
 config :lemon_channels,
@@ -392,6 +383,14 @@ Discord while their coding sessions run elsewhere. Automation binds each run to
 its exact session and target before submission. Approval requests and successful
 resolution edits go through Outbox, as do completion/failure notices.
 
+Transports route `/goal`, `/kanban`, `/remind`, `/reminders` and `/unremind`
+through `LemonCore.AutomationCommands` to the provider `lemon_automation`
+registers at boot (`LemonAutomation.ChatCommands`), passing only trusted
+context: session key, agent, bound workspace, channel context, operator
+attestation and the background task callbacks. Without the automation runtime
+each command answers a fixed unavailable reply; a provider that fails answers
+an outcome-unknown reply that is never retried.
+
 `/goal set` records the chat as the goal principal, the chat's channel-run
 tool policy (resolved as the router resolves a run from that chat, including
 the group approval floor) and its bound project directory (or the assistant
@@ -497,7 +496,7 @@ This ownership boundary matters: channels own truncation, send-vs-edit behavior,
 
 Voice replies are opt-in under `[gateway.<channel>.voice_replies]` (see the
 [configuration reference](../../docs/config.md)). Telegram sends native voice
-messages and WhatsApp sends push-to-talk audio. On voice-capable channels,
+messages. On voice-capable channels,
 only an inbound voice message can trigger synthesis of the final answer.
 The final text is the transcript. Speech synthesis runs in channels-owned
 background supervision only after every transcript chunk is confirmed delivered;
@@ -586,11 +585,6 @@ end
   authentication failures), a connection lost before DATA, connection refused
   and the like are definite and terminal; the `smtp_timeout` deadline stays
   unknown.
-- WhatsApp: the bridge flags an exception thrown by its `sendMessage` call
-  `outcome_unknown` and the transport returns `{:error, {:outcome_unknown, message}}`,
-  as it already does for an acknowledgement timeout or a lost transport process.
-  An error before that call (not connected, unreadable media file) is
-  unflagged, definite and terminal.
 - XMTP: a transport call that exits mid-delivery is an unknown outcome; a
   transport that is not running is a definite failure.
 - Dedupe still suppresses re-sends of confirmed deliveries: a key is marked
@@ -681,7 +675,7 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `Telegram.Formatter` | Converts markdown to plain text + Telegram entities (avoids fragile MarkdownV2 escaping) |
 | `Telegram.Markdown` | EarmarkParser-based AST renderer producing Telegram entity format with UTF-16 offsets |
 | `Telegram.ResumeIndexStore` | Typed wrapper for Telegram message-id session and resume indices; legacy vendor entries remain readable but are never selected for a top-level run |
-| `Telegram.StateStore` | Typed wrapper for Telegram per-session/per-topic preference state |
+| `Telegram.StateStore` | Typed wrapper for Telegram resume selection and thread generation state (model and thinking preferences live in `LemonCore.PolicyStore`) |
 | `Telegram.Truncate` | Splits/truncates messages so both the Markdown source and the rendered text fit 4096 UTF-16 units; never splits a code fence or table row that fits in one message (oversized fences/tables become several closed fences/tables, each table repeating its header) and keeps native resume lines on the last message |
 | `Telegram.TriggerMode` | Per-chat/topic `:all` vs `:mentions` mode (ETS-backed) |
 | `Telegram.OffsetStore` | Persists `getUpdates` offset via `LemonCore.Store` |
@@ -722,7 +716,7 @@ Session and native-resume indices are scoped by a generation counter. `/new` inc
 
 #### `/model` Picker Behavior
 
-`/model` uses a reply keyboard (bottom keyboard) flow for per-user selection in a chat/topic: provider -> model -> scope (`This session` or `All future sessions`). `This session` writes the current session override; `All future sessions` writes a chat-wide default even when invoked from a topic. Selection messages are intercepted by transport state and are not routed as normal inbound prompts. Provider/model lists are paginated in-keyboard with `<< Prev` / `Next >>`, plus `< Back` / `Close`. The model step accepts either the exact button label or raw model ids such as `gpt-5.4` and `provider:model_id`.
+`/model` uses a reply keyboard (bottom keyboard) flow for per-user selection in a chat/topic: provider -> model -> scope (`This session` or `All future sessions`). `This session` writes the `:model` of the session's `LemonCore.PolicyStore` row (the row `sessions.patch` writes, so web, TUI and the control plane show it); `All future sessions` also writes a chat-wide `PolicyStore` chat row, even when invoked from a topic. `/thinking` writes the topic or chat row. Channels only render these rows and encode picker choices: runs carry no channel-chosen model or thinking level, and `LemonRouter.ModelSelection` resolves them from the session key. Session reset and delete remove the session row with every model and thinking override; `/new` clears the session model. Selection messages are intercepted by transport state and are not routed as normal inbound prompts. Provider/model lists are paginated in-keyboard with `<< Prev` / `Next >>`, plus `< Back` / `Close`. The model step accepts either the exact button label or raw model ids such as `gpt-5.4` and `provider:model_id`.
 
 The picker belongs to the member who sent `/model`: only that sender's later messages in the same chat/topic answer it, and the keyboard is sent with `selective: true`. Other members' messages are ordinary messages. Picker answers pass the group trigger gate first, so in a mentions-only group the opener answers by replying to the bot's picker message (or the chat uses `/trigger all`). An idle picker expires after ten minutes and releases its catalog snapshot; a later answer is then an ordinary message.
 
@@ -1009,40 +1003,6 @@ authserv_id = "mx.your-provider.example"
 > run the agent as that sender. The adapter logs a warning at startup while
 > this is set. A configured `authserv_id` is still enforced alongside it.
 
-### WhatsApp
-
-**Plugin ID**: `"whatsapp"` | **Chunk limit**: 4096
-
-The WhatsApp adapter uses its own Node.js bridge script and event tag behind the same internal port lifecycle as XMTP.
-
-WhatsApp's transport is the sole reconnect authority for both socket disconnects
-and bridge port failures. Its existing twelve-attempt backoff budget is shared
-across those failures; duplicate disconnect notifications do not add a timer or
-consume another attempt. `PortBridge` runs in manual restart mode for WhatsApp;
-XMTP retains automatic port restart/replay.
-
-Exhaustion records an explicit reconnect-budget error in `Registry.status/0` and
-stops the transient transport child with `{:shutdown, :reconnect_exhausted}`.
-The supervisor retains a stopped child instead of resetting its retry budget.
-Logout and connection replacement also stop with explicit health errors.
-Re-link the account when required, then restart the adapter to recover. Stopping
-the transport closes its bridge and cancels outstanding reconnect/command timers.
-
-#### Module Layout
-
-| Module | Purpose |
-|--------|---------|
-| `WhatsApp` (plugin) | Plugin behaviour implementation |
-| `WhatsApp.Supervisor` | Starts the async supervisor and transport when credentials are configured |
-| `WhatsApp.Transport` | GenServer for message send/receive and bridge event handling with provisional dedupe and acceptance-only typing |
-| `WhatsApp.Bridge` | Communication with the Node.js bridge |
-| `LemonChannels.PortBridge` | Shared GenServer managing the WhatsApp Node.js port lifecycle |
-
-WhatsApp rolls back provisional message dedupe after a definite router
-rejection so the platform event can be retried. Ambiguous submission outcomes
-remain deduped, and the user is told acceptance could not be confirmed.
-`/cancel` preserves pending session state when cancellation is rejected.
-
 ## Adding a New Channel Adapter
 
 1. **Create the adapter module** in `lib/lemon_channels/adapters/my_channel.ex` implementing all 6 `LemonChannels.Plugin` callbacks.
@@ -1114,8 +1074,8 @@ LemonChannels.Runtime.session_busy?(session_key)
 
 Submission, cancel, and keep-alive calls return `:ok | {:error, term()}`. Busy
 checks return `{:ok, boolean()} | {:error, term()}`; an unreachable router is
-not equivalent to an idle session. Telegram, Discord, WhatsApp, and XMTP do not
-present a rejected submission as queued. Telegram and WhatsApp cancellation
+not equivalent to an idle session. Telegram, Discord, and XMTP do not
+present a rejected submission as queued. Telegram cancellation
 handlers likewise mutate local session state only after the router accepts
 cancellation. Telegram and Discord component controls remain intact when run
 control fails, and ambiguous failures say the decision could not be confirmed
@@ -1174,7 +1134,7 @@ per-request state or mutable cache is written to persistent-term.
 | `LemonChannels.Capabilities` | Capability type definitions and defaults |
 | `LemonChannels.PresentationState` | Channels-owned message-id/send-vs-edit state per `{route, run, surface}` |
 | `LemonChannels.OutboundPayload` | Core delivery struct with constructors |
-| `LemonChannels.PortBridge` (internal) | Shared line-delimited JSON port lifecycle used directly by the XMTP and WhatsApp transports |
+| `LemonChannels.PortBridge` (internal) | Line-delimited JSON port lifecycle used directly by the XMTP transport |
 | `LemonChannels.BindingResolver` | Chat scope to project/agent/cwd/queue binding resolution (delegates to LemonCore) |
 | LemonChannels.Runtime (internal) | Runtime bridge for session/run cancel, keepalive, and busy checks via `LemonCore.RouterBridge` |
 | `LemonCore.Cwd.channel_default_cwd/0` | Shared channel working-directory resolution |
@@ -1239,17 +1199,7 @@ per-request state or mutable cache is written to persistent-term.
 | `Adapters.XMTP` | Plugin behaviour implementation |
 | `XMTP.Transport` | Message send/receive GenServer |
 | `XMTP.Bridge` | Node.js bridge communication |
-| `LemonChannels.PortBridge` | Shared Node.js port lifecycle |
-
-### WhatsApp
-
-| Module | Purpose |
-|--------|---------|
-| `Adapters.WhatsApp` | Plugin behaviour implementation |
-| `WhatsApp.Supervisor` | Credentials-gated adapter supervisor |
-| `WhatsApp.Transport` | Message send/receive GenServer |
-| `WhatsApp.Bridge` | Node.js bridge communication |
-| `LemonChannels.PortBridge` | Shared Node.js port lifecycle |
+| `LemonChannels.PortBridge` | Node.js port lifecycle |
 
 ## Testing
 
@@ -1283,9 +1233,8 @@ mix test apps/lemon_channels/test/lemon_channels/outbox_test.exs
 | `telegram/file_transfer_test.exs` | File handling |
 | `media_status_message_test.exs` | Telegram `/media` command recognition and redacted status formatting |
 | `capabilities_test.exs` | Includes X adapter capability lookup |
-| `port_bridge_contract_test.exs` | Shared XMTP/WhatsApp bridge API, parser, event-tag, and reconnect contract |
+| `port_bridge_contract_test.exs` | XMTP bridge API, parser, event-tag, restart/replay and process-group cleanup contract |
 | `outbox_adapter_contract_test.exs` | Every built-in adapter's `deliver/1` against fake transports: ambiguous sends normalize to outcome-unknown, definite failures stay terminal |
-| `adapters/whatsapp/bridge_script_test.exs` | Runs `whatsapp_bridge.mjs` under Node with a fake Baileys package: send exceptions flag `outcome_unknown` |
 
 ### Mock Adapter Pattern
 

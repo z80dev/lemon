@@ -93,7 +93,8 @@ defmodule LemonRouter.SessionCoordinator do
 
       {:ok, nil} ->
         with {:ok, pid} <- ensure_coordinator(conversation_key, opts) do
-          GenServer.call(pid, {:submit_with_receipt, submission}, 15_000)
+          attempt = Keyword.get(opts, :admission_attempt)
+          GenServer.call(pid, {:submit_with_receipt, submission, attempt}, 15_000)
         end
 
       {:error, {:sync_failed, _reason}} ->
@@ -404,7 +405,7 @@ defmodule LemonRouter.SessionCoordinator do
     end
   end
 
-  def handle_call({:submit_with_receipt, submission}, _from, state) do
+  def handle_call({:submit_with_receipt, submission, attempt}, {sender, _tag}, state) do
     case RunReceiptStore.fetch(state.receipt_store, submission.run_id) do
       {:ok, %{} = receipt} ->
         {:reply, replay_receipt(submission, receipt), state}
@@ -419,7 +420,10 @@ defmodule LemonRouter.SessionCoordinator do
             {:reply, {:error, :runtime_stopping}, state}
 
           true ->
-            admit_submission(state, submission)
+            case claim_handoff(submission.run_id, attempt, sender) do
+              :ok -> admit_submission(state, submission)
+              {:error, _} = error -> {:reply, error, state}
+            end
         end
 
       {:error, {:sync_failed, _reason}} ->
@@ -427,6 +431,29 @@ defmodule LemonRouter.SessionCoordinator do
 
       {:error, _reason} = error ->
         {:reply, error, state}
+    end
+  end
+
+  defp claim_handoff(_run_id, nil, _sender), do: :ok
+
+  defp claim_handoff(run_id, attempt, sender) do
+    store = LemonCore.Store
+    table = LemonRouter.RunOrchestrator.admission_table()
+
+    with {:ok, %{state: "submitting", handoff: {epoch, ^attempt, ^sender, nil}} = row} <-
+           store.fetch(table, run_id),
+         :ok <- check_abort_fence(run_id),
+         :ok <-
+           store.compare_and_swap(
+             store,
+             table,
+             run_id,
+             row,
+             %{row | handoff: {epoch, attempt, sender, self()}}, durable: true) do
+      :ok
+    else
+      {:aborted, reason} -> {:error, {:run_aborted, reason}}
+      _ -> {:error, :outcome_unknown}
     end
   end
 
@@ -1009,7 +1036,8 @@ defmodule LemonRouter.SessionCoordinator do
 
     start_result =
       with :ok <- LemonRouter.NativeLineage.validate_activation(next.execution_request),
-           :ok <- LemonRouter.ResumeResolver.bind_run(next.execution_request) do
+           :ok <- LemonRouter.ResumeResolver.bind_run(next.execution_request),
+           :ok <- check_abort_fence(next.run_id) do
         RunStarter.start(next, self(), state.conversation_key)
       end
 
@@ -1018,6 +1046,15 @@ defmodule LemonRouter.SessionCoordinator do
         next_state = activate_submission(state, next, rest, pid, opts)
 
         if opts[:return_result?], do: {next_state, :started}, else: {next_state, :ok}
+
+      {:aborted, reason} ->
+        next_state = %SessionState{state | queue: rest}
+        complete_dropped_submissions(state, next_state, dropped_reason: reason)
+        if rest != [], do: send(self(), :maybe_start_next)
+
+        if opts[:return_result?],
+          do: {next_state, {:error, {:run_aborted, reason}}},
+          else: {next_state, :ok}
 
       {:error, reason}
       when reason == :session_busy or
@@ -1055,6 +1092,21 @@ defmodule LemonRouter.SessionCoordinator do
               else: {next_state, :ok}
         end
     end
+  end
+
+  defp check_abort_fence(run_id) do
+    case LemonCore.Store.fetch(LemonRouter.RunOrchestrator.abort_tombstone_table(), run_id) do
+      {:ok, nil} ->
+        :ok
+
+      {:ok, %{} = tombstone} ->
+        {:aborted, MapHelpers.get_key(tombstone, :reason_code) || :aborted}
+
+      _ ->
+        {:error, :run_state_unavailable}
+    end
+  catch
+    :exit, _ -> {:error, :run_state_unavailable}
   end
 
   defp refresh_queued_resume(%Submission{} = submission) do
@@ -1312,7 +1364,7 @@ defmodule LemonRouter.SessionCoordinator do
         meta = incoming_meta |> Map.delete("node") |> Map.put(:node, node)
         args = [active.cwd, prompt, meta]
 
-        case LemonCore.AgentRuntime.call(:prepare_prompt, args, prompt) do
+        case LemonCore.AgentRuntime.query(:prepare_prompt, args) do
           prepared when is_binary(prepared) -> prepared
           _ -> prompt
         end
