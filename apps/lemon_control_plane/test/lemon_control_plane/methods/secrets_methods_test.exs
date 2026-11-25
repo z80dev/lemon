@@ -4,31 +4,36 @@ defmodule LemonControlPlane.Methods.SecretsMethodsTest do
 
   alias LemonControlPlane.Methods.{Registry, SecretsDelete, SecretsSet}
   alias LemonControlPlane.Protocol.Schemas
-  alias LemonCore.Secrets
+  alias LemonCore.{Secrets, Store}
+  alias LemonPlatformTest.Testing.Helpers
 
   @name "CONTROL_PLANE_SECRET_TEST"
 
   setup do
     previous_secrets = Application.fetch_env(:lemon_core, :secrets)
-    previous_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
-
-    Application.put_env(:lemon_core, :secrets, key_providers: [:env])
-    System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
+    table = Secrets.table()
+    {:ok, previous_rows} = Store.fetch_all(table)
+    key_env = "LEMON_CONTROL_PLANE_SECRETS_TEST_KEY_#{System.unique_integer([:positive])}"
 
     on_exit(fn ->
-      _ = Secrets.delete(@name)
-
       case previous_secrets do
         {:ok, value} -> Application.put_env(:lemon_core, :secrets, value)
         :error -> Application.delete_env(:lemon_core, :secrets)
       end
 
-      if previous_key,
-        do: System.put_env("LEMON_SECRETS_MASTER_KEY", previous_key),
-        else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
+      System.delete_env(key_env)
+      Helpers.clear_store_table(table)
+
+      for {key, row} <- previous_rows, do: :ok = Store.put(table, key, row)
     end)
 
-    :ok
+    # The shared table can hold an earlier test's key verifier even with no
+    # remaining values. Give the fresh key an empty table for this test only.
+    Helpers.clear_store_table(table)
+    System.put_env(key_env, Helpers.random_master_key())
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env], env_var: key_env)
+
+    %{key_env: key_env}
   end
 
   test "both methods are admin-only and schema-bound" do
@@ -66,8 +71,9 @@ defmodule LemonControlPlane.Methods.SecretsMethodsTest do
     assert {:error, :not_found} = Secrets.get(@name)
   end
 
-  test "a store refusal names a bounded reason and promises nothing was written" do
-    System.delete_env("LEMON_SECRETS_MASTER_KEY")
+  test "a store refusal names a bounded reason and promises nothing was written",
+       %{key_env: key_env} do
+    System.delete_env(key_env)
 
     assert {:error, {:unavailable, "Could not store the secret", details}} =
              SecretsSet.handle(%{"name" => @name, "value" => "never-stored"}, %{})
