@@ -36,7 +36,11 @@ defmodule LemonRouter.CoalescerBackpressureTest do
 
   test "answer mailbox overflow requires canonical final text and rejects obsolete transport generations" do
     session = session_key()
-    pid = start_supervised!({StreamCoalescer, opts(session) ++ [min_chars: 1_000_000]})
+
+    pid =
+      start_supervised!(
+        {StreamCoalescer, opts(session) ++ [min_chars: 1_000_000, retire_after_ms: 60_000]}
+      )
 
     [{^pid, %{delivery: old}}] =
       Registry.lookup(LemonRouter.CoalescerRegistry, {session, "telegram"})
@@ -76,8 +80,10 @@ defmodule LemonRouter.CoalescerBackpressureTest do
     refute_received {:intent, _}
     StreamCoalescer.ingest_delta(session, "telegram", "run-2", 1, "current")
     send(pid, {:lemon_bus_delivery, old.gate, {:delta, "run-1", 10_001, "obsolete", %{}}})
-    assert %{run_id: "run-2", full_text: "current", finalized: false} = :sys.get_state(pid)
-    current = :sys.get_state(pid)
+
+    # Age the timestamp by one tick so an unintended touch always changes it.
+    current = :sys.replace_state(pid, &%{&1 | last_activity_ms: &1.last_activity_ms - 1})
+    assert %{run_id: "run-2", full_text: "current", finalized: false} = current
 
     assert :ok =
              StreamCoalescer.finalize_run(session, "telegram", "run-1",
@@ -85,6 +91,15 @@ defmodule LemonRouter.CoalescerBackpressureTest do
              )
 
     assert :sys.get_state(pid) == current
+    refute_received {:intent, _}
+
+    assert :ok = StreamCoalescer.finalize_run(session, "telegram", "run-2")
+    assert_received {:intent, %{kind: :stream_finalize, body: %{text: "current"}}}
+
+    finalized = :sys.get_state(pid)
+    assert %{finalized: true, buffer: "", full_text: "", flush_timer: nil} = finalized
+
+    assert finalized.last_activity_ms > current.last_activity_ms
   end
 
   test "replaceable tool progress coalesces into one action without retaining every update" do
