@@ -49,6 +49,12 @@ defmodule CodingAgent.Session.EventLogCursorTest do
       entries = for {seq, bytes, _entry} <- rows, is_integer(seq), do: bytes
       {:reply, %{count: length(entries), bytes: Enum.sum(entries)}, state}
     end
+
+    @impl true
+    def handle_info({Notifier, :flush}, state) do
+      :ok = Notifier.flush_pending()
+      {:noreply, state}
+    end
   end
 
   defmodule SnapshotAgent do
@@ -57,7 +63,7 @@ defmodule CodingAgent.Session.EventLogCursorTest do
     def init(nil), do: {:ok, nil}
 
     def handle_call(:get_state, {owner, _tag}, state) do
-      send(owner, {:agent_event, {:observed, :before_snapshot}})
+      send(owner, {:agent_event, {:agent_start}})
 
       snapshot = %{
         messages: [],
@@ -123,20 +129,25 @@ defmodule CodingAgent.Session.EventLogCursorTest do
     pid = owner()
     initial = GenServer.call(pid, :cursor)
     GenServer.call(pid, {:subscribe, self()})
-    cursors = for n <- 1..5, do: append(pid, {:observed, n})
+    cursors = for n <- 1..5, do: append(pid, delta(Integer.to_string(n)))
     assert Enum.map(cursors, & &1["seq"]) == Enum.to_list(1..5)
 
+    # The raw subscriber still receives the agent vocabulary.
     for n <- 1..5 do
-      assert_receive {:session_event, "native-1", {:observed, ^n}, cursor}
+      text = Integer.to_string(n)
+
+      assert_receive {:session_event, "native-1", {:message_update, {:text_delta, 0, ^text}},
+                      cursor}
+
       assert cursor == Enum.at(cursors, n - 1)
     end
 
     assert {:ok, first} = replay(pid, initial, 2)
     assert first.has_more
-    assert Enum.map(first.events, & &1.event) == [{:observed, 1}, {:observed, 2}]
+    assert Enum.map(first.events, &entry_text/1) == ["1", "2"]
     assert {:ok, second} = replay(pid, first.cursor)
     refute second.has_more
-    assert Enum.map(second.events, & &1.event) == [{:observed, 3}, {:observed, 4}, {:observed, 5}]
+    assert Enum.map(second.events, &entry_text/1) == ["3", "4", "5"]
     assert {:ok, again} = replay(pid, initial, 2)
     assert again == first
 
@@ -164,9 +175,9 @@ defmodule CodingAgent.Session.EventLogCursorTest do
   test "count eviction expires only the missing prefix, never the oldest valid boundary" do
     pid = owner(event_log_max_count: 2)
     cursor = GenServer.call(pid, :cursor)
-    first = append(pid, {:observed, 1})
-    append(pid, {:observed, 2})
-    append(pid, {:observed, 3})
+    first = append(pid, delta("1"))
+    append(pid, delta("2"))
+    append(pid, delta("3"))
     assert {:error, :cursor_expired} = replay(pid, cursor)
     assert {:ok, %{events: entries}} = replay(pid, first)
     assert Enum.map(entries, & &1.cursor["seq"]) == [2, 3]
@@ -176,11 +187,11 @@ defmodule CodingAgent.Session.EventLogCursorTest do
   test "encoded byte budget evicts oversized events without hiding their sequence" do
     pid = owner(event_log_max_count: 100, event_log_max_bytes: 1_024)
     initial = GenServer.call(pid, :cursor)
-    oversized = append(pid, {:observed, String.duplicate("x", 4_096)})
+    oversized = append(pid, delta(String.duplicate("x", 4_096)))
     assert %{count: 0, bytes: 0} = GenServer.call(pid, :usage)
     assert {:error, :cursor_expired} = replay(pid, initial)
     assert {:ok, %{events: []}} = replay(pid, oversized)
-    append(pid, {:observed, :small})
+    append(pid, delta("small"))
     assert {:ok, %{events: [entry]}} = replay(pid, oversized)
     assert entry.cursor["seq"] == 2
     assert %{count: 1, bytes: bytes} = GenServer.call(pid, :usage)
@@ -189,12 +200,12 @@ defmodule CodingAgent.Session.EventLogCursorTest do
 
   test "branch changes invalidate cursors without reusing sequence numbers" do
     pid = owner()
-    before = append(pid, {:observed, 1})
+    before = append(pid, delta("1"))
     after_branch = GenServer.call(pid, :invalidate)
     assert after_branch["seq"] == 1
     refute after_branch["streamId"] == before["streamId"]
     assert {:error, :cursor_expired} = replay(pid, before)
-    next = append(pid, {:observed, 2})
+    next = append(pid, delta("2"))
     assert next["seq"] == 2
     assert {:ok, %{events: [entry]}} = replay(pid, after_branch)
     assert entry.cursor == next
@@ -206,7 +217,7 @@ defmodule CodingAgent.Session.EventLogCursorTest do
     assert :ets.info(table, :owner) == pid
     assert :ets.info(table, :type) == :ordered_set
     assert :ets.info(table, :protection) == :protected
-    cursor = append(pid, {:observed, 1})
+    cursor = append(pid, delta("1"))
     ref = Process.monitor(pid)
     stop_supervised!(Owner)
     assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}
@@ -223,4 +234,7 @@ defmodule CodingAgent.Session.EventLogCursorTest do
     assert {:error, :cursor_expired} = replay(pid, %{cursor | "seq" => 1})
     assert {:error, :invalid_cursor} = replay(pid, %{})
   end
+
+  defp delta(text), do: {:message_update, {:text_delta, 0, text}}
+  defp entry_text(%{events: [%LemonCore.Event{payload: %{text: text}}]}), do: text
 end

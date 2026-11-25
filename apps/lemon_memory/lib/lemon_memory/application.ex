@@ -13,7 +13,15 @@ defmodule LemonMemory.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [LemonMemory.Providers] ++ sqlite_children()
+    sqlite_children = sqlite_children()
+    children = [LemonMemory.Providers] ++ sqlite_children
+
+    # Session deletion must delete the session's memory documents whenever the
+    # store that holds them runs.
+    if sqlite_children != [] do
+      :ok =
+        LemonCore.SessionLifecycle.Participant.register(:memory, LemonMemory.SessionParticipant)
+    end
 
     opts = [strategy: :one_for_one, name: LemonMemory.Supervisor]
     Supervisor.start_link(children, opts)

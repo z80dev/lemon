@@ -1,7 +1,7 @@
 defmodule LemonAutomation.KanbanCodingWorkflowTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Workspace.KanbanStore
+  alias LemonAutomation.KanbanStore
   alias LemonAutomation.{KanbanDispatcher, KanbanGitWorkflow, KanbanRunWorker}
 
   defmodule Router do
@@ -555,7 +555,7 @@ defmodule LemonAutomation.KanbanCodingWorkflowTest do
   end
 
   defp kanban(params, cwd, opts),
-    do: LemonSkills.Tools.Kanban.execute("call", params, nil, nil, cwd, opts)
+    do: LemonAutomation.Tools.Kanban.execute("call", params, nil, nil, cwd, opts)
 
   defp create(context, config, session_opts \\ []) do
     %{details: %{board: board}} =

@@ -15,7 +15,8 @@ defmodule Mix.Tasks.Lemon.Quality do
       publish set in `apps/*/mix.exs` equals `scripts/verify_packages`
     * architecture - the declared umbrella graph and every cross-app reference
       in `apps/*/lib` and `config/*.exs` follow `LemonCore.Quality.ArchitecturePolicy`
-    * duplicate test module guard (`mix lemon.check_duplicate_tests`)
+    * duplicate test module and layered test-family guard
+      (`mix lemon.check_duplicate_tests`)
 
   Usage:
     mix lemon.quality

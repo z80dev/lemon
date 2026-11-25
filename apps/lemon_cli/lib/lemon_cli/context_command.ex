@@ -1,7 +1,7 @@
 defmodule LemonCli.ContextCommand do
-  @moduledoc "Packaged CLI adapter for the canonical `LemonCore.Context` service."
+  @moduledoc "Packaged CLI adapter for the canonical `LemonSkills.Context` service."
 
-  alias LemonCore.Context
+  alias LemonSkills.Context
   alias LemonCli.Onboarding.LogSilencer
 
   @exit_ok 0

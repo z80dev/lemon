@@ -5,12 +5,14 @@ name: Packaging
 #
 #   - tarballs:  scripts/verify_packages — `mix hex.build --unpack` each
 #                package, compile a consumer project that depends on nothing
-#                but the unpacked tarballs, boot :lemon_agent, then generate
-#                `mix lemon.new` projects against the same tarballs and run
-#                their tests. Every other lane builds inside the umbrella,
-#                which is how the 0.1.0 releases shipped uninstallable.
-#                The Elixir 1.15 leg checks the `elixir: "~> 1.15"` floor the
-#                packages declare; it is advisory until it has been green.
+#                but the unpacked tarballs, boot :lemon_agent, run the packaged
+#                doctor, then generate `mix lemon.new` projects against the
+#                same tarballs and run their tests. Every other lane builds
+#                inside the umbrella, which is how the 0.1.0 releases shipped
+#                uninstallable. The Elixir 1.17 leg proves the
+#                `elixir: "~> 1.17"` floor the packages declare (exqlite 0.43
+#                requires 1.17); PlatformPackagingContractTest keeps it equal
+#                to that floor and required.
 #   - generator: scripts/verify_generator — both `mix lemon.new` shapes
 #                (including --channel, which needs the unpublished
 #                lemon_channels) against this checkout.
@@ -56,7 +58,6 @@ jobs:
     name: tarballs — Elixir ${{ matrix.elixir }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    continue-on-error: ${{ matrix.advisory }}
 
     strategy:
       fail-fast: false
@@ -64,10 +65,9 @@ jobs:
         include:
           - otp: "29.1.2"
             elixir: "1.20.5"
-            advisory: false
+          # The packages' declared floor.
           - otp: "26.2"
-            elixir: "1.15.8"
-            advisory: true
+            elixir: "1.17.3"
 
     steps:
       - name: Checkout

@@ -544,17 +544,15 @@ defmodule CodingAgent.Tools.ReadTest do
   end
 
   describe "execute/6 - directory handling" do
-    test "lists directory entries through the read tool", %{tmp_dir: tmp_dir} do
+    test "refuses directories and points at ls", %{tmp_dir: tmp_dir} do
       dir_path = Path.join(tmp_dir, "subdir")
       File.mkdir_p!(dir_path)
-      File.write!(Path.join(dir_path, "entry.txt"), "content")
 
-      result = Read.execute("call_1", %{"path" => dir_path}, nil, nil, tmp_dir, [])
+      assert {:error, message} =
+               Read.execute("call_1", %{"path" => dir_path}, nil, nil, tmp_dir, [])
 
-      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
-      assert text =~ "entry.txt"
-      assert details.is_directory
-      assert result.trust == :untrusted
+      assert message =~ "Path is a directory"
+      assert message =~ "List directories with ls"
     end
   end
 

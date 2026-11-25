@@ -71,6 +71,33 @@ defmodule LemonCore.SecretsTest do
     refute Secrets.exists?("expired_secret", env_fallback: false)
   end
 
+  @tag :tmp_dir
+  test "a client store's list hides an expired secret and leaves pruning to the runtime", %{
+    tmp_dir: tmp_dir
+  } do
+    backend = [backend: Store.SqliteBackend, backend_opts: [path: Path.join(tmp_dir, "s.db")]]
+
+    start_supervised!({Store, [name: :secrets_list_writer] ++ backend}, id: :writer)
+
+    assert {:ok, _} =
+             Secrets.set("expired_on_client", "value",
+               store: :secrets_list_writer,
+               expires_at: Clock.now_ms() - 1_000
+             )
+
+    :ok = stop_supervised(:writer)
+
+    start_supervised!(
+      {Store, [name: :secrets_list_reader, read_only: true, sweep: false] ++ backend},
+      id: :reader
+    )
+
+    assert {:ok, []} = Secrets.list(store: :secrets_list_reader)
+
+    assert {:ok, %{}} =
+             Store.fetch(:secrets_list_reader, Secrets.table(), {"default", "expired_on_client"})
+  end
+
   test "snapshot and restore preserve metadata without reviving conditional revisions" do
     name = "snapshot_secret"
     expires_at = Clock.now_ms() + 60_000

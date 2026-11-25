@@ -3,6 +3,7 @@ defmodule CodingAgent.Tools.TaskTest do
 
   alias CodingAgent.{RunGraph, TaskStore, ToolPolicy}
   alias CodingAgent.Tools.Task
+  alias CodingAgent.Tools.Task.InvocationAuthority
   alias CodingAgent.Tools.Task.Params
   alias LemonAgent.AbortSignal
   alias LemonAgent.Test.Mocks
@@ -169,7 +170,9 @@ defmodule CodingAgent.Tools.TaskTest do
                )
 
       assert {:ok, restricted} =
-               Params.restrict_to_parent(validated, "/tmp", execution_context: parent)
+               InvocationAuthority.restrict_to_parent(validated, "/tmp",
+                 execution_context: parent
+               )
 
       assert ExecutionContext.subset?(restricted.execution_context, parent)
       assert ToolPolicy.allowed?(restricted.tool_policy, "read")
@@ -191,7 +194,9 @@ defmodule CodingAgent.Tools.TaskTest do
                )
 
       assert {:error, message} =
-               Params.restrict_to_parent(validated, "/tmp", execution_context: parent)
+               InvocationAuthority.restrict_to_parent(validated, "/tmp",
+                 execution_context: parent
+               )
 
       assert message =~ "workspace_scope_escalation"
     end
@@ -217,7 +222,7 @@ defmodule CodingAgent.Tools.TaskTest do
                )
 
       assert {:error, message} =
-               Params.restrict_to_parent(validated, root, execution_context: parent)
+               InvocationAuthority.restrict_to_parent(validated, root, execution_context: parent)
 
       assert message =~ "workspace_scope_escalation"
 
@@ -232,7 +237,7 @@ defmodule CodingAgent.Tools.TaskTest do
                )
 
       assert {:ok, restricted} =
-               Params.restrict_to_parent(validated, root, execution_context: parent)
+               InvocationAuthority.restrict_to_parent(validated, root, execution_context: parent)
 
       {:ok, real_root} = LemonCore.TrustedRoot.realpath(root)
       assert restricted.cwd == Path.join(real_root, "sub")

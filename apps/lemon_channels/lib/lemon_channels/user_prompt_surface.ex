@@ -73,11 +73,7 @@ defmodule LemonChannels.UserPromptSurface do
     :ok = Bus.subscribe(Bus.run_topic(request.run_id))
 
     result =
-      AgentRuntime.call(
-        :user_prompt_bind,
-        [key, self(), true, [max_timeout_ms: @deadline]],
-        {:error, :unavailable}
-      )
+      AgentRuntime.mutate(:user_prompt_bind, [key, self(), true, [max_timeout_ms: @deadline]])
 
     run = %{
       session_key: key,
@@ -295,11 +291,13 @@ defmodule LemonChannels.UserPromptSurface do
 
   defp resolve(prompt, response),
     do:
-      AgentRuntime.call(
-        :user_prompt_resolve,
-        [prompt.public["promptId"], prompt.session_key, prompt.public["runId"], response, self()],
-        {:error, :expired}
-      )
+      AgentRuntime.mutate(:user_prompt_resolve, [
+        prompt.public["promptId"],
+        prompt.session_key,
+        prompt.public["runId"],
+        response,
+        self()
+      ])
 
   defp remove_run(state, id) do
     case Map.pop(state.runs, id) do
@@ -310,12 +308,7 @@ defmodule LemonChannels.UserPromptSurface do
         _ = Bus.unsubscribe(Bus.run_topic(id))
 
         if not Enum.any?(runs, fn {_, r} -> r.session_key == run.session_key end),
-          do:
-            AgentRuntime.call(
-              :user_prompt_bind,
-              [run.session_key, self(), false],
-              {:error, :unavailable}
-            )
+          do: AgentRuntime.mutate(:user_prompt_bind, [run.session_key, self(), false])
 
         prompts = Map.reject(state.prompts, fn {_, p} -> p.public["runId"] == id end)
         %{state | runs: runs, prompts: prompts}

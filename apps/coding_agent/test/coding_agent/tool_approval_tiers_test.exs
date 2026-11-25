@@ -217,60 +217,6 @@ defmodule CodingAgent.ToolApprovalTiersTest do
     refute_received :asked
   end
 
-  test "WASM tools use exec tier and yolo disables capability defaults without bypassing overrides" do
-    parent = self()
-    fake = %AgentTool{name: "wasm_fixture", execute: fn _, _, _, _ -> :executed end}
-
-    opts = [
-      include_extensions: false,
-      include_mcp: false,
-      wasm_tools: [{fake.name, fake, {:wasm, %{capabilities: %{exec: true}}}}],
-      approval_context: %{
-        approval_request_fun: fn _ ->
-          send(parent, :asked)
-          {:ok, :denied}
-        end
-      }
-    ]
-
-    for mode <- [:ask, :write] do
-      {:ok, tool} =
-        ToolRegistry.get_tool(
-          "/tmp",
-          fake.name,
-          Keyword.put(opts, :tool_policy, %{approval_mode: mode})
-        )
-
-      assert tool.execute.("wasm", %{}, nil, nil).is_error
-      assert_received :asked
-    end
-
-    {:ok, tool} =
-      ToolRegistry.get_tool(
-        "/tmp",
-        fake.name,
-        opts
-        |> Keyword.put(:tool_policy, %{approval_mode: :yolo})
-        |> Keyword.put(:tool_intent_recorder, CodingAgent.Test.ToolIntentRecorder.new("/tmp"))
-      )
-
-    assert tool.execute.("wasm", %{}, nil, nil) == :executed
-    refute_received :asked
-
-    {:ok, tool} =
-      ToolRegistry.get_tool(
-        "/tmp",
-        fake.name,
-        Keyword.put(opts, :tool_policy, %{
-          approval_mode: :yolo,
-          approvals: %{fake.name => :always}
-        })
-      )
-
-    assert tool.execute.("wasm", %{}, nil, nil).is_error
-    assert_received :asked
-  end
-
   test "canonical configured body cap reaches guarded fetch" do
     tools =
       Tools.resolve(%{

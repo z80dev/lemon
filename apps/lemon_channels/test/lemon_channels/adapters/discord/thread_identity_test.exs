@@ -103,7 +103,13 @@ defmodule LemonChannels.Adapters.Discord.ThreadIdentityTest do
     assert_receive {:interaction_response, _, %{data: %{content: "Model set to" <> _}}}
 
     request = submit_message(c.thread_id, "which model?")
-    assert request.meta.model == ModelCatalog.model_spec(model)
+    model_spec = ModelCatalog.model_spec(model)
+
+    # The run's own session row carries the model; the router resolves it from
+    # there, so the channel puts no model in the run meta.
+    refute Map.has_key?(request.meta, :model)
+    assert {:ok, %{model: ^model_spec}} = LemonCore.PolicyStore.fetch_session(request.session_key)
+    on_exit(fn -> LemonCore.PolicyStore.delete_session(request.session_key) end)
   end
 
   test "an unresolvable channel is not routed under a guessed key", c do

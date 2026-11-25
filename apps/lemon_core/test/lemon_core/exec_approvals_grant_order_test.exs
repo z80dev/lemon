@@ -18,7 +18,7 @@ defmodule LemonCore.ExecApprovalsGrantOrderTest do
     :exec_approvals_policy,
     :exec_approvals_policy_agent,
     :exec_approvals_policy_session,
-    :exec_approvals_policy_node
+    :exec_approvals_timeout_scratch
   ]
 
   setup do
@@ -153,7 +153,7 @@ defmodule LemonCore.ExecApprovalsGrantOrderTest do
 
   test "every non-durable mutation that times out reports :outcome_unknown" do
     store = Process.whereis(Store)
-    table = :exec_approvals_policy_node
+    table = :exec_approvals_timeout_scratch
     key = fn name -> {"timeout-node", name, "hash"} end
     :ok = Store.put(table, key.("cas"), :old)
     :ok = Store.put(table, key.("delete"), :old)

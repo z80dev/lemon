@@ -1,7 +1,4 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { AppShell } from "../../src/app.ts";
 import { errorResult, FakeControlPlane } from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
@@ -22,8 +19,6 @@ afterEach(() => {
 });
 
 async function boot() {
-	const home = mkdtempSync(join(tmpdir(), "lemon-steering-"));
-	teardown.push(() => rmSync(home, { recursive: true, force: true }));
 	const server = await FakeControlPlane.start({
 		methods: [
 			"chat.send",
@@ -66,7 +61,6 @@ async function boot() {
 		client,
 		terminal: new MemoryTerminal(),
 		sessionKey: key,
-		resources: { home, env: {} },
 		readBranch: async () => "main",
 	});
 	teardown.push(() => app.stop());

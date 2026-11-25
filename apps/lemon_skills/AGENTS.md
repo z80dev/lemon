@@ -63,7 +63,7 @@ Coding-session/file tools belong in `coding_agent`. Usage lives in the
   SSH clones with a PATH-injected `ssh` serving a local `git upload-pack`.
 - Portable skill/automation blueprints are owned by `LemonAutomation.Blueprint`.
   Reuse bundle, manifest, lint/audit and profile services; no second scheduler.
-- `LemonSkills.Learn` composes bounded `LemonCore.Context`, memory and synthesis
+- `LemonSkills.Learn` composes bounded `LemonSkills.Context`, memory and synthesis
   drafts. Review is non-mutating/content-free; confirmation re-resolves sources,
   recomputes conflicts and requires the exact fresh digest. Never execute source
   content or create a separate learning database.

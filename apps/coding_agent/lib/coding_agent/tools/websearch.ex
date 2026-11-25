@@ -3,8 +3,8 @@ defmodule CodingAgent.Tools.WebSearch do
   WebSearch tool for the coding agent.
 
   Uses the capability-aware search provider registry. Bundled providers include
-  Brave Search, Exa, Perplexity Sonar, Tavily, Kagi, Jina, Keenable, keyless DuckDuckGo,
-  and configurable SearXNG.
+  Brave Search, Exa, Perplexity Sonar, Tavily, Kagi, Jina, Keenable, Kimi Code,
+  keyless DuckDuckGo, and configurable SearXNG.
   """
 
   alias CodingAgent.Search.{Operators, Provider}
@@ -527,6 +527,41 @@ defmodule CodingAgent.Tools.WebSearch do
              "websearch needs a Brave Search API key. Set BRAVE_API_KEY or configure agent.tools.web.search.api_key.",
            "docs" => "docs/tools/web.md"
          }}
+    end
+  end
+
+  # Explicit search keys first; otherwise the `kimi_coding` model credential
+  # (subscription login, omp login or API key) and its endpoint.
+  defp resolve_api_config("kimi", runtime) do
+    config = provider_config(runtime, "kimi")
+    configured_base_url = normalize_optional_string(get_map_value(config, :base_url, nil))
+
+    case resolve_api_key("kimi", [
+           {:configured, {:value, get_map_value(config, :api_key, nil)}},
+           {:configured, {:secret, get_map_value(config, :api_key_secret, nil)}},
+           {:env, {:secret, "KIMI_SEARCH_API_KEY"}},
+           {:env, {:secret, "MOONSHOT_SEARCH_API_KEY"}}
+         ]) do
+      {:ok, api_key, _source} ->
+        {:ok, %{api_key: api_key, base_url: configured_base_url}}
+
+      {:error, payload} ->
+        {:error, payload}
+
+      :none ->
+        case runtime.kimi_code_credential.() do
+          {api_key, base_url} when is_binary(api_key) and api_key != "" ->
+            {:ok, %{api_key: api_key, base_url: configured_base_url || base_url}}
+
+          _ ->
+            {:error,
+             %{
+               "error" => "missing_kimi_api_key",
+               "message" =>
+                 "websearch (kimi) needs a Kimi Code credential. Sign in with `lemon model kimi-code`, set KIMI_SEARCH_API_KEY, or configure runtime.tools.web.search.providers.kimi.api_key. A Moonshot Open Platform key is not accepted.",
+               "docs" => "docs/tools/web.md"
+             }}
+        end
     end
   end
 
@@ -1095,6 +1130,19 @@ defmodule CodingAgent.Tools.WebSearch do
       Map.merge(build_char_limits(search_cfg), build_perplexity_config(perplexity_cfg))
     )
     |> Map.merge(http_functions)
+    |> Map.put(
+      :kimi_code_credential,
+      Keyword.get(opts, :kimi_code_credential, &kimi_code_credential/0)
+    )
+  end
+
+  defp kimi_code_credential do
+    cfg = LemonCore.Config.cached()
+    provider_cfg = LemonAgent.ModelRuntime.ProviderNames.provider_config(cfg, :kimi_coding) || %{}
+    base_url = Map.get(provider_cfg, :base_url) || Map.get(provider_cfg, "base_url")
+    api_key = LemonAgent.ModelRuntime.Credentials.build_get_api_key(cfg).(:kimi_coding)
+
+    {api_key, normalize_optional_string(base_url)}
   end
 
   # Extract nested configuration maps from settings

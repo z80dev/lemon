@@ -288,6 +288,11 @@ defmodule LemonAi.Models do
           | {:codex_timeout_ms, pos_integer()}
           | {:codex_force_refresh, boolean()}
           | {:codex_req_options, keyword()}
+          | {:discover_kimi_code, boolean()}
+          | {:kimi_code_access_token, String.t() | nil}
+          | {:kimi_code_base_url, String.t() | nil}
+          | {:kimi_code_force_refresh, boolean()}
+          | {:kimi_code_req_options, keyword()}
 
   @doc """
   List all known models with optional runtime discovery.
@@ -305,6 +310,11 @@ defmodule LemonAi.Models do
     cached by account and endpoint for five minutes.
   - `:codex_access_token` - Concrete ChatGPT JWT (no credential-file lookup or refresh).
   - `:codex_base_url`, `:codex_timeout_ms`, `:codex_force_refresh` - Discovery controls.
+  - `:discover_kimi_code` - Replace the bundled `kimi_coding` models with the
+    account's `GET /v1/models` listing (`LemonAi.Models.KimiCodeDiscovery`).
+    Without a credential, or when the listing fails, the bundled models stay.
+  - `:kimi_code_access_token`, `:kimi_code_base_url`, `:kimi_code_force_refresh`,
+    `:kimi_code_req_options` - Kimi Code discovery controls.
   """
   @spec list_models([list_models_opt()]) :: [Model.t()]
   def list_models(opts) when is_list(opts) do
@@ -320,33 +330,55 @@ defmodule LemonAi.Models do
         static_models
       end
 
-    if Keyword.get(opts, :discover_codex, false) do
-      discovery_opts = [
-        access_token: Keyword.get(opts, :codex_access_token),
-        base_url: Keyword.get(opts, :codex_base_url),
-        timeout_ms: Keyword.get(opts, :codex_timeout_ms, 5_000),
-        force_refresh: Keyword.get(opts, :codex_force_refresh, false),
-        req_options: Keyword.get(opts, :codex_req_options, [])
-      ]
+    models =
+      if Keyword.get(opts, :discover_codex, false) do
+        discovery_opts = [
+          access_token: Keyword.get(opts, :codex_access_token),
+          base_url: Keyword.get(opts, :codex_base_url),
+          timeout_ms: Keyword.get(opts, :codex_timeout_ms, 5_000),
+          force_refresh: Keyword.get(opts, :codex_force_refresh, false),
+          req_options: Keyword.get(opts, :codex_req_options, [])
+        ]
 
-      discovered =
-        case LemonAi.Models.OpenAICodexDiscovery.discover(discovery_opts) do
-          {:ok, available} -> Map.new(available, &{&1.id, &1})
-          {:error, _} -> %{}
-        end
-
-      Enum.flat_map(models, fn
-        %Model{provider: :openai_codex, id: id} ->
-          case Map.get(discovered, id) do
-            nil -> []
-            model -> [model]
+        discovered =
+          case LemonAi.Models.OpenAICodexDiscovery.discover(discovery_opts) do
+            {:ok, available} -> Map.new(available, &{&1.id, &1})
+            {:error, _} -> %{}
           end
 
-        model ->
-          [model]
-      end)
-    else
-      models
+        Enum.flat_map(models, fn
+          %Model{provider: :openai_codex, id: id} ->
+            case Map.get(discovered, id) do
+              nil -> []
+              model -> [model]
+            end
+
+          model ->
+            [model]
+        end)
+      else
+        models
+      end
+
+    if Keyword.get(opts, :discover_kimi_code, false),
+      do: with_kimi_code_discovery(models, opts),
+      else: models
+  end
+
+  defp with_kimi_code_discovery(models, opts) do
+    discovery_opts = [
+      access_token: Keyword.get(opts, :kimi_code_access_token),
+      base_url: Keyword.get(opts, :kimi_code_base_url),
+      force_refresh: Keyword.get(opts, :kimi_code_force_refresh, false),
+      req_options: Keyword.get(opts, :kimi_code_req_options, [])
+    ]
+
+    case LemonAi.Models.KimiCodeDiscovery.discover(discovery_opts) do
+      {:ok, [_ | _] = discovered} ->
+        Enum.reject(models, &(&1.provider == :kimi_coding)) ++ discovered
+
+      _ ->
+        models
     end
   end
 

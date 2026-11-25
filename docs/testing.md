@@ -37,10 +37,10 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 | `fast` | `mix compile --warnings-as-errors`, then `mix test --exclude integration` (no coverage). |
 | `changed` | Selects the merge-base-to-working-tree diff (including untracked non-ignored files), compiles with warnings as errors, then runs affected apps and reverse dependencies excluding integration; full scope falls back to `fast`. Runs client, Lemon Bot and docs checks when selected. |
 | `premerge` | Changed-file format check, changed-file `mix credo` with quality's default configuration, skip-tag guard, changed changelog validation, then `changed --narrow`; stops at the first failure and prints step timings. |
-| `quality` | `mix compile --warnings-as-errors`, `mix format --check-formatted`, `mix credo`, the skip-tag guard, `scripts/check_changelog`, `python3 scripts/test_changed_tests.py`, the docs source-reference check (`scripts/check_docs_source_refs.mjs` and its tests), `shellcheck` on the test/install/update/launcher scripts, `scripts/test_lemon_tui_auth.sh`, `scripts/test_lemon_launcher_reuse.sh`, `scripts/test_lemonup.sh`, `mix lemon.skill.lint`, `mix lemon.quality`, and the quality/eval-harness tests. |
+| `quality` | `mix compile --warnings-as-errors`, `mix format --check-formatted`, `mix credo`, the skip-tag guard, `scripts/check_changelog`, `python3 scripts/test_changed_tests.py`, the crash-model mutation-anchor check (`python3 scripts/check_crash_model_mutations.py --anchors`), the docs source-reference check (`scripts/check_docs_source_refs.mjs` and its tests), `shellcheck` on the test/install/update/launcher scripts, the launcher and container self-tests (`scripts/test_lemon_tui_auth.sh`, `test_lemon_launcher_reuse.sh`, `test_lemon_launcher_master_key.sh`, `test_lemon_launcher_cookie.sh`, `test_launcher_dotenv.sh`, `test_bind_loopback_launchers.sh`, `test_lemon_cli_stdio.sh`, `test_lemonup.sh`), the node-join, tunnel and release-verifier self-tests (`scripts/test_join_node.py`, `test_lemon_tunnel.py`, `test_verify_apple_release.py`, `test_verify_release_artifacts.py`), `mix lemon.skill.lint`, `mix lemon.quality`, and the quality/eval-harness tests, including the check that every umbrella module named by `scripts/*.exs` exists. |
 | `clients` | `clients/tui`: `bun install --frozen-lockfile`, `bun run check`, `bun run lint`, `bun test`. `clients/lemon-browser-node`: `npm ci`, `typecheck`, `lint`, `build`, `npm test`. |
 | `lemon_bot` | Frozen Bun installs in `products/lemon_bot/backend` and `web`; backend `bun test`, then web `bun run build` and `bun run test`. |
-| `coverage` | `mix compile --warnings-as-errors`, then `mix test --exclude integration --cover` with each app's `test_coverage` threshold. |
+| `coverage` | `mix compile --warnings-as-errors`, then `mix test --exclude integration --cover` in a separate VM per app (paths select apps; other arguments go to every run), each with its app's `test_coverage` threshold; the lane fails if any app fails. A shared VM would re-cover-compile apps under already-running processes and fail only under `--cover`. |
 | `eval-fast` | `mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}` (deterministic eval harness). |
 | `live-eval` | `mix lemon.eval --live-model`; needs a live credential (see below). |
 | `smoke` | Prints how to run `scripts/product_smoke_local` (`--release` for release-boot parity). |
@@ -50,8 +50,10 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 `mix lemon.quality` checks that local markdown links in tracked
 `docs/**/*.md` files resolve, that the generated dependency table in
 `docs/architecture_boundaries.md` is current, that the umbrella graph and every
-cross-app reference follow `LemonCore.Quality.ArchitecturePolicy`, and that no two test modules share a
-name. Add `--validate-config` to also validate the runtime config.
+cross-app reference follow `LemonCore.Quality.ArchitecturePolicy`, that no two test
+modules share a name, and that no layered `_edge_cases`/`_comprehensive`-style test
+file sits beside its canonical test (see [Behavior-focused coverage](#behavior-focused-coverage)).
+Add `--validate-config` to also validate the runtime config.
 
 `quality` needs `shellcheck`, `python3` and `node` on `PATH`. Client lanes reinstall
 dependencies; set `LEMON_TEST_REUSE_NODE_MODULES=1` to reuse existing
@@ -124,9 +126,9 @@ This is a **quick pre-check, not a substitute for the affected-app run**; it can
 find no matching tests. Selected client/Lemon Bot/docs checks still run.
 Preview the selection with `scripts/changed_tests --focused`; `--format json`
 is machine-readable. `--format github` appends `scope`, `apps`, `test_paths`,
-`clients`, `wasm`, `docs`, `apple`, and `lemon_bot` to `$GITHUB_OUTPUT`, and a selection summary to
-`$GITHUB_STEP_SUMMARY` when set. WASM and Apple flags are for CI's dedicated
-toolchains; `changed` itself does not invoke them.
+`clients`, `docs`, `apple`, and `lemon_bot` to `$GITHUB_OUTPUT`, and a selection
+summary to `$GITHUB_STEP_SUMMARY` when set. The `apple` flag selects CI's
+dedicated Apple lane; `changed` does not invoke it.
 
 Keep `quality` for repository-wide checks. `scripts/check_changelog` checks
 root/app/installer changelogs by default, or named files; Unreleased must be the
@@ -136,29 +138,29 @@ Version headings must consistently include or omit dates within each file.
 
 Diff checks do not replace the full suite on main after merge, nightly coverage
 and repeated regression/eval runs, or release assembly/boot/package checks.
-Dialyzer, install verification, and the dedicated WASM lane remain CI
-responsibilities. No live provider calls are needed for `premerge` or `changed`.
+Dialyzer and install verification remain CI responsibilities.
+No live provider calls are needed for `premerge` or `changed`.
 
 ## CI mapping
 
 | Workflow | Trigger | What it runs |
 | --- | --- | --- |
-| `ci.yml` | every PR and push to `main`; called by `release.yml` and `nightly.yml`; dispatch | `changes` → `scripts/changed_tests` (PRs: `--base origin/<base>`; other events: `--all`); `check` → `scripts/test quality` + `eval-fast` (PRs: `quality --base origin/<base>`, which formats and credo-checks only changed files unless the diff is full scope; Credo's cross-file checks are authoritative on `main`'s full run); `test (n/N)` → `scripts/test fast --partitions N [selected app test dirs]`; `dialyzer` (advisory full run plus the `scripts/dialyzer_gate.sh` allowlist gate); `install` → `scripts/verify_source_install` + `scripts/verify_install_script`; `clients` → `scripts/test clients`; `wasm-runtime`; `history` (PRs only); `CI result` (the one status to require; summarizes failures) |
+| `ci.yml` | every PR and push to `main`; called by `release.yml` and `nightly.yml`; dispatch | `changes` → `scripts/changed_tests` (PRs: `--base origin/<base>`; other events: `--all`); `check` → `scripts/test quality` + `eval-fast` (PRs: `quality --base origin/<base>`, which formats and credo-checks only changed files unless the diff is full scope; Credo's cross-file checks are authoritative on `main`'s full run); `test (n/N)` → `scripts/test fast --partitions N [selected app test dirs]`; `dialyzer` (advisory full run plus the `scripts/dialyzer_gate.sh` allowlist gate); `install` → `scripts/verify_source_install` + `scripts/verify_install_script`; `clients` → `scripts/test clients`; `history` (PRs only); `CI result` (the one status to require; summarizes failures) |
 | `nightly.yml` | daily + dispatch | the full `ci.yml`; `scripts/test coverage` over every app; the prompt/skill/overflow regression files with `--repeat-until-failure 5`; `scripts/test eval-fast` with 20 iterations; the `nightly-red` issue |
 | `product-smoke.yml` | PRs touching `apps/**`, weekly, dispatch | Boots a `lemon_runtime_full` release against a local deterministic provider |
 | `release-smoke.yml` | release paths, weekly, dispatch | Release assembly and boot matrix |
-| `osv-scanner.yml` | lockfile changes, weekly | The only dependency-vulnerability scan (Mix, npm, Bun lockfiles) |
+| `osv-scanner.yml` | lockfile changes, weekly | The only dependency-vulnerability scan (Mix, npm, Bun, SwiftPM lockfiles). Blocking: any finding not accepted (reason + expiry) in `osv-scanner.toml` fails it; `scripts/test_ci_gates.py` (quality lane) pins that every shipped lockfile is scanned and filtered. |
 | `docs-site.yml` | `docs/**` changes | VitePress build and link check |
 | `release.yml` | tag / dispatch | Skips the gates when `scripts/ci_verified_commit` finds (or waits up to 30 minutes for) a green `ci.yml` push run on the release commit or on an ancestor it differs from only by version fields and changelogs; otherwise calls `ci.yml` itself, so the release runs the same sharded jobs. Then builds and publishes artifacts. |
 | `live-eval.yml` | dispatch | `scripts/test live-eval` with repository secrets |
-| `packaging.yml` | PRs touching the five Hex packages, `lemon_channels`, `installer/` or the packaging scripts; nightly; dispatch | `scripts/verify_packages` (consumer project and generated projects built from the unpacked Hex tarballs; advisory Elixir 1.15 leg) and `scripts/verify_generator` (both generator shapes against the checkout) |
+| `packaging.yml` | PRs touching the five Hex packages, `lemon_channels`, `installer/` or the packaging scripts; nightly; dispatch | `scripts/verify_packages` (consumer project, packaged doctor and generated projects built from the unpacked Hex tarballs; required on Elixir 1.20.5 / OTP 29.1.2 and on the declared 1.17.3 / OTP 26.2 floor) and `scripts/verify_generator` (both generator shapes against the checkout) |
 | `publish.yml` | `<package>-v<version>` tag / dispatch | `scripts/release_package --verify`, then `--publish-tagged` when `HEX_API_KEY` is set |
 
 In `ci.yml`, pull requests run only what their diff can affect, chosen by
 `scripts/changed_tests --base origin/<base>` (see above): the `test` job runs the
 selected apps' test directories (one shard for small selections, four when
 `coding_agent` or more than six apps are selected, or for full scope); no
-selected app skips `test`, `dialyzer` and `install`; `clients`, `lemon_bot`, `apple` and `wasm-runtime` follow their lanes.
+selected app skips `test`, `dialyzer` and `install`; `clients`, `lemon_bot`, and `apple` follow their lanes.
 `check` always runs. Every other event (pushes to `main`, release preflight,
 nightly, dispatch) runs every job over every app, which is what
 lets a release reuse a main commit's green run. Cross-app effects that only
@@ -205,10 +207,12 @@ rather than polling for global ingest to pick up changed feature flags.
 
 Session fixtures pass a per-test `workspace_dir` as well as a temporary working
 directory: the isolated test HOME is still shared by concurrent modules.
-`CodingAgent.SessionSupervisor` accepts a second scope-options argument with
-`:supervisor` and `:registry` targets for isolated session trees. Start those
-targets under the test supervisor, and query/stop only that tree rather than
-enumerating or clearing the application's global sessions.
+For an isolated session tree, start a `CodingAgent.SessionSupervisor` (with
+`name:`) and a unique `Registry` under the test supervisor, and pass them as
+`supervisor:` and `registry:` to `start_session/1` and to `stop_session/2`,
+`lookup/2` and `list_sessions/1`. Query and stop only that tree rather than
+enumerating or clearing the application's global sessions; test the real
+module this way, never an in-file copy of it.
 
 Session/branch/lifecycle fixtures inject `extension_inventory: {[], []}` and
 `mcp_tools: []` when discovery is not under test, avoiding shared extension
@@ -219,13 +223,11 @@ does not inherit repository-local resources.
 The two approval-event broadcast cases remain in the small synchronous
 `SessionApprovalEventsTest` module because they publish to a shared Bus topic.
 
-Shared Elixir helpers live in `LemonCore.Testing.HermeticEnv`:
-
-- `credential_env_vars/0` returns the canonical scrub list.
-- `scrub_unit_credentials!/1` deletes those variables unless live credentials
-  are explicitly allowed.
-- `with_restored_env/2` snapshots and restores env vars around synchronous
-  tests that mutate process-wide env.
+Ambient provider/platform credentials are scrubbed before the BEAM starts, from
+the single `SCRUB_CREDENTIAL_ENV_VARS` list in `scripts/test`; no Elixir copy
+of that list exists. `LemonCore.Testing.HermeticEnv.with_restored_env/2`
+snapshots and restores env vars around synchronous tests that mutate
+process-wide env.
 
 Tests that call `System.put_env/2` or `System.delete_env/1` should be
 `async: false` and restore their changes.
@@ -313,6 +315,10 @@ mix test apps/coding_agent/test/coding_agent/session/crash_model_test.exs \
 python3 scripts/check_crash_model_mutations.py
 ```
 
+The mutation script patches production files one at a time, so run it only in an
+idle worktree. `scripts/test quality` runs its `--anchors` mode, which only checks
+that each mutation anchor still matches exactly once in its source file.
+
 The coding-agent model writes the real JSONL journal in a disposable writer,
 kills its owner, cuts at a generated byte offset and reopens with
 `SessionManager.load_from_file/1` and `Persistence.restore_messages_from_session/1`.
@@ -390,6 +396,19 @@ that exercise different branches. Stream and loop coverage must retain terminal
 ordering, cancellation, monitoring, and tool-result accounting—not just a
 successful return or a nonempty event list.
 
+Each module has one canonical test file, `foo_test.exs` for `Foo`. A separate
+file is for a genuinely separate concern (`foo_concurrency_test.exs`), not a
+layer of extra cases: `mix lemon.check_duplicate_tests` (run by
+`mix lemon.quality`) fails when a `_edge_cases`, `_additional_edge_cases`,
+`_comprehensive`, `_extended` or `_consolidation` test file sits beside its
+canonical `foo_test.exs`, or declares `FooEdgeCasesTest` (and so on) while
+`FooTest` exists. Fold such cases into the canonical file and table-drive the
+variants. A facade keeps only tests of what it adds: `LemonAgent.EventStream`
+tests its abort-signal, `:agent` event format and cancel-grace options, while
+queue, drop-strategy, ownership and cancellation behaviour is tested once
+against `LemonAi.EventStream`. Do not keep tests that only check OTP, Jason or
+a property test's own generators.
+
 For pruning measurements, distinguish literal source test definitions from
 executed tests: parameterized cases, properties, doctests, tags, and moved cases
 make those counts differ. Record the baseline revision, exact lane command,
@@ -446,7 +465,7 @@ scripts/test live-eval
 variables name a Lemon secret, so local runs can use the encrypted store:
 
 ```bash
-mix lemon.secrets.set release_eval_api_key <token>
+./bin/lemon secrets set release_eval_api_key <token>
 LEMON_EVAL_API_KEY_SECRET=release_eval_api_key scripts/test live-eval
 ```
 
@@ -477,7 +496,11 @@ The remaining manual smoke scripts are not run by CI:
 `scripts/live_telegram_matrix.py` (with `scripts/telegram_driver.py`),
 `scripts/live_discord_matrix.py`, `scripts/live_provider_fallback_smoke.exs`,
 `scripts/live_provider_ownership_smoke.exs`, and
-`scripts/live_cron_runtime_restart_smoke.exs`. MCP has no live smoke script: its
+`scripts/live_cron_runtime_restart_smoke.exs`. Despite its name,
+`live_provider_ownership_smoke.exs` uses fixture credentials and loopback HTTP
+only: it needs no provider login, approval or network call, and
+`apps/coding_agent/test/coding_agent/session/live_provider_ownership_test.exs`
+runs the same probe in the fast lane. MCP has no live smoke script: its
 client, transports and fixture server are covered by the deterministic
 `apps/lemon_skills/test/lemon_mcp` suite (`scripts/test path apps/lemon_skills/test/lemon_mcp`).
 

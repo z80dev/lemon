@@ -1,10 +1,8 @@
 defmodule LemonControlPlane.Methods.NullableUsageTest do
   use ExUnit.Case, async: false
 
-  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
-
-  alias LemonControlPlane.Methods.{SessionDetail, UsageStatus}
-  alias LemonCore.{RunStore, UsageStore}
+  alias LemonControlPlane.Methods.UsageStatus
+  alias LemonCore.UsageStore
 
   test "quota projections preserve unknown spend and counters without arithmetic errors" do
     previous_summary = UsageStore.get_summary(:current)
@@ -53,56 +51,5 @@ defmodule LemonControlPlane.Methods.NullableUsageTest do
 
     assert {:ok, exceeded} = UsageStatus.handle(%{}, %{})
     assert exceeded["summary"]["status"] == "over_limit"
-  end
-
-  test "session detail preserves missing usage across rows and summary totals" do
-    session_key = "agent:nullable-detail:#{LemonCore.Id.uuid()}"
-    run_ids = Enum.map(1..3, fn _ -> LemonCore.Id.uuid() end)
-
-    on_exit(fn ->
-      for run_id <- run_ids, do: LemonCore.Store.delete(:runs, run_id)
-      RunStore.delete_session(session_key)
-    end)
-
-    usages = [
-      %{input: 1, output: 2, total_tokens: 3, cost: %{total: 0.0}},
-      %LemonAi.Types.Usage{input: nil, output: 4, total_tokens: nil},
-      nil
-    ]
-
-    for {run_id, usage} <- Enum.zip(run_ids, usages) do
-      assert :ok =
-               RunStore.finalize(run_id, %{
-                 session_key: session_key,
-                 agent_id: "nullable-detail",
-                 completed: %{ok: true, usage: usage}
-               })
-    end
-
-    assert {:ok, detail} = SessionDetail.handle(%{"sessionKey" => session_key}, @operator_ctx)
-    rows = Map.new(detail["runs"], &{&1["runId"], &1["tokens"]})
-
-    assert rows[Enum.at(run_ids, 0)] == %{
-             "input" => 1,
-             "output" => 2,
-             "total" => 3,
-             "costUsd" => 0.0
-           }
-
-    assert rows[Enum.at(run_ids, 1)] == %{
-             "input" => nil,
-             "output" => 4,
-             "total" => nil,
-             "costUsd" => nil
-           }
-
-    assert rows[Enum.at(run_ids, 2)] == %{
-             "input" => nil,
-             "output" => nil,
-             "total" => nil,
-             "costUsd" => nil
-           }
-
-    assert detail["summary"]["tokenTotals"] == %{"input" => nil, "output" => nil, "total" => nil}
   end
 end

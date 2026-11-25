@@ -36,10 +36,10 @@ defmodule LemonControlPlane.Methods.UsageCostDetailsTest do
     :ok =
       UsageLedger.record(
         finalize("run-a", "agent:web:one", "openai:gpt-5", %{
-          input_tokens: 1_000,
-          output_tokens: 200,
-          cache_read_input_tokens: 500,
-          cache_creation_input_tokens: 0,
+          input: 1_000,
+          output: 200,
+          cache_read: 500,
+          cache_write: 0,
           cost: %{total: 0.25}
         })
       )
@@ -58,8 +58,8 @@ defmodule LemonControlPlane.Methods.UsageCostDetailsTest do
     :ok =
       UsageLedger.record(
         finalize("run-a", "agent:web:one", "openai:gpt-5", %{
-          input_tokens: 1_000,
-          output_tokens: 200
+          input: 1_000,
+          output: 200
         })
       )
 

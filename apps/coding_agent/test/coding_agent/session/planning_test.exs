@@ -4,7 +4,6 @@ defmodule CodingAgent.Session.PlanningTest do
   alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.Session
   alias CodingAgent.Session.Planning
-  alias CodingAgent.Session.WasmBridge
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
   alias CodingAgent.SettingsManager
@@ -284,7 +283,7 @@ defmodule CodingAgent.Session.PlanningTest do
     refute_received {:unexpected_plan_approval, _}
   end
 
-  test "repeated refresh and reload restore private host and native bridge writes", %{root: root} do
+  test "repeated refresh and reload restore private native bridge writes", %{root: root} do
     secret = "fixture-native-plan-secret"
     agent_dir = Path.join(root, "agent")
     File.mkdir_p!(agent_dir)
@@ -408,23 +407,6 @@ defmodule CodingAgent.Session.PlanningTest do
         assert {:ok, _} = Session.reload_extensions(session)
       end
 
-      host_content = secret <> "/host-#{revision}"
-
-      assert {:ok, _} =
-               WasmBridge.invoke_host_tool(
-                 session,
-                 "write",
-                 Jason.encode!(%{
-                   "path" => plan_file,
-                   "content" => placeholder <> "/host-#{revision}"
-                 }),
-                 5_000
-               )
-
-      assert_receive {:native_plan_hook, ^host_content}
-      refute_received {:native_plan_hook, _}
-      assert File.read!(plan_file) == host_content
-
       assert :ok = Session.prompt(session, placeholder)
       assert_receive {:session_event, ^native_id, {:agent_end, _}, _}, 5_000
       bridge_content = secret <> "/bridge-#{revision}"
@@ -520,7 +502,7 @@ defmodule CodingAgent.Session.PlanningTest do
     parent = self()
 
     tools =
-      for name <- ["todo", "todoread", "tool_invoke"] do
+      for name <- ["todo", "tool_invoke"] do
         %{
           writer()
           | name: name,
@@ -544,9 +526,7 @@ defmodule CodingAgent.Session.PlanningTest do
 
     guarded = Map.new(Planning.tools(tools, manager, context), &{&1.name, &1})
 
-    reads =
-      [{"todoread", %{}}] ++
-        Enum.map(["read", "progress", "actionable"], &{"todo", %{"action" => &1}})
+    reads = Enum.map(["read", "progress", "actionable"], &{"todo", %{"action" => &1}})
 
     for {target, args} <- reads do
       assert %AgentToolResult{is_error: false} =
@@ -606,17 +586,6 @@ defmodule CodingAgent.Session.PlanningTest do
 
     assert %AgentToolResult{is_error: true} =
              run(tools["write"], Path.join(plan_dir, "x.txt"), "x")
-
-    assert %AgentToolResult{is_error: true} =
-             run(tools["write"], Path.join(plan_dir, "bundle.zip:plan.md"), "blocked")
-
-    database = Path.join(plan_dir, "app.db")
-    {:ok, conn} = Exqlite.Sqlite3.open(database)
-    :ok = Exqlite.Sqlite3.execute(conn, "CREATE TABLE \"plan.md\" (name TEXT)")
-    :ok = Exqlite.Sqlite3.close(conn)
-
-    assert %AgentToolResult{is_error: true} =
-             run(tools["write"], database <> ":plan.md", ~s({"name":"blocked"}))
 
     refute File.exists?(Path.join(root, "a.md"))
 

@@ -2,8 +2,40 @@
 
 ## [Unreleased]
 
+### Added
+
+- Batched reads for up to 100 rows in one call, each `{:ok, %{id => value}}`
+  with every requested id present: `KanbanDispatcher.status_many/2`,
+  `GoalLoopManager.status_many/1`, `CronManager.runs_for/2` and
+  `CronStore.list_runs_for/2` (`:limit` per job; a failed store read is an error,
+  never empty history). The web Automation page uses them so a load no longer
+  scales with boards, goals and cron jobs (#687).
+
 ### Changed
 
+- `CronManager` matches every `CronStore` write and delete result: a failed
+  write emits no event, leaves in-memory state unchanged and replies
+  `{:error, :store_unavailable}`, or `{:error, :outcome_unknown}` when the
+  write may have landed (`add`, `update`, `refresh_captured_model`, `remove`,
+  `run_now`, `wake`, `abort_run`). A run starts with one write and is
+  submitted only once it is confirmed. An unpersisted terminal is not
+  announced, delivered or retried, and `abort_run` replies
+  `{:error, :outcome_unknown}` for it; recovery finishes the run (#87).
+- **Breaking:** lemon_automation owns goal and kanban state and their agent
+  tools. `LemonAutomation.{GoalStore, KanbanStore, GoalAuthority,
+  KanbanAuthority}` replace `LemonAgent.Workspace.*` with the same lease and
+  authority rules, and the `kanban` and `goal` tools (`LemonAutomation.Tools.Kanban`,
+  `LemonAutomation.Tools.Goal`, schemas unchanged) register at boot through
+  `LemonAgent.ToolRegistry` with managed native-process ownership, like `cron`.
+  Registered tool results are untrusted. The tools call the goal loop manager,
+  kanban dispatcher, delivery validator and git workflow directly; their
+  "runtime unavailable" branches are gone (#721, #729).
+- **Breaking:** the `/goal`, `/kanban`, `/remind`, `/reminders` and `/unremind`
+  chat commands moved from lemon_channels to
+  `LemonAutomation.ChatCommands.{Goal, Kanban, Reminders, ReminderParser}`.
+  `LemonAutomation.ChatCommands` is the `LemonCore.AutomationCommands`
+  provider registered at boot, and resolves chat policy with
+  `LemonRouter.Policy` directly (#721, #725).
 - **Breaking:** cron numeric fields are validated by the new shared
   `CronJob.numeric_bounds/0` / `CronJob.validate_numeric/2` (add, update, the
   `cron` tool and blueprints); out-of-range or non-integer values return
@@ -30,6 +62,11 @@
 
 ### Fixed
 
+- `CronManager.run_now_with_id/2` runs a job under a caller-fixed cron run ID,
+  claimed durably before it is announced; a reused ID is `{:error, :exists}`
+  and never overwrites the earlier run; an earlier unresolved run refuses it
+  with `{:prior_run_unresolved, prior_run_id}` before the ID is claimed.
+  `cron.run` uses it so a lost reply still names the run (#620).
 - `KanbanDispatcher` `control_revision` ignores lease renewals and other
   heartbeat-only task metadata, so it stays stable between ticks and an
   operator stop bound to it succeeds (#658).

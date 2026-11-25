@@ -13,8 +13,7 @@ defmodule CodingAgent.ApplicationTest do
           {CodingAgent.SessionTree,
            [
              CodingAgent.SessionRegistry,
-             CodingAgent.SessionSupervisor,
-             CodingAgent.Tools.Task.LiveBridgeSupervisor
+             CodingAgent.SessionSupervisor
            ]},
           {CodingAgent.ProcessSupervisor,
            [

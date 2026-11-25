@@ -354,17 +354,12 @@ defmodule CodingAgent.ExecutionNode.CredentialIsolationTest do
     end
 
     test "rich-read selectors check the backing file behind symlinks and hard links", ctx do
-      File.ln_s!(ctx.path, Path.join(ctx.cwd, "alias.json"))
-      File.ln!(ctx.path, Path.join(ctx.cwd, "hard.json"))
       File.ln_s!(ctx.db, Path.join(ctx.cwd, "alias.sqlite3"))
       File.ln!(ctx.db, Path.join(ctx.cwd, "hard.sqlite3"))
       File.ln_s!(ctx.zip, Path.join(ctx.cwd, "alias.zip"))
       File.ln!(ctx.zip, Path.join(ctx.cwd, "hard.zip"))
 
       for path <- [
-            "alias.json?q=.token",
-            "hard.json?q=.",
-            ctx.path <> "?q=.recoveryToken",
             "alias.sqlite3:secrets",
             "hard.sqlite3:secrets",
             ctx.db <> ":secrets",
@@ -382,8 +377,9 @@ defmodule CodingAgent.ExecutionNode.CredentialIsolationTest do
       end
 
       # Selectors on ordinary files still work.
-      File.write!(Path.join(ctx.cwd, "plain.json"), ~s({"a": 1}))
-      assert text!(run_tool("read", %{"path" => "plain.json?q=.a"}, ctx.cwd)) =~ "1"
+      plain = Path.join(ctx.cwd, "plain.zip")
+      {:ok, _} = :zip.create(String.to_charlist(plain), [{~c"a.txt", "plain member\n"}])
+      assert text!(run_tool("read", %{"path" => "plain.zip:a.txt"}, ctx.cwd)) =~ "plain member"
     end
 
     test "semantic search never reads credential files from a parent root", ctx do

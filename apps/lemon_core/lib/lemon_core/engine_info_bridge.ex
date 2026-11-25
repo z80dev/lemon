@@ -89,12 +89,18 @@ defmodule LemonCore.EngineInfoBridge do
   def sms_inbox_preview_clear, do: sms_inbox_call(:preview_clear, [])
 
   @doc """
-  Confirms a previewed SMS inbox clear for the exact holder. An exit after the
-  call was sent is `{:error, :outcome_unknown}`: the clear may have happened.
+  Confirms a previewed SMS inbox clear for the exact holder. A raise, exit or
+  throw after the call was reached is `{:error, :outcome_unknown}`: the clear
+  may have happened.
   """
   @spec sms_inbox_confirm_clear(binary(), binary()) :: :ok | {:error, term()}
   def sms_inbox_confirm_clear(holder, token),
-    do: sms_inbox_call(:confirm_clear, [holder, token], exit: {:error, :outcome_unknown})
+    do:
+      sms_inbox_call(:confirm_clear, [holder, token],
+        exception: {:error, :outcome_unknown},
+        exit: {:error, :outcome_unknown},
+        throw: {:error, :outcome_unknown}
+      )
 
   defp sms_inbox_call(function, args, opts \\ []) do
     if running?(:sms_inbox) do

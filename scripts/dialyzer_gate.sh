@@ -29,16 +29,19 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
 # `app_findings` below), so a finding in an app's `lib/mix/tasks/*.ex` or
 # `lib/<app>.ex` counts against it just like one under `lib/<app>/`.
 #
-# An entry may also name a source prefix inside an app
-# (`<app>/lib/<prefix>`): only findings in files under that prefix count, so a
-# clean library folded into a larger app stays gated on its own.
+# An entry may name a library namespace inside an app (`<app>/lib/<namespace>`).
+# Its root module and files below the namespace directory stay gated after a move.
 #
-# Apps that are Hex packages (docs/platform-split.md) are marked; keeping
-# those green is the headline "per-published-package" guarantee.
+# Apps that are Hex packages (docs/platform-split.md) are marked; all five
+# are gated, which is the headline "per-published-package" guarantee.
+# scripts/test_ci_gates.py pins that and the attribution below.
 GATED_APPS=(
-  lemon_media
+  lemon_core           # published
+  lemon_ai             # published
+  lemon_agent          # published
   lemon_memory         # published
   lemon_platform_test  # published
+  lemon_media
   lemon_browser
   lemon_web
   lemon_lsp
@@ -107,7 +110,8 @@ app_findings() {
   [[ "${entry}" == */* ]] && prefix="${entry#*/}"
   while IFS= read -r line; do
     path="${line%%:*}"
-    if [[ -f "apps/${app}/${path}" && "${path}" == "${prefix}"* ]]; then
+    if [[ -f "apps/${app}/${path}" &&
+          ( -z "${prefix}" || "${path}" == "${prefix}.ex" || "${path}" == "${prefix}/"* ) ]]; then
       printf '%s\n' "${line}"
     fi
   done < <(grep -E '^lib/[^:]*\.ex:[0-9]' "${out_file}" || true)

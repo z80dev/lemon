@@ -4,14 +4,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
   require Logger
 
   alias LemonChannels.SubmissionOutcome
-  alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonCore.{ChatScope, RouterBridge, RunRequest, RunStore}
 
   @type callbacks :: %{
           required(:maybe_subscribe_to_run) => (binary() -> term()),
           required(:current_thread_generation) => (map(), integer(), integer() | nil ->
-                                                     non_neg_integer()),
-          required(:maybe_put) => (map(), atom(), term() -> map())
+                                                     non_neg_integer())
         }
 
   @spec submit_before_new(
@@ -28,7 +26,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
   def submit_before_new(
         state,
         inbound,
-        %ChatScope{} = scope,
+        %ChatScope{},
         session_key,
         chat_id,
         thread_id,
@@ -49,9 +47,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
     else
       agent_id = (inbound.meta || %{})[:agent_id] || "default"
 
-      {thinking_hint, _source} =
-        ModelPolicyAdapter.resolve_thinking_hint(state.account_id, scope.chat_id, scope.topic_id)
-
       thread_generation = callbacks.current_thread_generation.(state, chat_id, thread_id)
 
       meta =
@@ -64,7 +59,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
         |> Map.put(:user_msg_id, user_msg_id)
         |> Map.put(:command, :new)
         |> Map.put(:record_memories, true)
-        |> callbacks.maybe_put.(:thinking_level, thinking_hint)
         |> LemonChannels.RunRequestBuilder.put_transport_meta(inbound)
 
       request =

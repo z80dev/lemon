@@ -2,7 +2,7 @@ defmodule CodingAgent.ProgressTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.{Progress, Session, SessionManager}
-  alias CodingAgent.Tools.{FeatureRequirements, TodoStore, TodoWrite}
+  alias CodingAgent.Tools.Todo
   alias LemonAgent.Test.Mocks
 
   setup do
@@ -28,7 +28,6 @@ defmodule CodingAgent.ProgressTest do
 
     on_exit(fn ->
       LemonCore.ChatStateStore.delete(session_id)
-      TodoStore.delete(session_id)
       File.rm_rf!(CodingAgent.Config.sessions_dir(cwd))
       File.rm_rf!(cwd)
     end)
@@ -38,10 +37,10 @@ defmodule CodingAgent.ProgressTest do
 
   defp write(session, todos) do
     assert %LemonAgent.Types.AgentToolResult{} =
-             TodoWrite.execute("write", %{"todos" => todos}, nil, nil, session)
+             Todo.execute("write", %{"action" => "write", "todos" => todos}, nil, nil, session)
   end
 
-  test "returns todo-based progress when no requirements file exists", %{
+  test "reports journal todo progress live and after the session stops", %{
     session_id: session_id,
     cwd: cwd,
     session: session
@@ -51,19 +50,16 @@ defmodule CodingAgent.ProgressTest do
       %{"id" => "t2", "content" => "Pending", "status" => "pending", "priority" => "medium"}
     ])
 
-    TodoStore.delete(Session.get_state(session).session_manager.header.id)
-
     snapshot = Progress.snapshot(session_id, cwd)
 
     assert snapshot.todos.total == 2
     assert snapshot.todos.completed == 1
-    assert snapshot.features == nil
+    refute Map.has_key?(snapshot, :features)
     assert snapshot.overall_percentage == 50
     assert length(snapshot.next_actions.todos) == 1
-    assert snapshot.next_actions.features == []
+    assert Map.keys(snapshot.next_actions) == [:todos]
 
     stop_supervised!(Session)
-    TodoStore.delete(session_id)
     assert Progress.snapshot(session_id, cwd) == snapshot
   end
 
@@ -79,57 +75,5 @@ defmodule CodingAgent.ProgressTest do
     snapshot = Progress.snapshot(requested_id, cwd)
     assert snapshot.todos == nil
     assert snapshot.next_actions.todos == []
-  end
-
-  test "combines todo and feature percentages when requirements exist", %{
-    session_id: session_id,
-    cwd: cwd,
-    session: session
-  } do
-    write(session, [
-      %{"id" => "t1", "content" => "Done", "status" => "completed", "priority" => "high"},
-      %{"id" => "t2", "content" => "Done2", "status" => "completed", "priority" => "high"},
-      %{"id" => "t3", "content" => "Pending", "status" => "pending", "priority" => "low"}
-    ])
-
-    requirements = %{
-      project_name: "Long run",
-      original_prompt: "build thing",
-      created_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-      version: "1.0",
-      features: [
-        %{
-          id: "f1",
-          description: "Feature 1",
-          status: :completed,
-          dependencies: [],
-          priority: :high,
-          acceptance_criteria: ["works"],
-          notes: "",
-          created_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-          updated_at: nil
-        },
-        %{
-          id: "f2",
-          description: "Feature 2",
-          status: :pending,
-          dependencies: ["f1"],
-          priority: :medium,
-          acceptance_criteria: ["works"],
-          notes: "",
-          created_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-          updated_at: nil
-        }
-      ]
-    }
-
-    assert :ok = FeatureRequirements.save_requirements(requirements, cwd)
-
-    snapshot = Progress.snapshot(session_id, cwd)
-
-    assert snapshot.todos.percentage == 66
-    assert snapshot.features.percentage == 50
-    assert snapshot.overall_percentage == 60
-    assert Enum.any?(snapshot.next_actions.features, &(&1.id == "f2"))
   end
 end

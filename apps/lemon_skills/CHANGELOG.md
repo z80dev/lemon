@@ -17,6 +17,22 @@
   app) lives in lemon_skills; `McpSource`/`McpSession` call it directly and the
   `:mcp_*_client_not_available` errors are gone. `mix lemon.update` moved here
   from lemon_core (#725).
+- **Breaking:** `skills.json` is skill state only. `Config.load_config/1`,
+  `save_config/3`, `get_skill_config/1` and `set_skill_config/2` were removed;
+  `Config.disabled_keys/1` (global ∪ project) and `Config.read_state/1` return
+  `{:error, {:skills_state, scope, reason}}` for an unusable file, which every
+  reader treats as "all disabled". `LearningNudge` reads
+  `[skills.learning_nudge]` from `LemonCore.Config` (#655).
+- **Breaking:** `LemonSkills.Tools.Kanban` and `LemonSkills.Tools.Goal` moved to
+  lemon_automation (`LemonAutomation.Tools.Kanban`/`Goal`), which registers them
+  through `LemonAgent.ToolRegistry`; lemon_skills no longer names any
+  lemon_automation module (#721).
+- `LemonSkills.Context` (with `Context.Document` and `Context.URLFetcher`), the
+  bounded context-reference preview/resolve service behind `lemon context` and
+  `LemonSkills.Learn`, moved here from `lemon_core` (`LemonCore.Context`). Its
+  references, limits and results are unchanged; `@url:` fetching stays on the
+  shared `LemonCore.Net.HTTP` address policy (#724).
+
 - **Breaking:** media provider HTTP clients, the Google JWT exchange and the
   artifact writer moved to `lemon_media` (`LemonMedia.Providers`,
   `LemonMedia.GoogleAuth`, `LemonMedia.Artifact`); `MediaCommon.write_artifact/2`,
@@ -41,6 +57,10 @@
 
 ### Fixed
 
+- `Config.enable/2` returns `{:error, :archived}` for an archived skill and, at
+  project scope, `{:error, :disabled_globally}` instead of lifting a global
+  disable; it writes nothing when the key is not listed. Writes are atomic and
+  locked (`MetadataFile`). The skills doctor check adds `skills.state` (#655).
 - `recall` filters ownership before its result limit for legacy sessions (via `Project.search_history/4`) and no longer searches memory providers; the `:search_fn` option is removed (**Breaking** for callers that injected it) (#656).
 - `ProfileMemoryTransfer.apply_transfer/2` passes definite failures
   (`:stale_destination`, `:destination_conflict`, `:transfer_conflict`, lock

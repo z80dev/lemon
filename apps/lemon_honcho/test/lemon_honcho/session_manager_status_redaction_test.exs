@@ -36,7 +36,7 @@ defmodule LemonHoncho.SessionManagerStatusRedactionTest do
       assert formatted.message == :redacted
       assert formatted.log == []
 
-      assert {%LemonCore.StatusRedaction.RedactedCrash{}, [{__MODULE__, :run, 1, _}]} =
+      assert {%LemonCore.StatusRedaction.RedactedCrashError{}, [{__MODULE__, :run, 1, _}]} =
                formatted.reason
     end
   end

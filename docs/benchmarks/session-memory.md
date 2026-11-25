@@ -54,7 +54,7 @@ Four cohorts are measured: `child_idle`, `child_hibernated`, `root_idle`, and
 capacity test. A child uses the production subagent scope, task-child flag, depth
 one and parent lineage. A root uses main scope and `executor_root: true`. Both
 start under the real `SessionSupervisor`, remain registered, and retain the
-normal native tool inventory. User extensions, MCP discovery, WASM, retries,
+normal native tool inventory. User extensions, MCP discovery, retries,
 automatic compaction and personal/project memory capture are excluded from this
 controlled fixture. The actual tool count is recorded per sample.
 

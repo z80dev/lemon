@@ -39,6 +39,8 @@ defmodule CodingAgent.Executor.SessionRunner do
     :run_id,
     :session_key,
     :agent_id,
+    :canonical_delta?,
+    :delta_callback,
     :translator
   ]
 
@@ -110,9 +112,8 @@ defmodule CodingAgent.Executor.SessionRunner do
     defp attach_context_budget(state, fields) do
       case CodingAgent.Session.context_budget(state.session) do
         {:ok, budget} ->
-          Map.update(fields, :usage, %{context_budget: budget}, fn usage ->
-            Map.put(usage || %{}, :context_budget, budget)
-          end)
+          usage = Map.get(fields, :usage) || %LemonCore.Events.Usage{}
+          Map.put(fields, :usage, %{usage | context_budget: budget})
 
         _ ->
           fields
@@ -226,6 +227,8 @@ defmodule CodingAgent.Executor.SessionRunner do
       run_id: run_id,
       session_key: session_key,
       agent_id: agent_id,
+      canonical_delta?: get_opt(run_opts, :canonical_delta) == true,
+      delta_callback: get_opt(run_opts, :delta_callback),
       translator: translator
     }
 
@@ -305,7 +308,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         # Restored children launch before the prompt; subscription stays atomic
         # with the prompt (or the follow-up submission) below.
         :ok =
-          CodingAgent.Tools.Task.Restore.restore_parent(run_id, meta,
+          CodingAgent.TaskRuntime.Restore.restore_parent(run_id, meta,
             parent_session: session_id,
             session_pid: session,
             agent_id: agent_id,
@@ -314,7 +317,7 @@ defmodule CodingAgent.Executor.SessionRunner do
 
         case async_followups do
           list when is_list(list) and list != [] ->
-            _unsubscribe = CodingAgent.Session.subscribe(session)
+            _unsubscribe = CodingAgent.Session.subscribe(session, format: :canonical)
 
             :ok =
               CodingAgent.Session.handle_async_followup(session, %{
@@ -331,7 +334,9 @@ defmodule CodingAgent.Executor.SessionRunner do
               CodingAgent.Commands.prepare_prompt(command_cwd, prompt, request.meta || %{})
 
             {:ok, _unsubscribe} =
-              CodingAgent.Session.subscribe_prompt(session, prompt, images: request.images)
+              CodingAgent.Session.subscribe_prompt(session, prompt, [images: request.images],
+                format: :canonical
+              )
         end
 
         session_ref = Process.monitor(session)
@@ -398,58 +403,22 @@ defmodule CodingAgent.Executor.SessionRunner do
   def handle_info({:session_terminal, _, _}, %{translator: %{completed_emitted: true}} = state),
     do: {:noreply, state}
 
-  def handle_info({:session_terminal, session_id, status}, %{session_id: session_id} = state) do
-    # Transient delivery was fenced, but the owner persisted terminal truth before
-    # this compact notification. Recover the canonical answer, not missed deltas.
-    terminal_event = CodingAgent.Session.get_state(state.session).terminal_event
+  def handle_info({:session_terminal, session_id, _status}, %{session_id: session_id} = state) do
+    case GenServer.call(state.session, :canonical_terminal) do
+      %LemonCore.Event{} = terminal ->
+        {:stop, :normal, forward_canonical(terminal, state)}
 
-    messages =
-      case terminal_event do
-        {:agent_end, terminal_messages} -> terminal_messages
-        _ -> CodingAgent.Session.get_messages(state.session)
-      end
-      |> Enum.reverse()
-      |> Enum.take_while(&(Map.get(&1, :role) != :user))
-      |> Enum.reverse()
-
-    translator = state.translator
-
-    translator =
-      RunTranslator.replace_text(
-        translator,
-        Presentation.extract_answer(messages, nil) || RunTranslator.snapshot_text(translator)
-      )
-
-    event =
-      case status do
-        :completed ->
-          {:agent_end, messages}
-
-        :canceled ->
-          {:canceled, :assistant_aborted}
-
-        :error ->
-          failed_message = Enum.find(Enum.reverse(messages), &match?(%{role: :assistant}, &1))
-          reason = (failed_message && Map.get(failed_message, :error_message)) || :session_failed
-          {:error, reason, %{messages: messages}}
-      end
-
-    event =
-      case terminal_event do
-        {:agent_end, _} -> event
-        nil -> event
-        terminal_event -> terminal_event
-      end
-
-    state = %{state | translator: RunTranslator.handle_event(translator, event)}
-    if state.translator.completed_emitted, do: {:stop, :normal, state}, else: {:noreply, state}
+      nil ->
+        {:noreply, state}
+    end
   end
 
-  def handle_info({:session_event, _, _, _}, %{translator: %{completed_emitted: true}} = state),
+  def handle_info({:session_batch, _, _}, %{translator: %{completed_emitted: true}} = state),
     do: {:noreply, state}
 
-  def handle_info({:session_event, session_id, event, _cursor}, %{session_id: session_id} = state) do
-    state = %{state | translator: RunTranslator.handle_event(state.translator, event)}
+  def handle_info({:session_batch, session_id, %{payload: %{events: events}}}, state)
+      when state.session_id == session_id do
+    state = Enum.reduce(events, state, &forward_canonical/2)
     if state.translator.completed_emitted, do: {:stop, :normal, state}, else: {:noreply, state}
   end
 
@@ -473,6 +442,51 @@ defmodule CodingAgent.Executor.SessionRunner do
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  defp forward_canonical(_event, %{translator: %{completed_emitted: true}} = state), do: state
+
+  defp forward_canonical(%{type: :run_started, payload: fields}, state) do
+    translator = state.translator
+    Emitter.emit_started(translator.emitter_state, fields)
+    %{state | translator: %{translator | started_emitted: true, resume_token: fields.resume}}
+  end
+
+  defp forward_canonical(%{type: :engine_action, payload: fields}, state) do
+    Emitter.emit_action_event(state.translator.emitter_state, Map.merge(fields, fields.action))
+    state
+  end
+
+  defp forward_canonical(%{type: :delta, payload: delta} = event, state) do
+    if state.canonical_delta? do
+      send(state.sink_pid, {:engine_delta, state.run_ref, event})
+    else
+      Emitter.emit_delta(state.translator.emitter_state, delta.text, delta)
+    end
+
+    if callback = state.delta_callback do
+      if delta.seq == 1, do: callback.(:first_token, %{run_id: state.run_id, seq: 1})
+      callback.(:delta, Map.put(Map.from_struct(delta), :type, :delta))
+    end
+
+    state
+  end
+
+  defp forward_canonical(%{type: :run_completed, payload: %{completed: fields}}, state) do
+    translator = state.translator
+
+    fields =
+      if translator.cancel_reason do
+        fields
+        |> Map.put(:ok, false)
+        |> Map.put(:error, Presentation.cancel_error_message(translator.cancel_reason))
+        |> Map.update(:meta, %{cancelled: true}, &Map.put(&1 || %{}, :cancelled, true))
+      else
+        fields
+      end
+
+    emitter_state = Emitter.emit_completed(translator.emitter_state, fields)
+    %{state | translator: %{translator | completed_emitted: true, emitter_state: emitter_state}}
+  end
 
   @impl true
   def terminate(_reason, state) do
@@ -536,7 +550,7 @@ defmodule CodingAgent.Executor.SessionRunner do
   defp checkpoint_native_resume(_session, _session_id, nil, _meta), do: :ok
 
   defp checkpoint_native_resume(session, session_id, run_id, meta) do
-    if CodingAgent.Tools.Task.Restore.enabled?(),
+    if CodingAgent.TaskRuntime.Restore.enabled?(),
       do: persist_native_resume(session, session_id, run_id, meta),
       else: :ok
   end

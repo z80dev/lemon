@@ -29,7 +29,7 @@ defmodule LemonControlPlane.Methods.SessionsEvents do
          {:ok, cursor} <- cursor(params["cursor"]),
          {:ok, limit} <- NativeSessions.integer(params, "limit", 50, 1, 100),
          {:ok, _scopes} <- authorize(ctx),
-         result <- AgentRuntime.call(:session_event_replay, [key, cursor, limit], :unavailable),
+         result <- AgentRuntime.query(:session_event_replay, [key, cursor, limit]),
          {:ok, scopes} <- authorize(ctx) do
       project(key, cursor, limit, result, scopes)
     end
@@ -140,7 +140,18 @@ defmodule LemonControlPlane.Methods.SessionsEvents do
             {name, payload} <- [EventBridge.authorize_event(name, payload, scopes)],
             do: %{"event" => name, "payload" => payload}
 
-      entry = %{"cursor" => next, "eventId" => id, "events" => projected}
+      legacy = %{"cursor" => next, "eventId" => id, "events" => projected}
+
+      entry =
+        case events do
+          [%{meta: %{schema_version: 1} = meta} | _] ->
+            entry = Map.merge(legacy, %{"schemaVersion" => 1, "sequence" => next["seq"]})
+            if meta[:attempt_id], do: Map.put(entry, "attemptId", meta.attempt_id), else: entry
+
+          _ ->
+            legacy
+        end
+
       entries(rest, next, scopes, [entry | acc])
     else
       _ -> :invalid

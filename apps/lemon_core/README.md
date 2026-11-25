@@ -4,11 +4,6 @@
 
 Foundational shared library for the Lemon umbrella project. All other apps depend on `lemon_core` -- it provides configuration management, configured-implementation contract validation, encrypted secrets, pluggable storage, an event bus, live named-node invocation routing, session routing primitives, idempotency, execution approvals, telemetry, and quality tooling.
 
-`LemonCore.Context` is the shared versioned preview/resolve boundary for
-root-confined file and folder references, shell-free git diffs, SSRF-guarded
-public URLs, redacted session exports, and format-sniffed document text. See
-[`docs/user-guide/context-references.md`](../../docs/user-guide/context-references.md).
-
 This app has **zero dependencies on other umbrella apps** and must remain that way.
 
 `LemonCore.Rpc.Client` is the shared `gen_statem` for RPC request ownership:
@@ -100,6 +95,23 @@ set by `LemonCore.CLI.start/2`): no `RuntimeOwner`, `RunHistoryStore`,
 `ConfigReloader`, `Watcher` or `Drain` (no SIGTERM trap), Store sweeps off, and
 `ExecApprovalExpiry` with `recover: false`; see `LemonCore.Application`.
 
+`config :lemon_core, :services` selects service groups: `:core` (always:
+`RuntimeCache`, `RuntimeLatch`, dedupe, the Bus, `ConfigCache`, `Store` and the
+secrets helpers), `:runtime_control` (`Drain`, `ACPClientBridge`,
+`NodeRegistry`, `RuntimeOwner`, `SessionActivity`, `UsageLedger`,
+`ExecApprovalExpiry`, the config reloader) and `:run_history`
+(`RunHistoryStore`). Unset starts every group. A library consumer that only uses
+the agent and store APIs can start just the core:
+
+```elixir
+config :lemon_core, :services, [:core]
+```
+
+A product that cannot run without durability or a group lists it in
+`config :lemon_core, :required_capabilities` (`:durable_store`, `:run_history`,
+`:runtime_control`); lemon_core then refuses to start, logging the fix, when one
+is unavailable. See `LemonCore.Capabilities`.
+
 Named-node sockets register themselves, so Registry removes dead connections
 without node-monitor bookkeeping. Each temporary `LemonCore.NodeInvocation` owns
 its timeout, recipient/socket monitors, sequence validation and controls.
@@ -129,7 +141,7 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.Config.Secrets` | Exact configuration for explicitly enabled external secret sources |
 | `LemonCore.Config.Agent` | Agent behavior settings sub-module |
 | `LemonCore.Config.Gateway` | Gateway settings sub-module |
-| `LemonCore.Config.Tools` | Web tools and WASM config sub-module |
+| `LemonCore.Config.Tools` | Web tool configuration |
 | `LemonCore.Config.TUI` | Terminal UI theme and debug sub-module |
 | `LemonCore.Config.Logging` | Log file and rotation sub-module |
 | `LemonCore.Config.Automation` | `[automation]` cron catch-up/retention and `[cron]` failure-alert sub-module |
@@ -208,7 +220,7 @@ truncating so partial credentials cannot escape.
 | `LemonCore.Store.EtsBackend` | In-memory ETS backend (ephemeral, default) |
 | `LemonCore.Store.SqliteBackend` | SQLite backend with WAL mode and optional ephemeral tables |
 | `LemonCore.Store.ReadCache` | Public ETS read-through cache for hot domains |
-| `LemonCore.PolicyStore` | Typed policy API and metadata owner for the existing agent, channel, session, and runtime policy tables |
+| `LemonCore.PolicyStore` | The single policy plane: per-session rows (model, thinking level, tool-policy override) |
 | `LemonCore.ToolPolicy` | Strict validated tool authorization shared by every execution boundary |
 | `LemonCore.ExecutionContext` | Versioned identity, provenance, policy, workspace, capability, and limit authority for root and child runs |
 
@@ -244,6 +256,7 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 
 | Module | Purpose |
 |--------|---------|
+| `LemonCore.Capabilities` | Capabilities a product requires at boot (`:durable_store`, `:run_history`, `:runtime_control`); checked before the tree starts |
 | `LemonCore.Idempotency` | At-most-once execution backed by Store; done results expire after 24h, unresolved claims never expire |
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
 | `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events; interactive restores need a random single-use preview token held server-side (`:checkpoint_restore_confirmations`), bound to caller, checkpoint revision, roots and tree fingerprint, with a five-minute TTL |
@@ -266,7 +279,6 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore.ConfinedFS` | Descriptor-bound file operations below a trusted root (port helper `priv/lemon_confined_fs`, built from `c_src/` during `mix compile`): no-follow directory walks (`openat2` `RESOLVE_BENEATH` on Linux), reads, exclusive creates, private-staging atomic replaces, appends, in-place overwrites, rename, unlink, tree removal and chmod relative to walked handles. Inside the Lemon umbrella (and therefore every release) the helper is required and `mix compile` fails without a C compiler and `make`. As a Hex dependency it is built when they are present; otherwise `ConfinedFS.available?/0` is `false` and every operation returns `{:error, :helper_unavailable}`, so confined callers (FileAccess, Checkpoint filesystem restore) fail closed instead of using path-based I/O |
 | `Lemon.Reload` | Published low-level BEAM/extension reload API; see its moduledoc for retained contracts |
 | `LemonCore.CodeReload` | Soft-loads changed BEAM files and invokes the configured session refresher for source-development reload |
-| `LemonCore.Testing` | Test harness builder (Harness, Case, Helpers) |
 | `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
 
 ### Quality
@@ -282,15 +294,10 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | Task | Purpose |
 |------|---------|
 | `mix lemon.config` | Validate and show configuration |
-| `mix lemon.secrets.init` | Generate master key |
-| `mix lemon.secrets.status` | Show secrets status |
-| `mix lemon.secrets.list` | List secrets metadata |
-| `mix lemon.secrets.set` | Store a secret |
-| `mix lemon.secrets.delete` | Delete a secret |
-| `mix lemon.secrets.check` | Check secrets health |
-| `mix lemon.secrets.import_env` | Import env vars as secrets |
-| `mix lemon.secrets.rotate_key` | Preview, then (`--confirm TOKEN`) rotate the master key and re-encrypt secrets |
 | `mix lemon.onboard` | Top-level provider onboarding picker with interactive TUI selection |
+
+The encrypted secret store's command-line interface is `lemon secrets` (in
+`lemon_cli`); this app owns only the `LemonCore.Secrets` store API.
 
 Provider onboarding `preferred_models` should favor stable models that actually
 work on Lemon's live transport path. Do not keep known-broken variants in those
@@ -301,7 +308,6 @@ default suggestions just because the upstream provider documents them.
 | `mix lemon.onboard.codex` | OpenAI Codex provider setup with OAuth and localhost callback capture |
 | `mix lemon.onboard.copilot` | GitHub Copilot provider setup with OAuth |
 | `mix lemon.quality` | Run all quality checks |
-| `mix lemon.store.migrate_jsonl_to_sqlite` | Migrate JSONL to SQLite |
 | `mix lemon.introspection` | Query introspection events |
 | `mix lemon.check_duplicate_tests` | Check for duplicate test names |
 
@@ -382,10 +388,6 @@ verification remains in `lemon_cli` and doctor diagnostics.
 | `LEMON_TUI_THEME` | `tui.theme` |
 | `LEMON_LOG_FILE` | `logging.file` |
 | `LEMON_LOG_LEVEL` | `logging.level` |
-| `LEMON_WASM_ENABLED` | `runtime.tools.wasm.enabled` |
-| `LEMON_WASM_RUNTIME_PATH` | `runtime.tools.wasm.runtime_path` |
-| `LEMON_WASM_TOOL_PATHS` | `runtime.tools.wasm.tool_paths` |
-| `LEMON_WASM_AUTO_BUILD` | `runtime.tools.wasm.auto_build` |
 | `LEMON_BROWSER_DRIVER_PATH` | Path to local browser driver JS file |
 | `ANTHROPIC_API_KEY` | `providers.anthropic.api_key` |
 | `ANTHROPIC_TOKEN` | Ambient Anthropic OAuth token when `providers.anthropic.auth_source = "oauth"` |
@@ -413,7 +415,7 @@ The order and the locations are configurable via `config :lemon_core, LemonCore.
 
 For local Linux/dev usage, treat `~/.lemon/secrets_master_key` as the canonical master key file. Every entry point (`./bin/lemon`, the release, CLI, Mix, runtime) resolves the same provider chain; launchers never export the key file, and a stale `LEMON_SECRETS_MASTER_KEY` holding a different key makes resolution fail with `{:conflicting_master_keys, sources}` instead of silently winning or losing. See [the secrets contract](../../docs/security/secrets-and-keychain.md).
 
-To change the master key without re-entering secrets, run `lemon secrets rotate-key` (or `mix lemon.secrets.rotate_key`): it previews, then with the preview's `--confirm` token re-encrypts every stored secret under a new key and writes that key to the Keychain entry or key file that supplied the old one. See `LemonCore.Secrets.KeyRotation` and [the secrets contract](../../docs/security/secrets-and-keychain.md#master-key-rotation).
+To change the master key without re-entering secrets, run `lemon secrets rotate-key`: it previews, then with the preview's `--confirm` token re-encrypts every stored secret under a new key and writes that key to the Keychain entry or key file that supplied the old one. See `LemonCore.Secrets.KeyRotation` and [the secrets contract](../../docs/security/secrets-and-keychain.md#master-key-rotation).
 
 ### API
 
@@ -488,7 +490,9 @@ It is removed now (issue #608); SQLite is the supported durable backend.
 This is a breaking package change from 0.2.x.
 
 Before upgrading, stop runtime writers, back up the JSONL store directory,
-and run the migration using the old source checkout:
+and run the migration from the installation you are upgrading from
+(`lemon_core` 0.2.x or a Lemon release up to v2026.11.9), which still ships
+the task and the JSONL backend:
 
 ```bash
 mix lemon.store.migrate_jsonl_to_sqlite --jsonl-path /var/lib/lemon/store --sqlite-path /var/lib/lemon/store.sqlite3 --dry-run
@@ -500,9 +504,7 @@ Use a new target database; `--replace` deletes an existing target. Add
 and configure `ephemeral_tables: []` if SQLite must keep them after startup.
 Switch the Store configuration to SQLite as below, verify the migrated data,
 then upgrade. Keep the original backup until verification is complete.
-The migration task remains available in 0.3.0 with a private read-only legacy
-reader for recovery; it does not restore a JSONL runtime backend or modify the
-source journals. Only migrate trusted local journals.
+`lemon_core` 0.3.0 no longer includes the migration task (#730).
 
 ### Configuration
 
@@ -531,6 +533,8 @@ widget = MyApp.WidgetStore.get(id)
 `put_new/3` is the insert-if-absent primitive for durable claims. It returns `:ok` for the first writer and `{:error, :exists}` for later writers without overwriting the original value. `take/2` atomically consumes a key, `compare_and_swap/4` replaces a value only when its exact expected value is still current, and `compare_and_delete/3` conditionally removes an exact snapshot so a sweeper cannot erase a renewed lease or receipt. `compare_and_delete_many/1` first validates a set of exact snapshots in one serialized Store call. SQLite commits the set transactionally, ETS applies it under the Store owner, and ordered backends report the first failure so callers can place a safety-critical durable fence last.
 
 Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and ordinary read/list APIs return `nil`/`[]`. `get/3` and `list/2` are for genuinely optional or display data only and are never an admission, policy, idempotency or verification check. Correctness-sensitive callers use `fetch/3` and `fetch_all/2` to distinguish confirmed absence or an empty table from an unavailable backend.
+
+Whole-table and range reads (`fetch_all/2`, `fetch_keys/2`, `fetch_range/5`, `list/2`, introspection listing) take a read handle from the Store in one short call and then read the backend in the caller's process — SQLite through a private read-only WAL connection — so a large scan never stalls other Store callers. `fetch_range/5` returns rows whose map value has an integer `:at_ms` in `[from, to)` (optionally plus untimed rows); SQLite indexes `:at_ms`. `:runs` cannot be read whole: read runs by id.
 
 For power-loss-sensitive writes, pass `durable: true` to the explicit-server
 mutation arity, for example
@@ -572,15 +576,19 @@ Shared-domain callers should prefer typed wrappers:
   removes expired `:chat` entries. `fetch` reports an unreadable store as
   `{:error, :store_unavailable}` instead of "no state"
 - **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `fetch_history/2`, `fetch_sessions/1`, `get/1`
-- **Policies**: `LemonCore.PolicyStore.fetch_agent/1`, `fetch_channel/1`, `fetch_session/1`,
-  `fetch_runtime/0` (strict: `{:ok, nil}` only for a confirmed absent row,
-  `{:error, :store_unavailable}` otherwise; the router rejects admission with
-  `:policy_unavailable`), `update_session/2` (compare-and-swap merge),
-  `put_agent/2`, `put_channel/2`, `put_session/2`, `put_runtime/1`
+- **Policies**: `LemonCore.PolicyStore.fetch_session/1` (strict: `{:ok, nil}`
+  only for a confirmed absent row, `{:error, :store_unavailable}` otherwise;
+  the router rejects admission with `:policy_unavailable`),
+  `update_session/2` (compare-and-swap merge), `put_session/2`,
+  `delete_session/1`. Config supplies defaults; there is no agent, channel or
+  global runtime policy row. `LemonCore.PolicyTablesWriterGuardTest` fails
+  when a policy table is read without a production writer.
 - **Idempotency**: `LemonCore.IdempotencyStore.fetch/2`, `put_new/3`, `compare_and_swap/4`, `compare_and_delete/3`, `put/3`, `delete/2`
 - **Introspection**: `LemonCore.IntrospectionStore.append/1`, `list/1`
 - **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `delete_override/1` (per-scope selection of an operator-configured project id; projects come only from config)
-- **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, policy getters/setters by scope
+- **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, and the
+  approval memory (`get_/put_global_policy`, `get_/put_agent_policy`,
+  `get_/put_session_policy`): grants remembered by `exec.approval.resolve`, not policy
 
 `RunStore.finalize/2` returns `:ok` only after the immutable final summary and
 its session index are written. Retrying the same summary repairs a partial index
@@ -593,7 +601,18 @@ expires; hooks are not automatically retried. Successful persistence still
 returns `:ok` even when a hook fails or times out. Explicit finalization retries
 can redeliver hooks, so implementations must be idempotent by run id.
 
-Agent workspace coordination — goals and kanban boards — is built on this Store but lives in `lemon_agent` as `LemonAgent.Workspace.{GoalStore, KanbanStore}`. Heartbeats use automation cron jobs and cron history.
+The `:runs` table contains summaries and lifecycle metadata only. The Store
+keeps events in a separate bounded per-run buffer (first 200 plus latest, 2,000
+in all), so ordinary run reads do not copy it. The summary and frozen buffer
+are swept `:runs_retention_ms` (default 24 hours) after finalization. A durable
+marker in `:run_terminals` makes `RunStore.fetch/1` return `{:error, :evicted}`
+for finished runs without a retained summary, including after a restart.
+Durable per-session history is in `LemonCore.RunHistoryStore`. Usage pages read
+only ledger occurrences, not `:runs`.
+
+Goal and kanban coordination uses this Store but belongs to
+`LemonAutomation.{GoalStore, KanbanStore}`. Heartbeats use automation cron jobs
+and cron history.
 
 ### ReadCache
 
@@ -993,6 +1012,9 @@ mix test --cover apps/lemon_core
 
 ### Test Harness
 
+The harness (`LemonCore.Testing*`) serves this repository's own test suites
+and is not part of the published Hex package.
+
 ```elixir
 defmodule MyTest do
   use LemonCore.Testing.Case, async: true
@@ -1004,7 +1026,7 @@ defmodule MyTest do
 end
 ```
 
-Available helpers: `unique_token/0`, `unique_scope/0`, `unique_session_key/0`, `unique_run_id/0`, `temp_file!/3`, `temp_dir!/2`, `clear_store_table/1`, `mock_home!/1`, `random_master_key/0`.
+Available helpers: `unique_token/0`, `unique_scope/0`, `unique_session_key/0`, `unique_run_id/0`, `temp_file!/3`, `temp_dir!/2`, `clear_store_table/1`, `mock_home!/1`, `random_master_key/0`. `use LemonCore.Testing.Case, with_store: true` (or `@tag with_store: true`) starts `LemonCore.Store` for the module (or test).
 
 ## Important Notes
 

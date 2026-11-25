@@ -143,10 +143,10 @@ explicit-version/draft inputs.
 ### Build
 
 ```bash
-# Minimal headless runtime (gateway + router + channels + control-plane)
+# Headless runtime: everything except the web UI
 MIX_ENV=prod mix release lemon_runtime_min
 
-# Full local runtime (+ automation, skills, web UI)
+# Full local runtime: the headless runtime plus the web UI
 MIX_ENV=prod mix do --app lemon_web phx.digest
 MIX_ENV=prod mix release lemon_runtime_full
 ```
@@ -263,18 +263,46 @@ curl -sS http://localhost:4040/healthz
 ./_build/prod/rel/lemon_runtime_full/bin/lemon doctor --bundle
 ```
 
+`/healthz` answers `200 {"ok":true}` only while every application of the
+runtime's profile is started. When one has stopped (for example after its
+supervisor exhausted its restart budget) it answers `503` and names the missing
+applications (`{"ok":false,"profile":"runtime_full","missing":["lemon_automation"]}`),
+and `lemon doctor` fails its `runtime.apps` check with the same names.
+Every profile application is started as a permanent application, so in practice
+one that exits stops the runtime rather than leaving it half-alive.
+
 For `lemon_runtime_full`, include `LEMON_WEB_SECRET_KEY_BASE` in release `eval`
 commands as well as daemon/start commands. The full profile configures the web
 endpoint during release boot before the eval expression is executed.
 
 ### Profiles
 
+Each `lemon_<profile>` release ships exactly the applications of one runtime
+profile in `apps/lemon_core/priv/runtime_profiles.exs`. The source launcher
+(`bin/lemon`, which boots `runtime_full`), `/healthz`, `lemon doctor` and
+`lemon setup runtime` read the same file, and
+`LemonCore.Runtime.ReleaseProfileTest` fails when the releases, the profiles or
+this table drift apart. Both profiles also start `exqlite`, `sentry` and `finch`
+(optional dependencies of `lemon_core`). The MCP client modules ship with `lemon_skills`.
+
 | Profile | Apps | Use case |
 |---|---|---|
-| `lemon_runtime_min` | gateway, CLI, router, channels, control-plane; MCP client library loaded on demand | Headless / API-only server |
-| `lemon_runtime_full` | + automation, skills, web; MCP client library loaded on demand | Full local runtime with UI |
+| `lemon_runtime_min` | `lemon_browser`, `lemon_media`, `lemon_lsp`, `lemon_omp`, `lemon_computer_use`, `lemon_skills`, `coding_agent`, `lemon_gateway`, `lemon_cli`, `lemon_router`, `lemon_honcho`, `lemon_channels`, `lemon_automation`, `lemon_control_plane` | Headless / API-only server: the full runtime without the web UI |
+| `lemon_runtime_full` | the minimal runtime plus the web UI: `lemon_browser`, `lemon_media`, `lemon_lsp`, `lemon_omp`, `lemon_computer_use`, `lemon_skills`, `coding_agent`, `lemon_gateway`, `lemon_cli`, `lemon_router`, `lemon_honcho`, `lemon_channels`, `lemon_automation`, `lemon_control_plane`, `lemon_web` | Full local runtime with UI |
 | `lemon_tui` | `tui/bin/lemon-tui` | Bun-compiled client pseudo-profile, not a BEAM release |
 | `lemon_bot` | `bot/bin/lemon-bot`, packaged web build | Standalone Bun-compiled backend; not a BEAM release (see `docs/release/versioning_and_channels.md`) |
+
+The minimal runtime is not a smaller scheduler footprint: `lemon_control_plane`
+and `coding_agent` depend on `lemon_automation` and `lemon_skills`, so both
+profiles run cron, kanban and goal loops; disable them through their
+configuration rather than by choosing `lemon_runtime_min`.
+
+Both profiles require the `:durable_store`, `:run_history` and
+`:runtime_control` capabilities (`config :lemon_core, :required_capabilities`
+in `config/prod.exs` and `config/dev.exs`): the runtime refuses to boot, and
+logs which capability is missing and how to provide it, when the store backend
+is not durable, `exqlite` is unavailable or a `lemon_core` service group is
+deselected. See `LemonCore.Capabilities`.
 
 ---
 

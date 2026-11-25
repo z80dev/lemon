@@ -214,7 +214,7 @@ OAuth access/refresh material is process-local unless a cache is supplied.
 Low-level integrations can pass `oauth_token_cache: [load: ..., save: ...]`
 or the compatibility `oauth_token_loader` / `oauth_token_persister` callbacks
 to load cached tokens before the initialize request and save every successful
-client-credentials, refresh-token, or PKCE token response. `lemon_mcp` keeps
+client-credentials, refresh-token, or PKCE token response. `LemonMCP` keeps
 the callbacks storage-agnostic; configured Lemon skill sources persist tokens
 through `LemonCore.Secrets` when `oauth.token_secret` is set and can host a
 localhost PKCE callback listener for configured local `redirect_uri` values.
@@ -287,7 +287,7 @@ Standard JSON-RPC 2.0 error codes:
 Run the test suite:
 
 ```bash
-mix test apps/lemon_mcp/test
+scripts/test path apps/lemon_skills/test/lemon_mcp
 ```
 
 ## Configuration Options

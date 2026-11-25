@@ -11,7 +11,7 @@ defmodule CodingAgent.ExecutionNode.MemoryTransferTest do
       "nodeId" => "destination-node"
     }
 
-    for method <- ~w(prepare snapshot validate) do
+    for method <- ~w(prepare snapshot validate release) do
       assert {:error, :transfer_conflict} =
                MemoryTransfer.execute("memory.transfer." <> method, args, "different-source")
 
@@ -42,7 +42,7 @@ defmodule CodingAgent.ExecutionNode.MemoryTransferTest do
 
   test "only explicit private transfer methods are advertised" do
     assert MemoryTransfer.methods() ==
-             ~w(memory.transfer.prepare memory.transfer.snapshot memory.transfer.validate memory.transfer.preview memory.transfer.apply memory.transfer.status memory.transfer.inspect)
+             ~w(memory.transfer.prepare memory.transfer.snapshot memory.transfer.validate memory.transfer.release memory.transfer.preview memory.transfer.apply memory.transfer.status memory.transfer.inspect)
 
     assert {:error, :invalid_operation} =
              MemoryTransfer.execute(

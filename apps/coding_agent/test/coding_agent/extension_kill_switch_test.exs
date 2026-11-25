@@ -285,39 +285,6 @@ defmodule CodingAgent.ExtensionKillSwitchTest do
     assert compiles(marker) == 1
   end
 
-  test "the kill switch also stops WASM discovery and startup", ctx do
-    settings =
-      configure(
-        ctx,
-        """
-        [runtime.tools.wasm]
-        enabled = true
-
-        [runtime.extensions]
-        enabled = false
-        """,
-        ""
-      )
-
-    assert CodingAgent.Wasm.Config.load(settings).enabled == false
-
-    boot =
-      CodingAgent.Session.WasmBridge.maybe_start_wasm_sidecar(
-        ctx.project,
-        settings,
-        "kill-switch",
-        nil,
-        nil
-      )
-
-    assert boot.sidecar_pid == nil
-    assert boot.wasm_tools == []
-
-    # Sanity: the same config without the kill switch does enable WASM.
-    enabled = configure(ctx, "[runtime.tools.wasm]\nenabled = true\n", "")
-    assert CodingAgent.Wasm.Config.load(enabled).enabled == true
-  end
-
   defp start_in(cwd, settings) do
     ExtensionLifecycle.initialize(
       cwd: cwd,

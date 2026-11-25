@@ -2,11 +2,11 @@ defmodule LemonRouter.Policy do
   @moduledoc """
   Policy merging for tool execution.
 
-  Merges tool policies from multiple sources:
-  - Agent default policy
-  - Channel policy (groups can be stricter)
-  - Session overrides
-  - Runtime overrides (operator)
+  A run's tool policy intersects these layers (none can widen another):
+  - Channel floor: group (non-DM) provenance requires approval for every
+    mutating tool
+  - Session override: the `LemonCore.PolicyStore` session row
+  - Agent profile and request overrides (applied by `LemonRouter.SubmissionBuilder`)
 
   ## Policy Structure
 
@@ -16,7 +16,7 @@ defmodule LemonRouter.Policy do
         # Approval requirements per tool
         approvals: %{
           "bash" => :always,        # always require approval
-          "write" => :dangerous,    # require for dangerous actions
+          "write" => :dangerous,    # enforced like :always
           "read" => :never          # never require approval
         },
         # Blocked tools (cannot be used at all)
@@ -34,11 +34,13 @@ defmodule LemonRouter.Policy do
   alias LemonCore.ToolPolicy
 
   @doc """
-  Intersect two tool policies.
+  Intersect two operator-configured tool policy layers.
 
-  The result cannot authorize more than either input. Invalid input returns a
-  deny-all policy; execution admission uses `merge_validated/2` to retain the
-  explicit validation error.
+  The result cannot grant a tool or waive an approval gate that either layer
+  applies; an unset `workspace_read_exempt` is neutral between layers. Invalid
+  input returns a deny-all policy; execution admission uses `merge_validated/2`
+  to retain the explicit validation error. Request overrides use
+  `restrict_validated/2`.
   """
   @spec merge(term(), term()) :: ToolPolicy.t()
   def merge(policy_a, policy_b) do
@@ -48,28 +50,45 @@ defmodule LemonRouter.Policy do
     end
   end
 
-  @doc "Strict policy intersection used by execution admission."
+  @doc "Strict operator-layer intersection used by execution admission."
   @spec merge_validated(term(), term()) :: {:ok, ToolPolicy.t()} | {:error, term()}
   def merge_validated(policy_a, policy_b) do
-    with {:ok, policy_a} <-
-           ToolPolicy.resolve(policy_a, ToolPolicy.from_profile(:full_access)),
-         {:ok, policy_b} <-
-           ToolPolicy.resolve(policy_b, ToolPolicy.from_profile(:full_access)) do
-      ToolPolicy.restrict(policy_a, policy_b)
+    with {:ok, policy_a} <- resolve_layer(policy_a),
+         {:ok, policy_b} <- resolve_layer(policy_b) do
+      ToolPolicy.layer(policy_a, policy_b)
     end
   end
+
+  @doc """
+  Strictly narrows resolved operator authority with a request override.
+
+  An absent override inherits `policy`; a supplied override can only narrow it
+  and cannot enable a read exemption `policy` lacks.
+  """
+  @spec restrict_validated(term(), term()) :: {:ok, ToolPolicy.t()} | {:error, term()}
+  def restrict_validated(policy, override) do
+    with {:ok, policy} <- resolve_layer(policy),
+         {:ok, override} <- ToolPolicy.resolve(override, policy) do
+      ToolPolicy.restrict(policy, override)
+    end
+  end
+
+  defp resolve_layer(policy),
+    do: ToolPolicy.resolve(policy, ToolPolicy.from_profile(:full_access))
 
   @doc """
   Resolve the effective tool policy for a run.
 
   ## Parameters
 
-  - `:agent_id` - Agent identifier
-  - `:session_key` - Session key
+  - `:session_key` - Session key whose `PolicyStore` row applies
+  - `:session_policy` - The session row already fetched strictly by the caller
+    (`{:ok, row}` from `LemonCore.PolicyStore.fetch_session/1`); when present the
+    row is not read again, so admission reads it once per run
   - `:channel_context` - Channel provenance (`meta.channel_context`). When it is
-    present its channel policy and group approval floor apply whatever the
-    submission origin; producers derive it from the authenticated ingress
-    (channel transport, webhook integration, A2A peer).
+    present its group approval floor applies whatever the submission origin;
+    producers derive it from the authenticated ingress (channel transport,
+    webhook integration, A2A peer).
   """
   @spec resolve_for_run(map()) :: ToolPolicy.t()
   def resolve_for_run(params) do
@@ -80,26 +99,18 @@ defmodule LemonRouter.Policy do
   end
 
   @doc """
-  Resolves all configured policy layers without permissive fallback.
+  Resolves all policy layers without permissive fallback.
 
-  Every layer is read strictly: when the Store cannot confirm a layer's row
-  (backend error, timeout or missing process) the result is
+  The session row is read strictly: when the Store cannot confirm it (backend
+  error, timeout or missing process) the result is
   `{:error, :policy_unavailable}`, never a policy without that layer.
   """
   @spec resolve_validated_for_run(map()) :: {:ok, ToolPolicy.t()} | {:error, term()}
   def resolve_validated_for_run(params) do
-    agent_id = params[:agent_id]
-    session_key = params[:session_key]
-    channel_context = params[:channel_context]
-
-    with {:ok, agent_policy} <- get_agent_policy(agent_id),
-         {:ok, channel_policy} <- get_channel_policy(channel_context),
-         {:ok, session_policy} <- get_session_policy(session_key),
-         {:ok, runtime_policy} <- get_runtime_policy(),
-         {:ok, policy} <- merge_validated(nil, agent_policy),
-         {:ok, policy} <- merge_validated(policy, channel_policy),
-         {:ok, policy} <- merge_validated(policy, session_policy) do
-      merge_validated(policy, runtime_policy)
+    with {:ok, floor} <- channel_floor(params[:channel_context]),
+         {:ok, session_row} <- session_row(params),
+         {:ok, session_policy} <- session_policy(session_row) do
+      merge_validated(floor, session_policy)
     end
   end
 
@@ -108,7 +119,7 @@ defmodule LemonRouter.Policy do
 
   Returns:
   - `:always` - Always require approval
-  - `:dangerous` - Require approval only for dangerous actions
+  - `:dangerous` - Require approval (enforced like `:always`)
   - `:never` - Never require approval
   - `:default` - Use tool's default behavior
   """
@@ -128,57 +139,41 @@ defmodule LemonRouter.Policy do
   @spec tool_blocked?(map(), binary()) :: boolean()
   def tool_blocked?(policy, tool), do: not ToolPolicy.allowed?(policy, tool)
 
-  # Load agent policy from store
-  defp get_agent_policy(nil), do: {:ok, nil}
-
-  defp get_agent_policy(agent_id), do: strict(LemonCore.PolicyStore.fetch_agent(agent_id))
-
-  defp strict({:ok, _policy} = fetched), do: fetched
-  defp strict({:error, _reason}), do: {:error, :policy_unavailable}
-
   # Tools that mutate files or execute code on the host. Group chats require
   # an approval for each call because any member can prompt the agent.
   @group_approval_tools ~w(bash write edit patch hashline_edit)
 
-  # Load channel-specific restrictions named by the run's channel provenance.
-  defp get_channel_policy(nil), do: {:ok, nil}
+  # The approval floor named by the run's channel provenance. Fail closed: only
+  # an explicit DM escapes it.
+  defp channel_floor(nil), do: {:ok, nil}
 
-  defp get_channel_policy(channel_context) when is_map(channel_context) do
-    channel_id = channel_context[:channel_id]
-    peer_kind = channel_context[:peer_kind]
-
-    # Fail closed: only an explicit DM escapes the group floor.
-    group_policy =
-      if peer_kind != :dm do
-        %{approvals: Map.new(@group_approval_tools, &{&1, :always})}
-      else
-        %{}
-      end
-
-    with {:ok, channel_policy} <- strict(LemonCore.PolicyStore.fetch_channel(channel_id)) do
-      merge_validated(channel_policy || %{}, group_policy)
-    end
+  defp channel_floor(channel_context) when is_map(channel_context) do
+    if channel_context[:peer_kind] == :dm,
+      do: {:ok, nil},
+      else: {:ok, %{approvals: Map.new(@group_approval_tools, &{&1, :always})}}
   end
 
-  defp get_channel_policy(_invalid), do: {:error, :invalid_channel_context}
+  defp channel_floor(_invalid), do: {:error, :invalid_channel_context}
 
   # Session rows contain routing settings beside the nested policy. Legacy
   # top-level policy fields remain an additional floor, never an override.
   @policy_keys ~w(approvals approval_mode blocked_tools allowed_commands blocked_commands max_file_size profile allow deny require_approval no_reply)a
 
-  defp get_session_policy(nil), do: {:ok, nil}
+  defp session_row(%{session_policy: {:ok, row}}), do: {:ok, row}
+  defp session_row(%{session_policy: {:error, _reason}}), do: {:error, :policy_unavailable}
 
-  defp get_session_policy(session_key) do
-    case strict(LemonCore.PolicyStore.fetch_session(session_key)) do
-      {:ok, nil} -> {:ok, nil}
-      {:ok, policy} when is_map(policy) -> session_tool_policy(policy)
-      {:ok, _invalid} -> {:error, :invalid_session_policy}
-      {:error, _reason} = error -> error
+  defp session_row(%{session_key: session_key}) when is_binary(session_key) do
+    case LemonCore.PolicyStore.fetch_session(session_key) do
+      {:ok, _row} = fetched -> fetched
+      {:error, _reason} -> {:error, :policy_unavailable}
     end
   end
 
-  # Load operator runtime overrides from store
-  defp get_runtime_policy, do: strict(LemonCore.PolicyStore.fetch_runtime())
+  defp session_row(_params), do: {:ok, nil}
+
+  defp session_policy(nil), do: {:ok, nil}
+  defp session_policy(row) when is_map(row), do: session_tool_policy(row)
+  defp session_policy(_invalid), do: {:error, :invalid_session_policy}
 
   defp session_tool_policy(policy) do
     # Forward the removed key only so ToolPolicy can warn and discard it.

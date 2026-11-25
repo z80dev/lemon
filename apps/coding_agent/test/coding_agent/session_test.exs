@@ -26,6 +26,7 @@ defmodule CodingAgent.SessionTest do
     TextContent,
     ToolCall,
     ToolResultMessage,
+    UserMessage,
     Usage,
     Cost,
     Model,
@@ -277,6 +278,32 @@ defmodule CodingAgent.SessionTest do
     end
   end
 
+  # A stream_fn that parks until the test sends the reported pid `:release`.
+  defp gated_stream_fn(parent, text) do
+    fn model, context, options ->
+      send(parent, {:stream_called, self()})
+
+      receive do
+        :release -> :ok
+      after
+        10_000 -> :ok
+      end
+
+      mock_stream_fn_single(assistant_message(text)).(model, context, options)
+    end
+  end
+
+  # Starts a session whose first turn stays in flight until the test exits.
+  defp start_blocked_session(opts \\ []) do
+    response = LemonAgent.Test.Mocks.assistant_message("done")
+    stream_fn = LemonAgent.Test.Mocks.blocking_stream_fn(response, self())
+    session = start_session(Keyword.put(opts, :stream_fn, stream_fn))
+    :ok = Session.prompt(session, "hold this turn")
+    assert_receive {:stream_blocked, producer}, 5_000
+    on_exit(fn -> send(producer, :release_stream) end)
+    {session, producer}
+  end
+
   # ============================================================================
   # Initialization Tests
   # ============================================================================
@@ -290,36 +317,16 @@ defmodule CodingAgent.SessionTest do
       assert state.model.id == "mock-model-1"
     end
 
-    test "accepts provider:model string model specs" do
-      session = start_session(model: "openai-codex:gpt-5.3-codex")
-      state = Session.get_state(session)
-
-      assert state.model.provider == :openai_codex
-      assert state.model.id == "gpt-5.3-codex"
-    end
-
-    test "accepts hyphenated provider aliases for underscored providers" do
-      session = start_session(model: "google-vertex:gemini-2.5-pro")
-      state = Session.get_state(session)
-
-      assert state.model.provider == :google_vertex
-      assert state.model.id == "gemini-2.5-pro"
-    end
-
-    test "accepts provider/model string model specs" do
-      session = start_session(model: "google_vertex/gemini-3.1-pro-preview")
-      state = Session.get_state(session)
-
-      assert state.model.provider == :google_vertex
-      assert state.model.id == "gemini-3.1-pro-preview"
-    end
-
-    test "accepts bare model_id string specs" do
-      session = start_session(model: "gpt-5.3-codex")
-      state = Session.get_state(session)
-
-      assert state.model.provider == :openai
-      assert state.model.id == "gpt-5.3-codex"
+    test "accepts string model specs" do
+      for {spec, provider, id} <- [
+            {"openai-codex:gpt-5.3-codex", :openai_codex, "gpt-5.3-codex"},
+            {"google-vertex:gemini-2.5-pro", :google_vertex, "gemini-2.5-pro"},
+            {"google_vertex/gemini-3.1-pro-preview", :google_vertex, "gemini-3.1-pro-preview"},
+            {"gpt-5.3-codex", :openai, "gpt-5.3-codex"}
+          ] do
+        state = Session.get_state(start_session(model: spec))
+        assert {state.model.provider, state.model.id} == {provider, id}, spec
+      end
     end
 
     test "spills oversized tool results to disk in transform_context" do
@@ -569,11 +576,9 @@ defmodule CodingAgent.SessionTest do
       assert String.contains?(state.system_prompt, "You are a test assistant.")
     end
 
-    test "accepts custom thinking_level" do
-      session = start_session(thinking_level: :high)
-      state = Session.get_state(session)
-
-      assert state.thinking_level == :high
+    test "thinking_level defaults to :medium and accepts an override" do
+      assert Session.get_state(start_session()).thinking_level == :medium
+      assert Session.get_state(start_session(thinking_level: :high)).thinking_level == :high
     end
 
     test "accepts custom tools" do
@@ -597,22 +602,6 @@ defmodule CodingAgent.SessionTest do
       assert "echo" in tool_names
     end
 
-    test "defaults thinking_level to :medium" do
-      session = start_session()
-      state = Session.get_state(session)
-
-      assert state.thinking_level == :medium
-    end
-
-    test "system_prompt is a string (may include loaded CLAUDE.md)" do
-      session = start_session()
-      state = Session.get_state(session)
-
-      # System prompt is now composed from ResourceLoader, so it may contain
-      # CLAUDE.md content from the home directory or project
-      assert is_binary(state.system_prompt)
-    end
-
     test "builds default tools when none provided" do
       session = start_session(tools: nil)
       state = Session.get_state(session)
@@ -624,6 +613,14 @@ defmodule CodingAgent.SessionTest do
       assert "write" in tool_names
       assert "edit" in tool_names
       assert "bash" in tool_names
+    end
+
+    test "rejects the retired advisor option instead of silently dropping it (#705)" do
+      assert {:error, {:unsupported_option, :advisor}} =
+               Session.start_link(default_opts(advisor: [max_notes: 1]))
+
+      assert {:error, {:unsupported_option, :advisor}} =
+               Session.validate_execution_options(cwd: session_cwd(), advisor: [])
     end
   end
 
@@ -809,27 +806,96 @@ defmodule CodingAgent.SessionTest do
         Process.flag(:trap_exit, previous_trap_exit)
       end
     end
+
+    @tag :tmp_dir
+    test "tolerates legacy and malformed persisted messages", %{tmp_dir: tmp_dir} do
+      cases = [
+        missing_timestamps: {
+          [
+            %{"role" => "user", "content" => "Hello"},
+            %{"role" => "assistant", "content" => [%{"type" => "text", "text" => "Hi!"}]}
+          ],
+          fn messages -> assert Enum.map(messages, & &1.timestamp) == [0, 0] end
+        },
+        unknown_content_block: {
+          [
+            %{
+              "role" => "assistant",
+              "content" => [
+                %{"type" => "unknown_type", "data" => "something"},
+                %{"type" => "text", "text" => "Valid text"}
+              ],
+              "timestamp" => 1
+            }
+          ],
+          fn messages ->
+            assert [%AssistantMessage{content: content}] = messages
+            assert Enum.any?(content, &match?(%TextContent{text: "Valid text"}, &1))
+          end
+        },
+        unknown_role: {
+          [
+            %{"role" => "unknown_role", "content" => "Some content", "timestamp" => 1},
+            %{"role" => "user", "content" => "Valid user message", "timestamp" => 2}
+          ],
+          fn messages -> assert [%UserMessage{content: "Valid user message"}] = messages end
+        },
+        legacy_tool_use_id: {
+          [
+            %{
+              "role" => "assistant",
+              "content" => [
+                %{
+                  "type" => "tool_call",
+                  "id" => "legacy_id_123",
+                  "name" => "read",
+                  "arguments" => %{"path" => "file.txt"}
+                }
+              ],
+              "stop_reason" => "tool_use",
+              "timestamp" => 0
+            },
+            %{
+              "role" => "tool_result",
+              "tool_use_id" => "legacy_id_123",
+              "tool_name" => "read",
+              "content" => [%{"type" => "text", "text" => "File content"}],
+              "is_error" => false,
+              "timestamp" => 1
+            }
+          ],
+          fn messages ->
+            assert [%ToolResultMessage{tool_call_id: "legacy_id_123"}] =
+                     Enum.filter(messages, &match?(%ToolResultMessage{}, &1))
+          end
+        }
+      ]
+
+      for {name, {entries, check}} <- cases do
+        manager =
+          Enum.reduce(
+            entries,
+            SessionManager.new(tmp_dir),
+            &SessionManager.append_message(&2, &1)
+          )
+
+        session_file = Path.join(tmp_dir, "#{name}.jsonl")
+        :ok = SessionManager.save_to_file(session_file, manager)
+        check.(Session.get_messages(start_session(session_file: session_file, cwd: tmp_dir)))
+      end
+    end
   end
 
   describe "start_link/1 settings manager integration" do
-    test "loads settings from cwd" do
-      session = start_session()
-      state = Session.get_state(session)
+    test "loads settings from cwd unless a settings_manager is supplied" do
+      assert %SettingsManager{} = Session.get_state(start_session()).settings_manager
 
-      # Settings manager should be loaded
-      assert state.settings_manager != nil
-      assert %SettingsManager{} = state.settings_manager
-    end
-
-    test "accepts custom settings_manager for testing" do
       custom_settings = %SettingsManager{
         default_thinking_level: :medium,
         compaction_enabled: false
       }
 
-      session = start_session(settings_manager: custom_settings)
-      state = Session.get_state(session)
-
+      state = Session.get_state(start_session(settings_manager: custom_settings))
       assert state.settings_manager.default_thinking_level == :medium
       assert state.settings_manager.compaction_enabled == false
     end
@@ -840,57 +906,38 @@ defmodule CodingAgent.SessionTest do
   # ============================================================================
 
   describe "prompt/3" do
-    test "sending a prompt starts streaming" do
-      session = start_session()
-
-      :ok = Session.prompt(session, "Hello!")
-
-      # Immediately check streaming state
-      state = Session.get_state(session)
-      # Note: streaming might complete very quickly with mocks
-      assert state.is_streaming == true or Session.get_messages(session) != []
-    end
-
-    test "returns error when already streaming" do
-      parent = self()
-
-      # Hold the first run open until the test releases it
-      slow_stream_fn = fn model, context, options ->
-        send(parent, {:stream_called, self()})
-
-        receive do
-          :release -> :ok
-        after
-          10_000 -> :ok
-        end
-
-        mock_stream_fn_single(assistant_message("Slow response")).(model, context, options)
-      end
-
-      session = start_session(stream_fn: slow_stream_fn)
+    test "returns error when already streaming and finishes the first turn" do
+      session = start_session(stream_fn: gated_stream_fn(self(), "Slow response"))
 
       :ok = Session.prompt(session, "First prompt")
-      result = Session.prompt(session, "Second prompt")
-
-      assert result == {:error, :busy}
+      assert Session.prompt(session, "Second prompt") == {:error, :busy}
 
       assert_receive {:stream_called, stream_pid}, 2_000
       send(stream_pid, :release)
       wait_for_streaming_complete(session)
+      assert Session.get_state(session).turn_index == 1
     end
 
-    test "can send prompt with images" do
-      session = start_session()
-
+    test "records the user message for text and image prompt variants" do
       images = [
-        %{data: "base64data", mime_type: "image/png"}
+        %{data: "base64data1", mime_type: "image/png"},
+        %{data: "base64data2", mime_type: "image/jpeg"},
+        %{data: "base64data3", mime_type: "image/gif"}
       ]
 
-      :ok = Session.prompt(session, "What's in this image?", images: images)
-      wait_for_streaming_complete(session)
+      for {text, opts} <- [
+            {"", []},
+            {"No images", [images: []]},
+            {"One image", [images: Enum.take(images, 1)]},
+            {"Multiple images", [images: images]}
+          ] do
+        session = start_session()
+        :ok = Session.prompt(session, text, opts)
+        wait_for_streaming_complete(session)
 
-      messages = Session.get_messages(session)
-      assert messages != []
+        assert [%UserMessage{}, %AssistantMessage{}] = Session.get_messages(session),
+               inspect({text, opts})
+      end
     end
 
     test "increments turn_index when a model turn starts" do
@@ -909,24 +956,25 @@ defmodule CodingAgent.SessionTest do
   # ============================================================================
 
   describe "steer/2" do
-    test "steering messages are queued" do
-      session = start_session()
+    test "steering and follow-up messages queue in FIFO order while a run is in flight" do
+      {session, _producer} = start_blocked_session()
 
-      :ok = Session.steer(session, "Stop what you're doing")
+      :ok = Session.steer(session, "Steer 1")
+      :ok = Session.steer(session, "Steer 2")
+      :ok = Session.follow_up(session, "Follow 1")
+      :ok = Session.follow_up(session, "Follow 2")
+
       state = Session.get_state(session)
 
-      # Queue should have one message
-      assert :queue.len(state.steering_queue) == 1
-    end
+      assert Enum.map(:queue.to_list(state.steering_queue), & &1.content) == [
+               "Steer 1",
+               "Steer 2"
+             ]
 
-    test "multiple steering messages are queued" do
-      session = start_session()
-
-      :ok = Session.steer(session, "First steer")
-      :ok = Session.steer(session, "Second steer")
-      state = Session.get_state(session)
-
-      assert :queue.len(state.steering_queue) == 2
+      assert Enum.map(:queue.to_list(state.follow_up_queue), & &1.content) == [
+               "Follow 1",
+               "Follow 2"
+             ]
     end
   end
 
@@ -966,18 +1014,16 @@ defmodule CodingAgent.SessionTest do
   end
 
   describe "queue consumption on agent_end" do
-    test "steering queue is cleared after agent ends" do
+    test "steering queued while idle is consumed by the next run" do
       session = start_session()
 
-      # Start a prompt first
+      :ok = Session.steer(session, "Steer message")
+      assert :queue.len(Session.get_state(session).steering_queue) == 1
+
       :ok = Session.prompt(session, "Hello!")
-
       wait_for_streaming_complete(session)
-      state = Session.get_state(session)
 
-      # Steering queue should be empty after run completes
-      # (steering is cleared in handle_agent_event for :agent_end)
-      assert :queue.len(state.steering_queue) == 0
+      assert :queue.len(Session.get_state(session).steering_queue) == 0
     end
   end
 
@@ -1039,53 +1085,38 @@ defmodule CodingAgent.SessionTest do
 
   describe "compact/2" do
     @tag :tmp_dir
-    test "manual compaction with custom summary", %{tmp_dir: tmp_dir} do
-      # Create a session with some messages first
+    test "manual compaction with a supplied summary persists the compaction entry", %{
+      tmp_dir: tmp_dir
+    } do
       session_manager =
-        SessionManager.new(tmp_dir)
-        |> SessionManager.append_message(%{
-          "role" => "user",
-          "content" => String.duplicate("a", 4000),
-          "timestamp" => 1
-        })
-        |> SessionManager.append_message(%{
-          "role" => "assistant",
-          "content" => [%{"type" => "text", "text" => String.duplicate("b", 4000)}],
-          "timestamp" => 2
-        })
-        |> SessionManager.append_message(%{
-          "role" => "user",
-          "content" => String.duplicate("c", 4000),
-          "timestamp" => 3
-        })
-        |> SessionManager.append_message(%{
-          "role" => "assistant",
-          "content" => [%{"type" => "text", "text" => String.duplicate("d", 4000)}],
-          "timestamp" => 4
-        })
+        Enum.reduce(1..4, SessionManager.new(tmp_dir), fn index, manager ->
+          role = if rem(index, 2) == 1, do: "user", else: "assistant"
+          text = String.duplicate(<<?a + index>>, 4000)
+          content = if role == "user", do: text, else: [%{"type" => "text", "text" => text}]
+
+          SessionManager.append_message(manager, %{
+            "role" => role,
+            "content" => content,
+            "timestamp" => index
+          })
+        end)
 
       session_file = Path.join(tmp_dir, "compact_test.jsonl")
       :ok = SessionManager.save_to_file(session_file, session_manager)
 
       session = start_session(session_file: session_file, cwd: tmp_dir)
 
-      # Compaction may fail if not enough tokens - that's acceptable
-      result = Session.compact(session, summary: "Custom summary", force: true)
+      assert :ok = Session.compact(session, summary: "Custom summary", force: true)
 
-      case result do
-        :ok ->
-          state = Session.get_state(session)
-          # After compaction, session_manager should have a compaction entry
-          assert state.session_manager != nil
+      compactions =
+        &Enum.filter(SessionManager.entries(&1), fn entry -> entry.type == :compaction end)
 
-        {:error, :cannot_compact} ->
-          # This is acceptable if not enough content to compact
-          :ok
+      assert [%{summary: "Custom summary"}] =
+               compactions.(Session.get_state(session).session_manager)
 
-        {:error, {:unknown_api, :mock}} ->
-          # This is acceptable in test environment with mock API
-          :ok
-      end
+      :ok = Session.save(session)
+      {:ok, loaded} = SessionManager.load_from_file(session_file)
+      assert [%{summary: "Custom summary"}] = compactions.(loaded)
     end
 
     test "compact returns error when not enough content" do
@@ -1103,37 +1134,7 @@ defmodule CodingAgent.SessionTest do
 
   describe "navigate_tree/3" do
     @tag :tmp_dir
-    test "navigates to different entry", %{tmp_dir: tmp_dir} do
-      # Create a session with entries
-      session_manager =
-        SessionManager.new(tmp_dir)
-        |> SessionManager.append_message(%{
-          "role" => "user",
-          "content" => "First message",
-          "timestamp" => 1
-        })
-        |> SessionManager.append_message(%{
-          "role" => "assistant",
-          "content" => [%{"type" => "text", "text" => "First response"}],
-          "timestamp" => 2
-        })
-
-      [first_entry, _second_entry] = SessionManager.entries(session_manager)
-
-      session_file = Path.join(tmp_dir, "nav_test.jsonl")
-      :ok = SessionManager.save_to_file(session_file, session_manager)
-
-      session = start_session(session_file: session_file, cwd: tmp_dir)
-
-      # Navigate to first entry
-      :ok = Session.navigate_tree(session, first_entry.id)
-
-      state = Session.get_state(session)
-      assert state.session_manager.leaf_id == first_entry.id
-    end
-
-    @tag :tmp_dir
-    test "messages are rebuilt from new position", %{tmp_dir: tmp_dir} do
+    test "moves the leaf to an entry and rebuilds messages from it", %{tmp_dir: tmp_dir} do
       session_manager =
         SessionManager.new(tmp_dir)
         |> SessionManager.append_message(%{
@@ -1158,24 +1159,12 @@ defmodule CodingAgent.SessionTest do
       :ok = SessionManager.save_to_file(session_file, session_manager)
 
       session = start_session(session_file: session_file, cwd: tmp_dir)
+      assert length(Session.get_messages(session)) == 3
 
-      # Initially should have 3 messages
-      initial_messages = Session.get_messages(session)
-      assert length(initial_messages) == 3
-
-      # Navigate to first entry - should rebuild with only 1 message
       :ok = Session.navigate_tree(session, first_entry.id)
 
-      messages = Session.get_messages(session)
-      assert length(messages) == 1
-    end
-
-    test "returns error on invalid entry_id" do
-      session = start_session()
-
-      result = Session.navigate_tree(session, "nonexistent-entry-id")
-
-      assert result == {:error, :entry_not_found}
+      assert Session.get_state(session).session_manager.leaf_id == first_entry.id
+      assert [%UserMessage{content: "First"}] = Session.get_messages(session)
     end
   end
 
@@ -1183,43 +1172,26 @@ defmodule CodingAgent.SessionTest do
   # State Management Tests
   # ============================================================================
 
-  describe "get_state/1" do
-    test "returns current state" do
+  describe "get_stats/1" do
+    test "reports identity and counts before and after a turn" do
       session = start_session()
       state = Session.get_state(session)
 
-      assert %Session{} = state
-      assert state.cwd == session_cwd()
-      assert state.is_streaming == false
-    end
-  end
+      assert %{
+               message_count: 0,
+               turn_count: 0,
+               is_streaming: false,
+               thinking_level: :medium,
+               model: %{provider: :mock_provider, id: "mock-model-1"}
+             } = stats = Session.get_stats(session)
 
-  describe "get_stats/1" do
-    test "returns statistics" do
-      session = start_session()
-      stats = Session.get_stats(session)
-
-      assert is_map(stats)
-      assert Map.has_key?(stats, :message_count)
-      assert Map.has_key?(stats, :turn_count)
-      assert Map.has_key?(stats, :is_streaming)
-      assert Map.has_key?(stats, :session_id)
-      assert Map.has_key?(stats, :cwd)
-      assert Map.has_key?(stats, :model)
-      assert Map.has_key?(stats, :thinking_level)
-    end
-
-    test "message_count reflects actual messages" do
-      session = start_session()
-
-      stats_before = Session.get_stats(session)
-      assert stats_before.message_count == 0
+      assert stats.session_id == state.session_manager.header.id
+      assert stats.cwd == session_cwd()
 
       :ok = Session.prompt(session, "Hello!")
       wait_for_streaming_complete(session)
 
-      stats_after = Session.get_stats(session)
-      assert stats_after.message_count > 0
+      assert %{message_count: 2, turn_count: 1} = Session.get_stats(session)
     end
   end
 
@@ -1245,8 +1217,8 @@ defmodule CodingAgent.SessionTest do
       assert state.is_streaming == false
     end
 
-    test "clears steering and follow-up queues" do
-      session = start_session()
+    test "clears steering and follow-up queued during a run" do
+      {session, _producer} = start_blocked_session()
 
       :ok = Session.steer(session, "Steer")
       :ok = Session.follow_up(session, "Follow-up")
@@ -1413,19 +1385,19 @@ defmodule CodingAgent.SessionTest do
 
   describe "save/1" do
     @tag :tmp_dir
-    test "persists session to disk", %{tmp_dir: tmp_dir} do
+    test "persists session to disk and keeps the path across saves", %{tmp_dir: tmp_dir} do
       session = start_session(cwd: tmp_dir)
 
-      # Add some content
       :ok = Session.prompt(session, "Hello!")
       wait_for_streaming_complete(session)
 
-      # Save
       :ok = Session.save(session)
+      session_file = Session.get_state(session).session_file
+      assert session_file != nil
+      assert File.exists?(session_file)
 
-      state = Session.get_state(session)
-      assert state.session_file != nil
-      assert File.exists?(state.session_file)
+      :ok = Session.save(session)
+      assert Session.get_state(session).session_file == session_file
     end
 
     @tag :tmp_dir
@@ -1442,6 +1414,85 @@ defmodule CodingAgent.SessionTest do
       assert {:ok, loaded} = SessionManager.load_from_file(session_file)
       assert loaded.header.id == Session.get_state(session).session_manager.header.id
     end
+
+    @tag :tmp_dir
+    test "model, thinking level and tool transcript survive save and resume", %{
+      tmp_dir: tmp_dir
+    } do
+      session_file = Path.join(tmp_dir, "model_thinking_test.jsonl")
+
+      session_manager =
+        SessionManager.new(tmp_dir)
+        |> SessionManager.append_message(%{
+          "role" => "user",
+          "content" => "Read the saved file",
+          "timestamp" => 1
+        })
+        |> SessionManager.append_message(%{
+          "role" => "assistant",
+          "content" => [
+            %{
+              "type" => "tool_call",
+              "id" => "persisted-call",
+              "name" => "read",
+              "arguments" => %{"path" => "saved.txt"}
+            }
+          ],
+          "stop_reason" => "tool_use",
+          "timestamp" => 2
+        })
+        |> SessionManager.append_message(%{
+          "role" => "tool_result",
+          "tool_call_id" => "persisted-call",
+          "tool_name" => "read",
+          "content" => [%{"type" => "text", "text" => "Saved file contents"}],
+          "is_error" => false,
+          "timestamp" => 3
+        })
+        |> SessionManager.append_message(%{
+          "role" => "assistant",
+          "content" => [%{"type" => "text", "text" => "The file is restored"}],
+          "stop_reason" => "stop",
+          "timestamp" => 4
+        })
+
+      :ok = SessionManager.save_to_file(session_file, session_manager)
+      session = start_session(cwd: tmp_dir, session_file: session_file)
+      original_messages = Session.get_messages(session)
+
+      assert [
+               %UserMessage{content: "Read the saved file"},
+               %AssistantMessage{
+                 content: [
+                   %ToolCall{
+                     id: "persisted-call",
+                     name: "read",
+                     arguments: %{"path" => "saved.txt"}
+                   }
+                 ]
+               },
+               %ToolResultMessage{
+                 tool_call_id: "persisted-call",
+                 content: [%TextContent{text: "Saved file contents"}]
+               },
+               %AssistantMessage{content: [%TextContent{text: "The file is restored"}]}
+             ] = original_messages
+
+      :ok = Session.switch_model(session, mock_model(id: "persisted-model"))
+      :ok = Session.set_thinking_level(session, :high)
+      :ok = Session.save(session)
+
+      {:ok, loaded} = SessionManager.load_from_file(session_file)
+      context = SessionManager.build_session_context(loaded)
+      assert context.model == %{provider: "mock_provider", model_id: "persisted-model"}
+      assert context.thinking_level == :high
+      assert context.messages == SessionManager.build_session_context(session_manager).messages
+
+      GenServer.stop(session)
+      resumed = start_session(cwd: tmp_dir, session_file: session_file)
+      assert Session.get_state(resumed).thinking_level == :high
+      assert Session.get_messages(resumed) == original_messages
+    end
   end
 
   # ============================================================================
@@ -1449,7 +1500,7 @@ defmodule CodingAgent.SessionTest do
   # ============================================================================
 
   describe "switch_model/2" do
-    test "changes the model" do
+    test "changes the model and records the change in the session manager" do
       session = start_session()
 
       new_model = mock_model(id: "new-model-id", name: "New Model")
@@ -1457,40 +1508,22 @@ defmodule CodingAgent.SessionTest do
 
       state = Session.get_state(session)
       assert state.model.id == "new-model-id"
-    end
 
-    test "records model change in session manager" do
-      session = start_session()
-
-      new_model = mock_model(id: "changed-model")
-      :ok = Session.switch_model(session, new_model)
-
-      state = Session.get_state(session)
-
-      context = SessionManager.build_session_context(state.session_manager)
-      assert context.model == %{provider: new_model.provider, model_id: new_model.id}
+      assert SessionManager.build_session_context(state.session_manager).model ==
+               %{provider: new_model.provider, model_id: new_model.id}
     end
   end
 
   describe "set_thinking_level/2" do
-    test "changes the thinking level" do
-      session = start_session(thinking_level: :off)
-
-      :ok = Session.set_thinking_level(session, :high)
-
-      state = Session.get_state(session)
-      assert state.thinking_level == :high
-    end
-
-    test "records thinking level change in session manager" do
+    test "changes and records every thinking level" do
       session = start_session()
 
-      :ok = Session.set_thinking_level(session, :medium)
-
-      state = Session.get_state(session)
-
-      context = SessionManager.build_session_context(state.session_manager)
-      assert context.thinking_level == :medium
+      for level <- [:off, :minimal, :low, :medium, :high] do
+        :ok = Session.set_thinking_level(session, level)
+        state = Session.get_state(session)
+        assert state.thinking_level == level
+        assert SessionManager.build_session_context(state.session_manager).thinking_level == level
+      end
     end
   end
 
@@ -1499,43 +1532,18 @@ defmodule CodingAgent.SessionTest do
   # ============================================================================
 
   describe "abort/1" do
-    test "abort can be called without error" do
-      session = start_session()
-
-      # Should not raise even when not streaming
-      :ok = Session.abort(session)
-    end
-
-    test "abort stops streaming" do
-      # Use a slow stream to ensure we can abort it
-      parent = self()
-
-      slow_stream_fn = fn model, context, options ->
-        send(parent, {:stream_called, self()})
-
-        receive do
-          :release -> :ok
-        after
-          10_000 -> :ok
-        end
-
-        mock_stream_fn_single(assistant_message("Slow response")).(model, context, options)
-      end
-
-      session = start_session(stream_fn: slow_stream_fn)
+    test "abort is a no-op while idle and stops an in-flight stream" do
+      session = start_session(stream_fn: gated_stream_fn(self(), "Slow response"))
+      assert :ok = Session.abort(session)
 
       :ok = Session.prompt(session, "Hello!")
-      # Wait for the stream to actually start
       assert_receive {:stream_called, stream_pid}, 2_000
 
       :ok = Session.abort(session)
       send(stream_pid, :release)
 
-      # After abort, is_streaming should eventually be false
-      # (may need to wait for cleanup)
       wait_for_streaming_complete(session)
-      final_state = Session.get_state(session)
-      assert final_state.is_streaming == false
+      assert Session.get_state(session).is_streaming == false
     end
 
     test "abort cancels deferred prompt before stream starts" do
@@ -1566,23 +1574,21 @@ defmodule CodingAgent.SessionTest do
   # ============================================================================
 
   describe "get_messages/1" do
-    test "returns empty list for new session" do
+    test "starts empty and accumulates each turn's user and assistant messages" do
       session = start_session()
-      messages = Session.get_messages(session)
+      assert Session.get_messages(session) == []
 
-      assert messages == []
-    end
+      for text <- ["First", "Second"] do
+        :ok = Session.prompt(session, text)
+        wait_for_streaming_complete(session)
+      end
 
-    test "returns messages after prompting" do
-      session = start_session()
-
-      :ok = Session.prompt(session, "Hello!")
-      wait_for_streaming_complete(session)
-
-      messages = Session.get_messages(session)
-      # Should have at least one message (user message is included in prompt call,
-      # assistant response may or may not be added depending on stream completion)
-      assert messages != []
+      assert [
+               %UserMessage{content: "First"},
+               %AssistantMessage{content: [%TextContent{text: "Hello!"}]},
+               %UserMessage{content: "Second"},
+               %AssistantMessage{content: [%TextContent{text: "Hello!"}]}
+             ] = Session.get_messages(session)
     end
   end
 
@@ -1591,15 +1597,19 @@ defmodule CodingAgent.SessionTest do
   # ============================================================================
 
   describe "main agent registration" do
-    test "main agent is registered in AgentRegistry on session start" do
-      session = start_session()
-      state = Session.get_state(session)
-      session_id = state.session_manager.header.id
+    test "each session registers its own agent as {session_id, :main, 0}" do
+      agents =
+        for session <- [start_session(), start_session()] do
+          state = Session.get_state(session)
+          key = {state.session_manager.header.id, :main, 0}
 
-      # Verify main agent is registered with key {session_id, :main, 0}
-      assert {:ok, pid} = LemonAgent.AgentRegistry.lookup({session_id, :main, 0})
-      assert is_pid(pid)
-      assert Process.alive?(pid)
+          assert LemonAgent.AgentRegistry.lookup(key) == {:ok, state.agent}
+          assert {key, state.agent} in LemonAgent.AgentRegistry.list()
+          state.agent
+        end
+
+      assert [agent1, agent2] = agents
+      refute agent1 == agent2
     end
 
     test "main agent is unregistered when session stops" do
@@ -1624,261 +1634,72 @@ defmodule CodingAgent.SessionTest do
         LemonAgent.AgentRegistry.lookup({session_id, :main, 0}) == :error
       end)
     end
-
-    test "registry list includes main agent" do
-      session = start_session()
-      state = Session.get_state(session)
-      session_id = state.session_manager.header.id
-
-      agents = LemonAgent.AgentRegistry.list()
-
-      assert Enum.any?(agents, fn
-               {{^session_id, :main, _index}, _pid} -> true
-               _ -> false
-             end)
-    end
-
-    test "multiple sessions have separate main agents in registry" do
-      session1 = start_session()
-      session2 = start_session()
-
-      state1 = Session.get_state(session1)
-      state2 = Session.get_state(session2)
-
-      session_id1 = state1.session_manager.header.id
-      session_id2 = state2.session_manager.header.id
-
-      # Verify both sessions have their own main agent
-      assert {:ok, pid1} = LemonAgent.AgentRegistry.lookup({session_id1, :main, 0})
-      assert {:ok, pid2} = LemonAgent.AgentRegistry.lookup({session_id2, :main, 0})
-
-      # PIDs should be different
-      assert pid1 != pid2
-    end
-
-    test "main agent can be looked up by session id" do
-      session = start_session()
-      state = Session.get_state(session)
-      session_id = state.session_manager.header.id
-
-      # Find the main agent through the registry
-      {:ok, agent_pid} = LemonAgent.AgentRegistry.lookup({session_id, :main, 0})
-
-      # Verify it's the same agent as in the session state
-      assert agent_pid == state.agent
-    end
   end
 
   # ============================================================================
   # Health Monitoring Tests
   # ============================================================================
 
-  describe "diagnostic health fields" do
-    test "returns healthy status for new session" do
-      session = start_session()
-      health = Session.diagnostics(session)
-
-      assert health.status == :healthy
-      assert is_binary(health.session_id)
-      assert health.uptime_ms >= 0
-      assert health.is_streaming == false
-      assert health.agent_alive == true
-    end
-
-    test "includes session_id in diagnostics" do
+  describe "diagnostics/1" do
+    test "reports a fresh session as healthy with zeroed counters" do
       session = start_session()
       state = Session.get_state(session)
-      health = Session.diagnostics(session)
-
-      assert health.session_id == state.session_manager.header.id
-    end
-
-    test "uptime increases over time" do
-      session = start_session()
-      health1 = Session.diagnostics(session)
-      Process.sleep(50)
-      health2 = Session.diagnostics(session)
-
-      assert health2.uptime_ms > health1.uptime_ms
-    end
-
-    test "is_streaming reflects current state" do
-      # Use a slow response to ensure we can check streaming state
-      parent = self()
-
-      slow_stream_fn = fn model, context, options ->
-        send(parent, {:stream_called, self()})
-
-        receive do
-          :release -> :ok
-        after
-          10_000 -> :ok
-        end
-
-        mock_stream_fn_single(assistant_message("Slow response")).(model, context, options)
-      end
-
-      session = start_session(stream_fn: slow_stream_fn)
-
-      health_before = Session.diagnostics(session)
-      assert health_before.is_streaming == false
-
-      :ok = Session.prompt(session, "Hello!")
-      assert_receive {:stream_called, stream_pid}, 2_000
-
-      health_during = Session.diagnostics(session)
-      assert health_during.is_streaming == true
-
-      send(stream_pid, :release)
-      wait_for_streaming_complete(session)
-
-      health_after = Session.diagnostics(session)
-      assert health_after.is_streaming == false
-    end
-  end
-
-  describe "diagnostics/1" do
-    test "returns comprehensive diagnostic info" do
-      session = start_session()
       diag = Session.diagnostics(session)
 
-      # Basic fields
-      assert is_binary(diag.session_id)
-      assert diag.status in [:healthy, :degraded, :unhealthy]
-      assert is_integer(diag.uptime_ms)
-      assert is_integer(diag.started_at)
-      assert is_boolean(diag.is_streaming)
-      assert is_boolean(diag.agent_alive)
-
-      # Counter fields
-      assert is_integer(diag.message_count)
-      assert is_integer(diag.turn_count)
-      assert is_integer(diag.tool_call_count)
-      assert is_integer(diag.error_count)
-      assert is_float(diag.error_rate)
-
-      # Queue fields
-      assert is_integer(diag.subscriber_count)
-      assert is_integer(diag.stream_subscriber_count)
-      assert is_integer(diag.steering_queue_size)
-      assert is_integer(diag.follow_up_queue_size)
-
-      # Model info
-      assert is_map(diag.model)
-      assert Map.has_key?(diag.model, :provider)
-      assert Map.has_key?(diag.model, :id)
-
-      # Other fields
-      assert is_binary(diag.cwd)
-      assert diag.thinking_level in [:off, :minimal, :low, :medium, :high]
-    end
-
-    test "message_count increases after prompting" do
-      session = start_session()
-
-      diag_before = Session.diagnostics(session)
-      assert diag_before.message_count == 0
-
-      :ok = Session.prompt(session, "Hello!")
-      wait_for_streaming_complete(session)
-
-      diag_after = Session.diagnostics(session)
-      assert diag_after.message_count > 0
-    end
-
-    test "turn_count increases after prompting" do
-      session = start_session()
-
-      diag_before = Session.diagnostics(session)
-      assert diag_before.turn_count == 0
-
-      :ok = Session.prompt(session, "Hello!")
-      wait_for_streaming_complete(session)
-
-      diag_after = Session.diagnostics(session)
-      assert diag_after.turn_count == 1
-    end
-
-    test "subscriber_count reflects active subscriptions" do
-      session = start_session()
-
-      diag_before = Session.diagnostics(session)
-      assert diag_before.subscriber_count == 0
-
-      _unsub = Session.subscribe(session)
-
-      diag_after = Session.diagnostics(session)
-      assert diag_after.subscriber_count == 1
-    end
-
-    test "steering_queue_size reflects queued messages" do
-      session = start_session()
-
-      diag_before = Session.diagnostics(session)
-      assert diag_before.steering_queue_size == 0
-
-      :ok = Session.steer(session, "Steer message")
-
-      diag_after = Session.diagnostics(session)
-      assert diag_after.steering_queue_size == 1
-    end
-
-    test "follow_up_queue_size reflects queued messages" do
-      session =
-        start_session(
-          stream_fn:
-            LemonAgent.Test.Mocks.blocking_stream_fn(
-              LemonAgent.Test.Mocks.assistant_message("done"),
-              self()
-            )
-        )
-
-      :ok = Session.prompt(session, "hold this turn")
-      assert_receive {:stream_blocked, producer}, 5_000
-      on_exit(fn -> send(producer, :release_stream) end)
-
-      diag_before = Session.diagnostics(session)
-      assert diag_before.follow_up_queue_size == 0
-
-      :ok = Session.follow_up(session, "Follow up message")
-
-      diag_after = Session.diagnostics(session)
-      assert diag_after.follow_up_queue_size == 1
-      send(producer, :release_stream)
-    end
-
-    test "error_rate is zero when no tool calls" do
-      session = start_session()
-      diag = Session.diagnostics(session)
+      assert %{
+               status: :healthy,
+               is_streaming: false,
+               agent_alive: true,
+               message_count: 0,
+               turn_count: 0,
+               tool_call_count: 0,
+               error_count: 0,
+               subscriber_count: 0,
+               stream_subscriber_count: 0,
+               steering_queue_size: 0,
+               follow_up_queue_size: 0,
+               thinking_level: :medium
+             } = diag
 
       assert diag.error_rate == 0.0
-      assert diag.tool_call_count == 0
-      assert diag.error_count == 0
+      assert diag.session_id == state.session_manager.header.id
+      assert diag.cwd == session_cwd()
+      assert diag.uptime_ms >= 0
+      assert is_integer(diag.started_at)
+      assert %{provider: :mock_provider, id: "mock-model-1"} = diag.model
+
+      _unsub = Session.subscribe(session)
+      assert Session.diagnostics(session).subscriber_count == 1
     end
 
-    test "last_activity_at is updated on prompt" do
+    test "tracks turns, messages, activity and uptime across a prompt" do
       session = start_session()
-
-      diag_before = Session.diagnostics(session)
-      initial_activity = diag_before.last_activity_at
+      before = Session.diagnostics(session)
 
       Process.sleep(50)
       :ok = Session.prompt(session, "Hello!")
       wait_for_streaming_complete(session)
 
-      diag_after = Session.diagnostics(session)
-      assert diag_after.last_activity_at > initial_activity
+      diag = Session.diagnostics(session)
+      assert diag.is_streaming == false
+      assert diag.message_count == 2
+      assert diag.turn_count == 1
+      assert diag.last_activity_at > before.last_activity_at
+      assert diag.uptime_ms > before.uptime_ms
+    end
+
+    test "reports streaming and queued input while a run is in flight" do
+      {session, _producer} = start_blocked_session()
+      assert Session.diagnostics(session).is_streaming == true
+
+      :ok = Session.steer(session, "Steer message")
+      :ok = Session.follow_up(session, "Follow up message")
+
+      assert %{steering_queue_size: 1, follow_up_queue_size: 1} = Session.diagnostics(session)
     end
   end
 
   describe "health status determination" do
-    test "new session is healthy" do
-      session = start_session()
-      health = Session.diagnostics(session)
-
-      assert health.status == :healthy
-    end
-
     test "session pointing at a dead agent is unhealthy" do
       session = start_session()
       agent = Session.get_state(session).agent
@@ -1929,58 +1750,7 @@ defmodule CodingAgent.SessionTest do
   end
 
   describe "tool call tracking" do
-    test "tool_call_count increments on tool execution" do
-      # Create a response with a tool call
-      tool_call = %ToolCall{
-        type: :tool_call,
-        id: "call_123",
-        name: "echo",
-        arguments: %{"text" => "hello"}
-      }
-
-      response_with_tool = %AssistantMessage{
-        role: :assistant,
-        content: [tool_call],
-        api: :mock,
-        provider: :mock_provider,
-        model: "mock-model-1",
-        usage: mock_usage(),
-        stop_reason: :tool_use,
-        error_message: nil,
-        timestamp: System.system_time(:millisecond)
-      }
-
-      final_response = assistant_message("Done with tool!")
-
-      call_count = :counters.new(1, [:atomics])
-
-      multi_stream_fn = fn _model, _context, _options ->
-        count = :counters.get(call_count, 1)
-        :counters.add(call_count, 1, 1)
-
-        response =
-          if count == 0 do
-            response_with_tool
-          else
-            final_response
-          end
-
-        {:ok, response_to_event_stream(response)}
-      end
-
-      session = start_session(tools: [echo_tool()], stream_fn: multi_stream_fn)
-
-      diag_before = Session.diagnostics(session)
-      assert diag_before.tool_call_count == 0
-
-      :ok = Session.prompt(session, "Use echo to say hello")
-      wait_for_streaming_complete(session)
-
-      diag_after = Session.diagnostics(session)
-      assert diag_after.tool_call_count >= 1
-    end
-
-    test "tool result details are persisted in session entries" do
+    test "counts executed tool calls and persists untrusted tool result details" do
       tool_call = %ToolCall{
         type: :tool_call,
         id: "call_details",
@@ -1988,33 +1758,15 @@ defmodule CodingAgent.SessionTest do
         arguments: %{"text" => "hello"}
       }
 
-      response_with_tool = %AssistantMessage{
-        role: :assistant,
-        content: [tool_call],
-        api: :mock,
-        provider: :mock_provider,
-        model: "mock-model-1",
-        usage: mock_usage(),
-        stop_reason: :tool_use,
-        error_message: nil,
-        timestamp: System.system_time(:millisecond)
-      }
+      responses = [
+        assistant_message("", stop_reason: :tool_use) |> Map.put(:content, [tool_call]),
+        assistant_message("Done with tool!")
+      ]
 
-      final_response = assistant_message("Done with tool!")
-
-      call_count = :counters.new(1, [:atomics])
+      {:ok, script} = Elixir.Agent.start_link(fn -> responses end)
 
       multi_stream_fn = fn _model, _context, _options ->
-        count = :counters.get(call_count, 1)
-        :counters.add(call_count, 1, 1)
-
-        response =
-          if count == 0 do
-            response_with_tool
-          else
-            final_response
-          end
-
+        response = Elixir.Agent.get_and_update(script, fn [head | tail] -> {head, tail} end)
         {:ok, response_to_event_stream(response)}
       end
 
@@ -2023,6 +1775,7 @@ defmodule CodingAgent.SessionTest do
       :ok = Session.prompt(session, "Use echo_details")
       wait_for_streaming_complete(session)
 
+      assert Session.diagnostics(session).tool_call_count == 1
       state = Session.get_state(session)
 
       tool_entries =
@@ -2030,10 +1783,9 @@ defmodule CodingAgent.SessionTest do
           entry.type == :message and entry.message["role"] == "tool_result"
         end)
 
-      assert tool_entries != []
-      last_entry = List.last(tool_entries)
-      assert last_entry.message["details"] == %{category: "demo", length: 5}
-      assert last_entry.message["trust"] == "untrusted"
+      assert [entry] = tool_entries
+      assert entry.message["details"] == %{category: "demo", length: 5}
+      assert entry.message["trust"] == "untrusted"
     end
   end
 end

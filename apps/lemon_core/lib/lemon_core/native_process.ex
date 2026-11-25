@@ -195,7 +195,7 @@ defmodule LemonCore.NativeProcess do
       :ok = Durable.sync_directory(Path.dirname(path))
     catch
       kind, reason ->
-        :dets.close(@table)
+        _ = :dets.close(@table)
         :erlang.raise(kind, reason, __STACKTRACE__)
     end
 

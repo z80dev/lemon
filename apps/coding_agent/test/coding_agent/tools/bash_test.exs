@@ -273,7 +273,7 @@ defmodule CodingAgent.Tools.BashTest do
         Bash.execute("call_1", %{"command" => "echo should not run"}, signal, nil, tmp_dir, [])
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
-      assert text =~ "cancelled"
+      assert text == "Command cancelled."
     end
 
     test "abort signal during execution stops command", %{tmp_dir: tmp_dir} do

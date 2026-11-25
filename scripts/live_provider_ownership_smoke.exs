@@ -1,7 +1,14 @@
-# Offline actual public Agent/Session lifecycle -> LemonAi -> loopback HTTP.
+# Manual smoke: public Agent/Session model switches -> LemonAi -> loopback HTTP.
+# Fixture credentials and loopback endpoints only: no provider login, approval or
+# network call. The ExUnit equivalent is
+# apps/coding_agent/test/coding_agent/session/live_provider_ownership_test.exs.
 # MIX_ENV=test mix run --no-compile --no-start scripts/live_provider_ownership_smoke.exs
-Code.require_file("support/live_provider_ownership_probe.exs", __DIR__)
-alias LemonScripts.LiveProviderOwnershipProbe
+Code.require_file(
+  "../apps/coding_agent/test/support/probes/live_provider_ownership_probe.exs",
+  __DIR__
+)
+
+alias CodingAgent.TestSupport.LiveProviderOwnershipProbe
 
 root =
   Path.join(System.tmp_dir!(), "live_provider_ownership_#{System.unique_integer([:positive])}")

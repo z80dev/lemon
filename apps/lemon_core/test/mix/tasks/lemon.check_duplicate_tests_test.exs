@@ -34,6 +34,52 @@ defmodule Mix.Tasks.Lemon.CheckDuplicateTestsTest do
     end
   end
 
+  test "an edge-cases file beside its canonical test fails", %{tmp_dir: root} do
+    write_test(root, "circuit_breaker", "defmodule Sample.CircuitBreakerTest do\nend")
+
+    write_test(
+      root,
+      "circuit_breaker_concurrency",
+      "defmodule Sample.CircuitBreakerConcurrencyTest do\nend"
+    )
+
+    write_test(root, "bash_edge_cases", "defmodule Sample.BashEdgeCasesTest do\nend")
+
+    assert capture_io(fn -> CheckDuplicateTests.run(["--root", root]) end) =~ "[ok]"
+
+    write_test(
+      root,
+      "circuit_breaker_edge_cases",
+      "defmodule Sample.CircuitBreakerEdgeCasesTest do\nend"
+    )
+
+    error =
+      assert_raise Mix.Error, fn ->
+        CheckDuplicateTests.run(["--root", root])
+      end
+
+    assert error.message =~
+             "apps/sample/test/circuit_breaker_edge_cases_test.exs " <>
+               "(canonical: apps/sample/test/circuit_breaker_test.exs)"
+
+    refute error.message =~ "bash_edge_cases"
+    refute error.message =~ "concurrency"
+  end
+
+  test "a layered module elsewhere fails when its canonical module exists", %{tmp_dir: root} do
+    write_test(root, "session", "defmodule Sample.SessionTest do\nend")
+
+    write_test(
+      root,
+      "legacy/session_comprehensive",
+      "defmodule Sample.SessionComprehensiveTest do\nend"
+    )
+
+    assert_raise Mix.Error,
+                 ~r"legacy/session_comprehensive_test\.exs \(canonical: apps/sample/test/session_test\.exs\)",
+                 fn -> CheckDuplicateTests.run(["--root", root]) end
+  end
+
   defp write_test(root, name, source) do
     path = Path.join([root, "apps", "sample", "test", name <> "_test.exs"])
     File.mkdir_p!(Path.dirname(path))

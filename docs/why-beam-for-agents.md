@@ -77,7 +77,7 @@ a dropped Telegram connection *should* come back, because reconnecting is idempo
 idempotency argument lives in the supervision strategy, where a reviewer can find it.
 
 One level down, each tool call runs as a supervised task with a monitor
-([`start_tool_tasks/10`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) in
+([`start_tool_tasks/9`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) in
 `LemonAgent.Loop.ToolCalls`). If it crashes, the `:DOWN` message is converted into a
 tool result the model can read — an interrupted result with
 `error_type: :tool_task_crashed`, built in
@@ -143,13 +143,11 @@ take a NIF dependency on. Nx and Bumblebee are real and good, and they are not P
 your agent needs local inference, embeddings, or reranking, that work happens somewhere
 else.
 
-**Anything with a native or JS-only SDK becomes an OS process boundary.** WASM extensions
-run in a sidecar over a port protocol
-([`wasm/sidecar_session.ex`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex));
-browser automation shells out; the TypeScript packages under `clients/` exist because the
-browser is the browser. Ports are the correct answer — a crashing sidecar cannot corrupt
-the VM — but you pay a serialization boundary and a supervision tree for what Python would
-have solved with an import.
+**Anything with a native or JS-only SDK becomes an OS process boundary.**
+Browser automation shells out; the TypeScript packages under `clients/` exist
+because the browser is the browser. Ports keep a crashing subprocess from
+corrupting the VM, but you pay for serialization and supervision where Python
+would use an import.
 
 **NIFs are where the guarantees stop.** A NIF can crash the whole VM and can block a
 scheduler thread. Every isolation property above is a property of Erlang code, not of the

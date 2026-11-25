@@ -49,8 +49,9 @@ defmodule CodingAgent.Tools.Task.Speculation do
   require Logger
 
   alias CodingAgent.{BudgetEnforcer, Subagents, TaskStore}
+  alias CodingAgent.TaskRuntime.Control
   alias CodingAgent.Tools.Task, as: TaskTool
-  alias CodingAgent.Tools.Task.{Control, Execution, Params, StreamItems, Telemetry}
+  alias CodingAgent.Tools.Task.{Execution, InvocationAuthority, Params, StreamItems, Telemetry}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
 
@@ -155,7 +156,7 @@ defmodule CodingAgent.Tools.Task.Speculation do
   # Per-item refusals (policy, budget, launch failure) and write-capable
   # children are left for dispatch; the item simply is not adopted.
   defp start(index, child, validated, key, %{id: id, signal: signal}, cwd, opts) do
-    with {:ok, validated} <- Params.restrict_to_parent(validated, cwd, opts),
+    with {:ok, validated} <- InvocationAuthority.restrict_to_parent(validated, cwd, opts),
          true <- read_only?(validated),
          :ok <- Params.check_budget_and_policy(validated, opts),
          %AgentToolResult{details: %{task_id: task_id} = details} = result <-

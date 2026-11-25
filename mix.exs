@@ -26,9 +26,10 @@ defmodule Lemon.MixProject do
     ]
   end
 
-  # Advisory Dialyzer lane (see .github/workflows/dialyzer.yml). PLTs are
-  # written under _build/ so they're picked up by the existing gitignore
-  # rule and can be cached in CI keyed on mix.lock.
+  # Dialyzer lane: the `dialyzer` job in .github/workflows/ci.yml runs the
+  # whole umbrella and scripts/dialyzer_gate.sh gates the clean apps. PLTs are
+  # written under _build/ so they're picked up by the existing gitignore rule
+  # and can be cached in CI keyed on mix.lock.
   defp dialyzer do
     [
       plt_core_path: "_build/dialyzer",
@@ -37,89 +38,52 @@ defmodule Lemon.MixProject do
       # per-app PLT discovery never pulls it in on its own; add it explicitly
       # so Discord adapter calls into Nostrum.Api.* type-check.
       plt_add_apps: [:mix, :ex_unit, :public_key, :nostrum],
+      # Umbrella apps are analysed from their own beams on every run. Keeping
+      # them out of the dependency PLT means a code change no longer makes the
+      # cached PLT stale (dialyxir otherwise adds every in_umbrella dependency).
+      plt_ignore_apps: umbrella_apps(),
       flags: [:error_handling, :unmatched_returns],
       ignore_warnings: ".dialyzer_ignore.exs",
       list_unused_filters: true
     ]
   end
 
+  defp umbrella_apps do
+    for mix_file <- Path.wildcard(Path.join(__DIR__, "apps/*/mix.exs")) do
+      mix_file |> Path.dirname() |> Path.basename() |> String.to_atom()
+    end
+  end
+
   # Runtime release configuration
   #
-  # lemon_core carries :exqlite, :sentry and :finch as optional deps (see
-  # apps/lemon_core/mix.exs), so the runtime releases name them explicitly:
-  # prod configures the SQLite store backend, and the error sink is part of
-  # what "reference runtime" means here.
-  #
-  # The :lemon_honcho satellite must be named here too, for the opposite
-  # reason: it depends on the platform and nothing in the platform depends on
-  # it, so a release that does not list it simply never starts it — and every
-  # registration a satellite performs happens in its `start/2`. The omission is
-  # silent, which is why it is listed in both runtimes rather than only in
-  # the full one; an unconfigured satellite registers nothing and costs nothing.
+  # Each release `lemon_<profile>` ships exactly the applications of one
+  # runtime profile in apps/lemon_core/priv/runtime_profiles.exs, the single
+  # source LemonCore.Runtime.Profile also compiles: the source launcher, the
+  # releases, /healthz and `lemon doctor` all start or expect the same list.
+  # That file documents why each application is named.
   defp releases do
-    [
-      lemon_runtime_min: [
-        applications: [
-          exqlite: :permanent,
-          sentry: :permanent,
-          finch: :permanent,
-          lemon_core: :permanent,
-          lemon_browser: :permanent,
-          lemon_media: :permanent,
-          lemon_lsp: :permanent,
-          lemon_omp: :permanent,
-          lemon_computer_use: :permanent,
-          coding_agent: :permanent,
-          lemon_gateway: :permanent,
-          lemon_cli: :permanent,
-          lemon_router: :permanent,
-          lemon_honcho: :permanent,
-          lemon_channels: :permanent,
-          lemon_control_plane: :permanent
-        ],
-        include_executables_for: [:unix],
-        steps: [
-          :assemble,
-          &Lemon.DistributionRelease.secure/1,
-          &bundle_python/1,
-          &bundle_browser_driver/1,
-          &stamp_build/1,
-          :tar
-        ]
-      ],
-      lemon_runtime_full: [
-        applications: [
-          exqlite: :permanent,
-          sentry: :permanent,
-          finch: :permanent,
-          lemon_core: :permanent,
-          lemon_browser: :permanent,
-          lemon_media: :permanent,
-          lemon_lsp: :permanent,
-          lemon_omp: :permanent,
-          lemon_computer_use: :permanent,
-          coding_agent: :permanent,
-          lemon_gateway: :permanent,
-          lemon_cli: :permanent,
-          lemon_router: :permanent,
-          lemon_honcho: :permanent,
-          lemon_channels: :permanent,
-          lemon_control_plane: :permanent,
-          lemon_automation: :permanent,
-          lemon_skills: :permanent,
-          lemon_web: :permanent
-        ],
-        include_executables_for: [:unix],
-        steps: [
-          :assemble,
-          &Lemon.DistributionRelease.secure/1,
-          &bundle_python/1,
-          &bundle_browser_driver/1,
-          &stamp_build/1,
-          :tar
-        ]
-      ]
-    ]
+    for {profile, spec} <- runtime_profiles() do
+      {:"lemon_#{profile}",
+       [
+         applications: Keyword.fetch!(spec, :applications),
+         include_executables_for: [:unix],
+         steps: [
+           :assemble,
+           &Lemon.DistributionRelease.secure/1,
+           &bundle_python/1,
+           &bundle_browser_driver/1,
+           &stamp_build/1,
+           :tar
+         ]
+       ]}
+    end
+  end
+
+  defp runtime_profiles do
+    {profiles, _binding} =
+      Code.eval_file("apps/lemon_core/priv/runtime_profiles.exs", __DIR__)
+
+    profiles
   end
 
   defp stamp_build(release) do

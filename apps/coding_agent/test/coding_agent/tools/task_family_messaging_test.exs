@@ -2,7 +2,7 @@ defmodule CodingAgent.Tools.TaskFamilyMessagingTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.TaskRuntime.Control
   alias LemonAgent.AbortSignal
 
   defmodule Mailbox do
@@ -12,7 +12,7 @@ defmodule CodingAgent.Tools.TaskFamilyMessagingTest do
     def init(owner), do: {:ok, owner}
 
     def handle_call({:cancel_owned, id}, _from, owner) do
-      {:reply, CodingAgent.Tools.Task.Control.cancel_owned(id), owner}
+      {:reply, CodingAgent.TaskRuntime.Control.cancel_owned(id), owner}
     end
 
     def handle_cast({:steer, text, false, reply_to, token}, owner) do

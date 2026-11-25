@@ -119,6 +119,8 @@ defmodule LemonMemory.Providers do
     :exit, _ -> :ok
   end
 
+  @doc false
+  def put_sync(%Document{} = doc), do: GenServer.call(__MODULE__, {:put, doc, []})
   @impl true
   def init(_opts) do
     {:ok, %{providers: %{}}}
@@ -145,14 +147,31 @@ defmodule LemonMemory.Providers do
     {:reply, default_specs() ++ Map.values(state.providers), state}
   end
 
+  def handle_call({:put, %Document{} = doc, opts}, _from, state) do
+    results = store_document(doc, opts, state)
+
+    result =
+      if Enum.all?(results, &match?({_, {:ok, :ok}}, &1)),
+        do: :ok,
+        else: {:error, :provider_failed}
+
+    {:reply, result, state}
+  end
+
   @impl true
   def handle_cast({:put, %Document{} = doc, opts}, state) do
-    (default_specs() ++ Map.values(state.providers))
-    |> Enum.filter(&provider_enabled_for_scope?(&1, doc.scope))
-    |> run_providers(&call_provider_put(&1, doc, opts))
-    |> Enum.each(&log_put_outcome/1)
-
+    store_document(doc, opts, state)
     {:noreply, state}
+  end
+
+  defp store_document(doc, opts, state) do
+    results =
+      (default_specs() ++ Map.values(state.providers))
+      |> Enum.filter(&provider_enabled_for_scope?(&1, doc.scope))
+      |> run_providers(&call_provider_put(&1, doc, opts))
+
+    Enum.each(results, &log_put_outcome/1)
+    results
   end
 
   defp provider_specs do

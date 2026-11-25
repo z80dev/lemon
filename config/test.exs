@@ -197,16 +197,6 @@ config :lemon_core, :gateway_test_config,
   bindings: [],
   projects: %{}
 
-# Credentials the umbrella's transports read, scrubbed from the unit lane on
-# top of LemonCore.Testing.HermeticEnv's built-in provider list. They live here
-# rather than in the library: the platform an adapter talks to is the adapter's
-# business, not lemon_core's.
-config :lemon_core, :test_credential_env_vars, ~w(
-  DISCORD_BOT_TOKEN
-  TELEGRAM_BOT_TOKEN
-  XMTP_WALLET_KEY
-)
-
 # Keep executor validation deterministic without introducing a test-only
 # operator-selectable implementation. CodingAgent.Executor is loaded from the
 # umbrella code path and is structurally valid even when coding_agent is not

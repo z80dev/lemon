@@ -2,9 +2,10 @@ defmodule CodingAgent.ControlPlaneProvider do
   @moduledoc """
   Exposes this agent's internals through the shared core runtime contract.
 
-  Runtime consumers report on tasks, sessions, extensions, the run graph and
-  progress without depending on this app; they call the provider registered with
-  `LemonCore.AgentRuntime`. `CodingAgent.Application` registers this module at boot.
+  Runtime consumers report on and operate tasks, sessions, subagents and
+  background runs without depending on this app; they call the
+  provider registered with `LemonCore.AgentRuntime`. `CodingAgent.Application`
+  registers this module at boot.
 
   Each function is a thin adapter over the agent's own modules. Shapes match
   what the control plane used to read directly, so method payloads are
@@ -26,9 +27,8 @@ defmodule CodingAgent.ControlPlaneProvider do
   alias CodingAgent.Session.Rewind
   alias CodingAgent.Session.Todos
   alias CodingAgent.Session.UserPrompt
-  alias CodingAgent.Tools.FeatureRequirements
-  alias CodingAgent.Tools.Task.Hub
-  alias CodingAgent.Tools.TodoStore
+  alias CodingAgent.TaskRuntime.Hub
+  alias CodingAgent.Tools.Todo
 
   @doc "Read bounded unresolved intents without starting or resuming the session."
   def interrupted_tool_calls(cwd, %LemonCore.ResumeToken{engine: "lemon", value: id})
@@ -104,8 +104,11 @@ defmodule CodingAgent.ControlPlaneProvider do
     case session_todos(session_key, nil) do
       {:ok, todos, _revision} ->
         todos
-        |> TodoStore.progress()
-        |> Map.put(:actionable_count, length(TodoStore.actionable(todos)))
+        |> Todo.progress()
+        |> Map.put(:actionable_count, length(Todo.actionable(todos)))
+
+      {:error, :introspection_unavailable} = error ->
+        error
 
       {:error, _} ->
         nil
@@ -217,8 +220,6 @@ defmodule CodingAgent.ControlPlaneProvider do
         {:error, :session_not_found}
     end
   end
-
-  def feature_progress(cwd), do: FeatureRequirements.get_progress(cwd)
 
   def compact_session(session_key, opts) do
     case compact_sessions(session_key) do
@@ -922,22 +923,6 @@ defmodule CodingAgent.ControlPlaneProvider do
     do: CodingAgent.BackgroundRun.cancel_scoped(id, session_key)
 
   def side_query(source, question, opts), do: CodingAgent.SideQuery.ask(source, question, opts)
-
-  def run_graph(run_id), do: CodingAgent.RunGraph.get(run_id)
-
-  def progress_snapshot(session_id, cwd), do: CodingAgent.Progress.snapshot(session_id, cwd)
-
-  def load_extensions(paths), do: CodingAgent.Extensions.load_extensions_with_errors(paths)
-
-  def extension_providers(extensions), do: CodingAgent.Extensions.get_providers(extensions)
-
-  def extension_info(extensions), do: CodingAgent.Extensions.get_info(extensions)
-
-  def tool_conflicts(cwd, opts), do: CodingAgent.ToolRegistry.tool_conflict_report(cwd, opts)
-
-  def wasm_sidecar_running? do
-    is_pid(Process.whereis(CodingAgent.Wasm.SidecarSupervisor))
-  end
 
   defp normalize_background_list_opts(opts) do
     case Keyword.get(opts, :status) do

@@ -27,22 +27,20 @@ defmodule Mix.Tasks.Lemon.Help do
      ~w(lemon.new lemon.setup lemon.onboard lemon.onboard.anthropic lemon.onboard.codex
         lemon.onboard.copilot lemon.onboard.gemini lemon.onboard.antigravity lemon.providers
         lemon.workspace lemon.update)},
-    {"Secrets", ~w(lemon.secrets.init lemon.secrets.set lemon.secrets.list lemon.secrets.status
-        lemon.secrets.check lemon.secrets.delete lemon.secrets.import_env lemon.voice.secrets)},
+    {"Secrets (`lemon secrets` manages the store)", ~w(lemon.voice.secrets)},
     {"Diagnostics",
      ~w(lemon.doctor lemon.config lemon.channels lemon.usage lemon.media lemon.models
         lemon.introspection lemon.feedback)},
     {"Quality & CI", ~w(lemon.quality lemon.architecture.docs lemon.check_duplicate_tests
         lemon.extension.validate lemon.eval lemon.help)},
-    {"Data, stores & messaging",
-     ~w(lemon.store.migrate_jsonl_to_sqlite lemon.memory lemon.policy lemon.send)},
+    {"Data, stores & messaging", ~w(lemon.memory lemon.policy lemon.send)},
     {"Skills", ~w(lemon.skill lemon.skill.lint)},
     {"Benchmarks (platform)", ~w(lemon.bench)}
   ]
 
   @fallback %{
     "lemon.new" => "Scaffold a new Lemon agent project (installer archive)",
-    "lemon.policy" => "Manage per-route model policies (channel/account/peer/thread)",
+    "lemon.policy" => "Manage chat model and thinking defaults (channel/account/peer/thread)",
     "lemon.channels" => "Show redacted Telegram/Discord configuration status",
     "lemon.config" => "Validate and inspect Lemon configuration",
     "lemon.usage" => "Show redacted usage, cost, token, and quota diagnostics",
@@ -52,7 +50,7 @@ defmodule Mix.Tasks.Lemon.Help do
 
   @impl true
   def run(_args) do
-    Mix.Task.load_all()
+    _ = Mix.Task.load_all()
 
     count = @groups |> Enum.flat_map(fn {_t, tasks} -> tasks end) |> length()
 

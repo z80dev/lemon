@@ -43,6 +43,53 @@ defmodule LemonCli.TestRunnerTest do
     end
   end
 
+  test "coverage runs each selected app in its own Mix VM and fails if any app fails", %{
+    tmp_dir: tmp_dir
+  } do
+    log = Path.join(tmp_dir, "mix.log")
+    mix = Path.join(tmp_dir, "mix")
+
+    File.write!(mix, """
+    #!/bin/sh
+    printf '%s\\n' "$*" >> #{log}
+    case "$*" in *apps/lemon_agent/*) exit 3 ;; esac
+    """)
+
+    File.chmod!(mix, 0o755)
+
+    {output, status} =
+      System.cmd(
+        "bash",
+        [
+          Path.join(@root, "scripts/test"),
+          "coverage",
+          "--seed",
+          "7",
+          "apps/lemon_ai/test",
+          "apps/lemon_agent/test/a_test.exs",
+          "apps/lemon_ai/test/b test.exs"
+        ],
+        cd: @root,
+        stderr_to_stdout: true,
+        env: [
+          {"PATH", tmp_dir <> ":" <> System.fetch_env!("PATH")},
+          {"LEMON_TEST_ELIXIR_VERSION", "1.20.5"},
+          {"LEMON_TEST_TMPDIR", tmp_dir},
+          {"LEMON_STORE_PATH", Path.join(tmp_dir, "store")}
+        ]
+      )
+
+    assert status == 1, output
+    assert output =~ "==> coverage: lemon_ai"
+    assert output =~ "coverage failed for: lemon_agent"
+
+    assert File.read!(log) |> String.split("\n", trim: true) == [
+             "compile --warnings-as-errors",
+             "test --exclude integration --cover --seed 7 apps/lemon_ai/test apps/lemon_ai/test/b test.exs",
+             "test --exclude integration --cover --seed 7 apps/lemon_agent/test/a_test.exs"
+           ]
+  end
+
   test "JavaScript-only lanes do not invoke Elixir", %{tmp_dir: tmp_dir} do
     invoked = Path.join(tmp_dir, "elixir-invoked")
 

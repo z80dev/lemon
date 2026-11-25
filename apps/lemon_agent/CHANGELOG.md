@@ -8,11 +8,30 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 **Release version: 0.3.0.**
 
+### Removed
+
+- **Breaking:** `LemonAgent.Workspace.{GoalStore, KanbanStore, GoalAuthority,
+  KanbanAuthority}` (about 2.5K lines of Lemon product state with no
+  `lemon_agent` consumer) moved to `lemon_automation` as
+  `LemonAutomation.{GoalStore, KanbanStore, GoalAuthority, KanbanAuthority}`,
+  unchanged, including `KanbanStore.changed_topic/0`/`ring_changed/1` (#687)
+  and the lease-guarded `update_task/3`. The published package no longer owns
+  the `:goals`, `:kanban_boards` or `:kanban_tasks` tables (#729).
+
 ### Added
 
+- `LemonAgent.AbortSignal.t()` (an `:atomics` reference); abort-signal,
+  loop-input and callback typespecs now use it, and the package is
+  Dialyzer-clean (#734). No runtime change.
+- `Credentials.list_provider_api_keys/3` orders several `kimi_coding`
+  subscription logins by quota headroom (`:kimi_ranking` options), and
+  `auth_source = "omp"` and `omp_broker` read omp's `kimi-code-global` login
+  when `base_url` is on kimi.ai (#525).
 - `Workspace.KanbanStore.changed_topic/0` and `ring_changed/1`: every
   operator-visible board/task write (not lease renewals) broadcasts the
   content-free doorbell `{:kanban_changed, board_id}` on the `kanban` Bus topic (#687).
+- `Workspace.KanbanStore.list_tasks_for/2`: the cards of up to 100 boards in one
+  strict store read, `{:ok, %{board_id => cards}}` with `:limit` per board (#687).
 - `LemonAgent.ModelRuntime.OmpBroker.url/0` and `default_url/0` expose the
   broker URL resolution without requiring a token.
 - `submit_result` structured subagent results (#602); task-tool action
@@ -59,6 +78,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking:** requires Elixir 1.17 (was `~> 1.15`, which the package did not
+  meet: it calls `String.replace_invalid/2`, Elixir 1.16). CI proves the floor
+  on Elixir 1.17.3 / OTP 26.2 (#730).
+- Sibling requirements are `~> 0.3.0` (`lemon_ai`, `lemon_core`), derived from
+  this package's own version: every 0.x minor may break, so a 0.4 sibling no
+  longer resolves (#730).
 - **Breaking (0.3.0):** agent events are delta-only (#571). Migration: handlers
   must accumulate deltas instead of expecting full partial messages on every
   event; `{:message_update, message, event}` becomes `{:message_update, event}`.
@@ -160,6 +185,15 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   delivery before releasing active tools. Acceptance does not start an idle
   agent or continue a completed, failed or cancelled run automatically; normal
   in-loop follow-ups retain the ordinary single terminal lifecycle.
+
+### Removed
+
+- **Breaking:** `LemonAgent.Proxy` (and `ProxyStreamOptions`) and
+  `LemonAgent.Context` are deleted; neither had a runtime consumer. The `req`
+  dependency is dropped. The loop no longer calls `Context.check_size/2` (a
+  full-history JSON encode per request) and the
+  `[:lemon_agent, :context, :size | :warning | :truncated]` events are gone.
+  Bound context with your own `transform_context` (#708).
 
 ## [0.2.0] - 2026-10-13
 

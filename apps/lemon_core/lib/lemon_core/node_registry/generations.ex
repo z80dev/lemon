@@ -16,7 +16,7 @@ defmodule LemonCore.NodeRegistry.Generations do
 
   @impl true
   def init(_) do
-    :ets.new(__MODULE__, [:named_table, :set, :protected, read_concurrency: true])
+    _ = :ets.new(__MODULE__, [:named_table, :set, :protected, read_concurrency: true])
     {:ok, nil}
   end
 

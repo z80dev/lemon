@@ -759,7 +759,7 @@ defmodule CodingAgent.Tools.AgentTest do
     end
 
     assert :ok =
-             CodingAgent.Tools.Task.Followup.maybe_send_async_followup(
+             CodingAgent.TaskRuntime.Followup.maybe_send_async_followup(
                opts
                |> Map.new()
                |> Map.merge(%{

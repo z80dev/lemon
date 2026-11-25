@@ -101,7 +101,7 @@ defmodule CodingAgent.Tools.OperatorState do
 
   @doc """
   The alias rule alone, for a target Lemon derives itself (a session's
-  `local://` scratch file, its `report_issue` log): refuses a path that cannot
+  `local://` scratch file): refuses a path that cannot
   be resolved or an existing regular file with more than one hard link.
   """
   @spec check_aliases(String.t()) :: :ok | {:error, String.t()}

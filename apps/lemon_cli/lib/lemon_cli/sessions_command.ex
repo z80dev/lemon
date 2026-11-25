@@ -552,6 +552,14 @@ defmodule LemonCli.SessionsCommand do
     @exit_error
   end
 
+  defp maintenance_result({:error, :outcome_unknown}, json?),
+    do:
+      failure(
+        "outcome_unknown",
+        "Session maintenance may already have applied; reconcile before running a fresh preview.",
+        json?
+      )
+
   defp maintenance_result({:error, _reason}, json?),
     do:
       failure(

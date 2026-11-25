@@ -10,27 +10,37 @@ defmodule LemonGateway.Sms.AvailabilityTest do
   @env_vars ~w(TWILIO_AUTH_TOKEN LEMON_SMS_WEBHOOK_ENABLED LEMON_SMS_WEBHOOK_PORT)
 
   setup do
+    running? = List.keymember?(Application.started_applications(), :lemon_gateway, 0)
+    previous_replacement = Application.fetch_env(:lemon_core, :gateway_test_config)
     _ = Application.stop(:lemon_gateway)
     saved = Map.new(@env_vars, &{&1, System.get_env(&1)})
     Enum.each(@env_vars, &System.delete_env/1)
 
     on_exit(fn ->
       Application.stop(:lemon_gateway)
-      Application.delete_env(:lemon_gateway, :gateway_ingress_enabled)
+
+      case previous_replacement do
+        {:ok, value} -> Application.put_env(:lemon_core, :gateway_test_config, value)
+        :error -> Application.delete_env(:lemon_core, :gateway_test_config)
+      end
 
       Enum.each(saved, fn
         {k, nil} -> System.delete_env(k)
         {k, v} -> System.put_env(k, v)
       end)
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      if running?, do: assert({:ok, _} = Application.ensure_all_started(:lemon_gateway))
     end)
 
     :ok
   end
 
   defp boot_with_ingress do
-    Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
+    Application.put_env(:lemon_core, :gateway_test_config, %{
+      max_concurrent_runs: 2,
+      ingress: %{enabled: true}
+    })
+
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     assert is_pid(Process.whereis(LemonGateway.IngressSupervisor))
   end

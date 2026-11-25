@@ -108,7 +108,9 @@ defmodule LemonCore.Update.Remote do
           tui_artifact: artifact() | nil,
           bot_artifact: artifact() | nil,
           channel: String.t(),
-          auto_update: boolean()
+          auto_update: boolean(),
+          manifest_commit: String.t() | nil,
+          manifest_sha256: String.t()
         }
 
   @doc """
@@ -449,7 +451,7 @@ defmodule LemonCore.Update.Remote do
               bot_install_result(plan, launcher, true, opts)
 
             {:error, reason} ->
-              restore_bot_install(previous, key, opts)
+              _ = restore_bot_install(previous, key, opts)
               {:error, reason}
           end
         end
@@ -610,10 +612,11 @@ defmodule LemonCore.Update.Remote do
         {:ok, result}
 
       {:error, reason} ->
-        ManagedInstall.restore_after_failed_flip(plan.current, plan.target, opts)
+        _ = ManagedInstall.restore_after_failed_flip(plan.current, plan.target, opts)
 
-        if target_bot,
-          do: ManagedInstall.restore_bot_after_failed_flip(previous_bot, target_bot, opts)
+        _ =
+          if target_bot,
+            do: ManagedInstall.restore_bot_after_failed_flip(previous_bot, target_bot, opts)
 
         _ = failed_receipt(plan, checkpoint, reason, opts)
         {:error, reason}
@@ -727,8 +730,9 @@ defmodule LemonCore.Update.Remote do
       {:error, reason} ->
         _ = ManagedInstall.restore_after_failed_flip(previous_runtime, target_runtime, opts)
 
-        if roll_bot?,
-          do: ManagedInstall.restore_bot_after_failed_flip(previous_bot, target_bot, opts)
+        _ =
+          if roll_bot?,
+            do: ManagedInstall.restore_bot_after_failed_flip(previous_bot, target_bot, opts)
 
         {:error, reason}
     end
@@ -836,8 +840,8 @@ defmodule LemonCore.Update.Remote do
     catch
       _kind, _reason -> {:error, :staging_failed}
     after
-      if partial, do: File.rm_rf(partial)
-      if bot_partial, do: File.rm_rf(bot_partial)
+      _ = if partial, do: File.rm_rf(partial)
+      _ = if bot_partial, do: File.rm_rf(bot_partial)
 
       Enum.each(downloads, fn
         nil -> :ok
@@ -865,7 +869,7 @@ defmodule LemonCore.Update.Remote do
   end
 
   defp unpack_bot(tarball, bot_partial, opts) do
-    File.rm_rf(bot_partial)
+    _ = File.rm_rf(bot_partial)
 
     case File.mkdir_p(bot_partial) do
       :ok -> extract_into(bot_partial, tarball, opts)
@@ -943,7 +947,7 @@ defmodule LemonCore.Update.Remote do
   defp download_to(dest, artifact, version, opts) do
     url = "#{base_url(opts)}/releases/download/v#{version}/#{artifact["file"]}"
     File.mkdir_p!(tmp_dir(opts))
-    File.rm(dest)
+    _ = File.rm(dest)
 
     request_opts =
       guarded_opts(opts,
@@ -957,11 +961,11 @@ defmodule LemonCore.Update.Remote do
         {:ok, dest}
 
       {:ok, %{status: status}} ->
-        File.rm(dest)
+        _ = File.rm(dest)
         {:error, {:download_http_status, status}}
 
       {:error, reason} ->
-        File.rm(dest)
+        _ = File.rm(dest)
         {:error, {:download_failed, reason}}
     end
   end
@@ -1018,7 +1022,7 @@ defmodule LemonCore.Update.Remote do
 
     cond do
       not (is_binary(expected) and expected != "") ->
-        File.rm(path)
+        _ = File.rm(path)
         {:error, :missing_checksum}
 
       true ->
@@ -1027,7 +1031,7 @@ defmodule LemonCore.Update.Remote do
         if String.downcase(expected) == actual do
           :ok
         else
-          File.rm(path)
+          _ = File.rm(path)
           {:error, {:checksum_mismatch, expected: expected, actual: actual}}
         end
     end
@@ -1042,11 +1046,11 @@ defmodule LemonCore.Update.Remote do
         :ok
 
       {:ok, %File.Stat{type: :regular, size: actual}} ->
-        File.rm(path)
+        _ = File.rm(path)
         {:error, {:artifact_size_mismatch, expected, actual}}
 
       {:ok, _stat} ->
-        File.rm(path)
+        _ = File.rm(path)
         {:error, :invalid_download_file}
 
       {:error, reason} ->
@@ -1067,7 +1071,7 @@ defmodule LemonCore.Update.Remote do
   defp unpack({nil, nil}, nil, _opts), do: :ok
 
   defp unpack({tarball, tui_tarball}, partial, opts) do
-    File.rm_rf(partial)
+    _ = File.rm_rf(partial)
 
     case File.mkdir_p(partial) do
       :ok -> extract_all(partial, [tarball, tui_tarball], opts)
@@ -1127,7 +1131,7 @@ defmodule LemonCore.Update.Remote do
   end
 
   defp running_version(opts),
-    do: Keyword.get(opts, :current_version) || Version.current()
+    do: Keyword.get(opts, :current_version) || LemonCore.BuildInfo.version()
 
   defp now_ms(opts), do: Keyword.get(opts, :now_ms, System.system_time(:millisecond))
 

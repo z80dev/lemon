@@ -249,7 +249,12 @@ defmodule LemonPlatformTest.PluginCase do
   end
 
   using opts do
-    LemonPlatformTest.require_dep!("PluginCase", LemonChannels.Plugin, :lemon_channels)
+    LemonPlatformTest.require_dep!(
+      "PluginCase",
+      LemonChannels.Plugin,
+      ~s|{:lemon_channels, path: "/path/to/lemon/apps/lemon_channels", only: :test}| <>
+        " (lemon_channels is not on Hex; point at a lemon checkout)"
+    )
 
     adapter = Keyword.fetch!(opts, :adapter)
     registry? = Keyword.get(opts, :registry, true)

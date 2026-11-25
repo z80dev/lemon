@@ -434,7 +434,9 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert {:error, :outcome_unknown} =
                RunOrchestrator.submit_with_receipt(replacement, intent)
 
-      assert {:ok, %{run_id: ^run_id, state: :outcome_unknown}} =
+      # Only a fresh durable fence after the first owner exits proves its
+      # handoff was never claimed; neither read nor replay dispatches it.
+      assert {:ok, %{run_id: ^run_id, state: :rejected}} =
                RunOrchestrator.run_receipt(run_id)
 
       refute_receive {:bridge_subscribed, ^run_id}, 50
@@ -590,6 +592,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         restore_env(:lemon_router, :session_coordinator, previous)
         Application.delete_env(:lemon_router, :admission_outcome)
         LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id)
+        LemonCore.Store.delete(RunOrchestrator.abort_tombstone_table(), run_id)
       end)
 
       {:ok, orchestrator} = GenServer.start_link(RunOrchestrator, [])
@@ -607,11 +610,17 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert %{state: "rejected", terminal: true, rejection: "rejected"} = rejected
       assert rejected.scope.session_key == "agent:definite-rejection:test"
 
+      assert {:ok, %{state: :rejected, session_key: "agent:definite-rejection:test"}} =
+               RunOrchestrator.run_receipt(run_id)
+
       # The same request may be submitted again: the rejection reopens to a claim.
       assert {:error, :rejected} = RunOrchestrator.submit(orchestrator, replay)
 
       assert %{state: "rejected", terminal: true} =
                LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+
+      assert :ok = RunOrchestrator.register_abort(orchestrator, run_id, :user_requested)
+      assert {:ok, %{state: :aborted}} = RunOrchestrator.run_receipt(run_id)
     end
 
     @tag capture_log: true

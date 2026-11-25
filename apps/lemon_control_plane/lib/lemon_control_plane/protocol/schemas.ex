@@ -40,6 +40,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
 
     # Channel methods
     "commands.catalog" => %{optional: %{}},
+    "commands.list" => %{required: %{"cwd" => :string}},
     "channels.pairing" => %{
       required: %{"action" => :string},
       optional: %{"platform" => :string, "pairing_code" => :string}
@@ -216,7 +217,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "sessionKey" => :string,
         "agentId" => :string,
         "queueMode" => :string,
+        "runId" => :string,
         "model" => :string,
+        "cwd" => :string,
+        "idempotency_key" => :string,
         "project_memory_capture" => :boolean,
         "session_mode" => :string,
         "persona" => :boolean
@@ -410,6 +414,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
       required: %{"sessionKey" => :string, "cursor" => :map},
       optional: %{"limit" => :integer}
     },
+    "sessions.watch" => %{required: %{"sessionKey" => :string}, optional: %{}},
     "sessions.create" => %{
       required: %{"sessionKey" => :string, "cwd" => :string},
       optional: %{}
@@ -540,6 +545,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "sessions.reset" => %{
       required: %{
         "sessionKey" => :string
+      },
+      optional: %{
+        "dryRun" => :boolean,
+        "confirmToken" => :string
       }
     },
     "sessions.delete" => %{
@@ -567,15 +576,6 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "session.detail" => %{
       required: %{
         "sessionKey" => :string
-      },
-      optional: %{
-        "limit" => :integer,
-        "historyLimit" => :integer,
-        "eventLimit" => :integer,
-        "toolCallLimit" => :integer,
-        "includeFullText" => :boolean,
-        "includeRawEvents" => :boolean,
-        "includeRunRecord" => :boolean
       }
     },
 
@@ -1130,18 +1130,12 @@ defmodule LemonControlPlane.Protocol.Schemas do
       }
     },
 
-    # Config methods
-    "config.get" => %{
-      optional: %{
-        "key" => :string
-      }
+    # Secrets (write-only)
+    "secrets.set" => %{
+      required: %{"name" => :string, "value" => :string},
+      optional: %{"provider" => :string, "expiresAt" => :integer}
     },
-    "config.set" => %{
-      required: %{
-        "key" => :string,
-        "value" => :any
-      }
-    },
+    "secrets.delete" => %{required: %{"name" => :string}},
 
     # Usage methods
     "usage.status" => %{optional: %{}},
@@ -1227,7 +1221,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "eventId" => :string,
         "cursor" => :map,
         "events" => :list
-      }
+      },
+      optional: %{"schemaVersion" => :integer, "attemptId" => :string, "sequence" => :integer}
     },
     "session.prompt.requested" => %{
       required: %{"promptId" => :string, "sessionKey" => :string, "questions" => :list},

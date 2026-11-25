@@ -2,6 +2,7 @@ defmodule LemonAgent.ModelRuntime.ProviderRoutingTest do
   use ExUnit.Case, async: false
 
   alias LemonAgent.ModelRuntime.ProviderRouting
+  alias LemonAi.CircuitBreaker
   alias LemonCore.Config
 
   defp config(routing, agent_extra \\ %{}) do
@@ -9,16 +10,6 @@ defmodule LemonAgent.ModelRuntime.ProviderRoutingTest do
   end
 
   defp provider_ids(candidates), do: Enum.map(candidates, & &1.provider)
-
-  defp open_breaker!(provider_atom) do
-    {:ok, _} = LemonAi.CircuitBreaker.ensure_started(provider_atom, failure_threshold: 1)
-
-    Enum.each(1..20, fn _ ->
-      LemonAi.CircuitBreaker.record_failure(provider_atom, :test_failure)
-    end)
-
-    assert LemonAi.CircuitBreaker.open?(provider_atom)
-  end
 
   defp rotation_config do
     config(%{
@@ -136,45 +127,46 @@ defmodule LemonAgent.ModelRuntime.ProviderRoutingTest do
 
   describe "plan/3 circuit breaker demotion" do
     setup do
-      on_exit(fn -> LemonAi.CircuitBreaker.reset(:zai) end)
-      :ok
-    end
+      # These built-in providers are not used by the other routing tests.
+      # Own their breakers and freeze the clock so the primary cannot recover mid-test.
+      for provider <- [:baseten, :novita, :nanogpt] do
+        start_supervised!(
+          {CircuitBreaker, provider: provider, failure_threshold: 1, monotonic_time: fn -> 0 end},
+          id: provider
+        )
+      end
 
-    test "open-circuit candidates are demoted to the end, never dropped" do
-      open_breaker!(:zai)
+      assert :ok = CircuitBreaker.record_failure(:baseten, :test_failure)
+      assert CircuitBreaker.open?(:baseten)
 
       config =
         config(%{
           enabled: true,
-          fallback_providers: ["anthropic", "openai"],
+          fallback_providers: ["novita", "nanogpt"],
           require_credentials: true
         })
 
-      candidates = ProviderRouting.plan(%{"provider" => "zai"}, config)
+      %{config: config}
+    end
 
-      assert provider_ids(candidates) == ["anthropic", "openai", "zai"]
+    test "open-circuit candidates are demoted to the end, never dropped", %{config: config} do
+      candidates = ProviderRouting.plan(%{"provider" => "baseten"}, config)
+
+      assert provider_ids(candidates) == ["novita", "nanogpt", "baseten"]
 
       demoted = List.last(candidates)
-      assert demoted.provider == "zai"
+      assert demoted.provider == "baseten"
       assert demoted.role == :primary
       assert demoted.demotions == [:circuit_open]
 
       assert Enum.all?(Enum.drop(candidates, -1), &(&1.demotions == []))
     end
 
-    test "check_breakers?: false keeps the configured order" do
-      open_breaker!(:zai)
+    test "check_breakers?: false keeps the configured order", %{config: config} do
+      candidates =
+        ProviderRouting.plan(%{"provider" => "baseten"}, config, check_breakers?: false)
 
-      config =
-        config(%{
-          enabled: true,
-          fallback_providers: ["anthropic", "openai"],
-          require_credentials: true
-        })
-
-      candidates = ProviderRouting.plan(%{"provider" => "zai"}, config, check_breakers?: false)
-
-      assert provider_ids(candidates) == ["zai", "anthropic", "openai"]
+      assert provider_ids(candidates) == ["baseten", "novita", "nanogpt"]
       assert Enum.all?(candidates, &(&1.demotions == []))
     end
   end

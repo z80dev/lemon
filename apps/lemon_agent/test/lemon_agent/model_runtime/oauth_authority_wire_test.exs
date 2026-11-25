@@ -1,14 +1,12 @@
-Code.require_file(
-  Path.expand("../../../../../scripts/support/oauth_authority_probe.exs", __DIR__)
-)
+Code.require_file(Path.expand("../../support/probes/oauth_authority_probe.exs", __DIR__))
 
 defmodule LemonAgent.ModelRuntime.OAuthAuthorityWireTest do
   use ExUnit.Case, async: false
 
   alias LemonAgent.ModelRuntime.{Credentials, StreamOptions}
+  alias LemonAgent.TestSupport.OAuthAuthorityProbe
   alias LemonAi.Types.{Context, Model, UserMessage}
   alias LemonCore.Secrets
-  alias LemonScripts.OAuthAuthorityProbe
 
   @providers [:xai, :github_copilot, :kimi_coding, :anthropic]
   @scenarios [:missing, :env_only, :expired, :encoded, :success]

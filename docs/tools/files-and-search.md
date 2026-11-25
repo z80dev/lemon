@@ -6,8 +6,8 @@ selectors, SQLite views and search paging; snapshot-anchored edits and rich
 reads (archives, PDFs, notebooks, images) are described in the
 [coding_agent README](../../apps/coding_agent/README.md#built-in-tools).
 
-`write`, `edit`, `patch` and `ast_grep` rewrites (including archive, SQLite and
-ACP-client writes) refuse Lemon operator state and operator toolchain
+`write`, `edit`, `patch` and `ast_grep` rewrites (including ACP-client writes)
+refuse Lemon operator state and operator toolchain
 directories: `~/.lemon` and the agent directory outside the assistant/profile
 workspaces, bot folders and kanban worktrees, the configured config, key file,
 store and `.env`, `~/.local/bin`, `~/bin`, and the `git_path` and checker
@@ -65,9 +65,10 @@ assistant request budget (default 200, task `request_budget` overrides it,
 batch and before the next request; a graceful stop at `ceil(1.5 × budget)`
 auto-delivers partial findings with `budget_exhausted: true`.
 
-## Directory trees
+## Directory listings
 
-`ls` with `tree: true` shows a depth-limited directory tree (default
+`ls` is the one directory-listing tool; `read` refuses a directory and points
+at `ls`. `ls` with `tree: true` shows a depth-limited directory tree (default
 `max_depth: 2`, counting children of the requested root as depth 1). Each
 directory displays at most 12 children, sorted newest-first by modification
 time with alphabetical tie-breaking, plus `… N more` for omitted siblings.
@@ -313,41 +314,6 @@ against the current raw file bytes before any patch writes. A stale refusal
 includes a fresh snapshot tag and bounded numbered context for retry without a
 separate read. Files not previously read in the session can still be patched.
 
-## JSON queries
-
-`read data.json?q=.users[]%20%7C%20select(.age%20>%2018)%20%7C%20.name`
-evaluates a native Elixir jq subset. Filters may also be supplied directly
-when they contain no query-escaped characters; percent-encode literal `+` and
-other URL-sensitive characters. No shell or optional `jq` installation is used.
-Existing literal filenames containing `?` always take precedence.
-
-Supported filters: `.`, `.a.b`, `.[0]` (negative indexes count from the end),
-`.[]`, `.a[]`, pipes (`|`), `keys`, `length`, and
-`select(.field == value)` with `==`, `!=`, `<` or `>` and a JSON scalar literal.
-Missing fields/indexes yield JSON null; iteration produces a stream of JSON
-values. Scalar ordering is null, false, true, numbers, strings. Unsupported
-syntax and type-incompatible operations return an explicit error, not a fallback.
-Results are immutable, numbered JSON text using the ordinary read line/byte
-budget and `offset`/`limit` continuation. An empty stream displays `(no results)`.
-
-## Archive member writes
-
-`write bundle.zip:inner/file.txt` replaces or adds one UTF-8 member. ZIP, TAR,
-`.tar.gz` and `.tgz` containers are supported, including new containers. Existing
-literal selector-shaped files take precedence. Members must be relative,
-slash-separated paths without empty, `.` or `..` segments; directories and links
-cannot be overwritten. Existing archives use the normal size, mutation lock,
-checkpoint, symlink and plan-mode guards. Replacing a member with truncated-read
-output is refused. A sibling temporary file is renamed over the archive only
-after the full replacement is ready. Unrelated members are decoded with the same
-streaming bounds as archive reads; exceeding them leaves the archive unchanged.
-
-Unchanged ZIP members retain their uncompressed bytes and file metadata (ZIP
-compression/layout may change). Unrelated TAR headers, data, links and extension
-records remain byte-identical; gzip containers are recompressed. The replaced
-TAR member retains its mode, owner and timestamp.
-
-
 ## SQLite databases
 
 A `.db`, `.db3`, `.sqlite` or `.sqlite3` file with the SQLite header is opened
@@ -365,27 +331,8 @@ app.db?q=SELECT name FROM users LIMIT 5  one read-only query (≤ 1000 rows)
 `where`, `order` and `q` reject comments, multiple statements and
 write/attach/pragma/transaction keywords; queries are interrupted after 10
 seconds. Database output is ordinary numbered text, so `offset`/`limit` page
-long results.
-
-`write app.db:users` inserts a row from a strict JSON object. Use
-`write app.db:users:42` to update fields by single-column primary key (including
-text keys), or rowid for tables without a primary key. Empty/whitespace content
-on a keyed selector deletes that row. `{}` inserts default values but is not a
-valid update. Composite primary keys and unavailable rowid fallbacks are refused.
-Values must be JSON scalars; column names are checked against `pragma_table_info`
-and SQL values are bound parameters. Database files must already exist; writes
-never create one. Query parameters are not accepted for writes. Physical
-database paths take the normal mutation lock, checkpoint, symlink and plan-mode
-guards. SQLite never opens the workspace file for a write: the database is read
-(at most 128 MiB) through the same descriptor-bound I/O as `write`, so a
-directory swapped for a symlink after validation is refused; the row change runs
-on a private in-memory copy, and the result atomically replaces the database
-with its mode kept (a WAL-format database stays in WAL format). A database with
-a `-journal`, `-wal` or `-shm` file (open, in WAL use or interrupted) is refused.
-Close other connections first: a process that keeps the database open keeps
-using the replaced file, and a change it commits between the read and the
-replace is overwritten. Existing literal selector-shaped files take precedence
-over SQLite interpretation.
+long results. The `read` views never write; change a database with `bash`
+(`sqlite3`) instead. Archives are likewise read-only through `read`.
 
 ## grep paging and ignore rules
 

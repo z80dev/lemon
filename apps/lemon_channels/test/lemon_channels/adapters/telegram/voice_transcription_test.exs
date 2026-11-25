@@ -5,6 +5,21 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   alias Elixir.LemonChannels.Adapters.Telegram.Transport
   alias LemonChannels.VoiceTranscriber
 
+  defmodule TranscriptionEndpoint do
+    import Plug.Conn
+
+    def init(owner), do: owner
+
+    def call(conn, owner) do
+      {:ok, body, conn} = read_body(conn)
+      send(owner, {:stt_request, conn.method, conn.request_path, conn.req_headers, body})
+
+      conn
+      |> put_resp_content_type("application/json")
+      |> send_resp(200, Jason.encode!(%{"text" => "hello from media"}))
+    end
+  end
+
   defmodule VoiceTestRouter do
     use LemonCore.RouterBridge.Router
     use LemonCore.RouterBridge.RunOrchestrator
@@ -205,6 +220,28 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     assert_receive {:inbound, msg}
     assert msg.message.text == "hello from voice"
     assert msg.meta[:voice_transcribed] == true
+  end
+
+  test "the channel transcriber sends audio through the shared media client" do
+    server =
+      start_supervised!(
+        {Bandit, plug: {TranscriptionEndpoint, self()}, ip: {127, 0, 0, 1}, port: 0}
+      )
+
+    assert {:ok, {_address, port}} = ThousandIsland.listener_info(server)
+
+    assert {:ok, "hello from media"} =
+             VoiceTranscriber.transcribe(
+               api_key: "test-key",
+               audio_bytes: "AUDIO",
+               base_url: "http://127.0.0.1:#{port}/v1"
+             )
+
+    assert_receive {:stt_request, "POST", "/v1/audio/transcriptions", headers, body}
+    assert {"authorization", "Bearer test-key"} in headers
+    assert body =~ ~s(filename="voice.ogg")
+    assert body =~ "gpt-4o-mini-transcribe"
+    assert body =~ "AUDIO"
   end
 
   test "local_transcript never produces a synthetic transcript" do

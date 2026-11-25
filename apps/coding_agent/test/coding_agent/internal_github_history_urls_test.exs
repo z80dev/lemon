@@ -1,7 +1,7 @@
 defmodule CodingAgent.InternalGitHubHistoryUrlsTest do
   use ExUnit.Case, async: false
   alias CodingAgent.{TaskStore, Tools.Read}
-  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.TaskRuntime.Control
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
   @moduletag :tmp_dir

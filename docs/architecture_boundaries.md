@@ -61,9 +61,9 @@ only inside the product releases.
 | `lemon_honcho` | 0.1.0 | no |
 | `lemon_lsp` | 0.1.0 | no |
 | `lemon_media` | 0.1.0 | no |
-| `lemon_memory` | 0.2.0 | yes |
+| `lemon_memory` | 0.3.0 | yes |
 | `lemon_omp` | 0.1.0 | no |
-| `lemon_platform_test` | 0.2.0 | yes |
+| `lemon_platform_test` | 0.3.0 | yes |
 | `lemon_router` | 0.1.0 | no |
 | `lemon_skills` | 0.1.0 | no |
 | `lemon_web` | 0.1.0 | no |
@@ -87,7 +87,7 @@ seams and config bindings) and never restates `mix.exs`. The tables between the
 `apps/*/mix.exs`, and must not be edited by hand. `mix lemon.quality` runs the
 docs link check (local Markdown links in `docs/**/*.md` must resolve), the
 generated-table freshness and publish-set checks, the architecture check and the
-duplicate test-module guard.
+duplicate test-module and layered test-family guard.
 
 The architecture checker fails when:
 
@@ -114,7 +114,7 @@ the dependency policy above, not these source-level rules:
 - `lemon_router` may emit semantic `LemonCore.DeliveryIntent` values, but it may not construct `LemonChannels.OutboundPayload` values or reference Telegram renderer helpers directly.
 - Automation binds supervision targets and submits terminal facts through the registered `LemonCore.ChannelSupervision` capability. Channels owns its implementation, durable admission, rendering and Outbox delivery. No consumer resolves a channels namespace or constructs platform payloads across this boundary.
 - `lemon_channels` owns channel rendering and presentation state. It must not mutate inbound prompts for pending-compaction behavior.
-- `lemon_gateway` owns execution slots and the native execution lifecycle. Router-owned queue semantics, chat-state readback for automatic-resume request mutation, and conversation-key selection must not move back into gateway. Router hands pre-resolved, engine-less `LemonCore.ExecutionCommand` values to `LemonCore.EngineRuntime`; gateway adapts them to its private `LemonGateway.ExecutionRequest` and invokes the fixed native executor. `LemonGateway.Runtime.submit/1` must not be reintroduced as a compatibility path. Default gateway startup is execution-only; gateway-native transport, command, SMS, and voice children require explicit `:gateway_ingress_enabled` configuration. Those surfaces are gateway-owned by design rather than pending migration — SMS, webhook, and voice do not fit `LemonChannels.Plugin`.
+- `lemon_gateway` owns execution slots and the native execution lifecycle. Router-owned queue semantics, chat-state readback for automatic-resume request mutation, and conversation-key selection must not move back into gateway. Router hands pre-resolved, engine-less `LemonCore.ExecutionCommand` values to `LemonCore.EngineRuntime`; gateway adapts them to its private `LemonGateway.ExecutionRequest` and invokes the fixed native executor. `LemonGateway.Runtime.submit/1` must not be reintroduced as a compatibility path. Default gateway startup is execution-only; gateway-native webhook, SMS, and voice listeners require explicit `[gateway.ingress]` opt-in. Those surfaces are gateway-owned by design rather than pending migration — SMS, webhook, and voice do not fit `LemonChannels.Plugin`.
 - Gateway-owned transports submit through `LemonCore.RouterBridge` when they need router normalization. They must not take a compile-time dependency on `LemonRouter.RunOrchestrator`.
 - Router-owned active session state is only exposed through `LemonRouter.Router` and `LemonCore.RouterBridge`. External apps must not reference `LemonRouter.SessionRegistry` directly.
 - Top-level requests and execution commands never validate or carry a runner identity. `engine: "lemon"` remains fixed run provenance in events and stores. `ResumeToken.engine` and historical `ChatState.last_engine` remain persisted discriminators; only native tokens may resume a top-level run, while non-native historical values are retained and quarantined from resume. Subagents execute natively in-process (`CodingAgent.Session` via the task lifecycle); there is no external CLI runner registry. `LemonCore.Cwd` is the only default-cwd resolver.
@@ -125,9 +125,10 @@ the dependency policy above, not these source-level rules:
   execution use authority intersection; named nodes transport and revalidate
   only the versioned context rather than independently normalizing policy.
 - Shared domains in `lemon_core` / `lemon_control_plane` must use typed wrappers such as `RunStore`, `ChatStateStore`, `PolicyStore`, and `ProjectBindingStore` instead of bypassing them with raw store helpers.
-- Agent runtime registration and optional callback contracts live in `LemonCore.AgentRuntime`. Coding products register their provider at boot; control-plane methods, automation reviewers, channel commands and Web projections call the same core seam. Registry configuration belongs to `:lemon_core`; no consumer depends on the control plane to discover the running agent.
 - The shared CLI registry dispatches Mix-free command modules in their owning apps. Its `coding_agent`, `lemon_channels`, `lemon_media` and `lemon_router` references are reference-only seams so setup and other one-shot commands do not start those services through an application dependency. Source Mix tasks are thin adapters; packaged runtime profiles include the same handlers.
 - The MCP client library (`LemonMCP.*`) ships inside `lemon_skills`, which owns its only source consumer, `LemonSkills.McpSource`, and calls the clients directly. `coding_agent` uses it for native MCP capability discovery; `lemon_router` reuses `LemonMCP.HTTP.OriginPolicy` during native follow-up admission, `lemon_automation` for cron admission, and `lemon_cli` and `lemon_control_plane` so local and remote `lemon doctor` runs compare Lemon Bot admission origins with that same canonicalization. All of them declare an ordinary `lemon_skills` edge. Consuming apps supervise any clients and transports they create; origin validation is not duplicated or moved into dependency-free `lemon_core` / `lemon_ai`.
+- Agent runtime registration and required callback contracts live in `LemonCore.AgentRuntime`. Coding products register a complete provider at boot. Consumers use `query/3` for reads and `mutate/2` for changes. Missing callbacks are unavailable; a mutation that raises, exits or throws after dispatch has an unknown outcome and must be reconciled, not retried. Registry configuration belongs to `:lemon_core`; no consumer depends on the control plane to discover the running agent.
+- Goal and kanban state (`GoalStore`, `KanbanStore` and their authority/lease rules), the `goal`, `kanban` and `cron` agent tools and the `/goal`, `/kanban` and `/remind` chat commands are owned by `lemon_automation`. The tools register through `LemonAgent.ToolRegistry` at boot; channel transports reach the chat commands through `LemonCore.AutomationCommands`, the provider automation registers at boot. Control-plane methods and Web projections call `lemon_automation` directly through their declared dependency. `lemon_skills` and `lemon_channels` name no `lemon_automation` or `lemon_router` module.
 
 ### Shared mechanisms without foundation dependencies
 
@@ -193,7 +194,8 @@ These rules complement the dependency policy table above. They must be respected
 | Native computer-use driver (LCU bridge, approval routing, `cua_js` tools) | `lemon_computer_use` | `lemon_core`, `coding_agent`, `lemon_control_plane` |
 | Skill platform logic (manifest, registry, installer, lockfile, source router, audit) | `lemon_skills` | `coding_agent`, `lemon_core`, `lemon_router` |
 | Coding-session prompt assembly and coding/file tool registration | `coding_agent` | `lemon_skills`, `lemon_core` |
-| Assistant-platform tools (`remember`, `recall`, goal, kanban, media, skill tools) | `lemon_skills` | `coding_agent`, `lemon_core` |
+| Assistant-platform tools (`remember`, `recall`, media, skill tools) | `lemon_skills` | `coding_agent`, `lemon_core` |
+| Goal, kanban and cron state, tools and chat commands | `lemon_automation` | `lemon_agent` (`ToolRegistry`), `lemon_core` (`AutomationCommands`), `lemon_router` |
 | Execution policy and authority context contracts | `lemon_core` | Any product-specific app |
 | Model/session routing | `lemon_router` | `coding_agent`, `lemon_skills` |
 | Optional GenAI model/tool telemetry span export | `lemon_agent` | `lemon_ai`, `lemon_core` (both remain umbrella-independent) |

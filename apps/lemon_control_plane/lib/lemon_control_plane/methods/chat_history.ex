@@ -59,7 +59,7 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   defp history(params, session_key, limit, before_id, full_text) do
     if Map.has_key?(params, "cwd") do
       with {:ok, _key, cwd} <- NativeSessions.target(params) do
-        case AgentRuntime.call(:session_history, [session_key, cwd], {:error, :unavailable}) do
+        case AgentRuntime.query(:session_history, [session_key, cwd]) do
           {:ok, entries} when is_list(entries) ->
             with {:ok, runs} <- run_history(session_key, 200) do
               entries = LemonControlPlane.ACP.History.reconcile_answers(entries, runs)

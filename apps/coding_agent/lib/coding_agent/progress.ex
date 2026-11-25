@@ -2,72 +2,34 @@ defmodule CodingAgent.Progress do
   @moduledoc """
   Aggregates long-running harness progress for a coding-agent session.
 
-  Combines journal-derived todos with optional feature requirements progress
-  and returns a normalized snapshot suitable for control-plane/reporting
-  surfaces.
+  Combines journal-derived todos with checkpoint statistics and returns a
+  normalized snapshot suitable for control-plane/reporting surfaces.
   """
 
   alias CodingAgent.Checkpoint
-  alias CodingAgent.Tools.{FeatureRequirements, TodoStore}
+  alias CodingAgent.Tools.Todo
 
   @type snapshot :: %{
           todos: map() | nil,
-          features: map() | nil,
           checkpoints: map(),
           overall_percentage: non_neg_integer(),
-          next_actions: %{todos: [map()], features: [map()]}
+          next_actions: %{todos: [map()]}
         }
 
   @spec snapshot(String.t(), String.t()) :: snapshot()
   def snapshot(session_id, cwd \\ ".") when is_binary(session_id) and is_binary(cwd) do
     {todo_progress, todo_next} =
       case CodingAgent.ControlPlaneProvider.native_session_todos(session_id, cwd) do
-        {:ok, todos, _revision} -> {TodoStore.progress(todos), TodoStore.actionable(todos)}
+        {:ok, todos, _revision} -> {Todo.progress(todos), Todo.actionable(todos)}
         {:error, _} -> {nil, []}
-      end
-
-    feature_progress =
-      case FeatureRequirements.get_progress(cwd) do
-        {:ok, progress} -> progress
-        {:error, _} -> nil
-      end
-
-    feature_next =
-      case FeatureRequirements.get_next_features(cwd) do
-        {:ok, features} -> features
-        {:error, _} -> []
       end
 
     %{
       todos: todo_progress,
-      features: feature_progress,
       checkpoints: Checkpoint.stats(session_id),
-      overall_percentage: overall_percentage(todo_progress, feature_progress),
-      next_actions: %{
-        todos: Enum.map(todo_next, &format_todo/1),
-        features: Enum.map(feature_next, &format_feature/1)
-      }
+      overall_percentage: if(todo_progress, do: todo_progress.percentage, else: 0),
+      next_actions: %{todos: Enum.map(todo_next, &format_todo/1)}
     }
-  end
-
-  defp overall_percentage(nil, feature_progress),
-    do: if(feature_progress, do: feature_progress[:percentage] || 0, else: 0)
-
-  defp overall_percentage(todo_progress, nil), do: todo_progress[:percentage] || 0
-
-  defp overall_percentage(todo_progress, feature_progress) do
-    todo_total = todo_progress[:total] || 0
-    feature_total = feature_progress[:total] || 0
-
-    combined_total = todo_total + feature_total
-
-    if combined_total == 0 do
-      0
-    else
-      todo_completed = todo_progress[:completed] || 0
-      feature_completed = feature_progress[:completed] || 0
-      div((todo_completed + feature_completed) * 100, combined_total)
-    end
   end
 
   defp format_todo(todo) do
@@ -77,16 +39,6 @@ defmodule CodingAgent.Progress do
       status: todo["status"] || todo[:status],
       priority: todo["priority"] || todo[:priority],
       dependencies: todo["dependencies"] || todo[:dependencies] || []
-    }
-  end
-
-  defp format_feature(feature) do
-    %{
-      id: feature.id,
-      description: feature.description,
-      status: feature.status,
-      priority: feature.priority,
-      dependencies: feature.dependencies
     }
   end
 end

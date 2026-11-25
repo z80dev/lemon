@@ -1,6 +1,8 @@
 defmodule LemonAi.Auth.OmpToken do
   @moduledoc """
-  Access-only bridge to omp's Kimi Code login. omp owns refresh and its leases;
+  Access-only bridge to omp's Kimi Code login (`omp token kimi-code`, or
+  `kimi-code-global` for kimi.ai accounts through the `:provider` option).
+  omp owns refresh and its leases;
   Lemon never reads or stores omp's refresh credentials. Access tokens are cached
   in the supervised `LemonAi.Auth.Cache` ETS table until two minutes before their
   JWT expiry. Owner restarts discard the cache; without the owner each resolution
@@ -16,6 +18,7 @@ defmodule LemonAi.Auth.OmpToken do
   @timeout_ms 20_000
   @max_output_bytes 65_536
   @skew_s 120
+  @providers ["kimi-code", "kimi-code-global"]
 
   @spec discover(String.t() | nil) :: {:ok, String.t()} | {:error, atom()}
   def discover(path \\ nil) do
@@ -33,15 +36,22 @@ defmodule LemonAi.Auth.OmpToken do
     end
   end
 
+  @doc """
+  An access token for omp's Kimi Code login. Options: `:provider` (`"kimi-code"`,
+  the default, or `"kimi-code-global"`), `:force_refresh`.
+  """
   @spec resolve(String.t() | nil, keyword()) :: {:ok, String.t()} | {:error, atom()}
   def resolve(path \\ nil, opts \\ []) do
-    with {:ok, executable} <- discover(path) do
+    provider = Keyword.get(opts, :provider) || "kimi-code"
+
+    with true <- provider in @providers || {:error, :omp_unsupported_provider},
+         {:ok, executable} <- discover(path) do
       scope =
         Enum.map(~w(HOME XDG_CONFIG_HOME PI_CODING_AGENT_DIR OMP_PROFILE), &System.get_env/1)
 
-      key = {__MODULE__, executable, scope}
+      key = {__MODULE__, executable, provider, scope}
       deadline = System.monotonic_time(:millisecond) + @timeout_ms
-      resolve_locked(key, executable, opts, deadline)
+      resolve_locked(key, executable, Keyword.put(opts, :provider, provider), deadline)
     end
   end
 
@@ -80,7 +90,8 @@ defmodule LemonAi.Auth.OmpToken do
       Cache.delete(key)
 
       args =
-        ["token", "kimi-code"] ++ if(opts[:force_refresh], do: ["--force-refresh"], else: [])
+        ["token", opts[:provider]] ++
+          if(opts[:force_refresh], do: ["--force-refresh"], else: [])
 
       with {:ok, output} <- run(executable, args),
            {:ok, token, exp} <- parse(output, System.system_time(:second)) do
@@ -98,7 +109,8 @@ defmodule LemonAi.Auth.OmpToken do
       "omp was not found; install omp or set providers.kimi_coding.omp_path to its absolute executable path."
 
   def error_message(:omp_exit_nonzero),
-    do: "omp could not provide a Kimi Code token; run `omp` and `/login kimi-code`, then retry."
+    do:
+      "omp could not provide a Kimi Code token; run `omp` and `/login kimi-code` (`kimi-code-global` for kimi.ai accounts), then retry."
 
   def error_message(:omp_invalid_token),
     do: "omp output was not a JWT; update omp and retry `omp token kimi-code`."
@@ -107,10 +119,14 @@ defmodule LemonAi.Auth.OmpToken do
     do: "omp returned an expired JWT; run `omp token kimi-code --force-refresh` and retry."
 
   def error_message(:omp_timeout),
-    do: "omp token timed out; run `omp` and `/login kimi-code`, then retry."
+    do:
+      "omp token timed out; run `omp` and `/login kimi-code` (`kimi-code-global` for kimi.ai accounts), then retry."
 
   def error_message(:omp_output_too_large),
     do: "omp token exceeded the output limit; update omp and retry."
+
+  def error_message(:omp_unsupported_provider),
+    do: "omp token supports only the kimi-code and kimi-code-global providers."
 
   def error_message(_),
     do:

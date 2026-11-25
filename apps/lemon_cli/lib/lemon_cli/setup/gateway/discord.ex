@@ -306,8 +306,9 @@ defmodule LemonCli.Setup.Gateway.Discord do
   defp secrets_status(io), do: Map.get(io, :secrets_status, &Secrets.status/0).()
   defp secret_get(io, key), do: Map.get(io, :secret_get, &Secrets.get/1).(key)
 
+  # A running runtime that owns the store receives the write over its control plane.
   defp secret_set(io, key, token),
-    do: Map.get(io, :secret_set, &Secrets.set(&1, &2, [])).(key, token)
+    do: Map.get(io, :secret_set, &LemonCli.SecretWriter.set(&1, &2, [])).(key, token)
 
   defp get_me(token) do
     ssl_opts = [verify: :verify_peer] |> maybe_put_cacerts()

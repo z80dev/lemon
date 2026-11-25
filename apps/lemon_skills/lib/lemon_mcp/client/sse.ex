@@ -266,7 +266,7 @@ defmodule LemonMCP.Client.SSE do
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{pending: pending} = state) do
     case Enum.find(pending, fn {_id, entry} -> entry.caller_ref == ref end) do
       {id, entry} ->
-        Process.cancel_timer(entry.timer)
+        _ = Process.cancel_timer(entry.timer)
         state = stop_task(state, entry)
         {:noreply, %{state | pending: Map.delete(state.pending, id)}}
 
@@ -312,7 +312,7 @@ defmodule LemonMCP.Client.SSE do
         state
 
       {entry, pending} ->
-        Process.cancel_timer(entry.timer)
+        _ = Process.cancel_timer(entry.timer)
         Process.demonitor(entry.caller_ref, [:flush])
         GenServer.reply(entry.from, reply)
         %{state | pending: pending}

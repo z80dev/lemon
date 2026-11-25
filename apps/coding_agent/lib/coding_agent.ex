@@ -32,7 +32,7 @@ defmodule CodingAgent do
   - `CodingAgent.Session` - Main GenServer orchestrating the agent
   - `CodingAgent.SessionManager` - JSONL persistence with tree structure
   - `CodingAgent.Messages` - Message types and LLM conversion
-  - `CodingAgent.ToolRegistry` - Built-in, WASM, extension, and MCP tool resolution
+  - `CodingAgent.ToolRegistry` - Built-in, extension, and MCP tool resolution
   - `CodingAgent.BashExecutor` - Streaming shell execution
   - `CodingAgent.Compaction` - Context compaction and summarization
   - `CodingAgent.Config` - Path and environment configuration

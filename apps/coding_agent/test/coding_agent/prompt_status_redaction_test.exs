@@ -7,7 +7,6 @@ defmodule CodingAgent.PromptStatusRedactionTest do
         {CodingAgent.Session, [run_id: "run_1", session_key: "sk_1", turn_index: 3]},
         {CodingAgent.Executor.SessionRunner, [run_id: "run_1", session_key: "sk_1"]},
         {CodingAgent.Executor.RemoteSessionRunner, [run_id: "run_1", session_key: "sk_1"]},
-        {CodingAgent.Advisor, [emitted: 2, ready: true]},
         {CodingAgent.AsyncFollowups, [window_ms: 50]},
         {CodingAgent.BackgroundRun.Worker, [id: "bg_1", session_id: "s_1"]}
       ] do
@@ -41,7 +40,7 @@ defmodule CodingAgent.PromptStatusRedactionTest do
       assert formatted.message == :redacted
       assert formatted.log == []
 
-      assert {%LemonCore.StatusRedaction.RedactedCrash{}, [{__MODULE__, :run, 1, _}]} =
+      assert {%LemonCore.StatusRedaction.RedactedCrashError{}, [{__MODULE__, :run, 1, _}]} =
                formatted.reason
     end
   end

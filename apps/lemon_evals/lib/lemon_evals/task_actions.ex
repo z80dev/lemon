@@ -57,7 +57,7 @@ defmodule LemonEvals.TaskActions do
 
   @impl true
   def terminate(_reason, state) do
-    :telemetry.detach(state.handler)
+    _ = :telemetry.detach(state.handler)
     File.close(state.file)
   end
 
@@ -144,6 +144,7 @@ defmodule LemonEvals.TaskActions do
 
   defp decode_action(_record, number), do: invalid!(number)
 
+  @spec invalid!(pos_integer()) :: no_return()
   defp invalid!(number),
     do: raise(ArgumentError, "Invalid task action telemetry at line #{number}")
 

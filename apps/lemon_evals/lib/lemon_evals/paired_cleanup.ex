@@ -219,11 +219,6 @@ defmodule LemonEvals.PairedCleanup do
             {:terminated, _} ->
               :ok
 
-            {:ok, observed} ->
-              record = remember(id, record, logs, observed)
-              Process.sleep(25)
-              recover_group(id, record, logs, deadline)
-
             {:error, _, observed} ->
               _record = remember(id, record, logs, observed)
               {:error, :cleanup_unverified}

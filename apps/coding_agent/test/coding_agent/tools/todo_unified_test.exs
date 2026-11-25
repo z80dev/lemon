@@ -6,7 +6,7 @@ defmodule CodingAgent.Tools.TodoUnifiedTest do
   alias LemonAi.Types.TextContent
   alias CodingAgent.{Session, SessionManager}
   alias LemonAgent.Test.Mocks
-  alias CodingAgent.Tools.{Todo, TodoStore}
+  alias CodingAgent.Tools.Todo
 
   setup do
     cwd = Path.join(System.tmp_dir!(), "todo-unified-#{System.unique_integer([:positive])}")
@@ -24,14 +24,8 @@ defmodule CodingAgent.Tools.TodoUnifiedTest do
          stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ok"))}
       )
 
-    session_id = Session.get_state(session_pid).session_manager.header.id
-
-    on_exit(fn ->
-      TodoStore.delete(session_id)
-      File.rm_rf!(cwd)
-    end)
-
-    {:ok, session_pid: session_pid, session_id: session_id}
+    on_exit(fn -> File.rm_rf!(cwd) end)
+    {:ok, session_pid: session_pid}
   end
 
   describe "tool/2" do
@@ -182,8 +176,7 @@ defmodule CodingAgent.Tools.TodoUnifiedTest do
     end
 
     test "writes a content-only plan with canonical state and projection", %{
-      session_pid: session_pid,
-      session_id: session_id
+      session_pid: session_pid
     } do
       tool = Todo.tool("/tmp", session_pid: session_pid)
 
@@ -195,7 +188,6 @@ defmodule CodingAgent.Tools.TodoUnifiedTest do
       result = tool.execute.("call_1", params, nil, nil)
 
       assert %AgentToolResult{details: details} = result
-      assert details.todos == TodoStore.get(session_id)
       assert {:ok, todos, _revision} = Session.todos(session_pid)
       assert todos == details.todos
       assert Jason.decode!(hd(result.content).text) == details.todos

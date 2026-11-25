@@ -44,6 +44,30 @@ defmodule LemonRouter.TerminalTruthDeliveryTest do
     send(observer, :stop)
   end
 
+  test "a terminal-only waiter sees one durable completion and no start or deltas" do
+    run_id = "terminal-topic-#{System.unique_integer([:positive])}"
+    session_key = "agent:terminal-topic:main"
+    command = %ExecutionCommand{run_id: run_id, session_key: session_key, prompt: ""}
+    :ok = Bus.subscribe(Bus.run_done_topic(run_id))
+
+    started = Event.new(:run_started, %{}) |> Event.identify_run(run_id)
+    :ok = Bus.publish_run_lifecycle(started)
+
+    for n <- 1..100 do
+      Bus.broadcast(Bus.run_topic(run_id), Event.new(:delta, %{text: "x", seq: n}))
+    end
+
+    assert :ok = RunCompletion.publish(command, completion_event(run_id, ok: true))
+    assert_receive %Event{type: :run_completed, meta: meta}, 1_000
+    assert meta.schema_version == 1
+    assert meta.seq == 2
+    assert meta.event_id != started.meta.event_id
+    assert meta.attempt_id == started.meta.attempt_id
+    assert {:ok, %{summary: %{attempt_id: attempt_id}}} = RunStore.fetch(run_id)
+    assert attempt_id == meta.attempt_id
+    refute_receive %Event{}, 30
+  end
+
   defp completion_event(run_id, ok: ok) do
     Event.new(
       :run_completed,

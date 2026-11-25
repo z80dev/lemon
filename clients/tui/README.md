@@ -177,17 +177,6 @@ on reconnect and when opening or changing models. Older daemons without
   transcript as `approval expired … — the run ended` (never as granted);
   answering it afterwards is refused as expired, and the TUI then drops the
   request instead of restoring the panel.
-  The offline owner/AppShell regression smoke is
-  `sh scripts/smoke_recovery_approvals.sh` from the umbrella root after dependencies
-  and central test artifacts are installed/compiled. It runs no ExUnit, compilation,
-  provider network calls or browser; it starts isolated native/approval owners and
-  authenticated loopback control-plane handlers, then exercises the real AppShell
-  through two recovered IDs, one explicit `approve_once` and one explicit denial.
-  A local scripted inference callback supplies the native tool call, not a remote
-  model. The fixture supplies initial RunStore metadata rather than router admission.
-  Its HOME, state and mode-0600 operator credential stay under a printed private
-  temporary root; the process exits after the consumer assertions. The scripts are
-  prepared regression coverage, not evidence of an executed successful smoke.
 - Four submission modes while the agent is busy: `queue` (client-side,
   editable), `steer`, `redirect`, `interrupt` — with graceful fallbacks. Redirect
   replaces pending model direction while preserving completed tool work. Interrupted
@@ -347,8 +336,8 @@ on reconnect and when opening or changing models. Older daemons without
   row, Esc, typing or pasting runs nothing and returns the prompt to the
   composer. This holds
   wherever the text came from — typing, completions, history, native terminal
-  edits, pastes or `$EDITOR`. As a convenience, pasted text, palette templates
-  and skills, restored queue items, rewound or retried prompts, plan feedback
+  edits, pastes or `$EDITOR`. As a convenience, pasted text, palette skills,
+  restored queue items, rewound or retried prompts, plan feedback
   and delegated native sends enter the composer sanitized and then escaped
   (`\{!`, and `\!` where they open the prompt), so they reach the model
   literally without asking. Interactive `!cmd` has no deadline: it owns the
@@ -359,19 +348,21 @@ on reconnect and when opening or changing models. Older daemons without
   is terminated so descendants cannot outlive it or hold the TUI's capture
   pipes open. Command text over 4096 characters is refused, not confirmed.
   Ctrl+P, `/palette`, or `/` in an empty editor opens one fuzzy command palette
-  for command names, aliases, descriptions, local skills, and prompt templates.
+  for command names, aliases, descriptions and skills.
   Ctrl+P and `/palette` keep destructive selections and argument-taking actions
   as drafts rather than sending them. When typing `/` directly, Enter executes
   an exact command or alias; a space after a recognized command returns its full
   text to the editor for arguments. Escape preserves the typed slash query.
-  Templates are discovered from `.lemon/prompts`, `.claude/prompts`, and
-  `$LEMON_AGENT_DIR/prompts` (default `~/.lemon/agent/prompts`), with project names
-  taking precedence. Local skills insert an explicit `read_skill` request; the
-  palette does not claim that a remote daemon or selected profile installed them.
-  File slash commands (`.claude/commands`, `.codex/prompts`, `.gemini/commands`
-  and the other roots in [file slash commands](../../docs/user-guide/slash-commands.md))
-  register as commands after the built-ins, which win name collisions; `/name
-  args` is sent verbatim and the daemon expands it.
+  The TUI scans no command or skill directories itself: each palette opening
+  asks the daemon for its [file slash commands](../../docs/user-guide/slash-commands.md)
+  (`commands.list` for the TUI's working directory) and installed skills
+  (`skills.list`), so the palette lists exactly what the daemon expands,
+  including its configured agent directory, and a deleted command file
+  disappears on the next opening. File commands register after the built-ins,
+  which win name collisions; `/name args` is sent verbatim and the daemon
+  expands it. A skill inserts an explicit `read_skill` request; a disabled skill
+  is listed as unavailable. A failed read is shown in the palette and keeps the
+  last file-command list rather than presenting an empty one.
 - `/skills` live official Hermes catalog browser: category drill-down, fuzzy
   filtering, descriptions, installed markers, and Space-toggle multi-select
   import through Lemon's normal audit/approval flow. A blocked bundle opens a
@@ -565,7 +556,7 @@ and control plane authoritative:
 | `/queue [prompt]`, `/q [prompt]` | With a prompt, use queue mode for that submission; without one, inspect and edit the pending queue. `/q` is intentionally queue, not quit. |
 | `/steer <prompt>` | Send one steering submission without changing the default submission mode. |
 | `/redirect <prompt>` | Replace the active run's pending model direction without changing the default submission mode. |
-| `/reset [--confirm <exact-key>]` | Preview what `sessions.reset` irreversibly deletes on the daemon (run history, chat state, session policy); only `/reset --confirm <focused-key>` resets, never while a run is live, and the local transcript is cleared only after the daemon verifies the reset for that key (otherwise the outcome is reported as unknown and nothing changes here). `/session reset` is the same command. Use `/new` for a fresh session without deleting anything. |
+| `/reset` | Fetch a daemon-side `dryRun: true` preview of what `sessions.reset` will irreversibly delete (run-history count, chat state, session policy) and open an interactive confirmation modal (defaulting to Cancel, with filter typing disabled). Only explicitly confirming sends `dryRun: false` with the server's single-use `confirmToken`, never while a run is live, and the local transcript is cleared only after the daemon verifies the reset for that key (otherwise the outcome is reported as unknown and nothing changes here). `/session reset` is the same command. Use `/new` for a fresh session without deleting anything. |
 | `/reasoning [level]` | Alias for Lemon's `/think` reasoning-effort control. |
 | `/stop` | Alias for `/abort`; partial output remains visible and is marked interrupted. |
 | `/status` | Show control-plane health/runtime summaries. |
@@ -699,59 +690,6 @@ These commands require advertised daemon support and a live authenticated
 connection. No offline send or rename is queued. A fresh focused session is
 persisted with `sessions.create` before naming or sending; this does not itself
 send a model prompt. Refusals and missing capabilities are not success notices.
-
-#### On-demand offline smoke
-
-Prerequisites: Bun, the locked product backend dependencies, and the integrated
-umbrella dependencies compiled in `MIX_ENV=test`. The launcher does not install
-or compile anything. Run from the repository root:
-
-```sh
-sh scripts/smoke_named_agents.sh
-```
-
-This is a separate, on-demand smoke, not a default test or CI job. It starts from
-an environment allowlist, uses private temporary HOME/config/state, a generated
-operator token, authenticated loopback WebSockets on an ephemeral port, real
-native sessions/router delivery, and scripted inference instead of provider
-calls. Product HTTP fetches to non-loopback hosts fail closed. Assertions cover:
-
-- Native A→existing B context and visible reply, an actual `agent_message` tool
-  loop, replay without duplicate delivery, and handle rename with a stable address.
-- Targeted external Bot request/reply, sender isolation and offline disconnect.
-- Actual product addressed REST handlers, authentication, owner ACL, nonce
-  journal, peer provenance, opt-in operator pin and private admin/member scopes.
-- Native↔product messages through the real addressed service and real native
-  execution. The fixture replaces unchanged managed executor admission and node
-  inventory reconciliation; production run/transcript projection remains in use.
-
-The report explicitly says `managedProof: false`: this is not a proof of managed
-node TLS/MCP invocation, Bot provisioning, live providers/platforms, physical
-Apple clients, or interactive TUI behavior. Only a successful run's final report
-is passing evidence; the script's presence does not claim it has been run.
-
-For **manual** TUI/Web checks after the assertions:
-
-```sh
-LEMON_NAMED_SMOKE_KEEP_ALIVE=1 sh scripts/smoke_named_agents.sh
-```
-
-This retains the isolated controller and starts the fixture product REST/realtime
-server on another ephemeral loopback port. Its `uiFixture: ready` message prints
-only the path to a mode-0600 `ui-fixture.json`, never credentials. That private
-file contains the backend URL, generated owner login/session, controller token
-file reference, existing conversation IDs and shutdown PID. If the production
-Web bundle has been built in `products/lemon_bot/web`, the ordinary backend asset
-handler serves it; no substitute UI is included. Open that backend URL and sign
-in using the private fixture credentials. Connect the real TUI using
-`LEMON_WS_URL`, `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` and `--session` with the
-fixture's controller and Alice key.
-
-This remains a scripted fixture, not a general chat provider: `@robert` accepts
-`SMOKE_BOB_QUERY_TWO` from Alice; `@product-carol` accepts `SMOKE_PRODUCT_QUERY`.
-Unrecognized inference prompts fail instead of contacting a provider. Send
-SIGTERM to the PID in the private state file when finished; the launcher removes
-temporary state. Manual UI observations are separate evidence from smoke output.
 
 ### Agent Hub
 
@@ -958,22 +896,6 @@ MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_sess
 MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_blueprints_wire_e2e_test.exs --seed 1
 MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_subagents_wire_e2e_test.exs --seed 1
 ```
-
-The standalone retry smoke drives the actual AppShell with a memory terminal.
-Its transport adapter forwards history/tree/rewind to real source methods and a
-persisted native journal, rather than supplying a hard-coded replay flag:
-
-```sh
-# From the umbrella root, after the integration owner's source compile:
-bun scripts/multimodal_retry_app_smoke.ts
-```
-
-It uses `mix run --no-compile`, not ExUnit, and checks resumed mixed/separate/
-unknown media refusal (including `--force`), byte-for-byte unchanged history,
-real text-only rewind/resend, and revision-token invalidation. Send acknowledgments
-are scripted: this smoke does not call a provider or establish model execution,
-and its memory terminal is not a native Tern visual proof.
-
 
 Profile commands deliberately do not accept a profile home or workspace path.
 The daemon derives that boundary from the validated profile ID. The only path

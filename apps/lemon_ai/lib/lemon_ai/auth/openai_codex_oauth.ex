@@ -284,7 +284,6 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       {:ok, secret}
     else
       {:error, reason} when is_atom(reason) -> {:error, reason}
-      _ -> {:error, :invalid_codex_cli_login}
     end
   end
 

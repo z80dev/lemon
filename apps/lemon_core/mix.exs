@@ -19,7 +19,7 @@ defmodule LemonCore.MixProject do
       app: :lemon_core,
       version: @version,
       test_pattern: "*_test.exs",
-      elixir: "~> 1.15",
+      elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 69]],
       deps: deps(),
@@ -73,11 +73,14 @@ defmodule LemonCore.MixProject do
       files: ~w(lib priv c_src Makefile mix.exs README.md CHANGELOG.md LICENSE),
       # Tooling for the lemon repository itself stays out of the tarball: the
       # architecture/docs lint (`mix lemon.quality`), the managed-install
-      # self-updater (`LemonCore.Update.*`), the repo's benchmark runner and
-      # task catalog. Nothing else in lib/ references these modules, and
-      # scripts/verify_packages compiles the tarball without them.
+      # self-updater internals (`LemonCore.Update.*`), the repo's benchmark
+      # runner and task catalog, and the in-repo test harness (`LemonCore.Testing*`,
+      # used only by umbrella suites). Nothing else in lib/ references these
+      # modules, and scripts/verify_packages compiles and runs the tarball
+      # without them.
       exclude_patterns: [
-        ~r{^lib/lemon_core/(quality|update)/},
+        ~r{^lib/lemon_core/(quality|update|testing)/},
+        ~r{^lib/lemon_core/testing\.ex$},
         # The compiled helper is built per platform by the consumer.
         ~r{^priv/(lemon_confined_fs|\.lemon_confined_fs\.platform)},
         ~r{^lib/mix/tasks/lemon\.(quality|architecture\.docs|check_duplicate_tests|bench|help)\.ex$}

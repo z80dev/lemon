@@ -4,10 +4,11 @@ defmodule CodingAgent.Tools.Lsp do
   code actions and raw requests over supervised `LemonLsp` sessions.
 
   A server is chosen by file extension from `LemonLsp.Servers`; its workspace
-  root is the nearest ancestor of the file (within the cwd) holding one of the
-  server's root markers, else the cwd. Session-scoped
-  `CodingAgent.Tools.Lsp.Client` leases share one initialized server per
-  (server, root, configuration) through `LemonLsp.ServerManager`.
+  root comes from `LemonLsp.WorkspaceRoot`: the outermost workspace declaration
+  (umbrella, Cargo, package-manager or Go workspace) inside the cwd, else the
+  nearest ancestor holding one of the server's root markers, else the cwd.
+  Session-scoped `CodingAgent.Tools.Lsp.Client` leases share one initialized
+  server per (server, root, configuration) through `LemonLsp.ServerManager`.
 
   Positions are `line` (1-based) plus `symbol` (text located on that line) or
   `column` (1-based); they are converted to LSP UTF-16 offsets. Results are
@@ -1449,7 +1450,7 @@ defmodule CodingAgent.Tools.Lsp do
     with :ok <- CredentialPaths.check_read(path),
          :ok <- regular_file(path),
          {:ok, server} <- server_for(path, ctx.cwd) do
-      root = workspace_root(path, ctx.cwd, server.root_markers)
+      root = LemonLsp.WorkspaceRoot.detect(path, ctx.cwd, server.root_markers)
       attempt(ctx, server, root, path, fun, 1)
     end
   end
@@ -1572,20 +1573,6 @@ defmodule CodingAgent.Tools.Lsp do
     end
   end
 
-  defp workspace_root(path, cwd, markers) do
-    dir = Path.dirname(path)
-    inside? = dir == cwd or String.starts_with?(dir, cwd <> "/")
-    find_root(dir, if(inside?, do: cwd, else: "/"), markers) || if(inside?, do: cwd, else: dir)
-  end
-
-  defp find_root(dir, stop, markers) do
-    cond do
-      Enum.any?(markers, &File.exists?(Path.join(dir, &1))) -> dir
-      dir == stop or Path.dirname(dir) == dir -> nil
-      true -> find_root(Path.dirname(dir), stop, markers)
-    end
-  end
-
   defp regular_file(path) do
     case File.stat(path) do
       {:ok, %File.Stat{type: :regular}} -> :ok
@@ -1604,7 +1591,17 @@ defmodule CodingAgent.Tools.Lsp do
     end
   end
 
+  defp connection_error({:file, :invalid_document_encoding, path}, _server),
+    do: "Cannot send #{path} to the language server: the file is not valid UTF-8 text"
+
   defp connection_error({:file, reason, path}, _server), do: "Cannot read #{path}: #{reason}"
+
+  defp connection_error({:session_crashed, _class}, server), do: session_crashed(server.label)
+
+  # Every live server slot is serving a request; none is evicted mid-request.
+  defp connection_error(:lsp_session_limit, server),
+    do:
+      "#{server.label} was not started: every live language server is serving a request; retry once one finishes"
 
   defp connection_error(:command_unavailable, server),
     do: "#{server.label} is not installed. #{server.install_hint}"
@@ -1661,11 +1658,19 @@ defmodule CodingAgent.Tools.Lsp do
        when reason in [:unknown_lsp_session, :session_lost],
        do: {:error, :session_lost}
 
+  defp response({:error, {:session_crashed, _class}}, _ctx, conn, _method),
+    do: {:error, session_crashed(conn.server.label)}
+
   defp response({:error, reason}, _ctx, _conn, method) when is_binary(reason),
     do: {:error, "LSP #{method}: #{reason}"}
 
   defp response({:error, reason}, _ctx, _conn, method),
     do: {:error, "LSP #{method} failed: #{inspect(reason)}"}
+
+  # The session's work may or may not have reached the server, so the request
+  # is neither replayed nor suggested again.
+  defp session_crashed(label),
+    do: "#{label} failed while handling this request; it was not retried"
 
   defp lsp_error(conn, method, error) do
     message = if is_map(error), do: error["message"] || inspect(error), else: inspect(error)

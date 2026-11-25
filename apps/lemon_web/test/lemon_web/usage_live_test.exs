@@ -66,8 +66,8 @@ defmodule LemonWeb.UsageLiveTest do
 
   test "renders totals, chart, model, provider and session breakdowns", %{conn: conn} do
     record("run-1", "agent:usage:alpha", "openai:gpt-5", %{
-      input_tokens: 12_000,
-      output_tokens: 3_000,
+      input: 12_000,
+      output: 3_000,
       cache_read: 0,
       cache_write: 0,
       cost: %{total: 1.5}
@@ -138,8 +138,8 @@ defmodule LemonWeb.UsageLiveTest do
 
   test "unknown run quota usage renders without crashing", %{conn: conn} do
     record("unknown-runs", "agent:usage:unknown", "openai:gpt-5", %{
-      input_tokens: 1,
-      output_tokens: 1,
+      input: 1,
+      output: 1,
       cost: %{total: 0.01}
     })
 

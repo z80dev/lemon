@@ -23,17 +23,24 @@ lemon_ai → lemon_core → lemon_agent → lemon_memory → lemon_platform_test
 |---|---|---|
 | `lemon_ai` | 0.3.0 | none |
 | `lemon_core` | 0.3.0 | none |
-| `lemon_agent` | 0.3.0 | `lemon_ai ~> 0.3`, `lemon_core ~> 0.3` |
-| `lemon_memory` | 0.2.0 | `lemon_core` |
-| `lemon_platform_test` | 0.2.0 | `lemon_core`, `lemon_memory`, `lemon_ai`, `lemon_agent` (all optional) |
+| `lemon_agent` | 0.3.0 | `lemon_ai ~> 0.3.0`, `lemon_core ~> 0.3.0` |
+| `lemon_memory` | 0.3.0 | `lemon_core ~> 0.3.0` |
+| `lemon_platform_test` | 0.3.0 | `lemon_core`, `lemon_memory`, `lemon_ai`, `lemon_agent`, all `~> 0.3.0` and optional |
 
 Every other app is in-repo only. `lemon_platform_test`'s `PluginCase` targets
-`lemon_channels`, which is not published, so outside this repository it needs a
-path dependency on a checkout.
+`lemon_channels`, which is not published, so the Hex package excludes it; outside
+this repository it comes from a path dependency on a checkout.
 
 `0.2.0` is the first installable release line. The `0.1.0` releases published on
-2026-08-11 cannot be installed (below). Sibling requirements have a minimum
-matching the APIs used by each package; none permits the retired 0.1 releases.
+2026-08-11 cannot be installed (below).
+
+The packages ship together on one 0.x release line, and every 0.x minor may break.
+Each `mix.exs` therefore derives a single `@lemon_requirement` from its own
+`@version` — `~> MAJOR.MINOR.0`, admitting patch releases of the same minor and
+never the next one — and applies it to every sibling. A package's in-repo version
+must stay on its siblings' minor: `PlatformPackagingContractTest` and
+`scripts/verify_packages` (against the built `hex_metadata.config`) fail when a
+requirement admits another minor or refuses a sibling's in-repo version.
 
 ### API migration for the 0.3 line (#559, #571, #592)
 
@@ -72,8 +79,8 @@ new versions have been published. `lemon_core` stays on its already-unreleased
   `on_stream_rule` (#559).
   The loop uses `LemonAi.Retry` while preserving one transient retry budget per
   response and provider `max_attempts: 1`. Package dependencies require
-  `lemon_ai ~> 0.3` and `lemon_core ~> 0.3`, rather than resolving older
-  packages that lack the consolidated APIs.
+  `lemon_ai ~> 0.3.0` and `lemon_core ~> 0.3.0`, rather than resolving older
+  or newer-minor packages that lack or change the consolidated APIs.
 
 Both policy structs count `max_attempts` as **total attempts including the
 initial attempt**. Their shared fields are `base_delay_ms`, `max_delay_ms`,
@@ -153,10 +160,16 @@ needs it: run without it, the deps are still `in_umbrella` and hex refuses to
 build ("Dependencies excluded from the package"). `scripts/verify_packages` and
 `scripts/release_package` set it for you.
 
-`lemon_core`'s package `exclude_patterns` leave this repository's tooling out of
-the tarball: `LemonCore.Quality.*`, `LemonCore.Update.*`, and the `lemon.quality`,
-`lemon.architecture.docs`, `lemon.check_duplicate_tests`, `lemon.bench` and
-`lemon.help` tasks. `mix lemon.update` lives in `lemon_skills`.
+`lemon_core`'s package `exclude_patterns` leave this repository's tooling and test
+harness out of the tarball: `LemonCore.Quality.*`, `LemonCore.Update.*`,
+`LemonCore.Testing*`, and the `lemon.quality`, `lemon.architecture.docs`,
+`lemon.check_duplicate_tests`, `lemon.bench` and `lemon.help` tasks.
+`mix lemon.update` lives in `lemon_skills`.
+The build identity the doctor reports (`LemonCore.BuildInfo.version/0`,
+`identity/0`, `describe/0`) ships; the Lemon application's Elixir floor is a
+`lemon doctor` check in `lemon_cli` (`LemonCli.Doctor.Toolchain`), so the packaged
+runtime check passes on every Elixir the packages admit.
+`lemon_platform_test` excludes `PluginCase`, whose target is unpublished.
 
 ## Proving the tarballs work
 
@@ -164,13 +177,28 @@ the tarball: `LemonCore.Quality.*`, `LemonCore.Update.*`, and the `lemon.quality
 scripts/verify_packages [--keep] [--no-generator]
 ```
 
-It builds each package with `mix hex.build --unpack`, compiles a scratch
-consumer project that depends on nothing but the unpacked directories, boots
-`:lemon_agent`, checks the repo-only modules are absent, then runs
-`mix lemon.new --packages-path` for the base and `--memory` shapes against the
-same tarballs and runs their tests. It needs Hex and network access to hex.pm.
-`.github/workflows/packaging.yml` runs it on pull requests that touch the
-packages and nightly, plus an advisory Elixir 1.15 leg for the declared floor.
+It builds each package with `mix hex.build --unpack` and inspects the tarballs:
+no packaged source names a module a tarball excludes, `lemon_platform_test`
+never names `LemonChannels`, and each sibling requirement in `hex_metadata.config`
+admits its sibling's 0.x minor and no other. It then compiles a scratch consumer
+project that depends on nothing but the unpacked directories (failing when any
+dependency requires a newer Elixir than the running one), boots `:lemon_agent`,
+checks the repo-only modules are absent, fails if xref finds a packaged call into
+a published namespace the packages do not define or a function the running
+Elixir/OTP lacks, and runs the packaged doctor: `LemonCore.Doctor.Checks.Runtime`
+must report the build identity with no failure on the running toolchain, and no
+doctor check may crash. Finally it runs `mix lemon.new --packages-path` for the
+base and `--memory` shapes against the same tarballs and runs their tests. It
+needs Hex and network access to hex.pm. `.github/workflows/packaging.yml` runs it
+on pull requests that touch the packages and nightly, on Elixir 1.20.5 / OTP
+29.1.2 and on the declared floor, Elixir 1.17.3 / OTP 26.2; both legs are
+required.
+
+The packages declare `elixir: "~> 1.17"`. That is the honest floor: exqlite 0.43
+(required by `lemon_memory`, optional for `lemon_core`) requires Elixir 1.17, and
+the packages call `String.replace_invalid/2` (Elixir 1.16). Elixir 1.15.8 / OTP
+26.2 fails both checks above. `PlatformPackagingContractTest` keeps every package
+on one floor and requires a packaging leg on it.
 
 ## Releasing a package
 

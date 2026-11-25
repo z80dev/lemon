@@ -10,7 +10,7 @@ The configuration system has been refactored from a monolithic 1253-line module 
 |--------|---------|-------|
 | `Helpers` | Environment variable utilities | 66 |
 | `Agent` | Agent behavior settings | 17 |
-| `Tools` | Web tools and WASM configuration | 25 |
+| `Tools` | Web tool configuration | 25 |
 | `Gateway` | Engine bindings, projects, channel sections | 22 |
 | `Logging` | Log file and rotation settings | 20 |
 | `TUI` | Terminal UI theme and debug | 12 |
@@ -173,12 +173,10 @@ Tool configuration:
 - `web.search` - Web search provider (brave, perplexity)
 - `web.fetch` - Web fetch settings (max_chars, readability)
 - `web.cache` - Caching configuration
-- `wasm` - WASM runtime settings
 
 Environment variables:
 - `LEMON_WEB_SEARCH_PROVIDER`, `LEMON_WEB_SEARCH_API_KEY`
 - `LEMON_WEB_FETCH_MAX_CHARS`, `LEMON_WEB_FETCH_READABILITY`
-- `LEMON_WASM_ENABLED`, `LEMON_WASM_DEFAULT_MEMORY_LIMIT`
 
 ### Config.Gateway
 

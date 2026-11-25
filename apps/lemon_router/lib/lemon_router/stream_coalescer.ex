@@ -617,21 +617,6 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   defp emit_output(state) do
-    # Broadcast to session topic for any local subscribers
-    if LemonCore.Bus.running?() do
-      LemonCore.Bus.broadcast(
-        LemonCore.Bus.session_topic(state.session_key),
-        %{
-          type: :coalesced_output,
-          session_key: state.session_key,
-          channel_id: state.channel_id,
-          run_id: state.run_id,
-          text: state.buffer,
-          seq: state.last_seq
-        }
-      )
-    end
-
     case build_intent(state, :stream_snapshot, state.full_text) do
       {:ok, intent} ->
         _ = dispatcher().dispatch(intent)
@@ -673,6 +658,11 @@ defmodule LemonRouter.StreamCoalescer do
   defp dispatch_final(state, text, terminal_answer?) do
     case build_intent(state, :stream_finalize, text) do
       {:ok, intent} ->
+        intent =
+          if terminal_answer? and Map.get(intent.meta, :durable_terminal) == true,
+            do: %{intent | intent_id: "#{state.run_id}:terminal-answer"},
+            else: intent
+
         intent = %{intent | meta: Map.put(intent.meta, :terminal_answer, terminal_answer?)}
 
         case dispatcher().dispatch(intent) do

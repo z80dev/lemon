@@ -2,7 +2,7 @@ defmodule CodingAgent.Tools.TodoTest do
   use ExUnit.Case, async: false
   alias CodingAgent.{Session, SessionManager}
   alias CodingAgent.Session.Todos
-  alias CodingAgent.Tools.{Todo, TodoStore}
+  alias CodingAgent.Tools.Todo
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.AgentToolResult
   @moduletag :tmp_dir
@@ -21,8 +21,6 @@ defmodule CodingAgent.Tools.TodoTest do
          stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ok"))}
       )
 
-    id = Session.get_state(session).session_manager.header.id
-    on_exit(fn -> TodoStore.delete(id) end)
     {:ok, session: session, path: path}
   end
 

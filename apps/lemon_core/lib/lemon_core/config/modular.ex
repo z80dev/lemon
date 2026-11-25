@@ -37,7 +37,7 @@ defmodule LemonCore.Config.Modular do
   ## Sub-modules
 
   - `LemonCore.Config.Agent` - Agent behavior settings
-  - `LemonCore.Config.Tools` - Web tools and WASM configuration
+  - `LemonCore.Config.Tools` - Tool configuration (web, browser, disclosure)
   - `LemonCore.Config.Gateway` - Engine bindings, queueing, channel sections
   - `LemonCore.Config.Logging` - Log file and rotation settings
   - `LemonCore.Config.TUI` - Terminal UI theme and debug
@@ -76,7 +76,7 @@ defmodule LemonCore.Config.Modular do
     :features,
     :memory,
     :automation,
-    skills: %{write_approval: false, allowed_private_git_hosts: []},
+    skills: %{write_approval: false, allowed_private_git_hosts: [], learning_nudge: %{}},
     budgets: %{},
     model_routing: %{},
     model_roles: %{}
@@ -95,7 +95,11 @@ defmodule LemonCore.Config.Modular do
           secrets: Secrets.t(),
           features: Features.t(),
           memory: Memory.t(),
-          skills: %{write_approval: boolean(), allowed_private_git_hosts: [String.t()]},
+          skills: %{
+            write_approval: boolean(),
+            allowed_private_git_hosts: [String.t()],
+            learning_nudge: map()
+          },
           automation: Automation.t()
         }
 
@@ -435,7 +439,10 @@ defmodule LemonCore.Config.Modular do
         write_approval: Map.get(Map.get(settings, "skills", %{}), "write_approval", false),
         # Operator-only: `ProjectLayer` never admits it from project config.
         allowed_private_git_hosts:
-          Map.get(Map.get(settings, "skills", %{}), "allowed_private_git_hosts", [])
+          Map.get(Map.get(settings, "skills", %{}), "allowed_private_git_hosts", []),
+        # Raw `[skills.learning_nudge]` table (string keys), consumed by
+        # `LemonSkills.LearningNudge`; a project layer can only narrow it.
+        learning_nudge: Map.get(Map.get(settings, "skills", %{}), "learning_nudge", %{})
       },
       automation: Automation.resolve(settings)
     }

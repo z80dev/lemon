@@ -18,6 +18,8 @@ on:
       - "mix.lock"
       - "apps/lemon_core/lib/lemon_core/runtime/**"
       - "apps/lemon_core/lib/mix/tasks/lemon.doctor.ex"
+      - "apps/lemon_core/priv/runtime_profiles.exs"
+      - "apps/lemon_skills/lib/lemon_mcp.ex"
       - "apps/lemon_skills/lib/lemon_mcp/**"
       - "apps/lemon_skills/lib/lemon_skills/mcp_source.ex"
       - "config/prod.exs"

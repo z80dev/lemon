@@ -27,7 +27,7 @@ if Code.ensure_loaded?(:otel_tracer) do
         })
 
       :otel_span.set_status(context, span.status)
-      :otel_span.end_span(context, span.end_time)
+      _ = :otel_span.end_span(context, span.end_time)
       :ok
     end
   end

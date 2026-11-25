@@ -316,5 +316,6 @@ defmodule LemonAgent.ModelRuntime.ModelRouting do
     end
   end
 
+  @spec invalid!(String.t()) :: no_return()
   defp invalid!(message), do: raise(ArgumentError, "model_routing " <> message)
 end

@@ -370,7 +370,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
           {"node.pair.invite", [:pairing]},
           {"node.pair.invite.revoke", [:pairing]},
           {"node.pair.approve", [:pairing]},
-          {"config.set", [:admin]},
+          {"cron.add", [:admin]},
           {"chat.send", [:write]},
           {"health", []}
         ] do
@@ -823,7 +823,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     on_exit(fn -> if Process.alive?(socket), do: Socket.stop(socket) end)
     assert_receive {:execution_node_socket, ^socket, {:connected, hello}}, 3_000
     assert hello["auth"]["role"] == "enrollment"
-    Socket.request(socket, "config.set", %{"key" => "bad", "value" => true}, :forbidden)
+    Socket.request(socket, "cron.add", %{}, :forbidden)
     assert_receive {:execution_node_socket, ^socket, {:response, :forbidden, {:error, _}}}, 3_000
 
     Socket.request(

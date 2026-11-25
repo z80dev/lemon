@@ -216,9 +216,10 @@ defmodule LemonCore.ConfigReloader.Watcher do
   defp normalize_event_paths(_), do: []
 
   defp debounce_reload(state) do
-    if state.debounce_ref do
-      Process.cancel_timer(state.debounce_ref)
-    end
+    _ =
+      if state.debounce_ref do
+        Process.cancel_timer(state.debounce_ref)
+      end
 
     ref = Process.send_after(self(), :debounced_reload, state.debounce_ms)
     %{state | debounce_ref: ref}

@@ -44,13 +44,11 @@ defmodule LemonChannels.TypingIndicator do
 
       # A fast run may have completed between the submission acknowledgement and
       # subscription. The durable terminal summary closes that race.
-      case RunStore.fetch(run_id) do
-        {:ok, %{summary: summary}} when is_map(summary) ->
-          Bus.unsubscribe(Bus.run_topic(run_id))
-          {:reply, :ok, state}
-
-        _ ->
-          {:reply, :ok, add_run(state, run_id, owner, opts)}
+      if terminal_run?(RunStore.fetch(run_id)) do
+        Bus.unsubscribe(Bus.run_topic(run_id))
+        {:reply, :ok, state}
+      else
+        {:reply, :ok, add_run(state, run_id, owner, opts)}
       end
     end
   end
@@ -214,4 +212,9 @@ defmodule LemonChannels.TypingIndicator do
   catch
     :exit, _ -> Logger.debug("typing indicator lifecycle unavailable")
   end
+
+  # Finalized, or finalized and since evicted by `:runs` retention.
+  defp terminal_run?({:ok, %{summary: summary}}) when is_map(summary), do: true
+  defp terminal_run?({:error, :evicted}), do: true
+  defp terminal_run?(_live_missing_or_unavailable), do: false
 end

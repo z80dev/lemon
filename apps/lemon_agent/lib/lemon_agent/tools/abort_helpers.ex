@@ -15,7 +15,7 @@ defmodule LemonAgent.Tools.AbortHelpers do
   Returns `true` when the signal has been aborted, `false` otherwise.
   Safely handles `nil` (no signal).
   """
-  @spec aborted?(reference() | nil) :: boolean()
+  @spec aborted?(AbortSignal.t() | nil) :: boolean()
   def aborted?(signal), do: AbortSignal.aborted?(signal)
 
   @doc """
@@ -23,10 +23,10 @@ defmodule LemonAgent.Tools.AbortHelpers do
   or `{:error, "Operation aborted"}` when it has.
   Safely handles `nil` (no signal).
   """
-  @spec check_abort(reference() | nil) :: :ok | {:error, String.t()}
+  @spec check_abort(AbortSignal.t() | nil) :: :ok | {:error, String.t()}
   def check_abort(nil), do: :ok
 
-  def check_abort(signal) when is_reference(signal) do
+  def check_abort(signal) do
     if AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else

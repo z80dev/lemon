@@ -1,7 +1,9 @@
 defmodule LemonCore.Events.Delta do
   @moduledoc """
-  A chunk of streamed answer text. Published on `run:<run_id>` and forwarded to
-  `session:<session_key>`. The highest-volume payload on the bus.
+  A chunk of streamed answer text. Local native sessions publish it in a cursor
+  batch on `session:<session_key>` and the gateway relays the same delta to run
+  consumers. Remote deltas are published on `run:<run_id>` and forwarded to
+  the session topic. `seq` is run-local, not a session cursor.
   """
 
   use LemonCore.Events.Payload,

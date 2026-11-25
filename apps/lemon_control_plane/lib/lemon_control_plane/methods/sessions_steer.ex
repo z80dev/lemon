@@ -24,7 +24,7 @@ defmodule LemonControlPlane.Methods.SessionsSteer do
          {:ok, run_id} <- NativeSessions.string(params, "runId", 256),
          {:ok, id} <- NativeSessions.string(params, "messageId", 256),
          {:ok, prompt} <- NativeSessions.string(params, "prompt", @max_prompt_bytes) do
-      case mutate(:session_steer, [key, run_id, prompt, id]) do
+      case AgentRuntime.mutate(:session_steer, [key, run_id, prompt, id]) do
         {:ok, %{id: ^id, accepted_after_turn: turn}} when is_integer(turn) and turn >= 0 ->
           {:ok,
            %{
@@ -44,18 +44,6 @@ defmodule LemonControlPlane.Methods.SessionsSteer do
   end
 
   def handle(_, _), do: NativeSessions.invalid("params must be an object")
-
-  @doc false
-  def mutate(function, args) do
-    provider = AgentRuntime.provider()
-
-    if provider && Code.ensure_loaded?(provider) &&
-         function_exported?(provider, function, length(args)) do
-      AgentRuntime.call(function, args, {:error, :outcome_unknown})
-    else
-      {:error, :unavailable}
-    end
-  end
 
   @doc false
   def failure(reason) when reason in [:not_found, :session_not_found] do
@@ -78,6 +66,7 @@ defmodule LemonControlPlane.Methods.SessionsSteerWithdraw do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Methods.{NativeSessions, SessionsSteer}
+  alias LemonCore.AgentRuntime
 
   @impl true
   def name, do: "sessions.steer.withdraw"
@@ -89,7 +78,7 @@ defmodule LemonControlPlane.Methods.SessionsSteerWithdraw do
   def handle(params, _ctx) when is_map(params) do
     with {:ok, key} <- NativeSessions.string(params, "sessionKey", 1024),
          {:ok, id} <- NativeSessions.string(params, "messageId", 256) do
-      case SessionsSteer.mutate(:session_withdraw_steer, [key, id]) do
+      case AgentRuntime.mutate(:session_withdraw_steer, [key, id]) do
         :ok -> {:ok, %{"sessionKey" => key, "messageId" => id, "withdrawn" => true}}
         {:error, reason} -> SessionsSteer.failure(reason)
         _ -> SessionsSteer.failure(:outcome_unknown)
@@ -129,7 +118,7 @@ defmodule LemonControlPlane.Methods.SessionsSteerPending do
 
     with {:ok, key} <- NativeSessions.string(params, "sessionKey", 1024),
          {:ok, limit} <- NativeSessions.integer(params, "limit", @max_items, 1, @max_items) do
-      case AgentRuntime.call(:session_pending_steers, [key], {:error, :unavailable}) do
+      case AgentRuntime.query(:session_pending_steers, [key]) do
         {:ok, items} when is_list(items) ->
           projected = items |> Enum.take(limit) |> Enum.map(&project(&1, content?))
 

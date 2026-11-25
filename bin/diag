@@ -52,7 +52,6 @@ LOG_FILE_CANDIDATES = {
         "lemon_router.log",
     ],
     "control-plane": [
-        "lemon-control-plane.log",
         "control-plane.log",
         "control_plane.log",
         "lemon_control_plane.log",
@@ -62,7 +61,7 @@ LOG_FILE_CANDIDATES = {
 LOG_GLOB_PATTERNS = {
     "gateway": ["*gateway*.log", "*lemon-gateway*.log"],
     "router": ["*router*.log", "*lemon-router*.log"],
-    "control-plane": ["*control*plane*.log", "*lemon-control-plane*.log"],
+    "control-plane": ["*control*plane*.log"],
 }
 
 REQUIRED_CONFIG_KEYS = [

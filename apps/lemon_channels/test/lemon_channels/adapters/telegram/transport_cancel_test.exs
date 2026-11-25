@@ -6,7 +6,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
-  alias LemonChannels.ModelPolicy
+  alias LemonCore.PolicyStore
   alias LemonCore.{ChatScope, ProjectBindingStore}
 
   @provider_env_vars [
@@ -210,8 +210,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     stop_transport()
 
-    ModelPolicy.list()
-    |> Enum.each(fn {route, _policy} -> ModelPolicy.clear(route) end)
+    {:ok, rows} = PolicyStore.fetch_chats()
+    for {{"telegram", _, _, _} = route, _row} <- rows, do: :ok = PolicyStore.delete_chat(route)
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
     old_gateway_config_env = Application.get_env(:lemon_channels, :gateway)
@@ -675,7 +675,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     assert text =~ "Model set to"
     assert get_in(finish_opts, ["reply_markup", "remove_keyboard"]) == true
 
-    stored = StateStore.get_session_model(session_key)
+    {:ok, %{model: stored}} = PolicyStore.fetch_session(session_key)
     assert is_binary(stored)
     assert String.starts_with?(stored, provider_choice <> ":")
 
@@ -1174,14 +1174,14 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     assert text =~ "Default model set to"
     assert get_in(finish_opts, ["reply_markup", "remove_keyboard"]) == true
 
-    stored = StateStore.get_session_model(session_key)
+    {:ok, %{model: stored}} = PolicyStore.fetch_session(session_key)
     assert is_binary(stored)
 
     chat_route = ModelPolicyAdapter.route_for("default", chat_id, nil)
     topic_route = ModelPolicyAdapter.route_for("default", chat_id, topic_id)
 
-    assert %{model_id: ^stored} = ModelPolicy.get(chat_route)
-    assert nil == ModelPolicy.get(topic_route)
+    assert {:ok, %{model: ^stored}} = PolicyStore.fetch_chat(chat_route)
+    assert {:ok, nil} == PolicyStore.fetch_chat(topic_route)
     refute_receive {:inbound, _msg}, 200
   end
 
@@ -1259,14 +1259,14 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     assert get_in(saved_opts, ["reply_markup", "inline_keyboard"]) == []
     assert_receive {:answer_callback, "cb-4", %{"text" => "Saved"}}
 
-    stored = StateStore.get_session_model(session_key)
+    {:ok, %{model: stored}} = PolicyStore.fetch_session(session_key)
     assert is_binary(stored)
 
     chat_route = ModelPolicyAdapter.route_for("default", chat_id, nil)
     topic_route = ModelPolicyAdapter.route_for("default", chat_id, topic_id)
 
-    assert %{model_id: ^stored} = ModelPolicy.get(chat_route)
-    assert nil == ModelPolicy.get(topic_route)
+    assert {:ok, %{model: ^stored}} = PolicyStore.fetch_chat(chat_route)
+    assert {:ok, nil} == PolicyStore.fetch_chat(topic_route)
   end
 
   test "/model callbacks without an opener cannot change a group's model" do
@@ -1298,7 +1298,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     assert refusal =~ "Only the member who opened"
     assert_receive {:answer_callback, "cb-g2", %{"text" => ^refusal}}
     refute_receive {:edit_message_text, ^chat_id, ^message_id, _text, _opts}, 100
-    assert nil == ModelPolicy.get(route)
+    assert {:ok, nil} == PolicyStore.fetch_chat(route)
   end
 
   test "/model callbacks bound to the opener refuse other members" do
@@ -1369,14 +1369,14 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     assert refusal =~ "Only the member who opened"
     assert_receive {:answer_callback, "cb-b5", %{"text" => ^refusal}}
     refute_receive {:edit_message_text, ^chat_id, ^message_id, _text, _opts}, 100
-    assert nil == ModelPolicy.get(route)
+    assert {:ok, nil} == PolicyStore.fetch_chat(route)
 
     CancelMockAPI.set_updates([
       group_callback_update(chat_id, "cb-b6", message_id, future_callback, 99)
     ])
 
     assert_receive {:answer_callback, "cb-b6", %{"text" => "Saved"}}
-    assert %{model_id: _} = ModelPolicy.get(route)
+    assert {:ok, %{model: _}} = PolicyStore.fetch_chat(route)
   end
 
   @group_anonymous_bot_id 1_087_968_824
@@ -1437,7 +1437,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     CancelMockAPI.set_updates([cb])
     assert_receive {:answer_callback, "cb-anon", %{"text" => refusal}}
     assert refusal =~ "Only the member who opened"
-    assert nil == ModelPolicy.get(route)
+    assert {:ok, nil} == PolicyStore.fetch_chat(route)
   end
 
   test "/model closing one of two concurrent pickers keeps the other" do

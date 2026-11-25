@@ -64,13 +64,8 @@ Cancellation/deadline terminates the cell and aborts/joins outstanding tools.
 ### Isolation and bridge authority
 
 The chosen runtime is **Deno 2**, required on `PATH` (or the trusted programmatic
-`:code_mode_runtime` executable override). Host inspection for #598 found Bun
-but **no Deno**. The repository's Wasmtime sidecar executes compiled WIT
-`sandboxed-tool` components and provides capability-gated host callbacks; it
-does not contain a JavaScript interpreter or a source-cell API. Adding one
-would be a different runtime project. Requiring optional Deno gives this
-experiment an existing permission boundary without altering the WASM sidecar
-or the stateful `Eval.Kernel`.
+`:code_mode_runtime` executable override). Deno provides a permission boundary
+for source cells without changing the stateful `Eval.Kernel`.
 
 The trusted Deno driver launches a worker with `permissions: "none"`; the
 process also uses explicit `--deny-read`, `--deny-write`, `--deny-net`,

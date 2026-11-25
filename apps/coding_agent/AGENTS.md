@@ -61,20 +61,31 @@ history, compaction and supervised delegation. The loop/model runtime comes from
 - `task`/`@name` personas launch native in-process sessions via the task lifecycle;
   `agent` delegates through router and can choose a named node. Do not restore
   vendor CLI runners or another agent engine.
-- Async launch receipts are not completed answers. Explicit joins suppress the
-  corresponding followup; `wait_any` suppresses only its completed winner and
-  releases other reservations. Crashed joiners cannot suppress completion forever.
+- Async launch receipts are not completed answers. A join suppresses the followup
+  of every task it returned, whatever its terminal status; `wait_any` suppresses
+  only its winner and releases other reservations. Crashed joiners cannot
+  suppress completion forever. Notices come from the stored terminal record; a
+  child cancelled because its parent aborted sends none.
 - `TaskStoreServer` serializes event/suppression/lifecycle writes. Terminal result
   is first-writer-wins; late running events cannot revive it. RunGraph persistence
   loads before accepting writes, not in a later fold that can overwrite them.
 - Supervisor admission failure terminalizes task/graph/budget/progress state.
   Worker/session death must end bounded waits. Completion followup failure does
   not turn a completed task into a failed worker.
+- The task runtime lives under `CodingAgent.TaskRuntime` (`Control`, `Async`,
+  `Runner`, `Restore`, `Followup`, `Hub`, `Child`); `Tools.Task.*` is the tool
+  surface (params, execution, result, messaging, swarm, wait). Invocation
+  authority (inheritance, parent narrowing) belongs to
+  `Tools.Task.InvocationAuthority`, not `Params`.
 - Each task child has its own supervised owner (`TaskRuntime.Child`); never
   reintroduce a node-wide coordinator that one child's blocking work can stall.
   Exactly one of worker and owner finalizes a turn (its claim); the worker sends
   the followup before the owner sees the turn end. Cross-child reads use the
   owners' published projections, not calls.
+- The `TaskStore` record is the one status authority (`TaskRuntime.status/2`,
+  joins, Hub). Owner phases and `RunGraph` rows are liveness/coordination
+  projections and never decide a terminal status; write the task record before
+  its run row.
 - Delegated router watcher timeout is tracking loss, not proof that the remote
   run failed. Preserve fixed task/run identity for reconciliation.
 - `BackgroundRun` gives `/bg` its own session without appending to a parent.
@@ -90,7 +101,7 @@ history, compaction and supervised delegation. The loop/model runtime comes from
   than deadlock parent and child. Only the authorized parent can answer.
 - Public task results contain visible assistant output and safe metadata, not
   hidden thinking, raw event history or tool-call internals.
-- The operator Agent Hub (`Tools.Task.Hub`) scopes task IDs by lineage from the
+- The operator Agent Hub (`TaskRuntime.Hub`) scopes task IDs by lineage from the
   session key's root native sessions, never by caller-supplied parentage; foreign
   IDs are not found. It messages and cancels through `Control`'s delivery and
   cancellation paths and reads the same bounded projection as `history://`.

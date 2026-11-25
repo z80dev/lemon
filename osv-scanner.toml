@@ -1,0 +1,52 @@
+# Accepted OSV findings for .github/workflows/osv-scanner.yml (passed with
+# --config). Every entry names the finding, why it is accepted for now, and an
+# expiry date after which the scan fails on it again. Remove an entry in the
+# same change that upgrades the dependency.
+
+# mix.lock (shipped runtime)
+[[IgnoredVulns]]
+id = "EEF-CVE-2026-117678"
+ignoreUntil = 2026-12-31
+reason = "idna 7.1.0 punycode CPU use; hackney pins idna ~> 7.1.0, so the 8.0.0 fix needs a hackney release."
+
+# apps/lemon_web/assets/package-lock.json: tailwind build-time dev dependencies only.
+[[IgnoredVulns]]
+id = "GHSA-rj75-hqrm-r3gf"
+ignoreUntil = 2026-12-31
+reason = "postcss-selector-parser 6.1.4 CPU DoS in the dev-only Tailwind CSS build; not shipped. Fixed in 6.1.5."
+
+[[IgnoredVulns]]
+id = "GHSA-68fv-2mgg-jv7q"
+ignoreUntil = 2026-12-31
+reason = "source-map-js 1.2.1 DoS in the dev-only Tailwind CSS build; not shipped. Fixed in 1.2.2."
+
+# products/lemon_bot (separate product lockfiles, newly scanned by #734).
+[[IgnoredVulns]]
+id = "GHSA-474x-hrwr-fgx4"
+ignoreUntil = 2026-12-15
+reason = "fast-xml-parser 5.11.2 quadratic CPU (Low); within ^5.3.6, fixed in 5.12.0: refresh bun.lock."
+
+[[IgnoredVulns]]
+id = "GHSA-f88m-g3jw-g9cj"
+ignoreUntil = 2026-12-15
+reason = "sharp 0.34.5 libvips CVEs; lemon_bot backend decodes untrusted images. Fixed in sharp 0.35.x: upgrade."
+
+[[IgnoredVulns]]
+id = "GHSA-rgj7-g3m4-5g8c"
+ignoreUntil = 2026-12-15
+reason = "sharp 0.34.5 libheif CVEs; lemon_bot backend decodes untrusted images. Fixed in sharp 0.35.4: upgrade."
+
+[[IgnoredVulns]]
+id = "GHSA-wq5f-xc86-pv6w"
+ignoreUntil = 2026-12-15
+reason = "sharp 0.34.5 librsvg CVE; lemon_bot backend decodes untrusted images. Fixed in sharp 0.35.5: upgrade."
+
+[[IgnoredVulns]]
+id = "GHSA-834v-8h66-3h79"
+ignoreUntil = 2026-12-31
+reason = "happy-dom 21.0.1 is a lemon_bot web test-only dependency; fixed in 21.0.4 within range: refresh bun.lock."
+
+[[IgnoredVulns]]
+id = "GHSA-8g5g-mxqh-grgj"
+ignoreUntil = 2026-12-31
+reason = "vite 6.4.4 dev-server fs.deny bypass; dev server binds 127.0.0.1 only. Fixed in 6.4.5 within range: refresh bun.lock."

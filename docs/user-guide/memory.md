@@ -300,7 +300,8 @@ rewritten or purged merely by migrating ownership columns.
 
 A memory transfer's frozen source snapshot (summaries, preference facts and
 `USER.md`/`MEMORY.md` bytes) never outlives the memory it copied: it is deleted
-once the destination receipt is recorded, when any document it captured is
+once the destination receipt is recorded (on a remote source node too, when its
+worker supports `memory.transfer.release`), when any document it captured is
 deleted, erased by scope or aged out, and in any case after `transfer_ttl_ms`
 (default **24 hours**, never longer than `retention_ms`). Transfer receipts hold
 only identifiers and digests and are kept.

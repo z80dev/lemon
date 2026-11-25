@@ -79,7 +79,7 @@ D19, and nothing beyond the five packages is published under D18).
 | # | Date | Decision |
 |---|---|---|
 | D1 | 08-09 | No merged `lemon_runtime` package; router, gateway and channels stay separate apps. |
-| D2 | 08-10 | *Amended.* Gateway sheds only what is a channel: email moved to a `LemonChannels.Plugin`; webhook, SMS and voice stay gateway-owned because `Plugin.deliver/1` cannot answer a synchronous HTTP request. The original "move all five transports" was overturned by the code. |
+| D2 | 08-10 | *Amended (#698).* Email moved to a `LemonChannels.Plugin`; webhook, SMS and voice remain gateway-owned for synchronous webhook responses, a receive-only SMS inbox and bidirectional voice streams. All three ship opt-in via global `[gateway.ingress] enabled = true` plus a per-surface enable flag; default gateway startup remains execution-only. See [Gateway ingress](config.md#gateway-ingress). |
 | D3 | 08-09 | Bench stays inside `lemon_sim`. |
 | D4 | 08-09 | `lemon_memory` split out of `lemon_core` as its own app. |
 | D5 | 08-09 | Goal, kanban and heartbeat stores moved to `lemon_agent` as `LemonAgent.Workspace.*`. |
@@ -152,8 +152,9 @@ tarballs so this class of break fails CI.
 
   Only the repo tooling (`quality/`, `update/`, repo-only `mix lemon.*` tasks)
   is kept out of the tarball.
-- **Elixir floor.** The packages declare `~> 1.15`; the packaging workflow proves
-  Elixir 1.20.5 / OTP 29.1.2 and runs an advisory 1.15.8 / OTP 26.2 leg.
+- **Elixir floor.** The packages declare `~> 1.17` (exqlite 0.43 requires it); the
+  packaging workflow requires both Elixir 1.20.5 / OTP 29.1.2 and the floor,
+  1.17.3 / OTP 26.2, to pass `scripts/verify_packages`.
 - **`LemonChannels.Plugin.meta/0`** keeps its flag-map capability vocabulary;
   widening it to typed `Capability.spec()` lists waits for a consumer that needs
   sizes, features or rate limits.

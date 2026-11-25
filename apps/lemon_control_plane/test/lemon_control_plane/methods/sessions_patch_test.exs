@@ -274,7 +274,21 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
       session_key = "session_#{System.unique_integer()}"
       LemonCore.PolicyStore.put_session(session_key, %{model: "private-model"})
 
-      {:ok, result} = SessionsReset.handle(%{"sessionKey" => session_key}, %{})
+      {:ok, preview} = SessionsReset.handle(%{"sessionKey" => session_key}, %{})
+      assert preview["dryRun"] == true
+      assert preview["preview"]["hasSessionPolicy"] == true
+      refute inspect(preview) =~ "private-model"
+      assert stored_policy(session_key) == %{model: "private-model"}
+
+      {:ok, result} =
+        SessionsReset.handle(
+          %{
+            "sessionKey" => session_key,
+            "dryRun" => false,
+            "confirmToken" => preview["confirmToken"]
+          },
+          %{}
+        )
 
       assert result["success"] == true
       assert result["sessionKey"] == session_key

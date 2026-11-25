@@ -19,7 +19,7 @@ defmodule LemonCore.Secrets.MasterKey do
   ## Key material
 
   A master key is 32 random bytes, stored base64-encoded — exactly what
-  `generate_encoded_key/0`, `mix lemon.secrets.init` or `openssl rand -base64 32`
+  `generate_encoded_key/0`, `lemon secrets init` or `openssl rand -base64 32`
   produce. Passphrase-like values are rejected with `:weak_master_key` because
   they are used as key material verbatim, without password stretching. Setups
   that already encrypted secrets under such a value can keep working by opting
@@ -516,16 +516,15 @@ defmodule LemonCore.Secrets.MasterKey do
       warn_once(:legacy_raw_key, """
       Lemon secrets master key is a raw string, not base64-encoded 32-byte key \
       material. It is used verbatim as key material, with no password \
-      stretching. Rotate to a generated key with `lemon secrets rotate-key` \
-      (or `mix lemon.secrets.rotate_key`), then drop \
-      `allow_legacy_raw_keys` from your config.\
+      stretching. Rotate to a generated key with `lemon secrets rotate-key`, \
+      then drop `allow_legacy_raw_keys` from your config.\
       """)
 
       {:ok, trimmed}
     else
       warn_once(:weak_master_key, """
       Lemon secrets master key is not base64-encoded 32-byte key material and \
-      was rejected. Generate one with `mix lemon.secrets.init` (or \
+      was rejected. Generate one with `lemon secrets init` (or \
       `openssl rand -base64 32`). To keep using an existing raw-string key, \
       set `config :lemon_core, LemonCore.Secrets, allow_legacy_raw_keys: true`.\
       """)

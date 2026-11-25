@@ -65,11 +65,11 @@ config :lemon_gateway, :xmtp_transport_module, LemonChannels.Adapters.Xmtp.Trans
 config :lemon_router, :native_followup_allowed_origins, ["http://127.0.0.1:4100"]
 config :lemon_automation, :cron_admission_allowed_origins, ["http://127.0.0.1:4100"]
 
-# Support bundles include workspace (goal/kanban) diagnostics when the agent
-# runtime is present. lemon_core must not reference agent_core directly.
+# Support bundles include workspace (goal/kanban) diagnostics when the
+# automation runtime is present. lemon_core must not reference it directly.
 config :lemon_core, :workspace_diagnostics,
-  goal: LemonAgent.Workspace.GoalStore,
-  kanban: LemonAgent.Workspace.KanbanStore
+  goal: LemonAutomation.GoalStore,
+  kanban: LemonAutomation.KanbanStore
 
 # Same idea for every diagnostic whose subject is owned by another app: the
 # doctor framework looks the module up instead of naming it.
@@ -83,13 +83,17 @@ config :lemon_core, :doctor_runtime,
   lsp_server_manager: LemonLsp.ServerManager,
   channel_diagnostics: LemonChannels.Doctor.Diagnostics,
   # `builtin?/1` decides which provider names doctor output may show verbatim.
-  provider_names: LemonAgent.ModelRuntime.CustomProviders
+  provider_names: LemonAgent.ModelRuntime.CustomProviders,
+  # `allowed_origins/0`: the callback allowlists the Bot admission check validates.
+  native_followup_admission: LemonRouter.NativeFollowupAdmission,
+  cron_admission: LemonAutomation.CronAdmission
 
 # Diagnostics owned by apps that depend on lemon_core register themselves here.
 # Modules missing from a given build are skipped (see LemonCore.Doctor).
 config :lemon_core, :doctor_checks, [
   LemonCli.Doctor.Providers,
   LemonCli.Doctor.BotAdmission,
+  LemonCli.Doctor.Toolchain,
   LemonControlPlane.Doctor.Checks.Listeners,
   LemonMemory.Doctor.Checks.Memory,
   LemonSkills.Doctor.Checks.Skills,
@@ -139,12 +143,15 @@ config :lemon_core, :env_registries, [
   LemonWeb.Env
 ]
 
+# Every adapter listed here must be startable from canonical config: its
+# platform section is registered under `:gateway_channels` above (Email reads
+# the `[gateway.email]` block). WhatsApp was retired rather than kept with no
+# config path that could start it (#699).
 config :lemon_channels,
   adapters: [
     LemonChannels.Adapters.Telegram,
     LemonChannels.Adapters.Discord,
     LemonChannels.Adapters.Xmtp,
-    LemonChannels.Adapters.WhatsApp,
     LemonChannels.Adapters.Email
   ]
 
@@ -191,6 +198,10 @@ config :lemon_core, LemonCore.Store,
     {LemonCore.UsageLedger, :handle_finalize_run},
     {LemonCore.ExecApprovalExpiry, :handle_finalize_run}
   ]
+
+config :lemon_core,
+       :terminal_presentation_replayer,
+       {LemonRouter.RunProcess, :replay_presentation}
 
 config :lemon_web, LemonWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,

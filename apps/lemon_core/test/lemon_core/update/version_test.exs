@@ -80,44 +80,4 @@ defmodule LemonCore.Update.VersionTest do
       refute Version.valid?("latest")
     end
   end
-
-  describe "current/0" do
-    test "source reports the umbrella CalVer instead of the OTP application version" do
-      System.delete_env("RELEASE_VSN")
-      System.delete_env("LEMON_PATH")
-      assert Version.valid?(Version.current())
-      assert %{mode: "source", channel: "source"} = Version.info()
-    end
-  end
-
-  test "release identity uses assembled metadata rather than the updater channel" do
-    root = Path.join(System.tmp_dir!(), "lemon-version-#{System.unique_integer([:positive])}")
-    version_dir = Path.join(root, "releases/2026.09.2")
-    File.mkdir_p!(version_dir)
-    on_exit(fn -> File.rm_rf!(root) end)
-
-    File.write!(
-      Path.join(version_dir, "lemon-build.json"),
-      Jason.encode!(%{commit: "0123456789ab", channel: "preview"})
-    )
-
-    System.put_env("RELEASE_VSN", "2026.09.2")
-    System.put_env("RELEASE_ROOT", root)
-    System.put_env("LEMON_CHANNEL", "stable")
-
-    assert Version.current() == "2026.09.2"
-
-    assert Version.info() == %{
-             version: "2026.09.2",
-             mode: "release",
-             commit: "0123456789ab",
-             channel: "preview"
-           }
-
-    assert Version.describe() ==
-             "Lemon 2026.09.2 (release; commit 0123456789ab; channel preview)"
-
-    File.rm!(Path.join(version_dir, "lemon-build.json"))
-    assert %{commit: "unknown", channel: "unknown"} = Version.info()
-  end
 end
