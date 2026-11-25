@@ -132,6 +132,10 @@ defmodule LemonRouter.SlotsTest do
         {:ok, value} -> Application.put_env(:lemon_core, key, value)
         :error -> Application.delete_env(:lemon_core, key)
       end
+
+      # The shared router pool also received the test's system broadcasts.
+      :ok = LemonCore.Bus.broadcast("system", reloaded_event())
+      if slots = Process.whereis(Slots), do: :sys.get_state(slots)
     end)
 
     Application.put_env(:lemon_core, key, %{max_concurrent_runs: 1})

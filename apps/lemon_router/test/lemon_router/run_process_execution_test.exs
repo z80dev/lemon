@@ -1020,15 +1020,15 @@ defmodule LemonRouter.RunProcessExecutionTest do
   end
 
   defp with_capacity(max) do
-    key = :"Elixir.LemonGateway.Config"
-    previous = Application.fetch_env(:lemon_gateway, key)
+    key = :gateway_test_config
+    previous = Application.fetch_env(:lemon_core, key)
     assert {:ok, %{max: previous_max}} = Slots.stats()
     reload = Event.new(:config_reloaded, %{reload_id: "run-execution-test"})
 
     on_exit(fn ->
       case previous do
-        {:ok, config} -> Application.put_env(:lemon_gateway, key, config)
-        :error -> Application.delete_env(:lemon_gateway, key)
+        {:ok, config} -> Application.put_env(:lemon_core, key, config)
+        :error -> Application.delete_env(:lemon_core, key)
       end
 
       send(Slots, reload)
@@ -1036,7 +1036,7 @@ defmodule LemonRouter.RunProcessExecutionTest do
     end)
 
     config = Map.put(LemonCore.GatewayConfig.load(), :max_concurrent_runs, max)
-    Application.put_env(:lemon_gateway, key, config)
+    Application.put_env(:lemon_core, key, config)
     send(Slots, reload)
     assert_eventually(fn -> match?({:ok, %{max: ^max}}, Slots.stats()) end)
   end
