@@ -2,7 +2,7 @@ defmodule CodingAgent.Session.ModelRolesTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Session
-  alias CodingAgent.Session.ModelResolver
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias CodingAgent.SettingsManager
   alias CodingAgent.Tools.Task.Params
 

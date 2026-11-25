@@ -176,7 +176,7 @@ startup/config-registration operations (`init`, `reset`, `register`,
 | `CodingAgent.Session.EventHandler` | Translates `LemonAgent` events into session state updates, triggers compaction, and fires extension hooks |
 | `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling, tracked worker cleanup, overflow recovery state machine, and compaction result application |
 | `CodingAgent.Session.MessageSerialization` | Serializes/deserializes messages between session and agent core formats |
-| `CodingAgent.Session.ModelResolver` | Resolves model structs from string specs, maps, or settings; handles API key lookup via env vars and secrets with OAuth refresh |
+| `LemonAgent.ModelRuntime.ModelResolver` / `ProviderFailover` (lemon_agent) | Model resolution over `SettingsManager` (any resolution settings map) and the agent loop's provider x credential failover, configured by `Lifecycle` through the Agent's `:provider_failover` option |
 | `CodingAgent.Session.PromptComposer` | Composes the final system prompt by layering the stable base prompt and available-skill metadata, prompt templates, an explicit system prompt, resource-loader instructions and rule sections; turn relevance stays outside the prompt |
 | `CodingAgent.Session.WasmBridge` | Bridges WASM sidecar tools into the session tool set |
 | `CodingAgent.SessionManager` | JSONL persistence engine with tree-structured entries (branching, compaction, labels), atomic writes, append-only incremental saves, and version migrations (v1-v3) |
@@ -1162,7 +1162,7 @@ Each tool module exposes `tool(cwd, opts)` returning an `%LemonAgent.Types.Agent
 
 ### Model Resolution
 
-`Session.ModelResolver` resolves models from string specs (`"provider:model_id"`), maps, or `%LemonAi.Types.Model{}` structs. API keys are resolved in order:
+`LemonAgent.ModelRuntime.ModelResolver` resolves models from string specs (`"provider:model_id"`), maps, or `%LemonAi.Types.Model{}` structs. API keys are resolved in order:
 1. Provider environment variables (`ANTHROPIC_API_KEY`, etc.)
 2. Plain `providers.<name>.api_key` in settings
 3. `providers.<name>.api_key_secret` via `LemonCore.Secrets`

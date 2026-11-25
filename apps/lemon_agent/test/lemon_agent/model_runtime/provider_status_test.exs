@@ -226,7 +226,9 @@ defmodule LemonAgent.ModelRuntime.ProviderStatusTest do
     refute inspect(status) =~ "codex-raw-token"
   end
 
-  test "anthropic oauth readiness requires a resolvable oauth payload", %{cwd: cwd} do
+  test "anthropic oauth status is presence-only; resolution refuses a non-oauth payload", %{
+    cwd: cwd
+  } do
     assert {:ok, _} = Secrets.set("llm_anthropic_bad_oauth", "not-json")
 
     write_config!(cwd, """
@@ -244,8 +246,15 @@ defmodule LemonAgent.ModelRuntime.ProviderStatusTest do
     provider = only_provider(status)
 
     assert provider["provider"] == "anthropic"
-    refute provider["credentialReady"]
+    # Status never decrypts: the selected login is stored under the current key.
+    assert provider["credentialReady"]
     refute inspect(status) =~ "llm_anthropic_bad_oauth"
+
+    refute LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(
+             :anthropic,
+             LemonCore.Config.load(cwd, cache: false).providers,
+             mode: :resolve
+           )
   end
 
   defp write_config!(_cwd, body) do

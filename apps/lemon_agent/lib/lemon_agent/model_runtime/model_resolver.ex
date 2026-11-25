@@ -1,39 +1,153 @@
-defmodule CodingAgent.Session.ModelResolver do
+defmodule LemonAgent.ModelRuntime.ModelResolver do
   @moduledoc """
-  Pure-function module for resolving AI model and provider configurations.
+  Model resolution over Lemon config: explicit selectors, `@role` aliases,
+  custom providers and presets, the configured default model, provider routing
+  of the default provider, and the runtime fallback candidates provider
+  failover walks.
 
-  Handles model resolution from various input formats (string specs, maps, structs),
-  provider configuration lookups, API key resolution via environment variables and
-  secrets, and provider-specific stream option building.
+  Every function takes resolution `t:settings/0`: any map carrying
+  `:default_model`, `:model_roles`, `:providers` and `:provider_routing`, such
+  as `settings/1` built from a `%LemonCore.Config{}` (coding sessions pass
+  their `CodingAgent.SettingsManager`). Credential readiness comes from
+  `Credentials.credential_readiness/3` (presence mode).
   """
-  alias CodingAgent.SettingsManager
   alias LemonAgent.ModelRuntime.{CustomProviders, ModelRoles}
   alias LemonAi.Models.Presets
+
+  @typedoc "Parsed default model: a `@role` selector or a provider/model identity."
+  @type default_model ::
+          String.t()
+          | %{
+              provider: atom() | String.t() | nil,
+              provider_source: :explicit | :inherited,
+              model_id: String.t(),
+              base_url: String.t() | nil
+            }
+          | nil
+
+  @typedoc "Resolution settings (see the module doc)."
+  @type settings :: %{
+          required(:default_model) => default_model(),
+          required(:model_roles) => ModelRoles.roles(),
+          required(:providers) => map(),
+          required(:provider_routing) => map(),
+          optional(atom()) => term()
+        }
+
+  @routing_defaults %{enabled: true, fallback_providers: [], require_credentials: true}
+
+  @doc """
+  Resolution settings from a loaded `%LemonCore.Config{}`. Raises
+  `ArgumentError` for invalid `model_roles`.
+  """
+  @spec settings(LemonCore.Config.t()) :: settings()
+  def settings(%LemonCore.Config{} = config) do
+    agent = config.agent || %{}
+    provider = Map.get(agent, :default_provider)
+
+    provider_source =
+      Map.get(
+        agent,
+        :default_provider_source,
+        if(provider in [nil, ""], do: :inherited, else: :explicit)
+      )
+
+    case ModelRoles.validate(config.model_roles) do
+      :ok -> :ok
+      {:error, reason} -> raise ArgumentError, reason
+    end
+
+    %{
+      default_model:
+        default_model_spec(provider, Map.get(agent, :default_model), provider_source),
+      model_roles: config.model_roles,
+      providers: config.providers || %{},
+      provider_routing: Map.merge(@routing_defaults, Map.get(agent, :provider_routing, %{}))
+    }
+  end
+
+  @doc """
+  Parses `[defaults] provider`/`model` into `t:default_model/0`: a `@role`
+  selector, a `provider:model` or `provider/model` qualified id (when no
+  provider is configured), or the configured provider with the bare id.
+  Built-in provider names become atoms; custom ids stay binaries.
+  """
+  @spec default_model_spec(term(), term(), :explicit | :inherited) :: default_model()
+  def default_model_spec(nil, nil, _provider_source), do: nil
+  def default_model_spec(_provider, "@" <> _role = selector, _provider_source), do: selector
+
+  def default_model_spec(provider, model, provider_source) when is_binary(model) do
+    qualified =
+      Enum.find_value([":", "/"], fn separator ->
+        case String.split(model, separator, parts: 2) do
+          [p, model_id] when provider in [nil, ""] and p != "" and model_id != "" ->
+            %{provider: spec_provider(p), provider_source: :explicit, model_id: model_id}
+
+          _ ->
+            nil
+        end
+      end)
+
+    cond do
+      qualified -> Map.put(qualified, :base_url, nil)
+      model == "" -> nil
+      true -> model_spec(provider, model, provider_source)
+    end
+  end
+
+  def default_model_spec(provider, model, provider_source)
+      when is_binary(provider) and provider != "",
+      do: model_spec(provider, to_string(model), provider_source)
+
+  def default_model_spec(_provider, _model, _provider_source), do: nil
+
+  defp model_spec(provider, model_id, provider_source) do
+    %{
+      provider: spec_provider(provider),
+      provider_source: provider_source,
+      model_id: model_id,
+      base_url: nil
+    }
+  end
+
+  # Built-in provider names normalize to atoms (lowercase, dashes to
+  # underscores). Custom `[providers.<id>]` ids stay binaries so config input
+  # never creates atoms.
+  defp spec_provider(p) when is_binary(p) do
+    normalized = p |> String.downcase() |> String.replace("-", "_")
+
+    if CustomProviders.builtin?(normalized),
+      do: String.to_atom(normalized),
+      else: String.trim(p)
+  end
+
+  defp spec_provider(p) when is_atom(p), do: p
+  defp spec_provider(_), do: nil
 
   # ============================================================================
   # Model Resolution
   # ============================================================================
 
-  @spec resolve_session_model(term(), CodingAgent.SettingsManager.t()) :: LemonAi.Types.Model.t()
-  def resolve_session_model(nil, %CodingAgent.SettingsManager{} = settings) do
+  @spec resolve_session_model(term(), settings()) :: LemonAi.Types.Model.t()
+  def resolve_session_model(nil, %{providers: _} = settings) do
     resolve_default_model(settings)
   end
 
   def resolve_session_model(
         %LemonAi.Types.Model{} = model,
-        %CodingAgent.SettingsManager{} = settings
+        %{providers: _} = settings
       ) do
     apply_provider_base_url(model, settings)
   end
 
-  def resolve_session_model("@" <> _role = selector, %SettingsManager{} = settings) do
+  def resolve_session_model("@" <> _role = selector, %{providers: _} = settings) do
     selector
     |> expand_role!(settings, default_selector(settings))
     |> resolve_role_model(settings)
     |> check_role_availability!(settings, selector)
   end
 
-  def resolve_session_model(model_spec, %CodingAgent.SettingsManager{} = settings) do
+  def resolve_session_model(model_spec, %{providers: _} = settings) do
     case resolve_explicit_model(model_spec, settings) do
       %LemonAi.Types.Model{} = model ->
         apply_provider_base_url(model, settings)
@@ -67,7 +181,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
   # Settings-aware overload: for bare model names (no provider prefix),
   # prefer providers that are configured with API keys in the user's settings.
-  @spec resolve_explicit_model(term(), CodingAgent.SettingsManager.t() | nil) ::
+  @spec resolve_explicit_model(term(), settings() | nil) ::
           LemonAi.Types.Model.t() | nil
   defp resolve_explicit_model(spec, settings) when is_binary(spec) do
     trimmed = String.trim(spec)
@@ -103,7 +217,7 @@ defmodule CodingAgent.Session.ModelResolver do
   # an API key configured in the user's settings.
   defp find_model_prefer_configured(nil, _settings), do: nil
 
-  defp find_model_prefer_configured(model_id, %CodingAgent.SettingsManager{} = settings) do
+  defp find_model_prefer_configured(model_id, %{providers: _} = settings) do
     configured = configured_provider_atoms(settings)
 
     # Match only known ids in each configured provider's effective scope.
@@ -121,8 +235,8 @@ defmodule CodingAgent.Session.ModelResolver do
   Without either, the parent model is returned unchanged (including nil).
   Built-in role fallbacks use the parent model before the configured default.
   """
-  @spec resolve_task_model(term(), SettingsManager.t(), term()) :: term()
-  def resolve_task_model(selector, %SettingsManager{} = settings, parent_model) do
+  @spec resolve_task_model(term(), settings(), term()) :: term()
+  def resolve_task_model(selector, %{providers: _} = settings, parent_model) do
     selector =
       selector || if(Map.has_key?(settings.model_roles, "task"), do: "@task")
 
@@ -142,9 +256,9 @@ defmodule CodingAgent.Session.ModelResolver do
   end
 
   @doc "Chooses compaction, configured smol, then the active model without session mutation."
-  @spec resolve_compaction_model(term(), SettingsManager.t(), LemonAi.Types.Model.t()) ::
+  @spec resolve_compaction_model(term(), settings(), LemonAi.Types.Model.t()) ::
           LemonAi.Types.Model.t()
-  def resolve_compaction_model(selector, %SettingsManager{} = settings, active_model) do
+  def resolve_compaction_model(selector, %{providers: _} = settings, active_model) do
     selector =
       selector ||
         cond do
@@ -160,8 +274,8 @@ defmodule CodingAgent.Session.ModelResolver do
   end
 
   @doc "Resolves an explicitly configured tiny or smol model for auto effort classification."
-  @spec resolve_auto_thinking_model(SettingsManager.t()) :: LemonAi.Types.Model.t() | nil
-  def resolve_auto_thinking_model(%SettingsManager{} = settings) do
+  @spec resolve_auto_thinking_model(settings()) :: LemonAi.Types.Model.t() | nil
+  def resolve_auto_thinking_model(%{providers: _} = settings) do
     Enum.find_value(["tiny", "smol"], fn role ->
       if Map.has_key?(settings.model_roles, role) do
         resolve_auto_role(role, settings)
@@ -185,12 +299,12 @@ defmodule CodingAgent.Session.ModelResolver do
     end
   end
 
-  defp default_selector(%SettingsManager{default_model: %{model_id: "@" <> _role = selector}}),
+  defp default_selector(%{default_model: %{model_id: "@" <> _role = selector}}),
     do: selector
 
-  defp default_selector(%SettingsManager{default_model: selector}), do: selector
+  defp default_selector(%{default_model: selector}), do: selector
 
-  defp resolve_role_model(spec, %SettingsManager{default_model: spec} = settings)
+  defp resolve_role_model(spec, %{default_model: spec} = settings)
        when is_map(spec) and not is_struct(spec) do
     resolve_default_model(settings)
   end
@@ -226,30 +340,28 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp check_role_availability!(model, _settings, _selector), do: model
 
-  @spec resolve_default_model(CodingAgent.SettingsManager.t()) :: LemonAi.Types.Model.t()
-  def resolve_default_model(%CodingAgent.SettingsManager{default_model: nil}) do
+  @spec resolve_default_model(settings()) :: LemonAi.Types.Model.t()
+  def resolve_default_model(%{default_model: nil}) do
     # No default model configured, raise an error
     raise ArgumentError,
           "model is required: either pass :model option or configure default_model in settings"
   end
 
-  def resolve_default_model(%SettingsManager{default_model: "@" <> _role = selector} = settings) do
+  def resolve_default_model(%{default_model: "@" <> _role = selector} = settings) do
     selector
     |> expand_role!(settings, nil)
     |> resolve_role_model(settings)
     |> check_role_availability!(settings, selector)
   end
 
-  def resolve_default_model(
-        %SettingsManager{default_model: %{model_id: "@" <> _role = selector}} = settings
-      ) do
+  def resolve_default_model(%{default_model: %{model_id: "@" <> _role = selector}} = settings) do
     selector
     |> expand_role!(settings, nil)
     |> resolve_role_model(settings)
     |> check_role_availability!(settings, selector)
   end
 
-  def resolve_default_model(%CodingAgent.SettingsManager{default_model: config} = settings)
+  def resolve_default_model(%{default_model: config} = settings)
       when is_map(config) do
     provider = Map.get(config, :provider)
     model_id = Map.get(config, :model_id)
@@ -373,14 +485,14 @@ defmodule CodingAgent.Session.ModelResolver do
 
   @spec runtime_fallback_models(
           LemonAi.Types.Model.t(),
-          CodingAgent.SettingsManager.t(),
+          settings(),
           keyword()
         ) :: [LemonAi.Types.Model.t()]
   def runtime_fallback_models(model, settings, opts \\ [])
 
   def runtime_fallback_models(
         %LemonAi.Types.Model{} = model,
-        %CodingAgent.SettingsManager{} = settings,
+        %{providers: _} = settings,
         opts
       ) do
     routing = settings.provider_routing || %{}
@@ -423,9 +535,9 @@ defmodule CodingAgent.Session.ModelResolver do
   # Provider Configuration
   # ============================================================================
 
-  @spec apply_provider_base_url(LemonAi.Types.Model.t(), CodingAgent.SettingsManager.t()) ::
+  @spec apply_provider_base_url(LemonAi.Types.Model.t(), settings()) ::
           LemonAi.Types.Model.t()
-  def apply_provider_base_url(model, %CodingAgent.SettingsManager{providers: providers}) do
+  def apply_provider_base_url(model, %{providers: providers}) do
     provider_cfg =
       LemonAgent.ModelRuntime.ProviderNames.provider_config(providers, model.provider) ||
         CustomProviders.config_for(providers, model.provider)
@@ -450,8 +562,8 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp gateway_wire_base_url(model), do: model
 
-  @spec build_get_api_key(CodingAgent.SettingsManager.t()) :: (atom() -> String.t() | nil)
-  def build_get_api_key(%CodingAgent.SettingsManager{} = settings) do
+  @spec build_get_api_key(settings()) :: (atom() -> String.t() | nil)
+  def build_get_api_key(%{providers: _} = settings) do
     # Pass the whole settings (not just providers) so pool credentials from
     # provider_routing participate in resolution; with no pools configured the
     # lookup is identical to a bare providers map.
@@ -460,13 +572,13 @@ defmodule CodingAgent.Session.ModelResolver do
 
   @spec build_stream_options(
           LemonAi.Types.Model.t(),
-          CodingAgent.SettingsManager.t(),
+          settings(),
           map() | nil,
           String.t() | nil
         ) :: LemonAi.Types.StreamOptions.t()
   def build_stream_options(
         model,
-        %CodingAgent.SettingsManager{providers: providers},
+        %{providers: providers},
         existing_opts,
         cwd
       ) do
@@ -489,7 +601,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
   # ---- Private helpers ----
 
-  @spec resolve_slash_model_spec(String.t(), SettingsManager.t() | nil) ::
+  @spec resolve_slash_model_spec(String.t(), settings() | nil) ::
           LemonAi.Types.Model.t() | nil
   defp resolve_slash_model_spec(model_spec, settings) when is_binary(model_spec) do
     case String.split(model_spec, "/", parts: 2) do
@@ -510,7 +622,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
   # Configured models and dynamic presets resolve in the full effective scope.
   # Registry-only fallback is safe for static providers, never preset metadata.
-  defp lookup_model(provider, model_id, %SettingsManager{} = settings)
+  defp lookup_model(provider, model_id, %{providers: _} = settings)
        when not is_nil(provider) and (is_binary(provider) or is_atom(provider)) and
               is_binary(model_id) do
     provider_atom = canonical_registry_provider(provider)
@@ -537,7 +649,7 @@ defmodule CodingAgent.Session.ModelResolver do
   end
 
   # Bare ids also match models listed under a custom provider.
-  defp find_custom_model(model_id, %SettingsManager{} = settings)
+  defp find_custom_model(model_id, %{providers: _} = settings)
        when is_binary(model_id) do
     settings
     |> CustomProviders.models()
@@ -583,7 +695,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
   # Extract provider atoms from the settings' configured providers map.
   # Only returns providers that have some form of API key configured.
-  defp configured_provider_atoms(%CodingAgent.SettingsManager{providers: providers})
+  defp configured_provider_atoms(%{providers: providers})
        when is_map(providers) do
     providers
     |> Enum.filter(fn {_name, cfg} ->
@@ -595,7 +707,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp configured_provider_atoms(_), do: []
 
-  defp route_default_provider(provider, model_id, %CodingAgent.SettingsManager{} = settings) do
+  defp route_default_provider(provider, model_id, %{providers: _} = settings) do
     routing = settings.provider_routing || %{}
 
     cond do
@@ -622,7 +734,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp provider_credentials_ready?(_provider, _settings, %{require_credentials: false}), do: true
 
-  defp provider_credentials_ready?(provider, %CodingAgent.SettingsManager{} = settings, routing) do
+  defp provider_credentials_ready?(provider, %{providers: _} = settings, routing) do
     LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(provider, settings.providers,
       provider_routing: routing
     )
@@ -633,7 +745,7 @@ defmodule CodingAgent.Session.ModelResolver do
     match?(%LemonAi.Types.Model{}, model)
   end
 
-  defp fallback_model(provider, model_id, %CodingAgent.SettingsManager{} = settings, routing) do
+  defp fallback_model(provider, model_id, %{providers: _} = settings, routing) do
     if provider_credentials_ready?(provider, settings, routing) do
       provider
       |> to_string()
@@ -706,7 +818,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp provider_to_atom(_), do: nil
 
-  # SettingsManager keeps legacy config compatibility by representing provider
+  # Coding settings keep legacy config compatibility by representing provider
   # names as underscored atoms (for example :openai_codex). Model registry keys
   # use the same canonical spelling, so canonicalize only at this registry
   # boundary. Unknown providers are preserved for the existing custom-provider

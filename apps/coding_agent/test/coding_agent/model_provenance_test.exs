@@ -154,7 +154,7 @@ defmodule CodingAgent.ModelProvenanceTest do
         "defaults" => %{"model" => "anthropic:claude-sonnet-4-5"}
       })
 
-    parent = CodingAgent.Session.ModelResolver.resolve_session_model(nil, merged)
+    parent = LemonAgent.ModelRuntime.ModelResolver.resolve_session_model(nil, merged)
     assert ModelProvenance.origin(nil, merged) == :project
 
     # With and without a recorded parent origin.
@@ -220,7 +220,7 @@ defmodule CodingAgent.ModelProvenanceTest do
 
     # The parent session records where its default came from.
     assert ModelProvenance.origin(nil, merged) == :project
-    parent = CodingAgent.Session.ModelResolver.resolve_session_model(nil, merged)
+    parent = LemonAgent.ModelRuntime.ModelResolver.resolve_session_model(nil, merged)
     assert canonical(parent) == "anthropic/claude-sonnet-4-5"
 
     opts = [settings_manager: merged, model: parent, model_origin: :project]
@@ -256,7 +256,7 @@ defmodule CodingAgent.ModelProvenanceTest do
         project
       )
 
-    parent = CodingAgent.Session.ModelResolver.resolve_session_model(nil, merged)
+    parent = LemonAgent.ModelRuntime.ModelResolver.resolve_session_model(nil, merged)
     assert canonical(parent) == "anthropic/claude-sonnet-4-5"
     assert ModelProvenance.origin(nil, merged) == :project
     {merged, [model: parent, model_origin: :project]}

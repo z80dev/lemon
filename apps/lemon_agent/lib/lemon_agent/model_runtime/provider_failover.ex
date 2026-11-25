@@ -1,10 +1,36 @@
-defmodule CodingAgent.Session.ProviderFallback do
-  @moduledoc false
+defmodule LemonAgent.ModelRuntime.ProviderFailover do
+  @moduledoc """
+  Provider x credential failover for one model request.
 
-  alias CodingAgent.Session.ModelResolver
-  alias CodingAgent.SettingsManager
+  Configure it on `AgentLoopConfig.provider_failover` (or the Agent's
+  `:provider_failover` option); the loop wraps its stream function with
+  `wrap/3`. Candidates are the request's model, then `provider_routing`
+  fallback models and providers (`ModelResolver.runtime_fallback_models/3`),
+  each with its ordered credentials (`Credentials.list_provider_api_keys/3`).
+  Before any output commits, a credential or provider failure moves to the
+  next credential or candidate; a 401 first refreshes the same credential
+  once. The first committed output fixes provider, model and credential: it
+  is recorded in `CredentialHealth` and pinned in `SessionPins`; failures are
+  recorded in `CredentialHealth` and clear a failed pin.
+
+  ## Attempt budget
+
+  The loop owns one attempt budget per response: `max_retries + 1` upstream
+  attempts in total (at least two, so disabling retries keeps one failover
+  attempt), shared by its own retries and every candidate tried here
+  (`:budget` option). A walk stops when the budget is spent and reports the
+  last failure, so failover never multiplies the retry budget.
+
+  ## Cost cap
+
+  The loop's `check_model_cost` runs for every candidate before it is tried
+  (`:check_model_cost` option); a capped candidate is skipped without an
+  upstream attempt.
+  """
+
   alias LemonAgent.ModelRuntime.CredentialHealth
   alias LemonAgent.ModelRuntime.Credentials
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias LemonAgent.ModelRuntime.SessionPins
   alias LemonAi.Retry
   alias LemonAi.Types.StreamOptions
@@ -15,73 +41,91 @@ defmodule CodingAgent.Session.ProviderFallback do
           (LemonAi.Types.Model.t(), LemonAi.Types.Context.t(), StreamOptions.t() ->
              {:ok, LemonAi.EventStream.t()} | LemonAi.EventStream.t() | {:error, term()})
 
-  @doc """
-  Wrap a stream fn with provider x credential failover.
-
-  Each invocation's primary model owns its options. Callers bind that pair before
-  invoking the wrapper; only cross-provider candidates discard owned inputs.
-
-  Options:
-
-    * `:session_id` - stable session identity used as the pool-rotation scope
-      and the `SessionPins` key. Callers pass the persisted session id
-      (`SessionManager.header.id`); without it rotation runs under `:global`
-      and no pinning happens.
-    * `:refresh_api_key` - optional `(config, provider, ref, previous_key)` callback
-      with the `Credentials.refresh_provider_api_key/4` result contract. A 401
-      refreshes the same credential once per invocation, before rotation.
+  @typedoc """
+  Failover configuration: resolution `settings` (`t:ModelResolver.settings/0`,
+  carrying `providers` and `provider_routing`), the config `cwd`, the stable
+  `session_id` scoping pool rotation and `SessionPins` (`nil` rotates under
+  `:global` without pinning) and a `refresh_api_key` callback with the
+  `Credentials.refresh_provider_api_key/4` contract.
   """
-  @spec maybe_wrap(
-          stream_fn() | nil,
-          SettingsManager.t(),
-          String.t(),
-          keyword()
-        ) :: stream_fn() | nil
-  def maybe_wrap(stream_fn, settings, cwd, opts \\ [])
+  @type t :: %__MODULE__{
+          settings: ModelResolver.settings(),
+          cwd: String.t() | nil,
+          session_id: term(),
+          refresh_api_key: (map(), atom() | String.t(), String.t(), String.t() | nil ->
+                              {:ok, String.t()} | {:error, atom()})
+        }
 
-  def maybe_wrap(stream_fn, %SettingsManager{} = settings, cwd, opts) do
-    session_scope = Keyword.get(opts, :session_id)
+  @enforce_keys [:settings]
+  defstruct settings: nil,
+            cwd: nil,
+            session_id: nil,
+            refresh_api_key: &Credentials.refresh_provider_api_key/4
 
+  @typedoc "Shared attempt counter and its limit."
+  @type budget :: {:atomics.atomics_ref(), pos_integer()}
+
+  @doc """
+  Builds failover configuration from a `%LemonCore.Config{}` or resolution
+  settings. Options: `:cwd`, `:session_id`, `:refresh_api_key`.
+  """
+  @spec new(LemonCore.Config.t() | ModelResolver.settings(), keyword()) :: t()
+  def new(config_or_settings, opts \\ [])
+
+  def new(%LemonCore.Config{} = config, opts),
+    do: new(ModelResolver.settings(config), opts)
+
+  def new(%{providers: _, provider_routing: _} = settings, opts) do
+    struct!(
+      __MODULE__,
+      [settings: settings] ++ Keyword.take(opts, [:cwd, :session_id, :refresh_api_key])
+    )
+  end
+
+  @doc """
+  Wraps `stream_fn` with failover. `nil` failover or disabled routing returns
+  `stream_fn` unchanged. Each invocation's primary model owns its options;
+  only cross-provider candidates discard owned inputs.
+
+  ## Options
+
+    * `:budget` - `{atomics, max_attempts}`: no candidate starts once the
+      counter reaches `max_attempts`. The caller charges each `stream_fn`
+      invocation to it. Without a budget the walk is unbounded.
+    * `:check_model_cost` - `(model, context, options -> :ok | {:error, reason})`
+      checked before each candidate.
+  """
+  @spec wrap(stream_fn(), t() | nil, keyword()) :: stream_fn()
+  def wrap(stream_fn, failover, opts \\ [])
+
+  def wrap(stream_fn, nil, _opts), do: stream_fn
+
+  def wrap(stream_fn, %__MODULE__{} = failover, opts) do
     # Even a single provider/credential needs the wrapper for refresh-on-401.
-    if Map.get(settings.provider_routing || %{}, :enabled, true) == false do
+    if Map.get(failover.settings.provider_routing || %{}, :enabled, true) == false do
       stream_fn
     else
-      base_stream_fn = stream_fn || (&LemonAi.stream/3)
-
       fn primary_model, context, options ->
         candidates =
-          ModelResolver.runtime_fallback_models(primary_model, settings,
-            session_scope: session_scope
+          ModelResolver.runtime_fallback_models(primary_model, failover.settings,
+            session_scope: failover.session_id
           )
 
-        stream_with_fallback(
-          primary_model,
-          candidates,
-          context,
-          options,
-          settings,
-          cwd,
-          base_stream_fn,
-          session_scope,
-          Keyword.get(opts, :refresh_api_key, &Credentials.refresh_provider_api_key/4)
-        )
+        stream_with_fallback(primary_model, candidates, context, options, %{
+          settings: failover.settings,
+          cwd: failover.cwd,
+          stream_fn: stream_fn,
+          session_scope: failover.session_id,
+          refresh_api_key: failover.refresh_api_key,
+          budget: Keyword.get(opts, :budget),
+          check_model_cost: Keyword.get(opts, :check_model_cost),
+          last_error: nil
+        })
       end
     end
   end
 
-  def maybe_wrap(stream_fn, _settings, _cwd, _opts), do: stream_fn
-
-  defp stream_with_fallback(
-         primary_model,
-         fallback_models,
-         context,
-         options,
-         settings,
-         cwd,
-         stream_fn,
-         session_scope,
-         refresh_api_key
-       ) do
+  defp stream_with_fallback(primary_model, fallback_models, context, options, base) do
     # The outer stream carries no wall-clock timer: serial provider x
     # credential attempts share one turn, so a fixed deadline would kill a
     # healthy committed fallback just because earlier attempts were slow.
@@ -97,23 +141,19 @@ defmodule CodingAgent.Session.ProviderFallback do
           [primary_model | fallback_models]
           |> Enum.reject(&is_nil/1)
           |> Enum.uniq_by(&model_identity/1)
-          |> lead_with_pinned_model(session_scope)
+          |> lead_with_pinned_model(base.session_scope)
 
-        ctx = %{
-          context: context,
-          options: options,
-          settings: settings,
-          cwd: cwd,
-          stream_fn: stream_fn,
-          output_stream: output_stream,
-          session_scope: session_scope,
-          primary_model: primary_model,
-          refreshed: MapSet.new(),
-          refresh_api_key: refresh_api_key
-        }
+        ctx =
+          Map.merge(base, %{
+            context: context,
+            options: options,
+            output_stream: output_stream,
+            primary_model: primary_model,
+            refreshed: MapSet.new()
+          })
 
         try do
-          run_candidates(candidates, ctx, nil)
+          run_candidates(candidates, ctx)
         catch
           :throw, {:event_stream_push_failed, _reason} ->
             :ok
@@ -131,11 +171,11 @@ defmodule CodingAgent.Session.ProviderFallback do
     end
   end
 
-  defp run_candidates([], ctx, last_error) do
-    push_last_error(ctx.output_stream, last_error || {:error, :no_provider_candidates})
+  defp run_candidates([], ctx) do
+    push_last_error(ctx.output_stream, ctx.last_error || {:error, :no_provider_candidates})
   end
 
-  defp run_candidates([model | rest], ctx, _last_error) do
+  defp run_candidates([model | rest], ctx) do
     attempt_credentials(model, credential_entries(model, ctx), rest, ctx)
   end
 
@@ -157,6 +197,32 @@ defmodule CodingAgent.Session.ProviderFallback do
 
     entry = Map.put(entry, :api_key, route_options.api_key)
 
+    # A capped candidate is skipped before it could spend the budget.
+    case check_cost(ctx, model, route_options) do
+      {:error, reason} ->
+        handle_failure(model, entry, more_entries, rest, ctx, reason, {:error, reason, model})
+
+      :ok ->
+        if budget_spent?(ctx.budget),
+          do:
+            push_last_error(
+              ctx.output_stream,
+              ctx.last_error || {:error, :attempt_budget_exhausted}
+            ),
+          else: invoke(model, entry, more_entries, rest, ctx, route_options)
+    end
+  end
+
+  defp budget_spent?({counter, max_attempts}), do: :atomics.get(counter, 1) >= max_attempts
+  defp budget_spent?(nil), do: false
+
+  defp check_cost(%{check_model_cost: check, context: context}, model, options)
+       when is_function(check, 3),
+       do: check.(model, context, options)
+
+  defp check_cost(_ctx, _model, _options), do: :ok
+
+  defp invoke(model, entry, more_entries, rest, ctx, route_options) do
     case ctx.stream_fn.(model, ctx.context, route_options) do
       {:ok, response_stream} when is_pid(response_stream) ->
         handle_attempt_stream(response_stream, model, entry, more_entries, rest, ctx)
@@ -252,12 +318,14 @@ defmodule CodingAgent.Session.ProviderFallback do
       maybe_clear_pin(model, entry, ctx)
     end
 
+    ctx = %{ctx | last_error: terminal}
+
     case action do
       :next_credential when more_entries != [] ->
         attempt_credentials(model, more_entries, rest, ctx)
 
       action when action in [:next_credential, :next_provider] ->
-        run_candidates(rest, ctx, terminal)
+        run_candidates(rest, ctx)
 
       _ ->
         push_last_error(ctx.output_stream, terminal)
@@ -596,7 +664,7 @@ defmodule CodingAgent.Session.ProviderFallback do
   defp ensure_api_key(
          %StreamOptions{} = options,
          model,
-         %SettingsManager{} = settings,
+         %{providers: _} = settings,
          original_options
        ) do
     get_api_key = ModelResolver.build_get_api_key(settings)

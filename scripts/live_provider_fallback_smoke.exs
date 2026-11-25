@@ -10,7 +10,7 @@ Application.ensure_all_started(:coding_agent)
 
 defmodule LemonScripts.LiveProviderFallbackSmoke do
   alias LemonAi.Types.{Context, StreamOptions, UserMessage}
-  alias CodingAgent.Session.{ModelResolver, ProviderFallback}
+  alias LemonAgent.ModelRuntime.{ModelResolver, ProviderFailover}
   alias CodingAgent.SettingsManager
   alias LemonAgent.ModelRuntime.{CredentialHealth, Credentials, SessionPins}
 
@@ -89,7 +89,12 @@ defmodule LemonScripts.LiveProviderFallbackSmoke do
     }
 
     primary_model = ModelResolver.resolve_session_model(nil, settings)
-    stream_fn = ProviderFallback.maybe_wrap(nil, settings, File.cwd!())
+
+    stream_fn =
+      ProviderFailover.wrap(
+        nil || (&LemonAi.stream/3),
+        ProviderFailover.new(settings, cwd: File.cwd!())
+      )
 
     context =
       Context.new(
@@ -216,7 +221,10 @@ defmodule LemonScripts.LiveProviderFallbackSmoke do
     primary_model = ModelResolver.resolve_session_model(nil, settings)
 
     stream_fn =
-      ProviderFallback.maybe_wrap(nil, settings, File.cwd!(), session_id: session_id)
+      ProviderFailover.wrap(
+        nil || (&LemonAi.stream/3),
+        ProviderFailover.new(settings, cwd: File.cwd!(), session_id: session_id)
+      )
 
     context =
       Context.new(

@@ -97,7 +97,7 @@ defmodule LemonCli.Setup.ProviderAuth do
               {present?(token), token}
 
             true ->
-              {Credentials.provider_has_credentials?(spec.id, providers), nil}
+              {Credentials.provider_has_credentials?(spec.id, providers, mode: :resolve), nil}
           end
 
         io.info.("  Credentials usable: #{if ready?, do: "yes", else: "no"}")
@@ -518,14 +518,21 @@ defmodule LemonCli.Setup.ProviderAuth do
     end
   end
 
+  # A passed re-login date always needs a new sign-in. A past access-token
+  # expiry needs one only when the login cannot refresh; a refreshable login is
+  # configured, since the runtime refreshes it transparently on the next request.
   defp static_oauth(module, secret) do
     info = describe(module, secret)
     now = System.system_time(:millisecond)
     expires = info[:expires_at_ms]
     reauth = info[:reauth_by_ms]
+    refreshable? = info[:kind] == :refreshable or present?(secret["refresh_token"])
 
     cond do
-      (is_integer(expires) and expires <= now) or (is_integer(reauth) and reauth <= now) ->
+      is_integer(reauth) and reauth <= now ->
+        observation("expired", true, nil)
+
+      is_integer(expires) and expires <= now and not refreshable? ->
         observation("expired", true, nil)
 
       not present?(secret["access_token"]) ->

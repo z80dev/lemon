@@ -16,7 +16,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
   alias LemonAgent.ModelRuntime.Credentials
   alias LemonAgent.ModelRuntime.CustomProviders
   alias LemonAgent.ModelRuntime.ProviderNames
-  alias LemonAgent.ProviderConfigResolver
+  alias LemonAgent.ModelRuntime.StreamOptions.ProviderSettings
 
   @effort_budget_keys [
     :minimal,
@@ -144,10 +144,8 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
     case model do
       %{provider: :google_vertex} ->
         resolved =
-          ProviderConfigResolver.resolve_for_provider(
-            :google_vertex,
-            google_vertex_input(base_opts, provider_cfg)
-          )
+          ProviderSettings.resolve(:google_vertex,
+          google_vertex_input(base_opts, provider_cfg))
 
         base_opts
         |> maybe_put_struct(:project, resolved[:project])
@@ -162,10 +160,8 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
 
       %{api: :azure_openai_responses} ->
         resolved =
-          ProviderConfigResolver.resolve_for_provider(
-            :azure_openai_responses,
-            azure_input(base_opts, provider_cfg)
-          )
+          ProviderSettings.resolve(:azure_openai_responses,
+          azure_input(base_opts, provider_cfg))
 
         base_opts
         |> maybe_put_struct(:api_key, resolved[:api_key])
@@ -181,10 +177,8 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
 
       %{api: :bedrock_converse_stream} ->
         resolved =
-          ProviderConfigResolver.resolve_for_provider(
-            :bedrock_converse_stream,
-            bedrock_input(base_opts, provider_cfg)
-          )
+          ProviderSettings.resolve(:bedrock_converse_stream,
+          bedrock_input(base_opts, provider_cfg))
 
         resolved_headers = Map.get(resolved, :headers, %{})
         headers = Map.merge(resolved_headers, base_opts.headers)
@@ -200,10 +194,8 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
 
       %{provider: :google_gemini_cli} ->
         resolved =
-          ProviderConfigResolver.resolve_for_provider(
-            :google_gemini_cli,
-            google_gemini_cli_input(base_opts, provider_cfg)
-          )
+          ProviderSettings.resolve(:google_gemini_cli,
+          google_gemini_cli_input(base_opts, provider_cfg))
 
         base_opts
         |> maybe_put_struct(:project, resolved[:project])
@@ -213,10 +205,8 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
         provider_id = provider_config_lookup_key(model)
 
         resolved =
-          ProviderConfigResolver.resolve_for_provider(
-            provider_id,
-            openai_compatible_input(base_opts, provider_cfg)
-          )
+          ProviderSettings.resolve(provider_id,
+          openai_compatible_input(base_opts, provider_cfg))
 
         base_opts
         |> apply_resolved_authority(resolved)

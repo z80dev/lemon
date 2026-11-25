@@ -2,7 +2,7 @@ defmodule LemonCore.Doctor.Checks.Config do
   @moduledoc "Validates Lemon configuration files."
 
   alias LemonCore.Config.Modular
-  alias LemonCore.Doctor.{Check, ProviderDiagnostics, Redaction}
+  alias LemonCore.Doctor.{Check, Redaction}
 
   @doc """
   Runs all config checks and returns a list of Check results.
@@ -116,7 +116,7 @@ defmodule LemonCore.Doctor.Checks.Config do
     config_paths
     |> Enum.flat_map(&provider_keys/1)
     |> Enum.uniq()
-    |> Enum.map(&{&1, ProviderDiagnostics.public_provider(&1)})
+    |> Enum.map(&{&1, LemonCore.ProviderIdentity.public_name(&1)})
     |> Enum.reject(fn {name, public} -> public == name end)
     |> Enum.sort_by(fn {name, _} -> -byte_size(name) end)
     |> Enum.reduce(message, fn {name, public}, acc ->

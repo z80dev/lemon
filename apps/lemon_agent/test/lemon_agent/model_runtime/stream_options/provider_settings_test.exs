@@ -1,7 +1,7 @@
-defmodule LemonAgent.ProviderConfigResolverTest do
+defmodule LemonAgent.ModelRuntime.StreamOptions.ProviderSettingsTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.ProviderConfigResolver
+  alias LemonAgent.ModelRuntime.StreamOptions.ProviderSettings
 
   # We need to manipulate env vars, so async: false is required.
 
@@ -54,7 +54,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
   # ============================================================================
 
   test "unknown provider returns empty map" do
-    assert ProviderConfigResolver.resolve_for_provider(:nonexistent) == %{}
+    assert ProviderSettings.resolve(:nonexistent) == %{}
   end
 
   # ============================================================================
@@ -63,7 +63,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
 
   describe "google_vertex" do
     test "returns empty map when no env or opts" do
-      result = ProviderConfigResolver.resolve_for_provider(:google_vertex)
+      result = ProviderSettings.resolve(:google_vertex)
       # Neither project nor location set, so both are nil and excluded
       refute Map.has_key?(result, :project)
       refute Map.has_key?(result, :location)
@@ -71,26 +71,26 @@ defmodule LemonAgent.ProviderConfigResolverTest do
 
     test "reads GOOGLE_CLOUD_PROJECT from env" do
       System.put_env("GOOGLE_CLOUD_PROJECT", "my-project")
-      result = ProviderConfigResolver.resolve_for_provider(:google_vertex)
+      result = ProviderSettings.resolve(:google_vertex)
       assert result.project == "my-project"
     end
 
     test "reads GCLOUD_PROJECT as fallback" do
       System.put_env("GCLOUD_PROJECT", "fallback-project")
-      result = ProviderConfigResolver.resolve_for_provider(:google_vertex)
+      result = ProviderSettings.resolve(:google_vertex)
       assert result.project == "fallback-project"
     end
 
     test "GOOGLE_CLOUD_PROJECT takes priority over GCLOUD_PROJECT" do
       System.put_env("GOOGLE_CLOUD_PROJECT", "primary")
       System.put_env("GCLOUD_PROJECT", "fallback")
-      result = ProviderConfigResolver.resolve_for_provider(:google_vertex)
+      result = ProviderSettings.resolve(:google_vertex)
       assert result.project == "primary"
     end
 
     test "reads GOOGLE_CLOUD_LOCATION from env" do
       System.put_env("GOOGLE_CLOUD_LOCATION", "us-central1")
-      result = ProviderConfigResolver.resolve_for_provider(:google_vertex)
+      result = ProviderSettings.resolve(:google_vertex)
       assert result.location == "us-central1"
     end
 
@@ -99,7 +99,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       System.put_env("GOOGLE_CLOUD_LOCATION", "env-location")
 
       result =
-        ProviderConfigResolver.resolve_for_provider(:google_vertex, %{
+        ProviderSettings.resolve(:google_vertex, %{
           project: "opts-project",
           location: "opts-location"
         })
@@ -109,13 +109,13 @@ defmodule LemonAgent.ProviderConfigResolverTest do
     end
 
     test "nil values are excluded from result" do
-      result = ProviderConfigResolver.resolve_for_provider(:google_vertex)
+      result = ProviderSettings.resolve(:google_vertex)
       refute Map.has_key?(result, :service_account_json)
     end
 
     test "service_account_json from opts is included" do
       result =
-        ProviderConfigResolver.resolve_for_provider(:google_vertex, %{
+        ProviderSettings.resolve(:google_vertex, %{
           service_account_json: "{\"key\": \"value\"}"
         })
 
@@ -124,7 +124,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
 
     test "reads GOOGLE_APPLICATION_CREDENTIALS_JSON from env" do
       System.put_env("GOOGLE_APPLICATION_CREDENTIALS_JSON", "{\"key\": \"value\"}")
-      result = ProviderConfigResolver.resolve_for_provider(:google_vertex)
+      result = ProviderSettings.resolve(:google_vertex)
       assert result.service_account_json == "{\"key\": \"value\"}"
     end
 
@@ -139,7 +139,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       service_account_json = '{"key":"value"}'
       """)
 
-      result = ProviderConfigResolver.resolve_for_provider(:google_vertex)
+      result = ProviderSettings.resolve(:google_vertex)
       assert result.project == "plain-project"
       assert result.location == "europe-west4"
       assert result.service_account_json == "{\"key\":\"value\"}"
@@ -157,7 +157,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       """)
 
       result =
-        ProviderConfigResolver.resolve_for_provider(:google_vertex, %{
+        ProviderSettings.resolve(:google_vertex, %{
           provider_config: %{
             "project" => "explicit-project",
             "service_account_json" => "{\"key\":\"value\"}"
@@ -172,7 +172,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
 
   describe "google_gemini_cli" do
     test "returns empty map when no env or opts" do
-      result = ProviderConfigResolver.resolve_for_provider(:google_gemini_cli)
+      result = ProviderSettings.resolve(:google_gemini_cli)
       refute Map.has_key?(result, :project)
     end
 
@@ -180,14 +180,14 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       System.put_env("LEMON_GEMINI_PROJECT_ID", "gemini-project")
       System.put_env("GOOGLE_CLOUD_PROJECT", "cloud-project")
 
-      result = ProviderConfigResolver.resolve_for_provider(:google_gemini_cli)
+      result = ProviderSettings.resolve(:google_gemini_cli)
       assert result.project == "gemini-project"
     end
 
     test "reads GOOGLE_CLOUD_PROJECT_ID as fallback" do
       System.put_env("GOOGLE_CLOUD_PROJECT_ID", "cloud-project-id")
 
-      result = ProviderConfigResolver.resolve_for_provider(:google_gemini_cli)
+      result = ProviderSettings.resolve(:google_gemini_cli)
       assert result.project == "cloud-project-id"
     end
 
@@ -195,7 +195,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       System.put_env("LEMON_GEMINI_PROJECT_ID", "env-project")
 
       result =
-        ProviderConfigResolver.resolve_for_provider(:google_gemini_cli, %{project: "opts-project"})
+        ProviderSettings.resolve(:google_gemini_cli, %{project: "opts-project"})
 
       assert result.project == "opts-project"
     end
@@ -207,7 +207,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
 
   describe "azure_openai_responses" do
     test "returns empty map when no env or opts" do
-      result = ProviderConfigResolver.resolve_for_provider(:azure_openai_responses)
+      result = ProviderSettings.resolve(:azure_openai_responses)
       # No env vars set, no config file
       refute Map.has_key?(result, :api_key)
       refute Map.has_key?(result, :base_url)
@@ -215,19 +215,19 @@ defmodule LemonAgent.ProviderConfigResolverTest do
 
     test "reads AZURE_OPENAI_API_VERSION from env" do
       System.put_env("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
-      result = ProviderConfigResolver.resolve_for_provider(:azure_openai_responses)
+      result = ProviderSettings.resolve(:azure_openai_responses)
       assert result.api_version == "2024-12-01-preview"
     end
 
     test "reads AZURE_OPENAI_RESOURCE_NAME from env" do
       System.put_env("AZURE_OPENAI_RESOURCE_NAME", "my-resource")
-      result = ProviderConfigResolver.resolve_for_provider(:azure_openai_responses)
+      result = ProviderSettings.resolve(:azure_openai_responses)
       assert result.resource_name == "my-resource"
     end
 
     test "opts api_key takes priority" do
       result =
-        ProviderConfigResolver.resolve_for_provider(:azure_openai_responses, %{
+        ProviderSettings.resolve(:azure_openai_responses, %{
           api_key: "opts-key"
         })
 
@@ -236,7 +236,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
 
     test "explicit Azure options override config and merge deployment maps" do
       result =
-        ProviderConfigResolver.resolve_for_provider(:azure_openai_responses, %{
+        ProviderSettings.resolve(:azure_openai_responses, %{
           provider_config: %{
             base_url: "https://config.invalid",
             resource_name: "config-resource",
@@ -264,26 +264,26 @@ defmodule LemonAgent.ProviderConfigResolverTest do
 
   describe "bedrock_converse_stream" do
     test "defaults region to us-east-1 when no env" do
-      result = ProviderConfigResolver.resolve_for_provider(:bedrock_converse_stream)
+      result = ProviderSettings.resolve(:bedrock_converse_stream)
       assert result.headers["aws_region"] == "us-east-1"
     end
 
     test "reads AWS_REGION from env" do
       System.put_env("AWS_REGION", "eu-west-1")
-      result = ProviderConfigResolver.resolve_for_provider(:bedrock_converse_stream)
+      result = ProviderSettings.resolve(:bedrock_converse_stream)
       assert result.headers["aws_region"] == "eu-west-1"
     end
 
     test "reads AWS_DEFAULT_REGION as fallback" do
       System.put_env("AWS_DEFAULT_REGION", "ap-southeast-1")
-      result = ProviderConfigResolver.resolve_for_provider(:bedrock_converse_stream)
+      result = ProviderSettings.resolve(:bedrock_converse_stream)
       assert result.headers["aws_region"] == "ap-southeast-1"
     end
 
     test "AWS_REGION takes priority over AWS_DEFAULT_REGION" do
       System.put_env("AWS_REGION", "us-west-2")
       System.put_env("AWS_DEFAULT_REGION", "eu-west-1")
-      result = ProviderConfigResolver.resolve_for_provider(:bedrock_converse_stream)
+      result = ProviderSettings.resolve(:bedrock_converse_stream)
       assert result.headers["aws_region"] == "us-west-2"
     end
 
@@ -291,7 +291,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       System.put_env("AWS_REGION", "env-region")
 
       result =
-        ProviderConfigResolver.resolve_for_provider(:bedrock_converse_stream, %{
+        ProviderSettings.resolve(:bedrock_converse_stream, %{
           headers: %{"aws_region" => "opts-region"}
         })
 
@@ -299,7 +299,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
     end
 
     test "nil credential values are excluded from headers" do
-      result = ProviderConfigResolver.resolve_for_provider(:bedrock_converse_stream)
+      result = ProviderSettings.resolve(:bedrock_converse_stream)
       # aws_region should always be present (defaults to us-east-1)
       assert Map.has_key?(result.headers, "aws_region")
       # credentials may or may not be present depending on env/secrets store
@@ -320,7 +320,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       api_key = "vertex-key-from-config"
       """)
 
-      result = ProviderConfigResolver.resolve_for_provider(:google_vertex)
+      result = ProviderSettings.resolve(:google_vertex)
       assert result.api_key == "vertex-key-from-config"
     end
 
@@ -335,7 +335,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
 
       System.put_env("GOOGLE_CLOUD_PROJECT", "env-project")
 
-      result = ProviderConfigResolver.resolve_for_provider(:google_vertex)
+      result = ProviderSettings.resolve(:google_vertex)
       assert result.api_key == "config-key"
       assert result.project == "env-project"
     end
@@ -356,7 +356,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
         System.delete_env("TEST_ZAI_SECRET")
       end)
 
-      result = ProviderConfigResolver.resolve_for_provider(:zai)
+      result = ProviderSettings.resolve(:zai)
       assert result.api_key == "zai-key-from-secret"
       assert result.base_url == "https://override.zai.test/v4"
     end
@@ -392,7 +392,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
         System.delete_env("GOOGLE_VERTEX_LOCATION_PROJECT")
       end)
 
-      result = ProviderConfigResolver.resolve_for_provider(:google_vertex, %{cwd: project_dir})
+      result = ProviderSettings.resolve(:google_vertex, %{cwd: project_dir})
       assert result.project == "global-project"
       assert result.location == "global-location"
     end
@@ -420,7 +420,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       """)
 
       result =
-        ProviderConfigResolver.resolve_for_provider(:azure_openai_responses, %{cwd: project_dir})
+        ProviderSettings.resolve(:azure_openai_responses, %{cwd: project_dir})
 
       assert result.resource_name == "global-resource"
       assert result.api_version == "2024-01-01"
@@ -445,7 +445,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       """)
 
       result =
-        ProviderConfigResolver.resolve_for_provider(:google_gemini_cli, %{cwd: project_dir})
+        ProviderSettings.resolve(:google_gemini_cli, %{cwd: project_dir})
 
       assert result.project == "global-project"
     end
@@ -468,7 +468,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       """)
 
       result =
-        ProviderConfigResolver.resolve_for_provider(:bedrock_converse_stream, %{cwd: project_dir})
+        ProviderSettings.resolve(:bedrock_converse_stream, %{cwd: project_dir})
 
       assert result.headers["aws_region"] == "us-east-1"
     end

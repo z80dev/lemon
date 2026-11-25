@@ -402,7 +402,7 @@ defmodule LemonCli.DoctorLiveTest do
 
     # Live-check names show the public provider projection (custom names hashed).
     defp live(key) do
-      public = LemonCore.Doctor.ProviderDiagnostics.public_provider(key)
+      public = LemonCore.ProviderIdentity.public_name(key)
       "providers.live." <> String.replace(public, ~r/[^A-Za-z0-9._-]/u, "_")
     end
 

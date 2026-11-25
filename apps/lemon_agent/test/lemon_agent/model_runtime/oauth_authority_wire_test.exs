@@ -229,7 +229,7 @@ defmodule LemonAgent.ModelRuntime.OAuthAuthorityWireTest do
     System.put_env("XAI_API_KEY", "fixture-wrong-principal")
 
     resolved =
-      LemonAgent.ProviderConfigResolver.resolve_for_provider(:xai, %{
+      LemonAgent.ModelRuntime.StreamOptions.ProviderSettings.resolve(:xai, %{
         cwd: root,
         provider_config: %{
           auth_source: "oauth",

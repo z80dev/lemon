@@ -455,6 +455,9 @@ defmodule LemonAgent.Types do
     - `budget` - Budget state, including run totals when continuing a prompt
     - `stream_options` - Options for streaming requests
     - `stream_fn` - Custom stream function (defaults to LemonAi.stream_simple/3)
+    - `provider_failover` - `LemonAgent.ModelRuntime.ProviderFailover` config; the loop
+      wraps the stream function with provider x credential failover inside the same
+      `max_retries + 1` (at least 2) upstream-attempt budget, cost-checking each candidate (default nil)
     - `hooks` - Optional queue transport, prompt observation and stream-rule hooks:
       - `queue_owner` - Queue-owning Agent pid; takes precedence over standalone callbacks
       - `queue_ref` - Active run's abort reference, binding requests and notifications
@@ -557,6 +560,7 @@ defmodule LemonAgent.Types do
             stream_options: LemonAi.Types.StreamOptions.t(),
             stream_options_model: LemonAi.Types.Model.t() | nil,
             stream_fn: stream_fn() | nil,
+            provider_failover: LemonAgent.ModelRuntime.ProviderFailover.t() | nil,
             hooks: hooks()
           }
     # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
@@ -591,6 +595,7 @@ defmodule LemonAgent.Types do
               stream_options: %StreamOptions{},
               stream_options_model: nil,
               stream_fn: nil,
+              provider_failover: nil,
               hooks: %{}
   end
 

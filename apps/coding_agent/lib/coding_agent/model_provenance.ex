@@ -56,7 +56,7 @@ defmodule CodingAgent.ModelProvenance do
 
   require Logger
 
-  alias CodingAgent.Session.ModelResolver
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias CodingAgent.SettingsManager
   alias LemonAgent.ModelRuntime.ModelRouting
 

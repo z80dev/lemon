@@ -13,13 +13,11 @@ defmodule CodingAgent.Session.Lifecycle do
     BudgetLedger,
     CompactionLifecycle,
     CompactionManager,
-    ModelResolver,
     Notifier,
     OverflowRecovery,
     Persistence,
     PromptComposer,
     PromptJournal,
-    ProviderFallback,
     State,
     WasmBridge
   }
@@ -33,7 +31,7 @@ defmodule CodingAgent.Session.Lifecycle do
   alias CodingAgent.Tools.Task.InvocationAuthority
   alias CodingAgent.Workspace
   alias CodingAgent.WorkspaceReads
-  alias LemonAgent.ModelRuntime.StreamOptions
+  alias LemonAgent.ModelRuntime.{ModelResolver, ProviderFailover, StreamOptions}
 
   defp emit_start_stage(stage, started, session_id) do
     :telemetry.execute(
@@ -511,30 +509,23 @@ defmodule CodingAgent.Session.Lifecycle do
     # restarts of the same session file, unlike run_id (per run) or
     # session_key (caller-overridable). It scopes credential-pool rotation and
     # committed-fallback pins so a session sticks to one provider+credential
-    # (provider prompt caches are keyed per provider+credential).
+    # (provider prompt caches are keyed per provider+credential). The loop
+    # runs failover inside its own attempt budget and checks each candidate
+    # against the live model-routing cost cap.
     agent_registry_key = {session_manager.header.id, :main, 0}
-    agent_name = LemonAgent.AgentRegistry.via(agent_registry_key)
 
-    # Consult the live branch policy even when the session started explicitly
-    # pinned: navigation can restore an automatic branch (and vice versa).
-    guarded_stream_fn = fn candidate, context, options ->
-      with :ok <-
-             GenServer.call(
-               agent_name,
-               {:check_model_cost, candidate, context, options},
-               :infinity
-             ) do
-        {base_stream_fn, options} =
-          GenServer.call(session_pid, {:invocation_stream, candidate, options}, :infinity)
-
-        base_stream_fn.(candidate, context, options)
-      end
-    end
-
-    stream_fn =
-      ProviderFallback.maybe_wrap(guarded_stream_fn, settings_manager, config_cwd,
+    provider_failover =
+      ProviderFailover.new(settings_manager,
+        cwd: config_cwd,
         session_id: session_manager.header.id
       )
+
+    stream_fn = fn candidate, context, options ->
+      {base_stream_fn, options} =
+        GenServer.call(session_pid, {:invocation_stream, candidate, options}, :infinity)
+
+      base_stream_fn.(candidate, context, options)
+    end
 
     retry_settings = SettingsManager.get_retry_settings(settings_manager)
     # Stream rules are repository data: load them from the trusted config
@@ -552,6 +543,7 @@ defmodule CodingAgent.Session.Lifecycle do
         },
         convert_to_llm: convert_to_llm,
         stream_fn: stream_fn,
+        provider_failover: provider_failover,
         system_prompt_observer: session_pid,
         hibernate_after: Keyword.get(opts, :hibernate_after, 5_000),
         stream_rules: fn ->

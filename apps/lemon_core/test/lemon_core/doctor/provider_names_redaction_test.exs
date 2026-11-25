@@ -1,13 +1,14 @@
 defmodule LemonCore.Doctor.ProviderNamesRedactionTest do
   @moduledoc """
   Custom provider names are private. Doctor compares and counts on raw
-  normalized names, and shows only `ProviderDiagnostics.public_provider/1`
+  normalized names, and shows only `ProviderIdentity.public_name/1`
   (`custom:<hash>`) in rendered output and support bundles.
   """
   use ExUnit.Case, async: false
 
+  alias LemonCore.CredentialReadiness
   alias LemonCore.Doctor
-  alias LemonCore.Doctor.{Checks, ProviderDiagnostics, Report, SupportBundle}
+  alias LemonCore.Doctor.{Checks, Report, SupportBundle}
 
   @private "customer.private.example"
   @fallback "fallback.private.example"
@@ -61,24 +62,22 @@ defmodule LemonCore.Doctor.ProviderNamesRedactionTest do
     """)
   end
 
-  test "status keeps raw names so readiness and pool reference counts are correct", ctx do
+  test "the bundle's provider section counts on raw names and shows only public ones", ctx do
     routed_config(ctx)
-    status = ProviderDiagnostics.status(project_dir: ctx.tmp_dir)
+    status = SupportBundle.collect(project_dir: ctx.tmp_dir)["provider_diagnostics.json"]
 
-    private = Enum.find(status.providers, &(&1.provider == @private))
-    fallback = Enum.find(status.providers, &(&1.provider == @fallback))
-    assert private, "raw provider name missing from internal status"
-    assert fallback.credential_ready == true
+    private = LemonCore.ProviderIdentity.public_name(@private)
+    fallback = LemonCore.ProviderIdentity.public_name(@fallback)
+    ready = Map.new(status["providers"], &{&1["provider"], &1["credential_ready"]})
+    assert ready[fallback] == true
+    assert ready[private] == false
 
-    assert [pool] = status.routing.credential_pools
-    assert pool.providers == [@private, @fallback]
+    assert [pool] = status["routing"]["credential_pools"]
+    assert pool["providers"] == [private, fallback]
     # One secret reference on the private provider; the fallback is inline.
-    assert pool.credential_reference_count == 1
-
-    public = ProviderDiagnostics.public_status(status)
-    refute inspect(public) =~ "private.example"
-    assert Enum.all?(hd(public.routing.credential_pools).providers, &(&1 =~ "custom:"))
-    assert public.default_provider == ProviderDiagnostics.public_provider(@private)
+    assert pool["credential_reference_count"] == 1
+    refute inspect(status) =~ "private.example"
+    assert status["default_provider"] == private
   end
 
   test "checks compare raw names and render only public names", ctx do
@@ -86,13 +85,13 @@ defmodule LemonCore.Doctor.ProviderNamesRedactionTest do
     checks = Checks.Providers.run(project_dir: ctx.tmp_dir)
 
     default = Enum.find(checks, &(&1.name == "providers.default"))
-    assert default.message =~ ProviderDiagnostics.public_provider(@private)
+    assert default.message =~ LemonCore.ProviderIdentity.public_name(@private)
 
     # The custom fallback is credential-ready; finding that needs raw-name lookups.
     routing = Enum.find(checks, &(&1.name == "providers.routing"))
 
     assert routing.message =~
-             "ready provider(s): " <> ProviderDiagnostics.public_provider(@fallback)
+             "ready provider(s): " <> LemonCore.ProviderIdentity.public_name(@fallback)
 
     refute inspect(checks) =~ "private.example"
   end
@@ -108,8 +107,7 @@ defmodule LemonCore.Doctor.ProviderNamesRedactionTest do
     omp_provider = "anthropic"
     """)
 
-    status = ProviderDiagnostics.status(project_dir: ctx.tmp_dir)
-    ready? = Enum.find(status.providers, &(&1.provider == @private)).credential_ready
+    ready? = CredentialReadiness.ready?(@private, LemonCore.Config.load(ctx.tmp_dir).providers)
 
     credentials =
       ctx.tmp_dir
@@ -171,6 +169,6 @@ defmodule LemonCore.Doctor.ProviderNamesRedactionTest do
     end
 
     usage = entries |> Enum.find(&(elem(&1, 0) == ~c"usage_diagnostics.json")) |> elem(1)
-    assert IO.iodata_to_binary(usage) =~ ProviderDiagnostics.public_provider(@private)
+    assert IO.iodata_to_binary(usage) =~ LemonCore.ProviderIdentity.public_name(@private)
   end
 end

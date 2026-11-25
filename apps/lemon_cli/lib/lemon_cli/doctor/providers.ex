@@ -191,7 +191,7 @@ defmodule LemonCli.Doctor.Providers do
   # configured key itself is still what the resolver receives.
   defp clean_id(value) when is_binary(value) do
     case value
-         |> LemonCore.Doctor.ProviderDiagnostics.public_provider()
+         |> LemonCore.ProviderIdentity.public_name()
          |> to_string()
          |> LemonCore.Redact.text()
          |> String.trim()
@@ -230,7 +230,8 @@ defmodule LemonCli.Doctor.Providers do
     if kimi? and auth_source == "omp" do
       if LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(
            provider,
-           providers_map(config)
+           providers_map(config),
+           mode: :resolve
          ) do
         Check.pass(name, label(entry) <> " can reuse omp's Kimi Code login.")
       else

@@ -199,9 +199,9 @@ defmodule CodingAgent.Executor.SessionRunner do
     async_followups = async_followups(request)
     extra_tools = extra_tools(request, run_opts)
 
-    # Passed through to CodingAgent.Session, whose Lifecycle.initialize applies
-    # CodingAgent.Session.ProviderFallback.maybe_wrap (a no-op when no runtime
-    # fallback candidates exist). Do not wrap here: that would double-wrap.
+    # Passed through to CodingAgent.Session; its agent loop applies
+    # LemonAgent.ModelRuntime.ProviderFailover inside the response attempt
+    # budget. Do not wrap here: that would double-wrap.
     stream_fn = get_opt(run_opts, :stream_fn)
 
     emitter_state = %Emitter{sink_pid: sink_pid, run_ref: run_ref}

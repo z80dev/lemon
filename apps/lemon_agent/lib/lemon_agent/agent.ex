@@ -92,6 +92,7 @@ defmodule LemonAgent.Agent do
           convert_to_llm: convert_to_llm_fn(),
           transform_context: transform_context_fn() | nil,
           stream_fn: stream_fn() | nil,
+          provider_failover: LemonAgent.ModelRuntime.ProviderFailover.t() | nil,
           system_prompt_observer: pid() | nil,
           response_system_prompt: LemonAi.SystemPrompt.t(),
           session_id: String.t() | nil,
@@ -120,6 +121,7 @@ defmodule LemonAgent.Agent do
           convert_to_llm: convert_to_llm_fn(),
           transform_context: transform_context_fn(),
           stream_fn: stream_fn() | nil,
+          provider_failover: LemonAgent.ModelRuntime.ProviderFailover.t() | nil,
           system_prompt_observer: pid(),
           session_id: String.t(),
           get_api_key: get_api_key_fn(),
@@ -155,6 +157,8 @@ defmodule LemonAgent.Agent do
   - `:convert_to_llm` - Function to convert agent messages to LLM messages (required)
   - `:transform_context` - Optional function to transform context before conversion
   - `:stream_fn` - Custom stream function (defaults to Loop's `LemonAi.stream/3`)
+  - `:provider_failover` - `LemonAgent.ModelRuntime.ProviderFailover` config: provider x
+    credential failover inside each response's `max_retries + 1` attempt budget
   - `:system_prompt_observer` - Optional journal owner. Receives the exact ordered
     prompt as `{:agent_system_prompt, agent, prompt}` immediately before each
     assistant `:message_end`; ordinary subscribers never receive prompt snapshots.
@@ -566,6 +570,7 @@ defmodule LemonAgent.Agent do
       transform_context: transform_context,
       tool_result_max_bytes: Keyword.get(opts, :tool_result_max_bytes),
       stream_fn: stream_fn,
+      provider_failover: Keyword.get(opts, :provider_failover),
       system_prompt_observer: Keyword.get(opts, :system_prompt_observer),
       response_system_prompt: agent_state.system_prompt,
       stream_rules: Keyword.get(opts, :stream_rules, []),
@@ -773,16 +778,8 @@ defmodule LemonAgent.Agent do
     {:reply, result, state}
   end
 
-  def handle_call({:check_model_cost, model, context, options}, _from, state) do
-    result =
-      LemonAgent.ModelRuntime.ModelRouting.check_cap(
-        state.model_routing,
-        model,
-        context,
-        options
-      )
-
-    {:reply, result, state}
+  def handle_call(:model_routing, _from, state) do
+    {:reply, state.model_routing, state}
   end
 
   def handle_call({:auto_thinking_resolved, abort_ref, marker, effort}, _from, state) do
@@ -1117,16 +1114,14 @@ defmodule LemonAgent.Agent do
             GenServer.call(agent_pid, {:route_model, context, options}, queue_call_timeout)
           end
         end,
-      check_model_cost:
-        if state.model_routing do
-          fn model, context, options ->
-            GenServer.call(
-              agent_pid,
-              {:check_model_cost, model, context, options},
-              queue_call_timeout
-            )
-          end
-        end,
+      # The live policy is fetched (navigation may switch an explicitly pinned
+      # session back to routing); the cap is computed in the calling process
+      # (loop or failover task), so the request context is never copied here.
+      check_model_cost: fn model, context, options ->
+        agent_pid
+        |> GenServer.call(:model_routing, queue_call_timeout)
+        |> LemonAgent.ModelRuntime.ModelRouting.check_cap(model, context, options)
+      end,
       resolve_thinking:
         if(state.agent_state.thinking_level == :auto,
           do: state.resolve_thinking || (&AutoThinking.resolve/3)
@@ -1165,7 +1160,8 @@ defmodule LemonAgent.Agent do
         stream_rules: state.stream_rules,
         on_stream_rule: state.on_stream_rule
       },
-      stream_fn: state.stream_fn
+      stream_fn: state.stream_fn,
+      provider_failover: state.provider_failover
     }
   end
 

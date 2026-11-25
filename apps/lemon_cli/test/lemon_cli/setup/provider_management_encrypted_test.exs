@@ -399,7 +399,8 @@ defmodule LemonCli.Setup.ProviderManagementEncryptedTest do
       assert {:ok, _} = Secrets.set("expired_login", encoded)
       assert {:ok, listing} = Management.list(ctx.opts)
       row = Enum.find(listing.providers, &(&1.id == "kimi_coding"))
-      assert row.status == "expired"
+      # Refreshable: the runtime refreshes it on the next request.
+      assert row.status == "configured"
       assert row.lastValidation == nil
       assert {:ok, ^encoded} = Secrets.get("expired_login")
 

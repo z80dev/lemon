@@ -257,6 +257,17 @@ defmodule LemonAi.Auth.AnthropicOAuth do
       if(claude_code_secret, do: non_empty_binary(claude_code_secret["access_token"]))
   end
 
+  @doc """
+  Whether an ambient Claude Code login is present, without refreshing it:
+  an OAuth token in `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_TOKEN` or an access
+  token in `~/.claude/.credentials.json`.
+  """
+  @spec ambient_login_present?() :: boolean()
+  def ambient_login_present? do
+    Enum.any?(@oauth_env_vars, &oauth_token?(System.get_env(&1))) or
+      match?({:ok, _}, read_claude_code_credentials())
+  end
+
   @spec oauth_token?(String.t() | nil) :: boolean()
   def oauth_token?(token) when is_binary(token) do
     trimmed = String.trim(token)

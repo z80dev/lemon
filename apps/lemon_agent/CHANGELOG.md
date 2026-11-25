@@ -59,6 +59,30 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking (0.3.0):** provider failover and model resolution live in the
+  runtime (#720). `LemonAgent.ModelRuntime.ProviderFailover` (formerly
+  coding_agent's `Session.ProviderFallback`) is configured with
+  `AgentLoopConfig.provider_failover` / the Agent's `:provider_failover`
+  option, built by `ProviderFailover.new/2` from a `%LemonCore.Config{}`, so
+  any lemon_agent consumer gets provider x credential failover. Failover
+  candidates share the response's one `max_retries + 1` (at least 2) upstream-attempt
+  budget (2 providers x 2 credentials with `max_retries: 2` drop from 12
+  attempts to 3) and each candidate is cost-checked in the calling process;
+  the Agent's `{:check_model_cost, ...}` call is replaced by `:model_routing`.
+  `LemonAgent.ModelRuntime.ModelResolver` (formerly
+  `CodingAgent.Session.ModelResolver`) works on any settings map or
+  `ModelResolver.settings/1`. `LemonAgent.ProviderConfigResolver` is now
+  `LemonAgent.ModelRuntime.StreamOptions.ProviderSettings.resolve/2`; its
+  configured API key order matches `StreamOptions` (`api_key_secret` before
+  the inline `api_key`).
+- **Breaking (0.3.0):** `Credentials.credential_readiness/3` is the single
+  credential-readiness predicate (#715) shared by doctor, setup readiness,
+  provider status, the CLI, the model catalog and routing. Its default
+  presence mode never decrypts, refreshes OAuth, runs omp or an external
+  source, or makes a request; an undecryptable stored secret is `:unusable`.
+  `provider_has_credentials?/3` answers from it; pass `mode: :resolve` for the
+  previous resolving check. The picker no longer enables Gemini CLI,
+  Antigravity or Kimi Coding from another provider's credential.
 - **Breaking (0.3.0):** agent events are delta-only (#571). Migration: handlers
   must accumulate deltas instead of expecting full partial messages on every
   event; `{:message_update, message, event}` becomes `{:message_update, event}`.

@@ -988,7 +988,12 @@ defmodule CodingAgent.Session.PlanningTest do
       assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
 
       if @selection == :during_plan do
-        model = Session.ModelResolver.resolve_session_model("openai:gpt-4", role_settings())
+        model =
+          LemonAgent.ModelRuntime.ModelResolver.resolve_session_model(
+            "openai:gpt-4",
+            role_settings()
+          )
+
         assert :ok = Session.switch_model(session, model)
       end
 

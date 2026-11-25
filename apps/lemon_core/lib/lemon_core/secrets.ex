@@ -654,6 +654,77 @@ defmodule LemonCore.Secrets do
   end
 
   @doc """
+  Side-effect-free presence check following `resolve/2`'s source order.
+
+  Never decrypts a value, runs an external source, records usage or removes an
+  expired record. A stored record is `:present` only when the resolvable
+  master key is the one the store's key verifier names (a store written before
+  verifiers existed cannot be checked without decrypting and counts as
+  present). External sources count only when an enabled source declares a
+  reference for `name`. Takes `resolve/2`'s options.
+
+  Returns `:present`, `:missing` (a definite absence) or `{:unusable, reason}`
+  where `resolve/2` would fail closed (for example `:master_key_mismatch`,
+  `:master_key_unavailable`, `:expired` or a store outage).
+  """
+  @spec presence(name(), keyword()) :: :present | :missing | {:unusable, atom()}
+  def presence(name, opts \\ []) do
+    with {:ok, name} <- normalize_name(name) do
+      if Keyword.get(opts, :prefer_env, false) and fetch_env(name, opts) != :error do
+        :present
+      else
+        store_presence(name, opts)
+      end
+    else
+      _ -> :missing
+    end
+  end
+
+  defp store_presence(name, opts) do
+    with {:ok, owner} <- normalize_owner(opts),
+         {:ok, server} <- storage_owner(opts) do
+      case fetch_active_entry(server, owner, name) do
+        {:ok, _entry} ->
+          key_presence(server, opts)
+
+        {:error, reason} ->
+          if store_miss?(reason, opts),
+            do: presence_after_store(name, opts),
+            else: {:unusable, presence_reason(reason)}
+      end
+    else
+      {:error, reason} -> {:unusable, presence_reason(reason)}
+    end
+  rescue
+    _ -> {:unusable, :secret_store_failed}
+  catch
+    :exit, _ -> {:unusable, :secret_store_failed}
+  end
+
+  defp key_presence(server, opts) do
+    case MasterKey.resolve_cached(opts) do
+      {:ok, master_key, _source} ->
+        if KeyCheck.matches?(server, master_key) == false,
+          do: {:unusable, :master_key_mismatch},
+          else: :present
+
+      _ ->
+        {:unusable, :master_key_unavailable}
+    end
+  end
+
+  defp presence_after_store(name, opts) do
+    cond do
+      Keyword.get(opts, :external_fallback, true) and External.declared?(name, opts) -> :present
+      Keyword.get(opts, :env_fallback, true) and fetch_env(name, opts) != :error -> :present
+      true -> :missing
+    end
+  end
+
+  defp presence_reason(reason) when is_atom(reason), do: reason
+  defp presence_reason(_reason), do: :secret_store_failed
+
+  @doc """
   Persist a secret to the encrypted store.
 
   This is an alias for `set/3` that provides a consistent API for

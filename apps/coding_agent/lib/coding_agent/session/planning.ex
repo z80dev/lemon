@@ -25,7 +25,7 @@ defmodule CodingAgent.Session.Planning do
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.ModelProvenance
   alias CodingAgent.Security.SecretObfuscator
-  alias CodingAgent.Session.ModelResolver
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
   alias CodingAgent.Tools.{Edit, Write, WriteArchive, WriteSqlite}

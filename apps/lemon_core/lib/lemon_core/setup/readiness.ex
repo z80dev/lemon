@@ -4,10 +4,9 @@ defmodule LemonCore.Setup.Readiness do
 
   Readiness inspects the resolved global config, secrets backend and configured
   default provider/model without starting a runtime or making a model request.
-  Externally managed omp credentials (`auth_source = "omp"` for Kimi Code,
-  `auth_source = "omp_broker"` on any provider, and the `omp_gateway` provider)
-  are checked through the registered provider management service; omp may
-  refresh its own access token.
+  Credential readiness is the runtime's single presence-mode predicate
+  (`LemonCore.CredentialReadiness`), shared with doctor, provider status and the
+  CLI: it never decrypts a value, refreshes a login or runs omp.
 
   This module reports three stable steps:
 
@@ -20,7 +19,7 @@ defmodule LemonCore.Setup.Readiness do
   """
 
   alias LemonCore.Config.{LegacyAgentMigration, Modular, Providers}
-  alias LemonCore.Doctor.ProviderDiagnostics
+  alias LemonCore.CredentialReadiness
   alias LemonCore.Secrets
 
   @type step :: :config | :secrets | :provider
@@ -112,7 +111,7 @@ defmodule LemonCore.Setup.Readiness do
 
     provider_cfg = if is_map(provider_cfg), do: provider_cfg, else: %{}
 
-    {credential_ready?, credential_reason} = credential_state(provider, provider_cfg)
+    {credential_ready?, credential_reason} = credential_state(provider, settings)
 
     reason =
       cond do
@@ -141,36 +140,16 @@ defmodule LemonCore.Setup.Readiness do
     }
   end
 
-  defp credential_state(nil, _provider_cfg), do: {false, :missing_default_provider}
+  defp credential_state(nil, _settings), do: {false, :missing_default_provider}
 
-  defp credential_state(provider, provider_cfg) do
-    refs =
-      provider_cfg
-      |> Map.take(["oauth_secret", "api_key_secret"])
-      |> Map.values()
+  defp credential_state(provider, settings) do
+    routing = get_in(settings, ["runtime", "provider_routing"]) || %{}
 
-    inline_key = normalize_optional_string(provider_cfg["api_key"])
-
-    cond do
-      omp_provider?(provider, provider_cfg) ->
-        {LemonCore.ProviderManagement.credential_ready?(provider, provider_cfg),
-         :credential_not_usable}
-
-      keyless_provider?(provider, provider_cfg) ->
-        {true, nil}
-
-      inline_key != nil ->
-        {true, nil}
-
-      ProviderDiagnostics.ambient_configured?(provider) ->
-        {true, nil}
-
-      Enum.any?(refs, &secret_usable?/1) ->
-        {true, nil}
-
-      true ->
-        {false, :credential_not_usable}
-    end
+    if CredentialReadiness.ready?(provider, settings["providers"] || %{},
+         provider_routing: routing
+       ),
+       do: {true, nil},
+       else: {false, :credential_not_usable}
   end
 
   defp omp_default?(settings) do
@@ -196,16 +175,6 @@ defmodule LemonCore.Setup.Readiness do
       (name in ["kimi-coding", "kimi-for-coding"] and auth_source == "omp") or
       name in ["omp-gateway", "omp-auth-gateway"]
   end
-
-  # A referenced credential is usable when the encrypted store can decrypt it,
-  # or when a same-named environment variable carries it. This matches the
-  # runtime resolution order in `LemonCore.Secrets.resolve/2`.
-  defp secret_usable?(name) when is_binary(name) and name != "" do
-    match?({:ok, _}, Secrets.get(name, prefer_env: false, env_fallback: false)) or
-      match?({:ok, _, _}, Secrets.resolve(name, prefer_env: false))
-  end
-
-  defp secret_usable?(_), do: false
 
   # Core has no provider catalog: local readiness recognizes configured provider
   # keys, while live setup verification also checks runtime providers/aliases.

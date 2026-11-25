@@ -1,8 +1,8 @@
 defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
   use ExUnit.Case, async: false
 
-  alias CodingAgent.Session.ModelResolver
-  alias CodingAgent.Session.ProviderFallback
+  alias LemonAgent.ModelRuntime.ModelResolver
+  alias LemonAgent.ModelRuntime.ProviderFailover
   alias CodingAgent.SettingsManager
   alias LemonAgent.ModelRuntime.{CredentialHealth, SessionPins}
   alias LemonAi.Retry
@@ -597,7 +597,10 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     opts =
       Keyword.put_new(opts, :refresh_api_key, fn _, _, _, _ -> {:error, :not_refreshable} end)
 
-    ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!(), opts)
+    ProviderFailover.wrap(
+      stream_fn,
+      ProviderFailover.new(settings, Keyword.put(opts, :cwd, File.cwd!()))
+    )
   end
 
   defp result(wrapped, model) do

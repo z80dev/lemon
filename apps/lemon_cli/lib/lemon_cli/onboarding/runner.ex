@@ -182,9 +182,11 @@ defmodule LemonCli.Onboarding.Runner do
         {:error, reason} -> fail!(OmpToken.error_message(reason))
       end
 
-    unless Credentials.provider_has_credentials?(spec.id, %{
-             spec.id => %{"auth_source" => "omp", "omp_path" => omp_path}
-           }) do
+    unless Credentials.provider_has_credentials?(
+             spec.id,
+             %{spec.id => %{"auth_source" => "omp", "omp_path" => omp_path}},
+             mode: :resolve
+           ) do
       fail!(
         "omp could not provide a usable Kimi Code token. Run `omp` and `/login kimi-code`, then retry `lemon model kimi_coding --auth omp`."
       )

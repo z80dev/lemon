@@ -56,9 +56,10 @@ defmodule LemonCli.OmpReadinessTest do
     refute inspect(check) =~ token
   end
 
-  test "bad omp token fails readiness even with an inline key", ctx do
-    script(ctx.path, "printf 'not-jwt'")
+  test "offline readiness is presence-only: a missing omp is not ready, an inline key never substitutes",
+       ctx do
     write_config(ctx)
+    refute File.exists?(ctx.path)
     state = Readiness.status(config_path: ctx.config_path)
     refute state.provider.complete
     refute state.provider.credential_ready
@@ -68,6 +69,34 @@ defmodule LemonCli.OmpReadinessTest do
 
     assert check.status == :fail
     assert check.remediation =~ "/login kimi-code"
+
+    # An installed omp is present offline without being run; its token is
+    # judged only by the live check below.
+    script(ctx.path, "touch #{Jason.encode!(Path.join(ctx.dir, "omp-ran"))}; printf 'not-jwt'")
+    assert Readiness.status(config_path: ctx.config_path).provider.credential_ready
+    refute File.exists?(Path.join(ctx.dir, "omp-ran"))
+  end
+
+  test "live resolution rejects a bad omp token even with an inline key", ctx do
+    script(ctx.path, "printf 'not-jwt'")
+    write_config(ctx)
+    providers = LemonCore.Config.load(ctx.dir, cache: false).providers
+
+    refute LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(
+             "kimi_coding",
+             providers,
+             mode: :resolve
+           )
+
+    readiness =
+      LemonCli.Setup.ModelReadiness.check(
+        config_path: ctx.config_path,
+        cwd: ctx.dir,
+        provider: "kimi_coding"
+      )
+
+    assert readiness.state == :action_required
+    assert readiness.reason == :credential_missing
   end
 
   defp write_config(ctx) do

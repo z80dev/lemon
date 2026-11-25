@@ -135,7 +135,7 @@ revision alongside results; timings are host/filesystem-specific.
 
 Config supplies model/thinking defaults; `LemonCore.PolicyStore` owns effective
 session/route/chat policy. Do not read app-env default models or policies as a
-second runtime plane. Provider resolution uses `LemonAgent.ProviderConfigResolver`.
+second runtime plane. Model selectors resolve through `LemonAgent.ModelRuntime.ModelResolver`.
 Validate configured runtime wiring while preserving router-only startup and
 explicit unavailable-runtime behavior.
 

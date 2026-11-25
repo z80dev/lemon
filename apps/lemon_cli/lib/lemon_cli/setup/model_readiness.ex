@@ -143,7 +143,10 @@ defmodule LemonCli.Setup.ModelReadiness do
       base = status(opts)
 
       if base.state == :saved do
-        ready? = Credentials.provider_has_credentials?(provider, %{provider => provider_cfg})
+        ready? =
+          Credentials.provider_has_credentials?(provider, %{provider => provider_cfg},
+            mode: :resolve
+          )
 
         %{
           base
@@ -305,16 +308,35 @@ defmodule LemonCli.Setup.ModelReadiness do
   # ──────────────────────────────────────────────────────────────────────────
   # Offline state
 
+  # Readiness is the shared presence-mode predicate doctor, setup readiness and
+  # provider status use. The static login projection only refines a ready
+  # credential: a stored login past its re-login date, or expired without a
+  # refresh token, needs a new sign-in.
   defp credential_state(provider_id, model_id, opts) do
-    provider_cfg = provider_table(provider_id, opts)
+    settings = config_settings(opts)
+    providers = Map.get(settings, "providers", %{})
+    provider_cfg = ProviderNames.provider_config(providers, provider_id) || %{}
     secrets = Keyword.get(opts, :secrets, Secrets)
     suggested = suggested_model_id(provider_id, nil)
 
+    ready? =
+      Credentials.provider_has_credentials?(provider_id, providers,
+        provider_routing: get_in(settings, ["runtime", "provider_routing"]) || %{}
+      )
+
     {state, reason} =
-      case ProviderAuth.static_status(provider_id, provider_cfg, secrets) do
-        %{status: status} when status in ["ready", "configured"] -> {:saved, nil}
-        %{status: "expired"} -> {:action_required, :credential_expired}
-        _ -> {:action_required, :credential_missing}
+      cond do
+        not ready? ->
+          {:action_required, :credential_missing}
+
+        match?(
+          %{status: "expired"},
+          ProviderAuth.static_status(provider_id, provider_cfg, secrets)
+        ) ->
+          {:action_required, :credential_expired}
+
+        true ->
+          {:saved, nil}
       end
 
     readiness(state, provider_id, model_id,
@@ -362,17 +384,21 @@ defmodule LemonCli.Setup.ModelReadiness do
   # The static credential check reads the provider table exactly as written, so
   # it uses the config file's own string keys, not the resolved runtime config.
   defp provider_table(provider_id, opts) do
+    opts
+    |> config_settings()
+    |> Map.get("providers", %{})
+    |> ProviderNames.provider_config(provider_id) || %{}
+  end
+
+  defp config_settings(opts) do
     path = Keyword.get(opts, :config_path) || Config.global_path()
 
-    settings =
-      with {:ok, content} <- File.read(Path.expand(path)),
-           {:ok, decoded} <- Toml.decode(content) do
-        decoded
-      else
-        _ -> %{}
-      end
-
-    ProviderNames.provider_config(Map.get(settings, "providers", %{}), provider_id) || %{}
+    with {:ok, content} <- File.read(Path.expand(path)),
+         {:ok, decoded} <- Toml.decode(content) do
+      decoded
+    else
+      _ -> %{}
+    end
   end
 
   defp readiness(state, provider_id, model_id, fields) do

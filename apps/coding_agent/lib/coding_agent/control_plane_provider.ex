@@ -17,7 +17,7 @@ defmodule CodingAgent.ControlPlaneProvider do
 
   alias CodingAgent.Session.AddressingContext
   alias CodingAgent.Session.ContextUsage
-  alias CodingAgent.Session.ModelResolver
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias CodingAgent.Session.Ownership
   alias CodingAgent.Session.Persistence
   alias CodingAgent.Session.Planning

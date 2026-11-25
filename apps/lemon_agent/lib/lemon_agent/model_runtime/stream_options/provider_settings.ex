@@ -1,29 +1,30 @@
-defmodule LemonAgent.ProviderConfigResolver do
+defmodule LemonAgent.ModelRuntime.StreamOptions.ProviderSettings do
   @moduledoc """
-  Resolves provider configuration from canonical config + env + secrets.
+  Provider-specific stream settings for `LemonAgent.ModelRuntime.StreamOptions`:
+  Vertex project/location/service account, Gemini CLI project, Azure endpoint
+  and deployments, Bedrock region/keys and OpenAI-compatible base URLs, from
+  canonical config, environment and secrets.
 
-  This module centralizes provider settings resolution so that provider
-  implementations don't need to read env vars or secrets directly.
-
-  Each provider function returns a map of resolved settings that can be
-  merged into StreamOptions or used directly by the provider.
-
-  API-key secret fields use credential-aware OAuth resolution, never raw secret
-  bytes. A caller-resolved selected login carries `api_key_authoritative: true`;
-  this preserves its refusal without a second credential lookup or fallback.
+  API keys follow the one configured-key order `StreamOptions` uses: the
+  caller's key, then `api_key_secret` (credential-aware OAuth resolution,
+  never raw secret bytes), then the inline `api_key`. A selected login
+  (`auth_source = "oauth"`) resolves through `Credentials` and carries
+  `api_key_authoritative: true`, preserving its refusal without fallback.
+  Ambient provider environment keys are `Credentials`' concern, not this
+  module's.
   """
 
   alias LemonAgent.ModelRuntime.Credentials
 
   @doc """
-  Resolve stream options for a given provider from canonical config.
+  Resolve stream settings for a given provider from canonical config.
 
   Returns a map of resolved settings. Keys with nil values are excluded.
   """
-  @spec resolve_for_provider(atom(), map()) :: map()
-  def resolve_for_provider(provider_id, opts \\ %{})
+  @spec resolve(atom(), map()) :: map()
+  def resolve(provider_id, opts \\ %{})
 
-  def resolve_for_provider(:google_vertex, opts) do
+  def resolve(:google_vertex, opts) do
     config = get_provider_config("google_vertex", opts)
 
     project =
@@ -64,7 +65,7 @@ defmodule LemonAgent.ProviderConfigResolver do
     |> reject_nil_values()
   end
 
-  def resolve_for_provider(:google_gemini_cli, opts) do
+  def resolve(:google_gemini_cli, opts) do
     config = get_provider_config("google_gemini_cli", opts)
 
     project =
@@ -88,7 +89,7 @@ defmodule LemonAgent.ProviderConfigResolver do
     |> reject_nil_values()
   end
 
-  def resolve_for_provider(:google, opts) do
+  def resolve(:google, opts) do
     config = get_provider_config("google", opts)
 
     %{
@@ -103,7 +104,7 @@ defmodule LemonAgent.ProviderConfigResolver do
     |> reject_nil_values()
   end
 
-  def resolve_for_provider(:azure_openai_responses, opts) do
+  def resolve(:azure_openai_responses, opts) do
     config = get_provider_config("azure_openai_responses", opts)
     azure_opts = Map.get(opts, :azure, %{})
 
@@ -148,7 +149,7 @@ defmodule LemonAgent.ProviderConfigResolver do
     |> reject_nil_values()
   end
 
-  def resolve_for_provider(:bedrock_converse_stream, opts) do
+  def resolve(:bedrock_converse_stream, opts) do
     config = get_provider_config("amazon_bedrock", opts)
 
     region =
@@ -190,7 +191,7 @@ defmodule LemonAgent.ProviderConfigResolver do
     |> reject_nil_header_values()
   end
 
-  def resolve_for_provider(provider_id, opts) do
+  def resolve(provider_id, opts) do
     case openai_compatible_provider_name(provider_id) do
       nil ->
         %{}
@@ -230,8 +231,8 @@ defmodule LemonAgent.ProviderConfigResolver do
       true ->
         first_credential([
           {:value, Map.get(opts, :api_key)},
-          {:value, config[:api_key]},
-          {:api_key_secret, config[:api_key_secret]}
+          {:api_key_secret, config[:api_key_secret]},
+          {:value, config[:api_key]}
         ])
     end
   end

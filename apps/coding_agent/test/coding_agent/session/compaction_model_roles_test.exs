@@ -2,7 +2,8 @@ defmodule CodingAgent.Session.CompactionModelRolesTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Compaction
-  alias CodingAgent.Session.{CompactionManager, ModelResolver}
+  alias CodingAgent.Session.CompactionManager
+  alias LemonAgent.ModelRuntime.ModelResolver
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
 

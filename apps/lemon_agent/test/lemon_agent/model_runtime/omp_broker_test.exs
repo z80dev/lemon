@@ -96,7 +96,7 @@ defmodule LemonAgent.ModelRuntime.OmpBrokerTest do
     end)
 
     assert Credentials.resolve_provider_api_key(:anthropic, cfg) == ""
-    refute Credentials.provider_has_credentials?(:anthropic, cfg)
+    refute Credentials.provider_has_credentials?(:anthropic, cfg, mode: :resolve)
   end
 
   test "credentials are shaped per Lemon provider and selected by omp_provider/omp_account" do

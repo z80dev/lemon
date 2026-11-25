@@ -6,7 +6,7 @@ defmodule CodingAgent.SettingsManager do
   a struct that existing coding agent components can consume.
   """
 
-  alias LemonAgent.ModelRuntime.{CustomProviders, ModelRoles}
+  alias LemonAgent.ModelRuntime.{ModelResolver, ModelRoles}
   alias LemonCore.Config, as: LemonConfig
 
   @type thinking_level :: :off | :auto | :minimal | :low | :medium | :high | :xhigh
@@ -187,7 +187,7 @@ defmodule CodingAgent.SettingsManager do
         if(provider in [nil, ""], do: :inherited, else: :explicit)
       )
 
-    default_model = parse_model_spec(provider, model, provider_source)
+    default_model = ModelResolver.default_model_spec(provider, model, provider_source)
 
     case ModelRoles.validate(config.model_roles) do
       :ok -> :ok
@@ -371,75 +371,4 @@ defmodule CodingAgent.SettingsManager do
       base_delay_ms: settings.base_delay_ms
     }
   end
-
-  # ============================================================================
-  # Helpers
-  # ============================================================================
-
-  defp parse_model_spec(nil, nil, _provider_source), do: nil
-  defp parse_model_spec(_provider, "@" <> _role = selector, _provider_source), do: selector
-
-  defp parse_model_spec(provider, model, provider_source) when is_binary(model) do
-    # Try colon separator first (Lemon's current format)
-    case String.split(model, ":", parts: 2) do
-      [p, model_id] when provider in [nil, ""] and p != "" and model_id != "" ->
-        %{
-          provider: normalize_provider(p),
-          provider_source: :explicit,
-          model_id: model_id,
-          base_url: nil
-        }
-
-      _ ->
-        # Try slash separator (OpenRouter/Pi format)
-        case String.split(model, "/", parts: 2) do
-          [p, model_id] when provider in [nil, ""] and p != "" and model_id != "" ->
-            %{
-              provider: normalize_provider(p),
-              provider_source: :explicit,
-              model_id: model_id,
-              base_url: nil
-            }
-
-          _ ->
-            # Fall back to treating entire string as model_id
-            if model != "" do
-              %{
-                provider: normalize_provider(provider),
-                provider_source: provider_source,
-                model_id: model,
-                base_url: nil
-              }
-            else
-              nil
-            end
-        end
-    end
-  end
-
-  defp parse_model_spec(provider, model, provider_source)
-       when is_binary(provider) and provider != "" do
-    %{
-      provider: normalize_provider(provider),
-      provider_source: provider_source,
-      model_id: to_string(model),
-      base_url: nil
-    }
-  end
-
-  defp parse_model_spec(_provider, _model, _provider_source), do: nil
-
-  # Built-in provider names normalize to atoms (lowercase, dashes to
-  # underscores). Custom `[providers.<id>]` ids stay binaries so config input
-  # never creates atoms.
-  defp normalize_provider(p) when is_binary(p) do
-    normalized = p |> String.downcase() |> String.replace("-", "_")
-
-    if CustomProviders.builtin?(normalized),
-      do: String.to_atom(normalized),
-      else: String.trim(p)
-  end
-
-  defp normalize_provider(p) when is_atom(p), do: p
-  defp normalize_provider(_), do: nil
 end

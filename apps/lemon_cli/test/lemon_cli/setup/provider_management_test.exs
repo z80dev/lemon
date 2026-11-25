@@ -388,13 +388,45 @@ defmodule LemonCli.Setup.ProviderManagementTest do
     assert row(due, "kimi_coding").lastValidation == nil
     assert MockSecrets.values()["login"] == near
 
+    # The runtime refreshes a refreshable login transparently: a past access
+    # token expiry is still a configured sign-in, never `expired`.
     expired = Jason.encode!(%{secret | "expires_at_ms" => now - 1})
     MockSecrets.seed("login", expired)
     assert {:ok, listing} = Management.list(ctx.opts)
-    assert row(listing, "kimi_coding").status == "expired"
+    assert row(listing, "kimi_coding").status == "configured"
     assert row(listing, "kimi_coding").lastValidation == nil
     assert MockSecrets.values()["login"] == expired
     refute Jason.encode!(listing) =~ "private"
+
+    static = Jason.encode!(%{secret | "expires_at_ms" => now - 1, "refresh_token" => nil})
+    MockSecrets.seed("login", static)
+    assert {:ok, listing} = Management.list(ctx.opts)
+    assert row(listing, "kimi_coding").status == "expired"
+    assert MockSecrets.values()["login"] == static
+  end
+
+  test "a passed re-login date needs a new sign-in even when refreshable", ctx do
+    now = System.system_time(:millisecond)
+
+    write(
+      ctx.config_path,
+      "[providers.anthropic]\nauth_source = \"oauth\"\noauth_secret = \"claude\"\n"
+    )
+
+    MockSecrets.seed(
+      "claude",
+      Jason.encode!(%{
+        "type" => "anthropic_oauth",
+        "source" => "lemon_oauth",
+        "access_token" => "access-private",
+        "refresh_token" => "refresh-private",
+        "expires_at_ms" => now + 3_600_000,
+        "created_at_ms" => now - 40 * 86_400_000
+      })
+    )
+
+    assert {:ok, listing} = Management.list(ctx.opts)
+    assert row(listing, "anthropic").status == "expired"
   end
 
   test "validation rejects alias/unsupported providers, invalid targets and bounded key/model inputs before mutation",

@@ -148,7 +148,7 @@ tarballs so this class of break fails CI.
     providers, usage, node tools) and the diagnostics core's `SupportBundle`
     reads: `LspDiagnostics` (also `coding_agent` `Tools.LspDiagnostics`),
     `CheckpointDiagnostics` (also channels), `CronDiagnostics`,
-    `ExtensionDiagnostics` and `ProviderDiagnostics`.
+    `ExtensionDiagnostics` and `CredentialReadiness` (the registered runtime predicate).
 
   Only the repo tooling (`quality/`, `update/`, repo-only `mix lemon.*` tasks)
   is kept out of the tarball.
