@@ -136,7 +136,7 @@ defmodule LemonCore.Store.ReadCache do
 
   This bypasses the GenServer entirely for O(1) ETS lookup.
   """
-  @spec get(store() | tables(), atom(), term()) :: term() | nil
+  @spec get(store() | tables() | pid(), atom(), term()) :: term() | nil
   def get(store \\ @default_store, domain, key)
 
   def get(store, domain, key) do
@@ -153,7 +153,7 @@ defmodule LemonCore.Store.ReadCache do
   when it does but has no entry for `key`, and `{:ok, value}` on a hit. Callers
   use this to decide whether a cache miss is worth populating.
   """
-  @spec fetch(store() | tables(), atom(), term()) :: {:ok, term()} | :miss | :uncached
+  @spec fetch(store() | tables() | pid(), atom(), term()) :: {:ok, term()} | :miss | :uncached
   def fetch(store \\ @default_store, domain, key) do
     case resolve(store, domain) do
       nil ->
