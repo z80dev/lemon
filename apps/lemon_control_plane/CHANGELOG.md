@@ -6,6 +6,10 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Fixed
 
+- `agent.wait` reports `UNAVAILABLE` when the run store cannot be read instead
+  of waiting out the timeout, never puts a raw exception message in error
+  details, and validates `runId`/`timeoutMs`. `cron.runs` never renders a
+  non-text output term onto the wire (#620).
 - A method with any scope beyond `:read` that raises, throws or whose async task
   dies now answers `INTERNAL_ERROR` with `details.retrySafe: false`, so clients
   never retry a mutation that may already have applied (#616).

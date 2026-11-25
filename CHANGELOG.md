@@ -223,6 +223,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- `agent.wait` returns `UNAVAILABLE` when the run store cannot be read instead
+  of reporting a timeout, and no longer copies a raw exception message into its
+  error details (#620).
 - One-shot CLI commands (`lemon doctor`, `config`, `secrets`, `usage`, `context`,
   `learn`, `learning`, `mcp`, `update`, `migrate`, `providers`, `setup`, and the
   `mix lemon.secrets*`/`lemon.config`/`lemon.usage` tasks) boot the core in a
