@@ -732,16 +732,17 @@ defmodule LemonRouter.SessionCoordinatorTest do
     run_supervisor: run_supervisor
   } do
     key = {:session, unique_session_key()}
+    failed_run_id = "queued-start-failure-#{System.unique_integer([:positive])}"
 
     :ok = submit(key, "run1", "one", :collect, run_supervisor)
     assert_receive {:started, "run1", _}
 
-    :ok = LemonCore.EventBridge.subscribe_run("run2")
-    assert_receive {:bridge_subscribed, "run2"}
-    LemonCore.Bus.subscribe(LemonCore.Bus.run_topic("run2"))
+    :ok = LemonCore.EventBridge.subscribe_run(failed_run_id)
+    assert_receive {:bridge_subscribed, ^failed_run_id}
+    :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(failed_run_id))
 
     failing_submission =
-      submission(key, "run2", "two", :collect, run_supervisor,
+      submission(key, failed_run_id, "two", :collect, run_supervisor,
         run_process_module: SessionCoordinatorFailingRunProcess
       )
 
@@ -760,15 +761,15 @@ defmodule LemonRouter.SessionCoordinatorTest do
                        }
                      },
                      meta: %{
-                       run_id: "run2",
+                       run_id: ^failed_run_id,
                        synthetic: true,
                        failure_stage: :run_start
                      }
                    },
                    500
 
-    refute_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: "run2"}}, 100
-    assert_receive {:bridge_unsubscribed, "run2"}
+    refute_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^failed_run_id}}, 100
+    assert_receive {:bridge_unsubscribed, ^failed_run_id}
     assert_receive {:started, "run3", _}
 
     SessionCoordinator.cancel(elem(key, 1), :user_requested)
@@ -1852,7 +1853,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     [{owner, _}] = Registry.lookup(LemonRouter.ConversationRegistry, key)
 
     assert {:error, :outcome_unknown} =
-             GenServer.call(owner, {:submit_with_receipt, prepared})
+             GenServer.call(owner, {:submit_with_receipt, prepared, nil})
 
     refute_receive {:started, ^run_id, _}, 50
 
@@ -1861,7 +1862,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert {:ok, ^receipt} =
              SessionCoordinator.submit_with_receipt(key, prepared, receipt_store: store)
 
-    assert {:ok, ^receipt} = GenServer.call(owner, {:submit_with_receipt, prepared})
+    assert {:ok, ^receipt} = GenServer.call(owner, {:submit_with_receipt, prepared, nil})
     refute_receive {:started, ^run_id, _}, 50
 
     assert :ok = LemonCore.Store.put(store, :receipt_backend_failures, :sync, true)
