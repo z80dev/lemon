@@ -28,7 +28,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportKanbanTest do
       do: {:ok, %{running: true, dispatcher: %{board_id: board_id, status: "running"}}}
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
   @group -100_555_001
   @owner 555_001
   @member 555_002
@@ -44,12 +44,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportKanbanTest do
     File.mkdir_p!(root)
     {real_root, 0} = System.cmd("pwd", ["-P"], cd: root)
 
-    previous_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous_gateway = Application.get_env(:lemon_core, @gateway_config_key)
     previous_dispatcher = Application.get_env(:lemon_channels, :kanban_dispatcher_module)
     :persistent_term.put({Dispatcher, :pid}, self())
     Application.put_env(:lemon_channels, :kanban_dispatcher_module, Dispatcher)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       telegram: %{bot_token: "fake-token", api_mod: FakeAPI},
       bindings: [
         %{transport: :telegram, chat_id: @group, project: "kanban-chat"},
@@ -62,7 +62,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportKanbanTest do
       stop_transport()
       FakeAPI.reset()
       :persistent_term.erase({Dispatcher, :pid})
-      restore_env(:lemon_gateway, @gateway_config_key, previous_gateway)
+      restore_env(:lemon_core, @gateway_config_key, previous_gateway)
       restore_env(:lemon_channels, :kanban_dispatcher_module, previous_dispatcher)
 
       KanbanStore.list_boards(limit: 1_000)

@@ -243,11 +243,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       enable_telegram: false
     }
 
-    Application.put_env(
-      :lemon_gateway,
-      Elixir.LemonGateway.Config,
-      Map.merge(base_config, config)
-    )
+    Application.put_env(:lemon_core, :gateway_test_config, Map.merge(base_config, config))
 
     Application.put_env(:lemon_gateway, :transports, transports)
 
@@ -501,7 +497,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       stop_if_running(TransportSupervisor)
       stop_if_running(TransportRegistry)
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{enable_telegram: false})
+      Application.put_env(:lemon_core, :gateway_test_config, %{enable_telegram: false})
       Application.put_env(:lemon_gateway, :transports, [MockTransportA])
 
       {:ok, _} = TransportRegistry.start_link([])

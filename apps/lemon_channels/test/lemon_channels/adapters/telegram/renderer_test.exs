@@ -5,7 +5,7 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
   alias LemonChannels.{PresentationState, Registry}
   alias LemonCore.{DeliveryIntent, DeliveryRoute}
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   defmodule TelegramRendererPlugin do
     @behaviour LemonChannels.Plugin
@@ -785,19 +785,19 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
   end
 
   defp with_telegram_files_config(files_config, fun) do
-    previous = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous = Application.get_env(:lemon_core, @gateway_config_key)
     config = previous || %{}
     telegram = Map.get(config, :telegram) || Map.get(config, "telegram") || %{}
     next = Map.put(config, :telegram, Map.put(telegram, :files, files_config))
 
     try do
-      Application.put_env(:lemon_gateway, @gateway_config_key, next)
+      Application.put_env(:lemon_core, @gateway_config_key, next)
       fun.()
     after
       if previous == nil do
-        Application.delete_env(:lemon_gateway, @gateway_config_key)
+        Application.delete_env(:lemon_core, @gateway_config_key)
       else
-        Application.put_env(:lemon_gateway, @gateway_config_key, previous)
+        Application.put_env(:lemon_core, @gateway_config_key, previous)
       end
     end
   end

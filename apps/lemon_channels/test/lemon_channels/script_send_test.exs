@@ -29,16 +29,16 @@ defmodule LemonChannels.ScriptSendTest do
 
   setup do
     Application.put_env(:lemon_channels, :script_send_test_pid, self())
-    old_gateway_config = Application.get_env(:lemon_gateway, LemonGateway.Config)
+    old_gateway_config = Application.get_env(:lemon_core, :gateway_test_config)
     clear_known_targets()
 
     on_exit(fn ->
       Application.delete_env(:lemon_channels, :script_send_test_pid)
 
       if is_nil(old_gateway_config) do
-        Application.delete_env(:lemon_gateway, LemonGateway.Config)
+        Application.delete_env(:lemon_core, :gateway_test_config)
       else
-        Application.put_env(:lemon_gateway, LemonGateway.Config, old_gateway_config)
+        Application.put_env(:lemon_core, :gateway_test_config, old_gateway_config)
       end
 
       clear_known_targets()
@@ -124,7 +124,7 @@ defmodule LemonChannels.ScriptSendTest do
   end
 
   test "parses default targets from gateway config" do
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       telegram: %{default_account_id: "tg-work", default_chat_id: -100_123, default_thread_id: 77},
       discord: %{
         default_account_id: "dc-work",
@@ -143,7 +143,7 @@ defmodule LemonChannels.ScriptSendTest do
   end
 
   test "environment default targets and accounts take precedence over gateway config" do
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       telegram: %{default_account_id: "config", default_chat_id: -100_123, default_thread_id: 77}
     })
 
@@ -159,7 +159,7 @@ defmodule LemonChannels.ScriptSendTest do
   end
 
   test "default account scopes known-name resolution" do
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       discord: %{default_account_id: "work"}
     })
 

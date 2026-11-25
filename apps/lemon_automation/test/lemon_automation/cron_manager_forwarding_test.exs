@@ -449,9 +449,9 @@ defmodule LemonAutomation.CronManagerForwardingTest do
   end
 
   defp pair_owner_chat(chat_id) do
-    previous = Application.get_env(:lemon_gateway, LemonGateway.Config)
+    previous = Application.get_env(:lemon_core, :gateway_test_config)
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       enable_telegram: true,
       telegram: %{allowed_chat_ids: [chat_id]},
       max_concurrent_runs: 1
@@ -459,9 +459,9 @@ defmodule LemonAutomation.CronManagerForwardingTest do
 
     on_exit(fn ->
       if previous do
-        Application.put_env(:lemon_gateway, LemonGateway.Config, previous)
+        Application.put_env(:lemon_core, :gateway_test_config, previous)
       else
-        Application.delete_env(:lemon_gateway, LemonGateway.Config)
+        Application.delete_env(:lemon_core, :gateway_test_config)
       end
     end)
   end

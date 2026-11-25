@@ -4,16 +4,16 @@ defmodule LemonChannels.Adapters.WhatsApp.Reconnect581Test do
   alias LemonChannels.Adapters.WhatsApp.Transport
   alias LemonChannels.{PortBridge, Registry}
 
-  @config_key :"Elixir.LemonGateway.Config"
+  @config_key :gateway_test_config
 
   setup do
-    old_config = Application.get_env(:lemon_gateway, @config_key)
+    old_config = Application.get_env(:lemon_core, @config_key)
     old_mode = Application.get_env(:lemon_core, :config_test_mode)
     registry_state = :sys.get_state(Registry)
 
     Application.put_env(:lemon_core, :config_test_mode, true)
 
-    Application.put_env(:lemon_gateway, @config_key, %{
+    Application.put_env(:lemon_core, @config_key, %{
       enable_whatsapp: true,
       whatsapp: %{bridge_script: Path.join(System.tmp_dir!(), "missing-bridge-581.mjs")}
     })
@@ -24,7 +24,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Reconnect581Test do
            ]
 
     on_exit(fn ->
-      restore(:lemon_gateway, @config_key, old_config)
+      restore(:lemon_core, @config_key, old_config)
       restore(:lemon_core, :config_test_mode, old_mode)
 
       # Plugin changes must go through Registry so its persistent lookup

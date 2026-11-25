@@ -19,7 +19,7 @@ defmodule LemonChannels.ChannelAdmissionFailClosedTest do
 
   @bot_user_id 1_476_753_643_834_183_690
   @channel_id 1_475_727_417_372_049_419
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   # Fails selected `{operation, table}` pairs inside the real Store process.
   defmodule FaultBackend do
@@ -86,14 +86,14 @@ defmodule LemonChannels.ChannelAdmissionFailClosedTest do
     :sys.replace_state(Store, &%{&1 | backend: FaultBackend})
 
     previous_bridge = Application.get_env(:lemon_core, :router_bridge)
-    previous_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous_gateway = Application.get_env(:lemon_core, @gateway_config_key)
     previous_test_mode = Application.get_env(:lemon_core, :config_test_mode)
 
     :persistent_term.put({FakeRouter, :test_pid}, self())
     :ok = LemonCore.RouterBridge.configure(router: FakeRouter, run_orchestrator: FakeRouter)
     Application.put_env(:lemon_core, :config_test_mode, true)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       enable_discord: true,
       discord: %{api_mod: FakeDiscordApi}
     })
@@ -109,7 +109,7 @@ defmodule LemonChannels.ChannelAdmissionFailClosedTest do
       :sys.replace_state(Store, &%{&1 | backend: EtsBackend})
       :persistent_term.erase({FakeRouter, :test_pid})
       restore_env(:lemon_core, :router_bridge, previous_bridge)
-      restore_env(:lemon_gateway, @gateway_config_key, previous_gateway)
+      restore_env(:lemon_core, @gateway_config_key, previous_gateway)
       restore_env(:lemon_core, :config_test_mode, previous_test_mode)
     end)
 

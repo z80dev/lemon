@@ -5,7 +5,7 @@ ExUnit.start(capture_log: true)
 # plane methods assume the runtime services and the control plane's own supervised
 # ETS registries are running. Ensure a consistent production baseline here.
 
-Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+Application.put_env(:lemon_core, :gateway_test_config, %{
   enable_telegram: false,
   max_concurrent_runs: 1
 })

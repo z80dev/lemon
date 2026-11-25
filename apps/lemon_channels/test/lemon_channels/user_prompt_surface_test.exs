@@ -50,11 +50,11 @@ defmodule LemonChannels.UserPromptSurfaceTest do
     assert_receive {:rendered, payload}
     assert payload.meta.plain_text
     assert String.length(payload.content) < 1_600
-    config_key = :"Elixir.LemonGateway.Config"
-    previous = Application.get_env(:lemon_gateway, config_key)
+    config_key = :gateway_test_config
+    previous = Application.get_env(:lemon_core, config_key)
 
     Application.put_env(
-      :lemon_gateway,
+      :lemon_core,
       config_key,
       Map.put(previous || %{}, :telegram, %{
         account_id: "default",
@@ -64,7 +64,7 @@ defmodule LemonChannels.UserPromptSurfaceTest do
       })
     )
 
-    on_exit(fn -> Application.put_env(:lemon_gateway, config_key, previous) end)
+    on_exit(fn -> Application.put_env(:lemon_core, config_key, previous) end)
     assert {:ok, _} = Outbound.deliver(payload)
     assert_receive {:sent, -100, text, opts, nil}
     assert text == payload.content

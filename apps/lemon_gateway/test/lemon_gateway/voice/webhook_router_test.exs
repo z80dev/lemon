@@ -4,20 +4,20 @@ defmodule LemonGateway.Voice.WebhookRouterTest do
   alias LemonGateway.Sms.TwilioSignature
   alias LemonGateway.Voice.{StreamToken, WebhookRouter}
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
   @auth_token "router-test-token"
 
   setup do
-    old = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old = Application.get_env(:lemon_core, @gateway_config_key)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       voice: %{twilio_auth_token: @auth_token, public_url: "https://lemon-voice.loca.lt/"}
     })
 
     on_exit(fn ->
       if old,
-        do: Application.put_env(:lemon_gateway, @gateway_config_key, old),
-        else: Application.delete_env(:lemon_gateway, @gateway_config_key)
+        do: Application.put_env(:lemon_core, @gateway_config_key, old),
+        else: Application.delete_env(:lemon_core, @gateway_config_key)
     end)
   end
 

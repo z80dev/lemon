@@ -9,7 +9,7 @@ defmodule LemonChannels.Adapters.Discord.ThreadIdentityTest do
   alias LemonCore.Dedupe.Ets
   alias Nostrum.Struct.{Message, User}
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
   @guild_id 1_475_727_416_549_969_980
   @user_id 1_476_753_643_834_183_691
 
@@ -34,14 +34,14 @@ defmodule LemonChannels.Adapters.Discord.ThreadIdentityTest do
 
   setup do
     parent = self()
-    previous_config = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous_config = Application.get_env(:lemon_core, @gateway_config_key)
     previous_mode = Application.get_env(:lemon_core, :config_test_mode)
     previous_bridge = Application.get_env(:lemon_core, :router_bridge)
     previous_fetcher = Application.get_env(:lemon_channels, :discord_channel_fetcher)
 
     Application.put_env(:lemon_core, :config_test_mode, true)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       enable_discord: true,
       discord: %{api_mod: FakeDiscordApi}
     })
@@ -63,7 +63,7 @@ defmodule LemonChannels.Adapters.Discord.ThreadIdentityTest do
       restore(:lemon_channels, :discord_channel_fetcher, previous_fetcher)
       restore(:lemon_core, :router_bridge, previous_bridge)
       restore(:lemon_core, :config_test_mode, previous_mode)
-      restore(:lemon_gateway, @gateway_config_key, previous_config)
+      restore(:lemon_core, @gateway_config_key, previous_config)
     end)
 
     parent_id = 1_475_727_417_372_049_419 + System.unique_integer([:positive])

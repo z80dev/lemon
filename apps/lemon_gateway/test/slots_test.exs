@@ -124,11 +124,11 @@ defmodule LemonGateway.SlotsTest do
 
   # #617/#697: a running gateway follows `max_concurrent_runs` across reloads.
   test "a config reload changes the limit of a running gateway" do
-    key = :"Elixir.LemonGateway.Config"
-    previous = Application.get_env(:lemon_gateway, key)
-    on_exit(fn -> Application.put_env(:lemon_gateway, key, previous) end)
+    key = :gateway_test_config
+    previous = Application.get_env(:lemon_core, key)
+    on_exit(fn -> Application.put_env(:lemon_core, key, previous) end)
 
-    Application.put_env(:lemon_gateway, key, %{max_concurrent_runs: 1})
+    Application.put_env(:lemon_core, key, %{max_concurrent_runs: 1})
     name = LemonGateway.SlotsTest.Reloading
     server = start_supervised!({Slots, name: name}, id: name)
     assert {:ok, %{max: 1}} = Slots.stats(name)
@@ -140,7 +140,7 @@ defmodule LemonGateway.SlotsTest do
     assert_receive {:a, {:slot_granted, _}}
     refute_receive {:b, {:slot_granted, _}}, 50
 
-    Application.put_env(:lemon_gateway, key, %{max_concurrent_runs: 3})
+    Application.put_env(:lemon_core, key, %{max_concurrent_runs: 3})
     LemonCore.Bus.broadcast("system", reloaded_event())
 
     assert_receive {:b, {:slot_granted, _}}
@@ -148,7 +148,7 @@ defmodule LemonGateway.SlotsTest do
     assert {:ok, %{max: 3, in_flight: 2}} = Slots.stats(name)
 
     # An invalid value keeps the last good limit.
-    Application.put_env(:lemon_gateway, key, %{max_concurrent_runs: 0})
+    Application.put_env(:lemon_core, key, %{max_concurrent_runs: 0})
 
     ExUnit.CaptureLog.capture_log(fn ->
       LemonCore.Bus.broadcast("system", reloaded_event())

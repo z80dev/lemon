@@ -1,4 +1,4 @@
-Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+Application.put_env(:lemon_core, :gateway_test_config, %{
   enable_telegram: false,
   max_concurrent_runs: 1
 })

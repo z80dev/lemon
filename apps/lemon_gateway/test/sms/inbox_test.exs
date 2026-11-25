@@ -291,10 +291,10 @@ defmodule LemonGateway.Sms.InboxTest do
     end
 
     test "a configured zero grace period is ignored in favour of the default" do
-      original = Application.get_env(:lemon_gateway, LemonGateway.Config)
-      on_exit(fn -> Application.put_env(:lemon_gateway, LemonGateway.Config, original) end)
+      original = Application.get_env(:lemon_core, :gateway_test_config)
+      on_exit(fn -> Application.put_env(:lemon_core, :gateway_test_config, original) end)
 
-      Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         sms: %{handoff_grace_ms: 0}
       })
 
@@ -305,12 +305,12 @@ defmodule LemonGateway.Sms.InboxTest do
     end
 
     test "config validation rejects a zero or negative handoff grace" do
-      previous = Application.get_env(:lemon_gateway, LemonGateway.Config)
+      previous = Application.get_env(:lemon_core, :gateway_test_config)
 
       on_exit(fn ->
         if previous,
-          do: Application.put_env(:lemon_gateway, LemonGateway.Config, previous),
-          else: Application.delete_env(:lemon_gateway, LemonGateway.Config)
+          do: Application.put_env(:lemon_core, :gateway_test_config, previous),
+          else: Application.delete_env(:lemon_core, :gateway_test_config)
       end)
 
       for bad <- [0, -5, "600000"] do
@@ -322,7 +322,7 @@ defmodule LemonGateway.Sms.InboxTest do
         assert Enum.any?(errors, &String.starts_with?(&1, "gateway.sms.handoff_grace_ms"))
       end
 
-      Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         "sms" => %{"handoff_grace_ms" => 30_000}
       })
 

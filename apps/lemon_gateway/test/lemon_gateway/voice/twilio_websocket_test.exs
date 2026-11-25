@@ -40,14 +40,14 @@ defmodule LemonGateway.Voice.TwilioWebSocketTest do
 
   describe "start event stream token" do
     setup do
-      key = :"Elixir.LemonGateway.Config"
-      old = Application.get_env(:lemon_gateway, key)
-      Application.put_env(:lemon_gateway, key, %{voice: %{twilio_auth_token: "ws-test-token"}})
+      key = :gateway_test_config
+      old = Application.get_env(:lemon_core, key)
+      Application.put_env(:lemon_core, key, %{voice: %{twilio_auth_token: "ws-test-token"}})
 
       on_exit(fn ->
         if old,
-          do: Application.put_env(:lemon_gateway, key, old),
-          else: Application.delete_env(:lemon_gateway, key)
+          do: Application.put_env(:lemon_core, key, old),
+          else: Application.delete_env(:lemon_core, key)
       end)
     end
 
@@ -101,7 +101,7 @@ defmodule LemonGateway.Voice.TwilioWebSocketTest do
       fresh = StreamToken.sign("CA1", "+1", "+2", now)
       assert :ok = StreamToken.verify(fresh, "CA1", "+1", "+2", now)
 
-      Application.put_env(:lemon_gateway, :"Elixir.LemonGateway.Config", %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         voice: %{twilio_auth_token: ""}
       })
 

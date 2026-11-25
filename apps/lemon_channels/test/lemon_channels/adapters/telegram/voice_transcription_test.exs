@@ -99,7 +99,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     end
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   setup do
     unless Process.whereis(LemonChannels.Adapters.Telegram.AsyncSupervisor) do
@@ -114,12 +114,12 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     :ok =
       LemonCore.RouterBridge.configure(router: VoiceTestRouter, run_orchestrator: VoiceTestRouter)
 
-    previous_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous_gateway_env = Application.get_env(:lemon_core, @gateway_config_key)
 
-    existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
+    existing = Application.get_env(:lemon_core, @gateway_config_key, %{})
 
     Application.put_env(
-      :lemon_gateway,
+      :lemon_core,
       @gateway_config_key,
       Map.merge(existing, %{
         telegram: %{
@@ -150,9 +150,9 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
       end
 
       if previous_gateway_env == nil do
-        Application.delete_env(:lemon_gateway, @gateway_config_key)
+        Application.delete_env(:lemon_core, @gateway_config_key)
       else
-        Application.put_env(:lemon_gateway, @gateway_config_key, previous_gateway_env)
+        Application.put_env(:lemon_core, @gateway_config_key, previous_gateway_env)
       end
 
       :persistent_term.erase({VoiceTestRouter, :pid})

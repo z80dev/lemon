@@ -54,7 +54,7 @@ defmodule LemonChannels.Adapters.Telegram.FileAccessTest do
     end
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   @user_id 4_200_001
 
@@ -65,7 +65,7 @@ defmodule LemonChannels.Adapters.Telegram.FileAccessTest do
 
     stop_transport()
     MockAPI.register(self())
-    previous = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous = Application.get_env(:lemon_core, @gateway_config_key)
 
     root = fresh_dir!("lemon-file-access-root")
     outside = fresh_dir!("lemon-file-access-outside")
@@ -83,8 +83,8 @@ defmodule LemonChannels.Adapters.Telegram.FileAccessTest do
       :persistent_term.erase({MockAPI, :pid})
 
       if previous,
-        do: Application.put_env(:lemon_gateway, @gateway_config_key, previous),
-        else: Application.delete_env(:lemon_gateway, @gateway_config_key)
+        do: Application.put_env(:lemon_core, @gateway_config_key, previous),
+        else: Application.delete_env(:lemon_core, @gateway_config_key)
 
       File.rm_rf!(root)
       File.rm_rf!(outside)
@@ -381,7 +381,7 @@ defmodule LemonChannels.Adapters.Telegram.FileAccessTest do
     projects = Keyword.get(opts, :projects, %{"fileproj" => %{root: root}})
     token = "file-access-#{System.unique_integer([:positive])}"
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       projects: projects,
       bindings: [],
       telegram: %{bot_token: token, api_mod: MockAPI}

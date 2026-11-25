@@ -288,7 +288,7 @@ defmodule LemonGatewayTest do
   setup do
     _ = Application.stop(:lemon_gateway)
 
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 1,
       enable_telegram: false
     })

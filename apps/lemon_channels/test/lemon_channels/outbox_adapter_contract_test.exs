@@ -28,7 +28,7 @@ defmodule LemonChannels.OutboxAdapterContractTest do
   alias LemonCore.RateLimiter
 
   @adapters [Telegram, Discord, Email, WhatsApp, Xmtp]
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
   @jid "15551234567@s.whatsapp.net"
 
   defmodule TelegramApi do
@@ -58,12 +58,12 @@ defmodule LemonChannels.OutboxAdapterContractTest do
   end
 
   setup do
-    old_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway = Application.get_env(:lemon_core, @gateway_config_key)
     old_email = Application.get_env(:lemon_channels, Email)
     missing_bridge = Path.join(System.tmp_dir!(), "missing_whatsapp_bridge.mjs")
 
     Application.put_env(
-      :lemon_gateway,
+      :lemon_core,
       @gateway_config_key,
       Map.merge(old_gateway || %{}, %{
         enable_discord: true,
@@ -80,7 +80,7 @@ defmodule LemonChannels.OutboxAdapterContractTest do
     on_exit(fn ->
       stop(WhatsAppTransport)
       stop(XmtpTransport)
-      restore(:lemon_gateway, @gateway_config_key, old_gateway)
+      restore(:lemon_core, @gateway_config_key, old_gateway)
       restore(:lemon_channels, Email, old_email)
     end)
 
@@ -218,7 +218,8 @@ defmodule LemonChannels.OutboxAdapterContractTest do
                  else: module
                )
              )
-           ), do: start_supervised!(module)
+           ),
+           do: start_supervised!(module)
       end
 
       _ = Registry.register(WhatsApp)

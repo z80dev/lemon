@@ -33,12 +33,12 @@ defmodule LemonAutomation.CronFailureAlertsTest do
 
   setup do
     previous_provider = ChannelSupervision.provider()
-    previous_gateway = Application.get_env(:lemon_gateway, LemonGateway.Config)
+    previous_gateway = Application.get_env(:lemon_core, :gateway_test_config)
     id = "failure_alert_#{System.unique_integer([:positive, :monotonic])}"
     :ok = ChannelSupervision.register(Notices)
     Application.put_env(:lemon_automation, :failure_alert_test_pid, self())
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       enable_telegram: false,
       enable_discord: false
     })
@@ -56,7 +56,7 @@ defmodule LemonAutomation.CronFailureAlertsTest do
 
     on_exit(fn ->
       restore(:lemon_core, :channel_supervision_provider, previous_provider)
-      restore(:lemon_gateway, LemonGateway.Config, previous_gateway)
+      restore(:lemon_core, :gateway_test_config, previous_gateway)
       Application.delete_env(:lemon_automation, :failure_alert_test_pid)
       Application.delete_env(:lemon_automation, :failure_alert_test_result)
       CronStore.delete_job(id)
@@ -166,7 +166,7 @@ defmodule LemonAutomation.CronFailureAlertsTest do
   end
 
   test "failure without a job route falls back to paired owner but success does not", %{job: job} do
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       enable_telegram: true,
       telegram: %{allowed_chat_ids: [1234]}
     })

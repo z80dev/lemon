@@ -29,11 +29,11 @@ defmodule LemonGateway.RuntimeAdmissionTest do
       end)
 
     previous =
-      for key <- [LemonGateway.Config, :executor],
-          do: {key, Application.fetch_env(:lemon_gateway, key)}
+      for {app, key} <- [{:lemon_core, :gateway_test_config}, {:lemon_gateway, :executor}],
+          do: {app, key, Application.fetch_env(app, key)}
 
     Application.stop(:lemon_gateway)
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{max_concurrent_runs: 2})
+    Application.put_env(:lemon_core, :gateway_test_config, %{max_concurrent_runs: 2})
     Application.put_env(:lemon_gateway, :executor, GatedExecutor)
     {:ok, started} = Application.ensure_all_started(:lemon_gateway)
 
@@ -41,8 +41,8 @@ defmodule LemonGateway.RuntimeAdmissionTest do
       Enum.each(Enum.reverse(started), &Application.stop/1)
 
       Enum.each(previous, fn
-        {key, {:ok, value}} -> Application.put_env(:lemon_gateway, key, value)
-        {key, :error} -> Application.delete_env(:lemon_gateway, key)
+        {app, key, {:ok, value}} -> Application.put_env(app, key, value)
+        {app, key, :error} -> Application.delete_env(app, key)
       end)
 
       if running?, do: Application.ensure_all_started(:lemon_gateway)

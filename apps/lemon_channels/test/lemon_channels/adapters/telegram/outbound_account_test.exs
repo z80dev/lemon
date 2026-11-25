@@ -4,7 +4,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundAccountTest do
   alias LemonChannels.Adapters.Telegram.Outbound
   alias LemonChannels.OutboundPayload
 
-  @gateway_key :"Elixir.LemonGateway.Config"
+  @gateway_key :gateway_test_config
 
   defmodule CaptureAPI do
     def send_message(token, chat, text, opts, mode) do
@@ -24,12 +24,12 @@ defmodule LemonChannels.Adapters.Telegram.OutboundAccountTest do
   end
 
   setup do
-    gateway = Application.get_env(:lemon_gateway, @gateway_key)
+    gateway = Application.get_env(:lemon_core, @gateway_key)
     test_mode = Application.get_env(:lemon_core, :config_test_mode)
     Application.put_env(:lemon_core, :config_test_mode, true)
 
     on_exit(fn ->
-      restore(:lemon_gateway, @gateway_key, gateway)
+      restore(:lemon_core, @gateway_key, gateway)
       restore(:lemon_core, :config_test_mode, test_mode)
     end)
   end
@@ -78,7 +78,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundAccountTest do
 
   defp configure(config) do
     config = Map.merge(%{api_mod: CaptureAPI, use_markdown: false}, config)
-    Application.put_env(:lemon_gateway, @gateway_key, %{telegram: config})
+    Application.put_env(:lemon_core, @gateway_key, %{telegram: config})
   end
 
   defp payload(account) do

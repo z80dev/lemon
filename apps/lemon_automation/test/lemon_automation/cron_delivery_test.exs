@@ -4,13 +4,13 @@ defmodule LemonAutomation.CronDeliveryTest do
   alias LemonAutomation.{CronDelivery, CronJob}
 
   setup do
-    previous = Application.get_env(:lemon_gateway, LemonGateway.Config)
+    previous = Application.get_env(:lemon_core, :gateway_test_config)
 
     on_exit(fn ->
       if previous do
-        Application.put_env(:lemon_gateway, LemonGateway.Config, previous)
+        Application.put_env(:lemon_core, :gateway_test_config, previous)
       else
-        Application.delete_env(:lemon_gateway, LemonGateway.Config)
+        Application.delete_env(:lemon_core, :gateway_test_config)
       end
     end)
 
@@ -123,8 +123,8 @@ defmodule LemonAutomation.CronDeliveryTest do
 
   defp configure(config) do
     Application.put_env(
-      :lemon_gateway,
-      LemonGateway.Config,
+      :lemon_core,
+      :gateway_test_config,
       Map.put(config, :max_concurrent_runs, 1)
     )
   end

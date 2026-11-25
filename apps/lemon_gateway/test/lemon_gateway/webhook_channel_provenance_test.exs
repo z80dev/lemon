@@ -38,7 +38,7 @@ defmodule LemonGateway.WebhookChannelProvenanceTest do
     original_bridge = Application.get_env(:lemon_core, :router_bridge)
     original_pid = Application.get_env(:lemon_gateway, :webhook_provenance_test_pid)
     original_home = System.get_env("HOME")
-    original_override = Application.get_env(:lemon_gateway, LemonGateway.Config)
+    original_override = Application.get_env(:lemon_core, :gateway_test_config)
     original_config_path = Application.get_env(:lemon_gateway, :config_path)
     Application.put_env(:lemon_gateway, :webhook_provenance_test_pid, self())
 
@@ -60,7 +60,7 @@ defmodule LemonGateway.WebhookChannelProvenanceTest do
       LemonCore.ConfigCache.clear()
       restore_env(:lemon_core, :router_bridge, original_bridge)
       restore_env(:lemon_gateway, :webhook_provenance_test_pid, original_pid)
-      restore_env(:lemon_gateway, LemonGateway.Config, original_override)
+      restore_env(:lemon_core, :gateway_test_config, original_override)
       restore_env(:lemon_gateway, :config_path, original_config_path)
 
       if original_home,
@@ -134,7 +134,7 @@ defmodule LemonGateway.WebhookChannelProvenanceTest do
     """)
 
     System.put_env("HOME", home)
-    Application.delete_env(:lemon_gateway, LemonGateway.Config)
+    Application.delete_env(:lemon_core, :gateway_test_config)
     Application.delete_env(:lemon_gateway, :config_path)
     webhook = LemonCore.GatewayConfig.get(:webhook)
     assert Map.has_key?(webhook.integrations, id)

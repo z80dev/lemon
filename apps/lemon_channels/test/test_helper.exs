@@ -8,9 +8,9 @@
 # LemonCore.GatewayConfig in test mode (config_test_mode: true).
 #
 
-gateway_config_key = :"Elixir.LemonGateway.Config"
+gateway_config_key = :gateway_test_config
 
-Application.put_env(:lemon_gateway, gateway_config_key, %{
+Application.put_env(:lemon_core, gateway_config_key, %{
   # Keep lemon_channels from auto-starting Telegram adapter during unit tests.
   enable_telegram: false,
   enable_discord: false,
@@ -70,7 +70,7 @@ ExUnit.after_suite(fn _ ->
   _ = Application.stop(:lemon_channels)
   _ = Application.stop(:lemon_gateway)
 
-  Application.delete_env(:lemon_gateway, gateway_config_key)
+  Application.delete_env(:lemon_core, gateway_config_key)
   Application.delete_env(:lemon_channels, :engines)
   Application.delete_env(:lemon_channels, :adapters)
 

@@ -811,14 +811,14 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
         authserv_id = "mx.provider.test"
         """)
 
-      gateway_key = :"Elixir.LemonGateway.Config"
-      previous_gateway = Application.get_env(:lemon_gateway, gateway_key)
-      on_exit(fn -> restore(:lemon_gateway, gateway_key, previous_gateway) end)
+      gateway_key = :gateway_test_config
+      previous_gateway = Application.get_env(:lemon_core, gateway_key)
+      on_exit(fn -> restore(:lemon_core, gateway_key, previous_gateway) end)
 
       email = LemonCore.Config.Modular.load(project_dir: project_dir).gateway.email
 
       Application.put_env(
-        :lemon_gateway,
+        :lemon_core,
         gateway_key,
         Map.put(previous_gateway || %{}, :email, email)
       )

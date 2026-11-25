@@ -24,20 +24,20 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
     end
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
   @jid "15551234567@s.whatsapp.net"
 
   setup do
     stop_transport()
 
-    old_gateway_config = Application.get_env(:lemon_gateway, @gateway_config_key)
+    old_gateway_config = Application.get_env(:lemon_core, @gateway_config_key)
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
     missing_bridge = Path.join(System.tmp_dir!(), "missing_whatsapp_bridge.mjs")
 
     :persistent_term.put({WhatsAppTestRouter, :pid}, self())
     :ok = RouterBridge.configure(router: WhatsAppTestRouter, run_orchestrator: WhatsAppTestRouter)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       enable_whatsapp: true,
       bindings: [
         %{
@@ -59,7 +59,7 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
       :persistent_term.erase({WhatsAppTestRouter, :abort_result})
       ModelPolicy.clear(ModelPolicyAdapter.build_route("default", @jid, nil))
       restore_env(:lemon_core, :router_bridge, old_router_bridge)
-      restore_env(:lemon_gateway, @gateway_config_key, old_gateway_config)
+      restore_env(:lemon_core, @gateway_config_key, old_gateway_config)
     end)
 
     :ok

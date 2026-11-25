@@ -63,7 +63,7 @@ defmodule LemonGateway.ApplicationTest do
   end
 
   defp configure_minimal_app do
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 2,
       enable_telegram: false
     })
@@ -73,7 +73,7 @@ defmodule LemonGateway.ApplicationTest do
   end
 
   defp cleanup_config do
-    Application.delete_env(:lemon_gateway, Elixir.LemonGateway.Config)
+    Application.delete_env(:lemon_core, :gateway_test_config)
     Application.delete_env(:lemon_gateway, :transports)
     Application.delete_env(:lemon_gateway, :config_path)
     Application.delete_env(:lemon_gateway, :gateway_ingress_enabled)
@@ -302,7 +302,7 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "loads configuration from Application env" do
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         max_concurrent_runs: 10,
         enable_telegram: false
       })
@@ -313,7 +313,7 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "gateway settings use defaults and configured overrides" do
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{})
+      Application.put_env(:lemon_core, :gateway_test_config, %{})
       Application.put_env(:lemon_gateway, :transports, [])
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -321,7 +321,7 @@ defmodule LemonGateway.ApplicationTest do
 
       stop_application()
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         max_concurrent_runs: 7,
         enable_telegram: true
       })
@@ -354,7 +354,7 @@ defmodule LemonGateway.ApplicationTest do
     test "enable_telegram: false disables telegram transport in TransportRegistry" do
       Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         max_concurrent_runs: 1,
         enable_telegram: false
       })

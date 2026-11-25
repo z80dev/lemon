@@ -464,11 +464,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
     File.mkdir_p!(project_root)
-    gateway_key = :"Elixir.LemonGateway.Config"
-    previous = Application.get_env(:lemon_gateway, gateway_key)
+    gateway_key = :gateway_test_config
+    previous = Application.get_env(:lemon_core, gateway_key)
 
     Application.put_env(
-      :lemon_gateway,
+      :lemon_core,
       gateway_key,
       Map.put(previous || %{}, :projects, %{project_id => %{root: project_root}})
     )
@@ -481,8 +481,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       ProjectBindingStore.delete_override(scope)
 
       if previous,
-        do: Application.put_env(:lemon_gateway, gateway_key, previous),
-        else: Application.delete_env(:lemon_gateway, gateway_key)
+        do: Application.put_env(:lemon_core, gateway_key, previous),
+        else: Application.delete_env(:lemon_core, gateway_key)
 
       File.rm_rf(project_root)
     end)

@@ -5,7 +5,7 @@ defmodule LemonChannels.Adapters.Discord.RendererTest do
   alias LemonChannels.{PresentationState, Registry}
   alias LemonCore.{DeliveryIntent, DeliveryRoute}
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   defmodule FakeDiscordPlugin do
     @behaviour LemonChannels.Plugin
@@ -580,19 +580,19 @@ defmodule LemonChannels.Adapters.Discord.RendererTest do
   end
 
   defp with_discord_files_config(files_config, fun) do
-    previous = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous = Application.get_env(:lemon_core, @gateway_config_key)
     config = previous || %{}
     discord = Map.get(config, :discord) || Map.get(config, "discord") || %{}
     next = Map.put(config, :discord, Map.put(discord, :files, files_config))
 
     try do
-      Application.put_env(:lemon_gateway, @gateway_config_key, next)
+      Application.put_env(:lemon_core, @gateway_config_key, next)
       fun.()
     after
       if previous == nil do
-        Application.delete_env(:lemon_gateway, @gateway_config_key)
+        Application.delete_env(:lemon_core, @gateway_config_key)
       else
-        Application.put_env(:lemon_gateway, @gateway_config_key, previous)
+        Application.put_env(:lemon_core, @gateway_config_key, previous)
       end
     end
   end

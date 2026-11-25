@@ -104,7 +104,7 @@ defmodule LemonGateway.WebhookTransportTest do
     if local_sweep_owner?, do: start_supervised!(Idempotency)
 
     original_webhook_env = Application.get_env(:lemon_gateway, :webhook)
-    original_override = Application.get_env(:lemon_gateway, LemonGateway.Config)
+    original_override = Application.get_env(:lemon_core, :gateway_test_config)
     original_bridge = Application.get_env(:lemon_core, :router_bridge)
     original_test_pid = Application.get_env(:lemon_gateway, :webhook_transport_test_pid)
 
@@ -114,7 +114,7 @@ defmodule LemonGateway.WebhookTransportTest do
     clear_idempotency_table()
 
     Application.delete_env(:lemon_gateway, :webhook)
-    Application.delete_env(:lemon_gateway, LemonGateway.Config)
+    Application.delete_env(:lemon_core, :gateway_test_config)
     Application.put_env(:lemon_gateway, :webhook_transport_test_pid, self())
 
     Application.put_env(
@@ -131,7 +131,7 @@ defmodule LemonGateway.WebhookTransportTest do
 
     on_exit(fn ->
       restore_env(:lemon_gateway, :webhook, original_webhook_env)
-      restore_env(:lemon_gateway, LemonGateway.Config, original_override)
+      restore_env(:lemon_core, :gateway_test_config, original_override)
       restore_env(:lemon_core, :router_bridge, original_bridge)
       restore_env(:lemon_gateway, :webhook_transport_test_pid, original_test_pid)
 
@@ -421,7 +421,7 @@ defmodule LemonGateway.WebhookTransportTest do
                updated_at_ms: 1
              })
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       webhook: %{
         integrations: %{
           integration_id => %{

@@ -239,7 +239,7 @@ defmodule LemonGateway.RunTest do
     # Stop and restart the application with the configured executor fixture.
     _ = Application.stop(:lemon_gateway)
 
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+    Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 10,
       enable_telegram: false
     })
@@ -1076,7 +1076,7 @@ defmodule LemonGateway.RunTest do
       # Enable engine claim for these tests
       _ = Application.stop(:lemon_gateway)
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         max_concurrent_runs: 10,
         enable_telegram: false
       })
@@ -2030,7 +2030,7 @@ defmodule LemonGateway.RunTest do
       # Setup with claim enabled
       _ = Application.stop(:lemon_gateway)
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         max_concurrent_runs: 10,
         enable_telegram: false
       })
@@ -2253,7 +2253,7 @@ defmodule LemonGateway.RunTest do
       # Setup with claim enabled and short timeout
       _ = Application.stop(:lemon_gateway)
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
+      Application.put_env(:lemon_core, :gateway_test_config, %{
         max_concurrent_runs: 10,
         enable_telegram: false
       })

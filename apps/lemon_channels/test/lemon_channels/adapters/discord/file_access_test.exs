@@ -10,7 +10,7 @@ defmodule LemonChannels.Adapters.Discord.FileAccessTest do
   alias LemonChannels.BindingResolver
   alias LemonCore.{ChatScope, ProjectBindingStore, Store}
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
   @guild_id 1_475_727_417_372_049_000
   @user_id 1_476_753_643_834_183_691
 
@@ -41,13 +41,13 @@ defmodule LemonChannels.Adapters.Discord.FileAccessTest do
       :ok
     end)
 
-    previous = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous = Application.get_env(:lemon_core, @gateway_config_key)
     root = fresh_dir!("lemon-discord-file-root")
     outside = fresh_dir!("lemon-discord-file-outside")
     File.write!(Path.join(outside, "secret.txt"), "OUTSIDE_SECRET")
     channel_id = 1_475_727_417_372_049_419 + System.unique_integer([:positive])
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       projects: %{"fileproj" => %{root: root}},
       bindings: [],
       discord: %{api_mod: FakeApi}
@@ -62,8 +62,8 @@ defmodule LemonChannels.Adapters.Discord.FileAccessTest do
       ProjectBindingStore.delete_override(scope)
 
       if previous,
-        do: Application.put_env(:lemon_gateway, @gateway_config_key, previous),
-        else: Application.delete_env(:lemon_gateway, @gateway_config_key)
+        do: Application.put_env(:lemon_core, @gateway_config_key, previous),
+        else: Application.delete_env(:lemon_core, @gateway_config_key)
 
       File.rm_rf!(root)
       File.rm_rf!(outside)

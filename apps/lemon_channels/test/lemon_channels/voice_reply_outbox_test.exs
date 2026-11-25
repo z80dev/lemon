@@ -115,7 +115,8 @@ defmodule LemonChannels.VoiceReplyOutboxTest do
                else: module
              )
            )
-         ), do: start_supervised!(module)
+         ),
+         do: start_supervised!(module)
     end
 
     if is_nil(Process.whereis(LemonChannels.VoiceReplyTaskSupervisor)) do
@@ -317,10 +318,10 @@ defmodule LemonChannels.VoiceReplyOutboxTest do
       existing = Registry.get_plugin("telegram")
       _ = Registry.unregister("telegram")
       :ok = Registry.register(LemonChannels.Adapters.Telegram)
-      config_key = :"Elixir.LemonGateway.Config"
-      old_config = Application.get_env(:lemon_gateway, config_key)
+      config_key = :gateway_test_config
+      old_config = Application.get_env(:lemon_core, config_key)
 
-      Application.put_env(:lemon_gateway, config_key, %{
+      Application.put_env(:lemon_core, config_key, %{
         telegram: %{
           account_id: ctx.account,
           bot_token: "test-token",
@@ -331,8 +332,8 @@ defmodule LemonChannels.VoiceReplyOutboxTest do
 
       on_exit(fn ->
         if old_config,
-          do: Application.put_env(:lemon_gateway, config_key, old_config),
-          else: Application.delete_env(:lemon_gateway, config_key)
+          do: Application.put_env(:lemon_core, config_key, old_config),
+          else: Application.delete_env(:lemon_core, config_key)
 
         if Process.whereis(Registry) do
           Registry.unregister("telegram")

@@ -134,7 +134,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     end
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   setup do
     start_supervised!({Task.Supervisor, name: LemonChannels.Adapters.Discord.AsyncSupervisor})
@@ -143,7 +143,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
   test "pairing API exits cannot put plaintext codes into crash logs" do
     with_discord_api(fn ->
-      Application.put_env(:lemon_gateway, @gateway_config_key, %{
+      Application.put_env(:lemon_core, @gateway_config_key, %{
         discord: %{api_mod: FailingPairingAPI}
       })
 
@@ -836,12 +836,12 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
   test "approval component resolves a pending approval through the runtime path" do
     parent = self()
-    previous_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous_gateway = Application.get_env(:lemon_core, @gateway_config_key)
     previous_test_mode = Application.get_env(:lemon_core, :config_test_mode)
     :persistent_term.put({ApprovalOutboxAPI, :pid}, parent)
     Application.put_env(:lemon_core, :config_test_mode, true)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       discord: %{api_mod: ApprovalOutboxAPI}
     })
 
@@ -854,7 +854,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     end)
 
     on_exit(fn ->
-      restore_env(:lemon_gateway, @gateway_config_key, previous_gateway)
+      restore_env(:lemon_core, @gateway_config_key, previous_gateway)
       restore_env(:lemon_core, :config_test_mode, previous_test_mode)
       :persistent_term.erase({ApprovalOutboxAPI, :pid})
     end)
@@ -1774,12 +1774,12 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   end
 
   defp with_discord_api(fun) do
-    previous = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous = Application.get_env(:lemon_core, @gateway_config_key)
     previous_test_mode = Application.get_env(:lemon_core, :config_test_mode)
 
     Application.put_env(:lemon_core, :config_test_mode, true)
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       enable_discord: true,
       discord: %{api_mod: FakeDiscordApi}
     })
@@ -1788,7 +1788,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       fun.()
     after
       restore_env(:lemon_core, :config_test_mode, previous_test_mode)
-      restore_env(:lemon_gateway, @gateway_config_key, previous)
+      restore_env(:lemon_core, @gateway_config_key, previous)
     end
   end
 

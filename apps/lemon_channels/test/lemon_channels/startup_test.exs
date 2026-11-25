@@ -38,7 +38,7 @@ defmodule LemonChannels.StartupTest do
     def answer_callback_query(_token, _cb_id, _opts), do: {:ok, %{"ok" => true}}
   end
 
-  @gateway_config_key :"Elixir.LemonGateway.Config"
+  @gateway_config_key :gateway_test_config
 
   setup do
     _ = Application.stop(:lemon_channels)
@@ -57,7 +57,7 @@ defmodule LemonChannels.StartupTest do
     StartupMockTelegramAPI.stop()
     {:ok, _} = StartupMockTelegramAPI.start_link()
 
-    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+    Application.put_env(:lemon_core, @gateway_config_key, %{
       max_concurrent_runs: 1,
       enable_telegram: true,
       bindings: [],
@@ -80,7 +80,7 @@ defmodule LemonChannels.StartupTest do
 
       # Restore a baseline for the rest of the lemon_channels suite. This module
       # intentionally stops applications as part of boot validation.
-      Application.put_env(:lemon_gateway, @gateway_config_key, %{
+      Application.put_env(:lemon_core, @gateway_config_key, %{
         enable_telegram: false,
         enable_discord: false,
         enable_xmtp: false,
