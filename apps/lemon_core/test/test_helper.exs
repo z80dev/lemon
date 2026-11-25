@@ -5,6 +5,9 @@ exclude_tags =
     [:memory_perf, :smoke, :external]
   end
 
+exclude_tags =
+  if match?({:unix, :linux}, :os.type()), do: exclude_tags, else: [:linux_only | exclude_tags]
+
 ExUnit.start(exclude: exclude_tags, capture_log: true)
 
 Code.require_file("../../lemon_platform_test/test_support.exs", __DIR__)

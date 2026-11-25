@@ -5,7 +5,6 @@ defmodule LemonCore.Service.IdentityTest do
   alias LemonCore.Service.{Identity, Lock}
 
   @moduletag :tmp_dir
-  @linux match?({:unix, :linux}, :os.type())
 
   test "lock acquires after boot run no ps or id", %{tmp_dir: dir} do
     assert {:ok, identity} = Identity.self_identity()
@@ -93,7 +92,7 @@ defmodule LemonCore.Service.IdentityTest do
              Identity.capture_self(os: :darwin, command_runner: fn _, _, _ -> {"", 1} end)
   end
 
-  @tag skip: if(@linux, do: false, else: "Linux only")
+  @tag :linux_only
   test "the /proc self identity equals the ps identity on Linux" do
     pid = String.to_integer(System.pid())
 
