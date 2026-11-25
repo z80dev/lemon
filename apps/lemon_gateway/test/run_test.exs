@@ -352,6 +352,27 @@ defmodule LemonGateway.RunTest do
     refute_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}, 50
   end
 
+  test "a finalized run evicted by :runs retention is never reopened" do
+    request = make_request(make_scope(), meta: %{executor_observer: self()})
+    now = System.system_time(:millisecond)
+
+    # What retention leaves behind: no `:runs` record, only the tombstone.
+    :ok =
+      LemonCore.Store.put(:run_tombstones, request.run_id, %{
+        finalized_at_ms: now,
+        expires_at: now + 60_000
+      })
+
+    on_exit(fn -> LemonCore.Store.delete(:run_tombstones, request.run_id) end)
+    assert {:error, :evicted} = LemonCore.RunStore.fetch(request.run_id)
+
+    {:ok, pid} = start_run_direct(request)
+    ref = Process.monitor(pid)
+
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2_000
+    refute_received {:executor_started, _request, _opts}
+  end
+
   describe "initialization" do
     test "starts successfully with a valid execution request" do
       scope = make_scope()

@@ -83,6 +83,10 @@ defmodule LemonCore.StoreCacheWarmTest do
     refute :hot_index in published
 
     assert {:error, :store_unavailable} = Store.fetch_all(store, :hot_index)
+
+    assert_raise RuntimeError, "Store could not list :hot_index", fn ->
+      Store.list(store, :hot_index)
+    end
   end
 
   test "reads of a table whose warm-up failed reach the backend instead of an empty mirror" do

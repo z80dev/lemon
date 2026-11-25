@@ -289,7 +289,7 @@ defmodule LemonCore.StoreTest do
       end
     end
 
-    test "listing and counting preserve backend errors through both query paths" do
+    test "listing and counting surface backend errors through both query paths" do
       original_state = :sys.get_state(Store)
       on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
 
@@ -297,9 +297,10 @@ defmodule LemonCore.StoreTest do
           opts <- [[], [run_id: "introspection-backend-failure"]] do
         swap_store_backend(backend, %{list_response: {:error, :sqlite_busy}})
 
-        assert Store.list_introspection_events(opts) == {:error, :sqlite_busy}
-        assert LemonCore.Introspection.list(opts) == {:error, :sqlite_busy}
-        assert LemonCore.IntrospectionStore.count(opts) == {:error, :sqlite_busy}
+        # The backend reason is logged; callers get the bounded store error.
+        assert Store.list_introspection_events(opts) == {:error, :store_unavailable}
+        assert LemonCore.Introspection.list(opts) == {:error, :store_unavailable}
+        assert LemonCore.IntrospectionStore.count(opts) == {:error, :store_unavailable}
       end
     end
 
@@ -311,8 +312,7 @@ defmodule LemonCore.StoreTest do
           opts <- [[], [event_type: :run_completed]] do
         swap_store_backend(backend, %{list_response: :unexpected})
 
-        assert Store.list_introspection_events(opts) ==
-                 {:error, {:unexpected_backend_response, :unexpected}}
+        assert Store.list_introspection_events(opts) == {:error, :store_unavailable}
       end
     end
 
@@ -609,7 +609,10 @@ defmodule LemonCore.StoreTest do
       original_state = swap_store_backend(BusyBackend, %{})
       on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
 
-      assert Store.list(:webhook_idempotency) == []
+      assert_raise RuntimeError, "Store could not list :webhook_idempotency", fn ->
+        Store.list(:webhook_idempotency)
+      end
+
       assert Store.fetch_all(:webhook_idempotency) == {:error, :store_unavailable}
     end
 

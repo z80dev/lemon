@@ -226,6 +226,8 @@ defmodule LemonGateway.Run do
   defp terminal_fence(state) do
     case RunStore.fetch(state.run_id) do
       {:ok, %{summary: %{completed: completed}}} when is_map(completed) -> :terminal
+      # Finalized, then evicted by `:runs` retention: never reopen it.
+      {:error, :evicted} -> :terminal
       {:ok, nil} -> :open
       {:ok, %{summary: nil}} -> :open
       _ -> :unavailable

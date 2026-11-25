@@ -4,9 +4,16 @@ defmodule LemonCore.Store.EtsBackend do
 
   This is the default backend providing fast, ephemeral storage.
   Data is lost when the process terminates.
+
+  Tables are `:protected`: the Store process writes them, and `reader/1`
+  lets any process read them (through a directory of table references) while
+  the Store keeps writing.
   """
 
   @behaviour LemonCore.Store.Backend
+
+  # Non-atom state key, so it can never collide with a caller's table name.
+  @directory {__MODULE__, :directory}
 
   @impl true
   def init(_opts) do
@@ -17,7 +24,9 @@ defmodule LemonCore.Store.EtsBackend do
       run_history: :ets.new(:lemon_core_run_history, [:ordered_set, :protected])
     }
 
-    {:ok, tables}
+    directory = :ets.new(:lemon_core_directory, [:set, :protected])
+    true = :ets.insert(directory, Map.to_list(tables))
+    {:ok, Map.put(tables, @directory, directory)}
   end
 
   @impl true
@@ -124,12 +133,79 @@ defmodule LemonCore.Store.EtsBackend do
     {:ok, items, state}
   end
 
+  @doc "The table directory; `read_list/2` and `read_range/5` take it."
+  @impl true
+  def reader(state), do: Map.fetch!(state, @directory)
+
+  @impl true
+  def read_list(directory, table) do
+    case :ets.lookup(directory, table) do
+      [{^table, tid}] -> {:ok, :ets.tab2list(tid)}
+      [] -> {:ok, []}
+    end
+  end
+
+  @impl true
+  def read_keys(directory, table) do
+    case :ets.lookup(directory, table) do
+      [{^table, tid}] -> {:ok, :ets.select(tid, [{{:"$1", :_}, [], [:"$1"]}])}
+      [] -> {:ok, []}
+    end
+  end
+
+  @impl true
+  def read_range(directory, table, from_ms, to_ms, include_untimed) do
+    case :ets.lookup(directory, table) do
+      [{^table, tid}] -> {:ok, select_range(tid, table, from_ms, to_ms, include_untimed)}
+      [] -> {:ok, []}
+    end
+  end
+
+  defp select_range(tid, :usage_records = table, from_ms, to_ms, include_untimed) do
+    :ets.foldl(
+      fn row, acc ->
+        if in_range?(row, table, from_ms, to_ms, include_untimed), do: [row | acc], else: acc
+      end,
+      [],
+      tid
+    )
+  end
+
+  defp select_range(tid, _table, from_ms, to_ms, include_untimed) do
+    time = {:map_get, :at_ms, :"$1"}
+
+    timed? =
+      {:andalso, {:is_map, :"$1"}, {:andalso, {:is_map_key, :at_ms, :"$1"}, {:is_integer, time}}}
+
+    in_range? = {:andalso, timed?, {:andalso, {:>=, time, from_ms}, {:<, time, to_ms}}}
+    predicate = if include_untimed, do: {:orelse, {:not, timed?}, in_range?}, else: in_range?
+    :ets.select(tid, [{{:_, :"$1"}, [predicate], [:"$_"]}])
+  end
+
+  @doc false
+  def filter_range(rows, table, from_ms, to_ms, include_untimed) do
+    Enum.filter(rows, &in_range?(&1, table, from_ms, to_ms, include_untimed))
+  end
+
+  defp in_range?({key, value}, table, from_ms, to_ms, include_untimed) do
+    case LemonCore.Store.Backend.range_timestamp(table, key, value) do
+      nil -> include_untimed
+      ms -> ms >= from_ms and ms < to_ms
+    end
+  end
+
   # Ensure a table exists, creating it dynamically if needed
   defp ensure_table(state, table) do
     if Map.has_key?(state, table) do
       state
     else
       ets_table = :ets.new(:"lemon_core_#{table}", [:set, :protected])
+
+      case Map.fetch(state, @directory) do
+        {:ok, directory} -> true = :ets.insert(directory, {table, ets_table})
+        :error -> :ok
+      end
+
       Map.put(state, table, ets_table)
     end
   end

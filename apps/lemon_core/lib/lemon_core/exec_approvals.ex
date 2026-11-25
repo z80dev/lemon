@@ -392,6 +392,7 @@ defmodule LemonCore.ExecApprovals do
         id when is_binary(id) and id != "" ->
           case LemonCore.RunStore.fetch(id) do
             {:ok, %{summary: summary}} when is_map(summary) -> {:ok, true}
+            {:error, :evicted} -> {:ok, true}
             {:ok, _} -> {:ok, false}
             {:error, _} = error -> error
           end
@@ -705,6 +706,7 @@ defmodule LemonCore.ExecApprovals do
       id when is_binary(id) and id != "" ->
         case LemonCore.RunStore.fetch(id) do
           {:ok, %{summary: summary}} when is_map(summary) -> {:ok, true}
+          {:error, :evicted} -> {:ok, true}
           {:ok, _} -> {:ok, false}
           {:error, _} = error -> error
         end

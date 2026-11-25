@@ -8,6 +8,23 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking (0.3.0):** `LemonCore.Store` bounds `:runs` (#682). Events are
+  buffered per run (first 200 + latest, 2,000 in all; `:events_dropped`) and
+  attached to `get_run/2`/`fetch_run/2` results; finalization moves them into
+  the record and stamps `:finalized_at_ms`/`:expires_at`; the sweep evicts
+  finalized runs after `:runs_retention_ms` (default 24 h) and keeps a
+  durable terminal marker in `:run_terminals`.
+  `fetch_run/2` returns `{:error, :evicted}` for a finalized, evicted run;
+  events for finalized runs are dropped. `list/2`, `fetch_all/2`,
+  `fetch_keys/2` and `fetch_range/5` raise `ArgumentError` for `:runs`;
+  `UsageStore.fetch_runs/1` is removed and `UsageRecords` reads only
+  occurrences (`UsageStore.fetch_occurrences_between/3`).
+- `LemonCore.Store` whole-table reads (`fetch_all/2`, `list/2`,
+  `list_introspection_events/2`, new `fetch_keys/2` and `fetch_range/5`) run in
+  the caller through the new optional `Store.Backend` callbacks `reader/1`,
+  `read_list/2`, `read_range/5` and `read_recent/3` (implemented by the ETS and
+  SQLite backends; SQLite adds an indexed `at_ms` column). Introspection listing
+  errors are now `{:error, :store_unavailable}` (#682).
 - `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
   OS processes (#586).
 - **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,

@@ -86,10 +86,11 @@ defmodule LemonRouter.AgentMessagingSessions do
     end
   end
 
+  # Keys only: `ensure/2` reads each session's index row strictly itself.
   def discover do
-    with {:ok, rows} <- Store.fetch_all(:sessions_index) do
-      Enum.reduce_while(rows, :ok, fn
-        {key, row}, :ok when is_binary(key) and is_map(row) ->
+    with {:ok, keys} <- RunStore.fetch_session_keys() do
+      Enum.reduce_while(keys, :ok, fn
+        key, :ok when is_binary(key) ->
           case ensure("operator", "session://" <> key) do
             {:ok, _} ->
               {:cont, :ok}

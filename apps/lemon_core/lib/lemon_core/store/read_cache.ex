@@ -261,6 +261,17 @@ defmodule LemonCore.Store.ReadCache do
     ArgumentError -> :uncached
   end
 
+  @doc "Every cached key of a domain; `:uncached` as in `fetch_all/2`."
+  @spec fetch_keys(store() | tables(), atom()) :: {:ok, [term()]} | :uncached
+  def fetch_keys(store \\ @default_store, domain) do
+    case resolve(store, domain) do
+      nil -> :uncached
+      table -> {:ok, :ets.select(table, [{{:"$1", :_}, [], [:"$1"]}])}
+    end
+  rescue
+    ArgumentError -> :uncached
+  end
+
   # -- Internals -----------------------------------------------------------
 
   # Server-side callers pass the table map straight through; client-side
