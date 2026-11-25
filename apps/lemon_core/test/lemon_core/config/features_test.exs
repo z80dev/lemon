@@ -29,12 +29,15 @@ defmodule LemonCore.Config.FeaturesTest do
       assert Features.enabled?(features, :session_search)
     end
 
-    test "learning-loop flags default to default-on" do
+    test "skill synthesis drafts default on and routing feedback defaults off" do
       features = Features.resolve(%{})
-      assert features.routing_feedback == :"default-on"
+      assert features.routing_feedback == :off
       assert features.skill_synthesis_drafts == :"default-on"
-      assert Features.enabled?(features, :routing_feedback)
+      refute Features.enabled?(features, :routing_feedback)
       assert Features.enabled?(features, :skill_synthesis_drafts)
+
+      enabled = Features.resolve(%{"features" => %{"routing_feedback" => "on"}})
+      assert Features.enabled?(enabled, :routing_feedback)
     end
 
     test "crash resume is default off and explicitly configurable" do

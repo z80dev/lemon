@@ -1485,7 +1485,7 @@ without ad-hoc environment variables.
 ```toml
 [features]
 session_search               = "default-on" # durable memory ingest and search (default)
-routing_feedback             = "default-on" # task fingerprinting + routing feedback (default)
+routing_feedback             = "off"        # task fingerprinting + routing feedback (enable with "on")
 skill_synthesis_drafts       = "default-on" # skill synthesis draft pipeline (default)
 crash_resume                = "off"        # hard-crash continuation is explicitly opt-in
 ```
@@ -1493,8 +1493,11 @@ crash_resume                = "off"        # hard-crash continuation is explicit
 `session_search` defaults to `"default-on"`: durable memory ingest and search
 are active on a stock install (retention 30 days, max 500 documents per scope;
 runs whose summaries look like they contain a secret are dropped entirely, not
-redacted). Set it to `"off"` to disable. The learning-loop flags
-(`routing_feedback`, `skill_synthesis_drafts`) also default to `"default-on"`.
+redacted). Set it to `"off"` to disable. `skill_synthesis_drafts` also defaults
+to `"default-on"`. `routing_feedback` defaults to `"off"`; when enabled, routing
+history only replaces `[defaults] model` for un-pinned runs in a task context
+where the default measured worse (see
+[Adaptive Behavior](user-guide/adaptive.md#how-it-influences-routing)).
 
 Valid rollout states:
 
@@ -1509,7 +1512,7 @@ Each flag can be overridden via an environment variable using the pattern
 
 ```bash
 LEMON_FEATURE_SESSION_SEARCH=off       # kill switch for durable memory
-LEMON_FEATURE_ROUTING_FEEDBACK=default-on
+LEMON_FEATURE_ROUTING_FEEDBACK=on      # record and use routing history
 ```
 
 Config validation fails cleanly if a flag is set to an unrecognised state.

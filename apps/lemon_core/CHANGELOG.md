@@ -13,6 +13,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- `LemonCore.Config.Features`: `routing_feedback` now defaults to `:off`
+  (`%Features{}` and `resolve/1` with no setting); enable it with `"on"` (#647).
 - `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
   fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
   instead of launching a browser (#660).

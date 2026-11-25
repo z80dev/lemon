@@ -107,6 +107,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- **Breaking:** `[features] routing_feedback` now defaults to `"off"`; set it to
+  `"on"` in the global config to record and use routing history. When enabled,
+  history no longer outranks `[defaults] model`: it is consulted only for
+  un-pinned runs, suggests only models with at least a 75% success rate, and
+  replaces the default only where the default itself was measured (5+ samples)
+  and did worse, so a changed default takes effect immediately. The router reads
+  the flag from the config cache instead of parsing TOML per submission, and
+  the history lookup is an index range scan (#647).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
@@ -251,6 +259,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   was never read and is now ignored with a warning. Binding transports from
   config no longer create atoms, and TOML project roots resolve for channel
   bindings (#697).
+- Two follow-ups merged inside the router's 500 ms debounce window (or two
+  steers falling back together) now run: the merged run keeps the newest
+  message's execution context instead of the earlier one's, which the native
+  executor rejected as a run-ID mismatch, and a restart replays the merged
+  prompt instead of only the first message (#642).
 - Discord boots again: `lemon_channels` now starts `:gun`, which Nostrum needs
   for its gateway and REST connections; previously a configured bot token
   failed with `:noproc` and no Discord service started (#670).
