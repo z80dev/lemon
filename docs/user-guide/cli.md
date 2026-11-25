@@ -1464,9 +1464,10 @@ lemon model [provider] [options]
 | --- | --- |
 | `--provider NAME` | Provider id |
 | `--token TOKEN` | Provider credential |
-| `--auth oauth\|device\|api_key\|codex-cli` | Authentication mode (import is opt-in) |
+| `--auth oauth\|device\|api_key\|codex-cli\|omp` | Authentication mode (import is opt-in) |
 | `--codex-auth-path PATH` | Auth file for --auth codex-cli only |
-| `--non-interactive` | Require --token, --auth device or --auth codex-cli |
+| `--region china\|global` | Kimi Code deployment (global = kimi.ai accounts) |
+| `--non-interactive` | Require --token, --auth device, --auth codex-cli, or --auth omp |
 | `--secret-name NAME` | Secret to store, inspect, or log out |
 | `--model MODEL` | Default model with --set-default |
 | `--set-default` | Set the provider and model as defaults |

@@ -5,7 +5,7 @@ defmodule LemonCli.Onboarding.Runner do
   @moduledoc false
 
   alias LemonAgent.ModelRuntime.Credentials
-  alias LemonAi.Auth.OmpToken
+  alias LemonAi.Auth.{KimiCodeOAuth, OmpToken}
   alias LemonAgent.ModelRuntime.CustomProviders
   alias LemonAgent.ModelRuntime.ModelCatalog
   alias LemonAi.Models.Discovery
@@ -161,6 +161,7 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   defp onboard(cli_opts, spec, io, opts) do
+    cli_opts = put_region_base_url!(cli_opts, spec)
     auth_mode = resolve_auth_mode!(cli_opts, spec, io)
 
     if auth_mode == :omp do
@@ -182,11 +183,13 @@ defmodule LemonCli.Onboarding.Runner do
         {:error, reason} -> fail!(OmpToken.error_message(reason))
       end
 
+    base_url = cli_opts[:region_base_url] || provider_cfg["base_url"]
+
     unless Credentials.provider_has_credentials?(spec.id, %{
-             spec.id => %{"auth_source" => "omp", "omp_path" => omp_path}
+             spec.id => %{"auth_source" => "omp", "omp_path" => omp_path, "base_url" => base_url}
            }) do
       fail!(
-        "omp could not provide a usable Kimi Code token. Run `omp` and `/login kimi-code`, then retry `lemon model kimi_coding --auth omp`."
+        "omp could not provide a usable Kimi Code token. Run `omp` and `/login #{KimiCodeOAuth.omp_provider(base_url)}`, then retry `lemon model kimi_coding --auth omp`."
       )
     end
 
@@ -197,6 +200,7 @@ defmodule LemonCli.Onboarding.Runner do
     persist!(config_path, [], fn content ->
       content
       |> update_provider_auth_config(spec, :omp, omp_path)
+      |> put_base_url(spec, cli_opts[:region_base_url])
       |> maybe_set_defaults(model, spec)
     end)
 
@@ -235,6 +239,7 @@ defmodule LemonCli.Onboarding.Runner do
     persist!(config_path, [{secret_name, {:set, secret_value, secret_provider}}], fn content ->
       content
       |> update_provider_auth_config(spec, auth_mode, secret_name)
+      |> put_base_url(spec, cli_opts[:region_base_url])
       |> maybe_set_defaults(selected_model, spec)
     end)
 
@@ -250,6 +255,43 @@ defmodule LemonCli.Onboarding.Runner do
 
     :ok
   end
+
+  # `--region` (Kimi Code) selects a deployment: its auth host for sign-in and
+  # its API base URL, which is written to the provider table. Without it, a
+  # kimi.ai `base_url` already configured keeps sign-in on the global host.
+  defp put_region_base_url!(cli_opts, %Provider{} = spec) do
+    case normalize_optional_string(cli_opts[:region]) do
+      nil when spec.id == "kimi_coding" ->
+        base_url =
+          (cli_opts[:config_path] || Config.global_path())
+          |> read_existing_config!()
+          |> Toml.decode!()
+          |> get_in(["providers", spec.id, "base_url"])
+
+        if KimiCodeOAuth.region_for_base_url(base_url) == "global",
+          do: Keyword.put(cli_opts, :region, "global"),
+          else: cli_opts
+
+      nil ->
+        cli_opts
+
+      region ->
+        case KimiCodeOAuth.region(region) do
+          {:ok, %{api_base_url: url}} when spec.id == "kimi_coding" ->
+            Keyword.put(cli_opts, :region_base_url, url)
+
+          _ ->
+            fail!(
+              "Unknown --region #{inspect(region)}. Use one of: #{Enum.join(KimiCodeOAuth.regions(), ", ")}."
+            )
+        end
+    end
+  end
+
+  defp put_base_url(content, _spec, nil), do: content
+
+  defp put_base_url(content, %Provider{} = spec, base_url),
+    do: TomlPatch.upsert_string(content, spec.provider_table, "base_url", base_url)
 
   @doc """
   Starts the apps onboarding depends on. Raises a user-readable error (a

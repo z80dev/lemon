@@ -6,6 +6,9 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Added
 
+- `lemon model kimi-code --region china|global` signs in to the selected Kimi
+  Code deployment (with `--auth omp`, omp's `kimi-code` or `kimi-code-global`
+  login) and writes its `base_url` (#525).
 - `lemon browser stop` stops the runtime's local browser driver and the
   Chrome it launched through the admin `browser.stop` method (#660).
 - `lemon setup omp [status|disconnect]` connects Lemon providers to omp's auth

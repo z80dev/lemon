@@ -89,7 +89,8 @@ defmodule LemonAi.Auth.KimiCodeOAuthTest do
              "type" => "kimi_code_oauth",
              "access_token" => ^access_token,
              "refresh_token" => "kimi-rt",
-             "account_id" => "kimi-user"
+             "account_id" => "kimi-user",
+             "auth_base_url" => "https://auth.kimi.com"
            } = secret
   end
 
@@ -104,6 +105,76 @@ defmodule LemonAi.Auth.KimiCodeOAuthTest do
              KimiCodeOAuth.login_device_flow(Keyword.put(opts, :on_auth, fn _, _ -> :ok end))
 
     assert_received {:request, "auth.kimi.test", _, _, _}
+  end
+
+  test "global accounts sign in and refresh at auth.kimi.ai", %{opts: opts} do
+    System.put_env("KIMI_CODE_OAUTH_HOST", "https://auth.kimi.test")
+    test_pid = self()
+
+    stub(fn conn, path, _params ->
+      case path do
+        "/api/oauth/device_authorization" ->
+          json(conn, %{
+            "device_code" => "dev",
+            "user_code" => "KIMI-2",
+            "verification_uri" => "https://www.kimi.ai/device",
+            "interval" => 1,
+            "expires_in" => 600
+          })
+
+        "/api/oauth/token" ->
+          json(conn, %{"access_token" => "fresh", "refresh_token" => "rt", "expires_in" => 60})
+      end
+    end)
+
+    assert {:ok, secret} =
+             KimiCodeOAuth.login_device_flow(
+               Keyword.merge(opts, region: "global", on_auth: fn _, _ -> :ok end)
+             )
+
+    assert secret["auth_base_url"] == "https://auth.kimi.ai"
+    assert_received {:request, "auth.kimi.ai", "/api/oauth/device_authorization", _, _}
+    assert_received {:request, "auth.kimi.ai", "/api/oauth/token", _, _}
+
+    # The stored issuer wins over the environment's host on refresh.
+    stored = Jason.encode!(secret)
+
+    persist = fn _name, value, _revision ->
+      send(test_pid, {:persisted, value})
+      :ok
+    end
+
+    assert {:ok, "fresh"} =
+             OAuthSecretResolver.resolve_api_key_from_secret(
+               "llm_kimi_coding_api_key",
+               stored,
+               Keyword.merge(opts,
+                 force_refresh: true,
+                 reload_secret: fn _ -> {:ok, stored, :rev} end,
+                 persist_secret: persist
+               )
+             )
+
+    assert_received {:request, "auth.kimi.ai", "/api/oauth/token",
+                     %{"grant_type" => "refresh_token"}, _}
+
+    assert_received {:persisted, value}
+    assert Jason.decode!(value)["auth_base_url"] == "https://auth.kimi.ai"
+
+    assert {:error, :unknown_kimi_region} =
+             KimiCodeOAuth.login_device_flow(
+               Keyword.merge(opts, region: "mars", on_auth: fn _, _ -> :ok end)
+             )
+  end
+
+  test "regions map API base URLs to omp providers" do
+    assert KimiCodeOAuth.regions() == ["china", "global"]
+    assert {:ok, %{api_base_url: "https://api.kimi.ai/coding"}} = KimiCodeOAuth.region(" Global ")
+    assert KimiCodeOAuth.region("eu") == :error
+    assert KimiCodeOAuth.omp_provider("https://api.kimi.ai/coding") == "kimi-code-global"
+    assert KimiCodeOAuth.omp_provider("https://api.kimi.com/coding") == "kimi-code"
+    assert KimiCodeOAuth.omp_provider(nil) == "kimi-code"
+    assert KimiCodeOAuth.omp_provider("https://notkimi.ai/coding") == "kimi-code"
   end
 
   test "a near-expiry login refreshes through the resolver and persists the rotated token",

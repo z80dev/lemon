@@ -2552,7 +2552,7 @@ Other subscription and browser sign-ins offered by `lemon model <provider>`:
 | --- | --- | --- |
 | `openrouter` | Browser PKCE sign-in (callback on `http://localhost:54549/callback`, or paste the redirect URL); a pasted `sk-or-` key is checked and accepted | A durable OpenRouter API key in `providers.openrouter.api_key_secret` |
 | `xai` | SuperGrok / X Premium+ device code (`--auth oauth`); API key remains the default | Refreshable login in `providers.xai.api_key_secret`, `auth_source = "oauth"` |
-| `kimi_coding` (`kimi-code`) | Kimi Code device code (default), API key, or existing omp login (`--auth omp`) | Refreshable login in `providers.kimi_coding.api_key_secret`, `auth_source = "oauth"`; omp mode stores only `auth_source = "omp"` and an optional executable path, never credentials |
+| `kimi_coding` (`kimi-code`) | Kimi Code device code (default), API key, or existing omp login (`--auth omp`); `--region global` for kimi.ai accounts | Refreshable login in `providers.kimi_coding.api_key_secret`, `auth_source = "oauth"`; omp mode stores only `auth_source = "omp"` and an optional executable path, never credentials; `--region` also writes `base_url` |
 | `zai` | GLM Coding Plan sign-in (`--auth oauth`): paste the full final `zcode://zai-auth/callback?...` redirect (or `code#state`, not a bare code); Lemon finds or creates an API key named `lemon` | A durable Z.AI API key in `providers.zai.api_key_secret` |
 
 Refreshable logins renew shortly before expiry and when a provider rejects the
@@ -2561,7 +2561,8 @@ variables (for example `XAI_API_KEY` or `KIMI_API_KEY`) do not override the
 stored login. `lemon model <provider> --status` reports the stored login or key
 without printing it; `--logout` deletes it and its config references but does
 not revoke it at the provider. `KIMI_CODE_OAUTH_HOST` overrides the Kimi auth
-host; the `ZAI_OAUTH_*` variables override the Z.AI endpoints for allowlist
+host for a new sign-in (a stored Kimi login refreshes at the host that issued
+it); the `ZAI_OAUTH_*` variables override the Z.AI endpoints for allowlist
 changes.
 
 Token-grant requests do not follow redirects. Device-code deadlines include
@@ -2622,6 +2623,66 @@ refresh that loses the conditional write adopts the winner's stored token when
 it is different and unexpired, instead of failing. This applies to every
 refreshable OAuth login.
 
+### Kimi Code regions
+
+Kimi Code runs two separate deployments, and accounts and tokens belong to the
+one that issued them, as in omp's `kimi-code` and `kimi-code-global`
+providers:
+
+| `--region` | Accounts | Sign-in host | API `base_url` | omp provider |
+| --- | --- | --- | --- | --- |
+| `china` (default) | kimi.com | `https://auth.kimi.com` | `https://api.kimi.com/coding` | `kimi-code` |
+| `global` | kimi.ai | `https://auth.kimi.ai` | `https://api.kimi.ai/coding` | `kimi-code-global` |
+
+```bash
+lemon model kimi-code --region global              # device sign-in
+lemon model kimi-code --region global --auth omp   # reuse omp's kimi-code-global login
+```
+
+`--region` writes the region's `base_url` to `[providers.kimi_coding]`; model
+requests, model discovery, `--status` quota, `lemon doctor --live` and Kimi web
+search all use that `base_url`. A stored login records the host that issued it
+and refreshes there. Without `--region`, onboarding leaves `base_url` as it is.
+
+### Several Kimi Code accounts
+
+Two or more Kimi Code subscription logins on `kimi_coding` (credential pool
+entries under `runtime.provider_routing.credential_pools.<pool>.credentials`,
+or several `omp_broker` accounts) are ordered for new sessions by quota
+headroom, as omp ranks its Kimi accounts: Lemon reads each login's quota from
+`/coding/v1/usages` (cached per account for five minutes, one minute after a
+failure), puts accounts with an exhausted window last (earliest reset first)
+and accounts whose 5h window is at least 85% used after the rest, and prefers
+the account whose long window (`7d`, else `month`) and then 5h window has the
+most unused quota per hour left before it resets. Accounts whose quota cannot
+be read and API keys follow in configured order. A session keeps the
+credential it started with; rate-limited credentials still cool down and
+rotate as for any pool.
+
+```toml
+[runtime.provider_routing]
+default_pool = "kimi"
+
+[runtime.provider_routing.credential_pools.kimi.credentials]
+kimi_coding = ["secret:llm_kimi_coding_second"]
+```
+
+Store a second login with
+`lemon model kimi-code --secret-name llm_kimi_coding_second`, then point
+`providers.kimi_coding.api_key_secret` back at the first.
+
+### Moonshot tool schemas
+
+Lemon's `kimi` and `kimi_coding` providers use the Anthropic Messages wire.
+A model configured with `api = "openai_completions"` against a Moonshot-native
+host (`api.moonshot.ai`, `api.moonshot.cn`, `api.kimi.com`, `api.kimi.ai`)
+sends its tool parameters as Moonshot Flavored JSON Schema, the subset those
+hosts accept (omp's `normalizeSchemaForMoonshot`): `const` becomes a typed
+`enum`, `oneOf` becomes `anyOf`, `type` arrays and `nullable` collapse to one
+type, and validation keywords such as `format`, `pattern` or `minItems` are
+removed and summarized in the field's `description`. Other hosts, including
+proxies in front of Moonshot, receive the schema unchanged.
+
 ### Kimi Code authentication through omp
 
 To reuse a Kimi Code login managed by omp, sign in to Kimi Code with omp first,
@@ -2651,7 +2712,8 @@ the executable need not exist on the machine validating the config. Runtime
 resolution checks that the selected path is executable.
 
 Both credential resolution and readiness obtain an access token by running
-`omp token kimi-code`, without a shell. Readiness does not launch a login flow
+`omp token kimi-code` (`omp token kimi-code-global` when `base_url` is on
+kimi.ai), without a shell. Readiness does not launch a login flow
 or inspect omp's credential files. The selected source is authoritative:
 `KIMI_API_KEY`, `MOONSHOT_API_KEY`, inline `api_key`, `api_key_env`, and stored
 `api_key_secret` / `oauth_secret` credentials do not override it, including when

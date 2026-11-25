@@ -256,6 +256,11 @@ defmodule LemonCli.CommandRegistry do
           "Auth file for --auth codex-cli only"
         ),
         option(
+          "--region china|global",
+          ["--region"],
+          "Kimi Code deployment (global = kimi.ai accounts)"
+        ),
+        option(
           "--non-interactive",
           ["--non-interactive"],
           "Require --token, --auth device, --auth codex-cli, or --auth omp"

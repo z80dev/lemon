@@ -15,7 +15,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   image input, effort levels, per-family output caps), and `websearch` gains a
   `kimi` provider (`POST /coding/v1/search`) that uses the Kimi Code login,
   omp login or API key. The `kimi` (API-key) K3 and `kimi-for-coding` models now
-  send adaptive thinking with effort, like `kimi_coding`.
+  send adaptive thinking with effort, like `kimi_coding`. Global (kimi.ai)
+  Kimi Code accounts sign in with `lemon model kimi-code --region global`
+  (also with `--auth omp`, which then reads omp's `kimi-code-global` login), and
+  a stored login refreshes at the host that issued it. Several Kimi Code logins
+  in a credential pool (or omp broker) are ordered for new sessions by quota
+  headroom, as omp does. Models using the OpenAI Chat Completions wire against
+  a Moonshot-native host send tool parameters as Moonshot Flavored JSON Schema.
 - `lemon browser stop` (admin control-plane method `browser.stop`) stops the
   local browser driver and the Chrome it launched (#660).
 - `lemon setup omp` reuses the provider logins and API keys omp already holds:

@@ -66,6 +66,16 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonAi.Auth.KimiCodeOAuth.region/1`, `regions/0`, `region_for_base_url/1`
+  and `omp_provider/1` describe the China (kimi.com) and global (kimi.ai) Kimi
+  Code deployments; `login_device_flow/1` takes `:region`, and stored logins
+  record `auth_base_url` and refresh there. `LemonAi.Auth.OmpToken.resolve/2`
+  takes `provider: "kimi-code-global"` (#525).
+- `LemonAi.Providers.KimiCodeRanking.rank/2` orders several Kimi Code logins
+  by quota headroom, like omp's Kimi account ranking (#525).
+- `LemonAi.Providers.MoonshotToolSchema` normalizes tool parameters to Moonshot
+  Flavored JSON Schema; `OpenAICompletions` applies it for Moonshot-native
+  hosts (`compat.moonshot_tool_schema`) (#525).
 - `LemonAi.Models.KimiCodeDiscovery` lists a Kimi Code account's models from
   `/v1/models` (efforts, context, image input, per-family output caps), cached
   per account; `Models.list_models/1` takes `:discover_kimi_code` and
