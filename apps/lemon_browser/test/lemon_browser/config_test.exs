@@ -90,7 +90,7 @@ defmodule LemonBrowser.ConfigTest do
 
   test "the browser driver's application env does not select a provider" do
     Application.put_env(:lemon_browser, :backend, :browserbase)
-    assert Tools.resolve(%{}).browser.provider == "auto"
+    assert Tools.section(Tools.resolve(%{}), :browser).provider == "auto"
   end
 
   test "provider override wins over file and legacy backend choices" do
