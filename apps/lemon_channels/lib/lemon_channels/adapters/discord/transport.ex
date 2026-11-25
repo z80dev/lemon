@@ -772,9 +772,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     session_key = build_session_key(state, inbound, scope)
 
-    {model_hint, model_scope} = resolve_model_hint(state, session_key, channel_id, thread_id)
-    {thinking_hint, thinking_scope} = resolve_thinking_hint(state, channel_id, thread_id)
-
+    # Model and thinking level come from the router (`PolicyStore` session and
+    # chat rows), never from channel meta.
     meta =
       inbound.meta
       |> Map.put(:session_key, session_key)
@@ -782,10 +781,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       |> Map.put(:user_msg_id, user_msg_id)
       |> Map.put(:status_msg_id, nil)
       |> Map.put(:topic_id, thread_id)
-      |> maybe_put(:model, model_hint)
-      |> maybe_put(:model_scope, model_scope)
-      |> maybe_put(:thinking_level, thinking_hint)
-      |> maybe_put(:thinking_scope, thinking_scope)
       |> maybe_put(:queue_mode, queue_override)
 
     meta =
@@ -1492,8 +1487,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         nil,
         %{
           maybe_subscribe_to_run: fn _run_id -> :ok end,
-          current_thread_generation: fn _state, _chat_id, _thread_id -> 0 end,
-          maybe_put: &maybe_put/3
+          current_thread_generation: fn _state, _chat_id, _thread_id -> 0 end
         }
       )
     end)

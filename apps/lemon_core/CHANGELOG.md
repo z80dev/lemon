@@ -23,6 +23,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- `LemonCore.PolicyStore` gains chat rows (`:chat_policies`) for channel model
+  and thinking defaults: `chat_route/1`, `chat_route?/1`, `route_chain/1`,
+  `fetch_chat/1`, `fetch_chats/0`, `update_chat/2`, `delete_chat/1` and
+  `resolve_chat/1` (most specific row per field, fail closed). `lemon policy`
+  is now `LemonCore.PolicyStore.CLI` with its `mix lemon.policy` task (#714).
 - `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
   fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
   instead of launching a browser (#660).

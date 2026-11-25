@@ -30,10 +30,16 @@ or passes through a `Job` adapter.
 - **Model precedence**:
   1. request-level explicit model
   2. meta model (backward-compatible input)
-  3. session policy model
-  4. profile model
-  5. config default model (`LemonCore.Config.cached().agent.default_model`,
+  3. session policy model (`LemonCore.PolicyStore` session row: `sessions.patch`,
+     channel `/model` for this session)
+  4. chat model (the most specific `PolicyStore` chat row of a channel session's
+     route: thread, chat, account, channel; channel `/model` for future sessions
+     and `lemon policy`)
+  5. profile model
+  6. config default model (`LemonCore.Config.cached().agent.default_model`,
      backed by `[defaults]`)
+- **Thinking precedence**: request `meta.thinking_level`, then the session row,
+  then the chat row. Channels never put a model or thinking level in run meta.
 
 `SubmissionBuilder` also stores the resolved `history_model` in submission
 metadata for routing-feedback history when that feature is enabled. Runtime
@@ -110,11 +116,10 @@ building/filtering/sorting (net -530 LOC in `lemon_channels`); both now
 delegate to `ModelCatalog`.
 
 **Survey findings for the remaining candidate sites:**
-- `apps/lemon_channels/lib/lemon_channels/model_policy*.ex` (the
-  `LemonChannels.ModelPolicy` route-precedence store) is clean — it stores
-  and resolves *policy* (which model/thinking-level a route prefers) by
-  channel/account/peer/thread precedence, and never reimplements
-  provider/credential lookups. No migration needed.
+- Channel route defaults (which model/thinking level a thread, chat, account
+  or channel prefers) are `LemonCore.PolicyStore` chat rows resolved by
+  `PolicyStore.resolve_chat/1`; `apps/lemon_channels` only renders them and
+  never reimplements provider/credential lookups.
 - `apps/lemon_router/lib/lemon_router/model_selection.ex` is intentionally
   separate from provider/credential lookup: it applies top-level model
   precedence and returns the resolved model. It no longer maps model strings

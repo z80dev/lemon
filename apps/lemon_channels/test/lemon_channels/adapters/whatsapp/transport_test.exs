@@ -2,7 +2,6 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.Adapters.WhatsApp.{ModelPolicyAdapter, Transport}
-  alias LemonChannels.ModelPolicy
   alias LemonCore.{RouterBridge, RunRequest}
 
   defmodule WhatsAppTestRouter do
@@ -57,7 +56,7 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
       :persistent_term.erase({WhatsAppTestRouter, :pid})
       :persistent_term.erase({WhatsAppTestRouter, :submit_result})
       :persistent_term.erase({WhatsAppTestRouter, :abort_result})
-      ModelPolicy.clear(ModelPolicyAdapter.build_route("default", @jid, nil))
+      LemonCore.PolicyStore.delete_chat(ModelPolicyAdapter.build_route("default", @jid, nil))
       restore_env(:lemon_core, :router_bridge, old_router_bridge)
       restore_env(:lemon_gateway, @gateway_config_key, old_gateway_config)
     end)

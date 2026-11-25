@@ -4,6 +4,11 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- `session.detail` resolves a channel session's model and thinking level from
+  its `PolicyStore` chat defaults too, reporting `modelSource: "chat"` (#714).
+
 ### Removed
 
 - **Breaking:** `exec.approvals.get` no longer returns the never-written

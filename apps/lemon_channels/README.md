@@ -240,7 +240,6 @@ LemonChannels.Application
 +-- LemonChannels.Outbox.Dedupe           (GenServer - confirmed-key cleanup policy)
 +-- Outbox.WorkerSupervisor               (Task.Supervisor - max_children delivery cap)
 +-- LemonChannels.Outbox                  (GenServer - delivery queue)
-+-- WhatsApp.ModelPolicyAdapter           (GenServer - session-override ETS owner)
 +-- LemonChannels.InboundHttp             (Supervisor - optional HTTP listener)
 |   +-- InboundHttp.Routes                (GenServer - config registration only)
 +-- LemonChannels.AdapterSupervision      (Supervisor - rest_for_one)
@@ -267,10 +266,6 @@ When another runtime holds a Telegram bot's poller lock, the Telegram transport 
 
 Named volatile dedupe tables belong to `LemonCore.Dedupe.Owner` workers under
 the core dynamic supervisor, not short-lived callers or channel transports.
-The application-owned `WhatsApp.ModelPolicyAdapter` child owns session model
-overrides. Session override reads/writes use ETS directly; they never create a
-table in a short-lived command process. An unavailable owner is an explicit
-failure, and owner restart clears those ephemeral overrides.
 
 ```elixir
 config :lemon_channels,
@@ -681,7 +676,7 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `Telegram.Formatter` | Converts markdown to plain text + Telegram entities (avoids fragile MarkdownV2 escaping) |
 | `Telegram.Markdown` | EarmarkParser-based AST renderer producing Telegram entity format with UTF-16 offsets |
 | `Telegram.ResumeIndexStore` | Typed wrapper for Telegram message-id session and resume indices; legacy vendor entries remain readable but are never selected for a top-level run |
-| `Telegram.StateStore` | Typed wrapper for Telegram per-session/per-topic preference state |
+| `Telegram.StateStore` | Typed wrapper for Telegram resume selection and thread generation state (model and thinking preferences live in `LemonCore.PolicyStore`) |
 | `Telegram.Truncate` | Splits/truncates messages so both the Markdown source and the rendered text fit 4096 UTF-16 units; never splits a code fence or table row that fits in one message (oversized fences/tables become several closed fences/tables, each table repeating its header) and keeps native resume lines on the last message |
 | `Telegram.TriggerMode` | Per-chat/topic `:all` vs `:mentions` mode (ETS-backed) |
 | `Telegram.OffsetStore` | Persists `getUpdates` offset via `LemonCore.Store` |
@@ -722,7 +717,7 @@ Session and native-resume indices are scoped by a generation counter. `/new` inc
 
 #### `/model` Picker Behavior
 
-`/model` uses a reply keyboard (bottom keyboard) flow for per-user selection in a chat/topic: provider -> model -> scope (`This session` or `All future sessions`). `This session` writes the current session override; `All future sessions` writes a chat-wide default even when invoked from a topic. Selection messages are intercepted by transport state and are not routed as normal inbound prompts. Provider/model lists are paginated in-keyboard with `<< Prev` / `Next >>`, plus `< Back` / `Close`. The model step accepts either the exact button label or raw model ids such as `gpt-5.4` and `provider:model_id`.
+`/model` uses a reply keyboard (bottom keyboard) flow for per-user selection in a chat/topic: provider -> model -> scope (`This session` or `All future sessions`). `This session` writes the `:model` of the session's `LemonCore.PolicyStore` row (the row `sessions.patch` writes, so web, TUI and the control plane show it); `All future sessions` also writes a chat-wide `PolicyStore` chat row, even when invoked from a topic. `/thinking` writes the topic or chat row. Channels only render these rows and encode picker choices: runs carry no channel-chosen model or thinking level, and `LemonRouter.ModelSelection` resolves them from the session key. Session reset and delete remove the session row with every model and thinking override; `/new` clears the session model. Selection messages are intercepted by transport state and are not routed as normal inbound prompts. Provider/model lists are paginated in-keyboard with `<< Prev` / `Next >>`, plus `< Back` / `Close`. The model step accepts either the exact button label or raw model ids such as `gpt-5.4` and `provider:model_id`.
 
 The picker belongs to the member who sent `/model`: only that sender's later messages in the same chat/topic answer it, and the keyboard is sent with `selective: true`. Other members' messages are ordinary messages. Picker answers pass the group trigger gate first, so in a mentions-only group the opener answers by replying to the bot's picker message (or the chat uses `/trigger all`). An idle picker expires after ten minutes and releases its catalog snapshot; a later answer is then an ordinary message.
 

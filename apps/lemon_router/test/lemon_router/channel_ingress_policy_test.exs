@@ -219,8 +219,7 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
                  nil,
                  %{
                    maybe_subscribe_to_run: fn _ -> :ok end,
-                   current_thread_generation: fn _, _, _ -> 0 end,
-                   maybe_put: fn map, key, value -> Map.put(map, key, value) end
+                   current_thread_generation: fn _, _, _ -> 0 end
                  }
                )
 

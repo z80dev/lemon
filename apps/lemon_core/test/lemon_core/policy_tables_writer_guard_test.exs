@@ -35,21 +35,21 @@ defmodule LemonCore.PolicyTablesWriterGuardTest do
       writers: [:put_session_policy],
       deleters: []
     },
-    model_policies: %{
-      module: "ModelPolicyStore",
-      readers: [:get, :list],
-      writers: [:put],
-      deleters: [:delete]
+    chat_policies: %{
+      module: "PolicyStore",
+      readers: [:fetch_chat, :fetch_chats, :resolve_chat],
+      writers: [:update_chat],
+      deleters: [:delete_chat]
     }
   }
+
+  # Pure route helpers: they read no table.
+  @helpers [:chat_route, :chat_route?, :route_chain]
 
   @owners %{
     "PolicyStore" => {LemonCore.PolicyStore, "apps/lemon_core/lib/lemon_core/policy_store.ex"},
     "ExecApprovalStore" =>
-      {LemonCore.ExecApprovalStore, "apps/lemon_core/lib/lemon_core/exec_approval_store.ex"},
-    "ModelPolicyStore" =>
-      {LemonChannels.ModelPolicyStore,
-       "apps/lemon_channels/lib/lemon_channels/model_policy_store.ex"}
+      {LemonCore.ExecApprovalStore, "apps/lemon_core/lib/lemon_core/exec_approval_store.ex"}
   }
 
   @root Path.expand("../../../..", __DIR__)
@@ -86,7 +86,8 @@ defmodule LemonCore.PolicyTablesWriterGuardTest do
 
       policy_accessors =
         for {fun, _arity} <- module.__info__(:functions),
-            name != "ExecApprovalStore" or String.contains?(Atom.to_string(fun), "_polic"),
+            name == "PolicyStore" or String.contains?(Atom.to_string(fun), "_polic"),
+            fun not in @helpers,
             uniq: true,
             do: fun
 

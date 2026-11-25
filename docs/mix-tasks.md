@@ -124,7 +124,7 @@ Durable state and outbound notifications.
 | `mix lemon.store.migrate_jsonl_to_sqlite` | Migrate Lemon store data from JSONL files to SQLite. |
 | `mix lemon.honcho` | Inspect the Honcho memory satellite (`status` / `sessions` / `ping` / `context`). |
 | `mix lemon.memory` | Manage the durable memory store (`stats` / `prune` / `erase`). |
-| `mix lemon.policy` | Manage per-route model policies (channel / account / peer / thread). |
+| `mix lemon.policy` | Manage chat model and thinking defaults (channel / account / peer / thread `PolicyStore` rows). |
 | `mix lemon.send` | Send a Telegram or Discord notification from a script. |
 
 ## Skills

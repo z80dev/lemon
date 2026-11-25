@@ -1,13 +1,13 @@
 defmodule Mix.Tasks.Lemon.Policy do
   use Mix.Task
 
-  @shortdoc "Manage channel model policies"
+  @shortdoc "Manage chat model and thinking defaults"
   @moduledoc "Source wrapper for `lemon policy`. Run `lemon policy --help` for options."
   @requirements ["loadpaths"]
 
   @impl true
   def run(args) do
-    LemonChannels.ModelPolicy.CLI.run(args)
+    LemonCore.PolicyStore.CLI.run(args)
   rescue
     error in LemonCore.CLI.Error -> Mix.raise(error.message)
   end

@@ -673,9 +673,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       extract_message_ids: &extract_message_ids/1,
       maybe_index_telegram_msg_session: &maybe_index_telegram_msg_session/4,
       maybe_subscribe_to_session: &maybe_subscribe_to_session/1,
-      resolve_model_hint: &resolve_model_hint/4,
       resolve_session_key: &resolve_session_key/4,
-      resolve_thinking_hint: &resolve_thinking_hint/3,
       send_submission_failure: &send_critical_feedback/5,
       send_system_message: &send_system_message/5
     }
@@ -1124,8 +1122,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       user_msg_id,
       %{
         maybe_subscribe_to_run: &maybe_subscribe_to_run/1,
-        current_thread_generation: &current_thread_generation/3,
-        maybe_put: &maybe_put/3
+        current_thread_generation: &current_thread_generation/3
       }
     )
   end

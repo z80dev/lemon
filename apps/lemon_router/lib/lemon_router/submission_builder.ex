@@ -104,6 +104,7 @@ defmodule LemonRouter.SubmissionBuilder do
          :ok <- require_channel_provenance(origin, meta),
          :ok <- require_goal_binding(origin, meta, cwd_override),
          {:ok, session_row} <- get_session_row(session_key),
+         {:ok, chat_defaults} <- get_chat_defaults(session_key),
          {:ok, agent_profile} <- get_execution_profile(agent_id, meta, settings),
          {:ok, tool_policy} <-
            resolve_tool_policy(agent_profile, tool_policy_override, %{
@@ -154,8 +155,13 @@ defmodule LemonRouter.SubmissionBuilder do
 
       session_config = session_row || %{}
       session_model = MapHelpers.get_key(session_config, :model)
-      session_thinking_level = MapHelpers.get_key(session_config, :thinking_level)
-      request_thinking_level = MapHelpers.get_key(meta, :thinking_level)
+
+      thinking_input = %{
+        request_thinking_level: MapHelpers.get_key(meta, :thinking_level),
+        session_thinking_level: MapHelpers.get_key(session_config, :thinking_level),
+        chat_thinking_level: chat_defaults.thinking_level
+      }
+
       profile_model = MapHelpers.get_key(agent_profile, :model)
       profile_system_prompt = MapHelpers.get_key(agent_profile, :system_prompt)
       default_model = settings.default_model
@@ -170,6 +176,7 @@ defmodule LemonRouter.SubmissionBuilder do
         model_explicit: params.model_explicit,
         meta_model: MapHelpers.get_key(meta, :model),
         session_model: session_model,
+        chat_model: chat_defaults.model,
         profile_model: profile_model,
         history_model: history_model,
         default_model: default_model
@@ -179,7 +186,7 @@ defmodule LemonRouter.SubmissionBuilder do
       resolved_model = selection.model
 
       resolved_thinking_level =
-        normalize_thinking_level(request_thinking_level || session_thinking_level)
+        thinking_input |> ModelSelection.thinking_level() |> normalize_thinking_level()
 
       resolved_system_prompt = explicit_system_prompt || profile_system_prompt
 
@@ -336,6 +343,15 @@ defmodule LemonRouter.SubmissionBuilder do
     case LemonCore.PolicyStore.fetch_session(session_key) do
       {:ok, row} when is_map(row) or is_nil(row) -> {:ok, row}
       {:ok, _invalid} -> {:error, :invalid_session_policy}
+      {:error, _reason} -> {:error, :policy_unavailable}
+    end
+  end
+
+  # Model and thinking defaults of the session's channel route (thread, chat,
+  # account, channel). A non-channel session has none and reads nothing.
+  defp get_chat_defaults(session_key) do
+    case LemonCore.PolicyStore.resolve_chat(session_key) do
+      {:ok, defaults} -> {:ok, defaults}
       {:error, _reason} -> {:error, :policy_unavailable}
     end
   end

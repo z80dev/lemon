@@ -969,16 +969,16 @@ defmodule LemonCli.CommandRegistry do
     ),
     runtime(
       "policy",
-      LemonChannels.ModelPolicy.CLI,
-      "Manage model policies",
+      LemonCore.PolicyStore.CLI,
+      "Manage chat model and thinking defaults",
       "lemon policy <list|set|get|clear> [channel] [options]",
       [
         option("--account ID", ["--account", "-a"], "Channel account"),
         option("--peer ID", ["--peer", "-p"], "Peer or chat"),
         option("--thread ID", ["--thread", "-t"], "Thread or topic"),
-        option("--model MODEL", ["--model", "-m"], "Model override"),
-        option("--thinking LEVEL", ["--thinking"], "Thinking override"),
-        option("--reason TEXT", ["--reason", "-r"], "Policy metadata reason"),
+        option("--model MODEL", ["--model", "-m"], "Model default"),
+        option("--thinking LEVEL", ["--thinking"], "Thinking default"),
+        option("--reason TEXT", ["--reason", "-r"], "Reason stored with the row"),
         option("--all", ["--all"], "Clear all policies for the channel")
       ],
       subcommands(~w(list set get clear))

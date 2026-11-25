@@ -744,7 +744,7 @@ export interface SessionRouting {
 	provider?: Nullable<string>;
 	contextWindow?: Nullable<number>;
 	maxOutput?: Nullable<number>;
-	modelSource?: Nullable<"session" | "profile" | "default">;
+	modelSource?: Nullable<"session" | "chat" | "profile" | "default">;
 	modelOverride?: Nullable<string>;
 	thinkingLevel?: Nullable<string>;
 	/** Read-only provenance for the runtime that will execute the next run. */

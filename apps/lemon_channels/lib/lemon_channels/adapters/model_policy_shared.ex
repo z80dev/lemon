@@ -1,9 +1,17 @@
 defmodule LemonChannels.Adapters.ModelPolicyShared do
   @moduledoc """
-  Shared ModelPolicyAdapter logic for all channel transports.
+  Channel `/model` and `/thinking` preferences, stored in `LemonCore.PolicyStore`.
 
-  Provides model and thinking-level resolution with session overrides
-  (ephemeral) and persistent policy storage via `LemonChannels.ModelPolicy`.
+  A session override (`/model` → "this session") is the `:model` field of the
+  session's `PolicyStore` row, the same row `sessions.patch` writes, so the
+  control plane, web and TUI see it. A chat or thread default (`/model` →
+  "future sessions", `/thinking`) is the `PolicyStore` chat row of the route
+  `build_route/3` names. Channels only render these values and encode picker
+  choices; `LemonRouter.ModelSelection` decides which one a run uses, from the
+  session key alone, so a run never depends on what a channel put in its meta.
+
+  Reads here feed rendering only: an unreadable row renders as unset, while the
+  router's admission read of the same rows fails closed.
 
   ## Usage
 
@@ -14,116 +22,52 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
         def channel_name, do: "telegram"
 
         @impl true
-        def build_route(account_id, chat_id, thread_id) do
-          thread_str = if is_integer(thread_id), do: to_string(thread_id), else: nil
-          Route.new("telegram", account_id, to_string(chat_id), thread_str)
-        end
-
-        @impl true
-        def session_get(session_key), do: ...
-
-        @impl true
-        def session_put(session_key, model), do: ...
+        def build_route(account_id, chat_id, thread_id),
+          do: {"telegram", account_id, to_string(chat_id), thread_id && to_string(thread_id)}
 
         @impl true
         def format_source_labels, do: %{topic: "topic default", chat: "chat default"}
       end
-
-  ## Optional callbacks
-
-  - `legacy_model_fallback/3` — for channels with pre-ModelPolicy data
-  - `legacy_thinking_fallback/3` — for channels with pre-ModelPolicy thinking data
-  - `chat_id_guard/1` — override the default guard type check
   """
 
-  alias LemonChannels.ModelPolicy
-  alias LemonChannels.ModelPolicy.Route
+  alias LemonCore.PolicyStore
 
   @thinking_levels ~w(off minimal low medium high xhigh auto)
-  @placeholder_model_id "_thinking_only"
 
   @callback channel_name() :: String.t()
   @callback build_route(account_id :: String.t(), chat_id :: term(), thread_id :: term()) ::
-              Route.t()
-  @callback session_get(session_key :: String.t()) :: String.t() | nil
-  @callback session_put(session_key :: String.t(), model :: String.t()) :: :ok
+              PolicyStore.chat_route()
   @callback format_source_labels() :: %{topic: String.t(), chat: String.t()}
 
-  @optional_callbacks legacy_model_fallback: 3,
-                      legacy_thinking_fallback: 3,
-                      clear_legacy_thinking: 1
-  @callback legacy_model_fallback(
-              account_id :: String.t(),
-              chat_id :: term(),
-              thread_id :: term()
-            ) :: String.t() | nil
-  @callback legacy_thinking_fallback(
-              account_id :: String.t(),
-              chat_id :: term(),
-              thread_id :: term()
-            ) :: String.t() | nil
-  @callback clear_legacy_thinking(legacy_key :: term()) :: term()
-
   defmacro __using__(_opts) do
-    # Shared adapter callbacks intentionally inject a broad implementation block.
-    # credo:disable-for-next-line Credo.Check.Refactor.LongQuoteBlocks
     quote location: :keep do
       @behaviour LemonChannels.Adapters.ModelPolicyShared
 
-      alias LemonChannels.ModelPolicy
-      alias LemonChannels.ModelPolicy.Route
-
-      import LemonChannels.Adapters.ModelPolicyShared,
-        only: [
-          normalize_thinking_level: 1,
-          thinking_level_atom: 1,
-          normalize_model_id: 1,
-          placeholder_only_policy?: 1,
-          policy_model_id: 1,
-          resolve_policy_model: 1,
-          exact_policy_thinking_level: 1,
-          placeholder_model_id: 0
-        ]
-
-      # ======================================================================
-      # Session Overrides (ephemeral, per-session)
-      # ======================================================================
+      alias LemonChannels.Adapters.ModelPolicyShared, as: Shared
 
       @spec session_model_override(term()) :: binary() | nil
-      def session_model_override(session_key) when is_binary(session_key) do
-        case session_get(session_key) do
-          model when is_binary(model) and model != "" -> model
-          _ -> nil
-        end
-      end
+      def session_model_override(session_key), do: Shared.session_model(session_key)
 
-      def session_model_override(_session_key), do: nil
+      @spec put_session_model_override(term(), term()) :: :ok | {:error, term()}
+      def put_session_model_override(session_key, model),
+        do: Shared.put_session_model(session_key, model)
 
-      @spec put_session_model_override(term(), term()) :: :ok
-      def put_session_model_override(session_key, model)
-          when is_binary(session_key) and is_binary(model) do
-        :ok = session_put(session_key, model)
-        :ok
-      end
+      @spec delete_session_model_override(term()) :: :ok | {:error, term()}
+      def delete_session_model_override(session_key), do: Shared.delete_session_model(session_key)
 
-      def put_session_model_override(_session_key, _model), do: :ok
-
-      # ======================================================================
-      # Combined Resolution (session + policy + optional legacy fallback)
-      # ======================================================================
-
+      @doc "The model shown for a session: its override, else the chat default (`:future`)."
       @spec resolve_model_hint(binary() | nil, term(), term(), term()) ::
               {binary() | nil, :session | :future | nil}
       def resolve_model_hint(account_id, session_key, chat_id, thread_id)
           when is_binary(session_key) do
         case session_model_override(session_key) do
-          model when is_binary(model) and model != "" ->
+          model when is_binary(model) ->
             {model, :session}
 
-          _ ->
+          nil ->
             case default_model_preference(account_id, chat_id, thread_id) do
-              model when is_binary(model) and model != "" -> {model, :future}
-              _ -> {nil, nil}
+              model when is_binary(model) -> {model, :future}
+              nil -> {nil, nil}
             end
         end
       end
@@ -134,27 +78,19 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
               {binary() | nil, :topic | :chat | nil}
       def resolve_thinking_hint(account_id, chat_id, thread_id) do
         account_id = account_id || "default"
+        route = build_route(account_id, chat_id, thread_id)
+        chat_route = build_route(account_id, chat_id, nil)
 
-        topic_level =
-          if has_thread?(thread_id),
-            do: default_thinking_preference(account_id, chat_id, thread_id),
-            else: nil
+        case Shared.resolved_defaults(route) do
+          %{thinking_level: level, thinking_route: ^route}
+          when is_binary(level) and route != chat_route ->
+            {level, :topic}
 
-        chat_level = default_thinking_preference(account_id, chat_id, nil)
+          %{thinking_level: level, thinking_route: ^chat_route} when is_binary(level) ->
+            {level, :chat}
 
-        inherited_level =
-          LemonChannels.Adapters.ModelPolicyShared.resolved_policy_thinking_level(
-            __MODULE__,
-            account_id,
-            chat_id,
-            thread_id
-          )
-
-        cond do
-          is_binary(topic_level) and topic_level != "" -> {topic_level, :topic}
-          is_binary(chat_level) and chat_level != "" -> {chat_level, :chat}
-          is_binary(inherited_level) and inherited_level != "" -> {inherited_level, nil}
-          true -> {nil, nil}
+          %{thinking_level: level} ->
+            {level, nil}
         end
       end
 
@@ -169,183 +105,157 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
         end
       end
 
-      def format_thinking_line(_level, _source) do
-        LemonChannels.Adapters.ModelPolicyShared.default_thinking_line()
-      end
+      def format_thinking_line(_level, _source), do: Shared.default_thinking_line()
 
-      # ======================================================================
-      # Persistent Model Preferences (ModelPolicy + optional legacy fallback)
-      # ======================================================================
-
+      @doc "The chat default model inherited by `thread_id` (thread, chat, account, channel)."
       @spec default_model_preference(binary() | nil, term(), term()) :: binary() | nil
       def default_model_preference(account_id, chat_id, thread_id) do
-        account_id = account_id || "default"
-        route = build_route(account_id, chat_id, thread_id)
+        (account_id || "default")
+        |> build_route(chat_id, thread_id)
+        |> Shared.resolved_defaults()
+        |> Map.fetch!(:model)
+      end
 
-        case resolve_policy_model(route) do
+      @spec put_default_model_preference(binary() | nil, term(), term(), term()) ::
+              :ok | {:error, term()}
+      def put_default_model_preference(account_id, chat_id, thread_id, model) do
+        case Shared.normalize_model_id(model) do
           nil ->
-            if function_exported?(__MODULE__, :legacy_model_fallback, 3) do
-              apply(__MODULE__, :legacy_model_fallback, [account_id, chat_id, thread_id])
-            else
-              nil
-            end
+            :ok
 
-          model_id ->
-            model_id
+          model ->
+            (account_id || "default")
+            |> build_route(chat_id, thread_id)
+            |> Shared.put_chat_field(:model, model, channel_name())
         end
       end
 
-      @spec put_default_model_preference(binary() | nil, term(), term(), term()) :: :ok
-      def put_default_model_preference(account_id, chat_id, thread_id, model)
-          when is_binary(model) do
-        account_id = account_id || "default"
-        route = build_route(account_id, chat_id, thread_id)
-        existing = ModelPolicy.get(route)
-
-        policy_opts = [
-          set_by: channel_name(),
-          reason: "Set via #{String.capitalize(channel_name())} /model command"
-        ]
-
-        policy_opts =
-          case existing do
-            %{thinking_level: thinking_level} when not is_nil(thinking_level) ->
-              Keyword.put(policy_opts, :thinking_level, thinking_level)
-
-            _ ->
-              policy_opts
-          end
-
-        policy = ModelPolicy.new_policy(model, policy_opts)
-        :ok = ModelPolicy.set(route, policy)
-        :ok
-      end
-
-      def put_default_model_preference(_account_id, _chat_id, _thread_id, _model), do: :ok
-
-      # ======================================================================
-      # Persistent Thinking Preferences (ModelPolicy + optional legacy fallback)
-      # ======================================================================
-
+      @doc "The thinking level stored on exactly this thread or chat (no inheritance)."
       @spec default_thinking_preference(binary() | nil, term(), term()) :: binary() | nil
       def default_thinking_preference(account_id, chat_id, thread_id)
           when is_binary(account_id) do
-        route = build_route(account_id, chat_id, thread_id)
-
-        case exact_policy_thinking_level(route) do
-          nil ->
-            if function_exported?(__MODULE__, :legacy_thinking_fallback, 3) do
-              apply(__MODULE__, :legacy_thinking_fallback, [account_id, chat_id, thread_id])
-            else
-              nil
-            end
-
-          level ->
-            level
-        end
+        account_id
+        |> build_route(chat_id, thread_id)
+        |> Shared.exact_thinking_level()
       end
 
       def default_thinking_preference(_account_id, _chat_id, _thread_id), do: nil
 
-      @spec put_default_thinking_preference(binary() | nil, term(), term(), term()) :: :ok
-      def put_default_thinking_preference(account_id, chat_id, thread_id, level)
-          when is_binary(level) do
-        normalized = normalize_thinking_level(level)
-
-        if is_binary(normalized) and normalized != "" do
-          account_id = account_id || "default"
-          route = build_route(account_id, chat_id, thread_id)
-          thinking_atom = thinking_level_atom(normalized)
-
-          existing = ModelPolicy.get(route)
-
-          policy =
-            case existing do
-              nil ->
-                ModelPolicy.new_policy(placeholder_model_id(),
-                  thinking_level: thinking_atom,
-                  set_by: channel_name(),
-                  reason: "Set via #{String.capitalize(channel_name())} /thinking command"
-                )
-
-              policy ->
-                Map.put(policy, :thinking_level, thinking_atom)
-            end
-
-          :ok = ModelPolicy.set(route, policy)
-        end
-
-        :ok
-      end
-
-      def put_default_thinking_preference(_account_id, _chat_id, _thread_id, _level), do: :ok
-
-      @spec clear_default_thinking_preference(binary() | nil, term(), term()) :: boolean()
-      def clear_default_thinking_preference(account_id, chat_id, thread_id)
-          when is_binary(account_id) do
-        had_override? = is_binary(default_thinking_preference(account_id, chat_id, thread_id))
-
-        route = build_route(account_id, chat_id, thread_id)
-
-        case ModelPolicy.get(route) do
+      @spec put_default_thinking_preference(binary() | nil, term(), term(), term()) ::
+              :ok | {:error, term()}
+      def put_default_thinking_preference(account_id, chat_id, thread_id, level) do
+        case Shared.normalize_thinking_level(level) do
           nil ->
             :ok
 
-          %{thinking_level: _} = policy ->
-            updated = Map.delete(policy, :thinking_level)
-
-            if placeholder_only_policy?(updated) do
-              :ok = ModelPolicy.clear(route)
-            else
-              :ok = ModelPolicy.set(route, updated)
-            end
-
-          _ ->
-            :ok
+          normalized ->
+            (account_id || "default")
+            |> build_route(chat_id, thread_id)
+            |> Shared.put_chat_field(:thinking_level, normalized, channel_name())
         end
+      end
 
-        if function_exported?(__MODULE__, :clear_legacy_thinking, 1) do
-          apply(__MODULE__, :clear_legacy_thinking, [{account_id, chat_id, thread_id}])
-        end
-
+      @doc "Clears this thread's or chat's own thinking level; true when one was set."
+      @spec clear_default_thinking_preference(binary() | nil, term(), term()) :: boolean()
+      def clear_default_thinking_preference(account_id, chat_id, thread_id)
+          when is_binary(account_id) do
+        route = build_route(account_id, chat_id, thread_id)
+        had_override? = is_binary(Shared.exact_thinking_level(route))
+        _ = Shared.put_chat_field(route, :thinking_level, nil, channel_name())
         had_override?
       end
 
       def clear_default_thinking_preference(_account_id, _chat_id, _thread_id), do: false
 
-      # ======================================================================
-      # Route helpers
-      # ======================================================================
+      @spec route_for(map() | String.t(), term(), term()) :: PolicyStore.chat_route()
+      def route_for(%{account_id: account_id}, chat_id, thread_id),
+        do: route_for(account_id || "default", chat_id, thread_id)
 
-      @spec route_for(map() | String.t(), term(), term()) :: Route.t()
-      def route_for(%{account_id: account_id}, chat_id, thread_id) do
-        route_for(account_id || "default", chat_id, thread_id)
-      end
-
-      def route_for(account_id, chat_id, thread_id) when is_binary(account_id) do
-        build_route(account_id, chat_id, thread_id)
-      end
-
-      # ======================================================================
-      # Private helpers
-      # ======================================================================
-
-      defp has_thread?(thread_id) when is_integer(thread_id), do: true
-      defp has_thread?(thread_id) when is_binary(thread_id) and thread_id != "", do: true
-      defp has_thread?(_), do: false
+      def route_for(account_id, chat_id, thread_id) when is_binary(account_id),
+        do: build_route(account_id, chat_id, thread_id)
     end
   end
 
-  # ===========================================================================
-  # Public helper functions (called from injected code)
-  # ===========================================================================
+  @doc false
+  def session_model(session_key) when is_binary(session_key) do
+    case PolicyStore.fetch_session(session_key) do
+      {:ok, %{} = row} -> row |> Map.get(:model) |> normalize_model_id()
+      _absent_or_unreadable -> nil
+    end
+  end
 
-  def resolved_policy_thinking_level(module, account_id, chat_id, thread_id)
-      when is_binary(account_id) do
-    account_id
-    |> module.build_route(chat_id, thread_id)
-    |> ModelPolicy.resolve_thinking_level()
-    |> normalize_thinking_level()
+  def session_model(_session_key), do: nil
+
+  @doc false
+  def put_session_model(session_key, model) when is_binary(session_key) do
+    case normalize_model_id(model) do
+      nil ->
+        :ok
+
+      model ->
+        session_result(
+          PolicyStore.update_session(session_key, &Map.put(&1 || %{}, :model, model))
+        )
+    end
+  end
+
+  def put_session_model(_session_key, _model), do: :ok
+
+  @doc false
+  def delete_session_model(session_key) when is_binary(session_key) do
+    case PolicyStore.fetch_session(session_key) do
+      {:ok, %{model: _}} ->
+        session_result(PolicyStore.update_session(session_key, &Map.delete(&1 || %{}, :model)))
+
+      {:ok, _no_model} ->
+        :ok
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  def delete_session_model(_session_key), do: :ok
+
+  defp session_result({:ok, _row}), do: :ok
+  defp session_result({:error, _reason} = error), do: error
+
+  @doc false
+  def resolved_defaults(route) do
+    case PolicyStore.resolve_chat(route) do
+      {:ok, defaults} ->
+        defaults
+
+      {:error, _reason} ->
+        %{model: nil, model_route: nil, thinking_level: nil, thinking_route: nil}
+    end
+  end
+
+  @doc false
+  def exact_thinking_level(route) do
+    case PolicyStore.fetch_chat(route) do
+      {:ok, %{} = row} -> row |> Map.get(:thinking_level) |> normalize_thinking_level()
+      _absent_or_unreadable -> nil
+    end
+  end
+
+  @doc false
+  # Sets (or with `nil` clears) one field of the chat row; a row left with
+  # neither a model nor a thinking level is deleted.
+  def put_chat_field(route, field, value, set_by) do
+    update = fn current ->
+      row = current || %{}
+      row = if is_nil(value), do: Map.delete(row, field), else: Map.put(row, field, value)
+
+      if Map.has_key?(row, :model) or Map.has_key?(row, :thinking_level),
+        do: Map.merge(row, %{set_by: set_by, updated_at_ms: System.system_time(:millisecond)}),
+        else: nil
+    end
+
+    case PolicyStore.update_chat(route, update) do
+      {:ok, _row} -> :ok
+      {:error, _reason} = error -> error
+    end
   end
 
   def default_thinking_line do
@@ -358,16 +268,8 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
   defp get_agent_map(%{agent: agent}) when is_map(agent), do: agent
   defp get_agent_map(_), do: %{}
 
-  # ===========================================================================
-  # Public utility functions (imported by adapters)
-  # ===========================================================================
-
-  def normalize_thinking_level(nil), do: nil
-
-  def normalize_thinking_level(level) when is_atom(level) do
-    str = Atom.to_string(level)
-    if str in @thinking_levels, do: str, else: nil
-  end
+  def normalize_thinking_level(level) when is_atom(level) and not is_nil(level),
+    do: level |> Atom.to_string() |> normalize_thinking_level()
 
   def normalize_thinking_level(level) when is_binary(level) do
     normalized = String.downcase(String.trim(level))
@@ -376,59 +278,12 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
 
   def normalize_thinking_level(_), do: nil
 
-  def thinking_level_atom(level) when is_binary(level) do
-    case level do
-      "off" -> :off
-      "minimal" -> :minimal
-      "low" -> :low
-      "medium" -> :medium
-      "high" -> :high
-      "xhigh" -> :xhigh
-      "auto" -> :auto
-    end
-  end
-
   def normalize_model_id(model_id) when is_binary(model_id) do
-    normalized = String.trim(model_id)
-
-    if normalized != "" and normalized != @placeholder_model_id do
-      normalized
-    else
-      nil
+    case String.trim(model_id) do
+      "" -> nil
+      normalized -> normalized
     end
   end
 
   def normalize_model_id(_), do: nil
-
-  def placeholder_only_policy?(policy) when is_map(policy) do
-    is_nil(Map.get(policy, :thinking_level)) and
-      is_nil(normalize_model_id(Map.get(policy, :model_id)))
-  end
-
-  def placeholder_only_policy?(_policy), do: false
-
-  def policy_model_id(%{model_id: model_id}) when is_binary(model_id),
-    do: normalize_model_id(model_id)
-
-  def policy_model_id(_), do: nil
-
-  def resolve_policy_model(%Route{} = route) do
-    route
-    |> Route.precedence_keys()
-    |> Enum.find_value(fn key ->
-      key
-      |> Route.from_key()
-      |> ModelPolicy.get()
-      |> policy_model_id()
-    end)
-  end
-
-  def exact_policy_thinking_level(%Route{} = route) do
-    case ModelPolicy.get(route) do
-      %{thinking_level: level} -> normalize_thinking_level(level)
-      _ -> nil
-    end
-  end
-
-  def placeholder_model_id, do: @placeholder_model_id
 end

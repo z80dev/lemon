@@ -127,6 +127,21 @@ defmodule LemonRouter.PolicyStoreFailClosedTest do
     refute_received {:store_read, :session_policies, _key}
   end
 
+  test "an unreadable chat default rejects a channel session's admission" do
+    key =
+      LemonCore.SessionKey.channel_peer(%{
+        agent_id: "default",
+        channel_id: "test",
+        account_id: "default",
+        peer_kind: :dm,
+        peer_id: "#{System.unique_integer([:positive])}"
+      })
+
+    FaultBackend.set(%{chat_policies: :error})
+
+    assert SubmissionBuilder.build(request(key, :channel), %{}) == {:error, :policy_unavailable}
+  end
+
   @tag timeout: 30_000
   test "a Store call timeout on the session policy rejects admission", ctx do
     FaultBackend.set(%{session_policies: {:stall, 5_500}})

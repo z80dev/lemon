@@ -4,6 +4,11 @@ All notable changes to `lemon_cli` are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- `lemon policy` manages `LemonCore.PolicyStore` chat rows; `--peer` without
+  `--account` names the `default` account and `--thread` requires `--peer`
+  (#714).
 ### Added
 
 - `lemon browser stop` stops the runtime's local browser driver and the
