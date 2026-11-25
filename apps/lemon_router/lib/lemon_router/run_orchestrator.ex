@@ -285,6 +285,9 @@ defmodule LemonRouter.RunOrchestrator do
       {:ok, %{summary: %{}}} ->
         {:ok, unresolved_receipt(run_id, session_key, :terminal)}
 
+      {:error, :evicted} ->
+        {:ok, unresolved_receipt(run_id, session_key, :terminal)}
+
       {:ok, run} ->
         reconcile_handoff(run_id, admission, tombstone, run)
 
@@ -324,8 +327,11 @@ defmodule LemonRouter.RunOrchestrator do
   defp reconcile_handoff(run_id, _admission, _tombstone, _run),
     do: {:ok, unresolved_receipt(run_id, nil, :outcome_unknown)}
 
-  defp current_handoff?(%{handoff: {epoch, _, _, _}}),
-    do: Registry.meta(LemonRouter.ConversationRegistry, :admission_epoch) == {:ok, epoch}
+  defp current_handoff?(%{handoff: {epoch, _, _, _}}) do
+    Registry.meta(LemonRouter.ConversationRegistry, :admission_epoch) == {:ok, epoch}
+  rescue
+    ArgumentError -> false
+  end
 
   defp current_handoff?(_admission), do: false
 

@@ -560,6 +560,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Fixed-ID run receipts distinguish definite rejection from unknown admission.
   Router-owner loss reconciles unclaimed handoffs without replay, and queued
   runs recheck durable cancellation before starting (#81).
+  Receipts remain terminal after run history is evicted; when the router is
+  stopped, an unresolved handoff cannot be mistaken for a definitive outcome.
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

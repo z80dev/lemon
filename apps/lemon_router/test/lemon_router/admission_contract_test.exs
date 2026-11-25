@@ -107,7 +107,7 @@ defmodule LemonRouter.AdmissionContractTest do
       :ok = :sys.suspend(orchestrator)
 
       try do
-        assert {:timeout, _} = catch_exit(RunOrchestrator.submit(orchestrator, intent))
+        assert {:error, :outcome_unknown} = RunOrchestrator.submit(orchestrator, intent)
       after
         :ok = :sys.resume(orchestrator)
       end
@@ -149,7 +149,7 @@ defmodule LemonRouter.AdmissionContractTest do
       :ok = :sys.suspend(coordinator)
 
       try do
-        caller = Task.async(fn -> catch_exit(RunOrchestrator.submit(sender, request)) end)
+        caller = Task.async(fn -> RunOrchestrator.submit(sender, request) end)
 
         assert eventually(fn ->
                  {:messages, messages} = Process.info(coordinator, :messages)
@@ -163,7 +163,7 @@ defmodule LemonRouter.AdmissionContractTest do
         assert {:ok, %{state: :outcome_unknown}} = RunOrchestrator.run_receipt(run_id)
         Process.exit(sender, :kill)
         assert_receive {:DOWN, ^sender_ref, :process, ^sender, :killed}, 1_000
-        assert {:killed, _} = Task.await(caller, 1_000)
+        assert {:error, :outcome_unknown} = Task.await(caller, 1_000)
         assert {:ok, %{state: :rejected}} = RunOrchestrator.run_receipt(run_id)
       after
         :ok = :sys.resume(coordinator)
@@ -242,6 +242,56 @@ defmodule LemonRouter.AdmissionContractTest do
       end
 
       refute_receive {:execution_started, ^run_id, _command}, 100
+    end
+  end
+
+  test "an evicted run remains terminal without an accepted receipt" do
+    request = intent(unique_id("evicted_receipt"), "completion leaves terminal evidence")
+    run_id = request.run_id
+    table = RunOrchestrator.admission_table()
+
+    on_exit(fn ->
+      Store.delete(table, run_id)
+      Store.delete(:run_terminals, run_id)
+    end)
+
+    assert :ok =
+             Store.put(:run_terminals, run_id, %{
+               finalized_at_ms: System.system_time(:millisecond)
+             })
+
+    assert {:error, :evicted} = RunStore.fetch(run_id)
+
+    assert :ok =
+             Store.put(table, run_id, %{
+               state: "submitting",
+               scope: %{session_key: request.session_key}
+             })
+
+    assert {:ok, %{run_id: ^run_id, state: :terminal, session_key: session_key}} =
+             RunOrchestrator.run_receipt(run_id)
+
+    assert session_key == request.session_key
+  end
+
+  test "a receipt query cannot reconcile ownership while the router is stopped" do
+    run_id = unique_id("stopped_router_receipt")
+    table = RunOrchestrator.admission_table()
+    assert {:ok, epoch} = Registry.meta(LemonRouter.ConversationRegistry, :admission_epoch)
+    admission = %{state: "submitting", handoff: {epoch, "attempt", self(), nil}}
+    assert :ok = Store.put(table, run_id, admission)
+
+    try do
+      assert :ok = Application.stop(:lemon_router)
+      refute Process.whereis(LemonRouter.ConversationRegistry)
+
+      assert {:ok, %{run_id: ^run_id, state: :outcome_unknown}} =
+               RunOrchestrator.run_receipt(run_id)
+
+      assert {:ok, ^admission} = Store.fetch(table, run_id)
+    after
+      Store.delete(table, run_id)
+      {:ok, _started} = Application.ensure_all_started(:lemon_router)
     end
   end
 
