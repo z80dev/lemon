@@ -194,12 +194,12 @@ a published namespace the packages do not define or a function the running
 Elixir/OTP lacks, and runs the packaged doctor: `LemonCore.Doctor.Checks.Runtime`
 must report the build identity with no failure on the running toolchain, and no
 doctor check may crash. The scratch consumer also runs an ExUnit suite against
-the packaged test harness. Finally the script runs `mix lemon.new --packages-path`
-for the base and `--memory` shapes against the same tarballs and runs their tests. It
-needs Hex and network access to hex.pm. `.github/workflows/packaging.yml` runs it
-on pull requests that touch the packages and nightly, on Elixir 1.20.5 / OTP
-29.1.2 and on the declared floor, Elixir 1.17.3 / OTP 26.2; both legs are
-required.
+the packaged test harness. Finally the script builds the installer in the scratch
+directory, so the checkout can be read-only. It runs `mix lemon.new --packages-path`
+for the base and `--memory` shapes against the same tarballs and runs their tests.
+It needs Hex and network access to hex.pm. `.github/workflows/packaging.yml` runs
+it on pull requests that touch the packages and nightly, on Elixir 1.20.5 / OTP
+29.1.2 and on the declared floor, Elixir 1.17.3 / OTP 26.2; both legs are required.
 
 The packages declare `elixir: "~> 1.17"`. That is the honest floor: exqlite 0.43
 (required by `lemon_memory`, optional for `lemon_core`) requires Elixir 1.17, and

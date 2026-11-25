@@ -259,7 +259,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   call `String.replace_invalid`, Elixir 1.16; lemon_core did not compile on
   1.15). `packaging.yml` now requires `scripts/verify_packages` on the floor,
   Elixir 1.17.3 / OTP 26.2, and the script fails on functions the running
-  toolchain lacks or dependencies that refuse it (#730).
+  toolchain lacks or dependencies that refuse it. The installer smoke builds in
+  the scratch directory so it also works from a read-only checkout (#730).
 - Duplicate test families are collapsed to one canonical file per module
   (#732): EventStream, Loop, CircuitBreaker, CallDispatcher, ProviderRegistry,
   Google/OpenAI Responses shared helpers, TextSanitizer, CodingAgent session,
