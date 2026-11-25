@@ -1,7 +1,8 @@
-defmodule LemonAi.Auth.OmpTokenTest do
+defmodule LemonAgent.ModelRuntime.OmpTokenTest do
   use ExUnit.Case, async: false
 
-  alias LemonAi.Auth.{Cache, OmpToken}
+  alias LemonAi.Auth.Cache
+  alias LemonAgent.ModelRuntime.OmpToken
 
   setup do
     dir = Path.join(System.tmp_dir!(), "omp_token_#{System.unique_integer([:positive])}")

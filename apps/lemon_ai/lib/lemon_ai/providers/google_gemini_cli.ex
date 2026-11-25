@@ -67,12 +67,6 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
   def api_id, do: :google_gemini_cli
 
   @impl true
-  def get_env_api_key do
-    # Gemini CLI uses OAuth, not static API keys
-    nil
-  end
-
-  @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
     StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end

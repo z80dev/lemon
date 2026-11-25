@@ -536,7 +536,7 @@ defmodule LemonAi.Providers.OpenAIResponsesTest do
 
     context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-    {:ok, stream} = OpenAIResponses.stream(model, context, %StreamOptions{})
+    {:ok, stream} = LemonAi.stream(model, context, %StreamOptions{})
 
     assert_receive {:request_headers, headers}, 1000
     assert Map.new(headers)["authorization"] == "Bearer opencode-env-key"

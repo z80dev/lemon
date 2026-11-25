@@ -64,10 +64,10 @@ app-suite references below.
 | `apps/lemon_agent/lib/lemon_agent/env.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/credentials.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/credentials_test.exs` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/model_roles.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/model_roles_test.exs` |
+| `apps/lemon_agent/lib/lemon_agent/model_runtime/omp_auth_broker.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/omp_auth_broker_test.exs` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/omp_broker.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/omp_broker_test.exs` |
-| `apps/lemon_ai/lib/lemon_ai/auth/omp_auth_broker.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_ai/test/lemon_ai/auth/omp_auth_broker_test.exs` |
-| `apps/lemon_ai/lib/lemon_ai/auth/omp_config.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_ai/test` |
-| `apps/lemon_ai/lib/lemon_ai/auth/omp_token.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_ai/test/lemon_ai/auth/omp_token_test.exs` |
+| `apps/lemon_agent/lib/lemon_agent/model_runtime/omp_config.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/omp_broker_test.exs` |
+| `apps/lemon_agent/lib/lemon_agent/model_runtime/omp_token.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/omp_token_test.exs` |
 | `apps/lemon_ai/lib/lemon_ai/model_cache.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_ai/test/lemon_ai/model_cache_test.exs` |
 | `apps/lemon_ai/lib/lemon_ai/models/omp_gateway.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_ai/test/lemon_ai/models/omp_gateway_test.exs` |
 | `apps/lemon_ai/lib/lemon_ai/models/open_ai.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_ai/test` |

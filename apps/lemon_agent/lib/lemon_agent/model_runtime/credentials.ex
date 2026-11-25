@@ -35,12 +35,15 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   require Logger
 
   alias LemonAi.Auth.OAuthSecretResolver
-  alias LemonAi.Auth.OmpToken
   alias LemonAi.Providers.KimiCodeRanking
+  alias LemonAgent.ModelRuntime.AmbientCredentials
   alias LemonAgent.ModelRuntime.CredentialHealth
   alias LemonAgent.ModelRuntime.CustomProviders
   alias LemonAgent.ModelRuntime.OmpBroker
+  alias LemonAgent.ModelRuntime.OmpConfig
+  alias LemonAgent.ModelRuntime.OmpToken
   alias LemonAgent.ModelRuntime.ProviderNames
+  alias LemonAgent.ModelRuntime.VertexToken
   alias LemonAgent.ProviderConfigResolver
   alias LemonCore.Secrets
 
@@ -398,8 +401,13 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       "omp_gateway" ->
         case resolve_generic_api_key("omp_gateway", provider_cfg) do
           key when is_binary(key) and key != "" -> key
-          _ -> LemonAi.Auth.OmpConfig.read_token(:gateway)
+          _ -> OmpConfig.read_token(:gateway)
         end
+
+      # Vertex AI takes an OAuth access token minted for this request (cached);
+      # a failure refuses with "" so no other key replaces it.
+      "google_vertex" ->
+        resolve_vertex_access_token(provider_cfg)
 
       canonical when is_binary(canonical) ->
         resolve_generic_api_key(canonical, provider_cfg)
@@ -1019,6 +1027,25 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       present_value?(System.get_env("GOOGLE_APPLICATION_CREDENTIALS"))
   end
 
+  defp resolve_vertex_access_token(provider_cfg) do
+    resolved =
+      ProviderConfigResolver.resolve_for_provider(:google_vertex, %{
+        provider_config: provider_cfg
+      })
+
+    case VertexToken.access_token(resolved) do
+      {:ok, token} ->
+        token
+
+      {:error, reason} ->
+        Logger.warning(
+          "Google Vertex AI access token unavailable: " <> VertexToken.error_message(reason)
+        )
+
+        ""
+    end
+  end
+
   defp bedrock_credentials_available?(provider_cfg, opts) do
     resolved =
       :bedrock_converse_stream
@@ -1161,15 +1188,14 @@ defmodule LemonAgent.ModelRuntime.Credentials do
         fetch_secret_api_key(ProviderNames.default_secret_name("openai_codex"),
           env_fallback: false
         )
-      end,
-      fn -> present(LemonAi.Auth.OpenAICodexOAuth.resolve_access_token()) end
+      end
     ])
     |> credential_value()
   end
 
   defp resolve_anthropic_access_token do
     first_credential([
-      fn -> present(LemonAi.Auth.AnthropicOAuth.resolve_access_token()) end,
+      fn -> present(AmbientCredentials.anthropic_access_token()) end,
       fn ->
         fetch_secret_api_key(ProviderNames.oauth_default_secret_name("anthropic"),
           env_fallback: false

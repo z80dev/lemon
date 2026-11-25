@@ -522,7 +522,7 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
       },
       fn ->
         context = Context.new(messages: [%UserMessage{content: "Hi"}])
-        {:ok, stream} = Anthropic.stream(opencode_model(), context, %StreamOptions{})
+        {:ok, stream} = LemonAi.stream(opencode_model(), context, %StreamOptions{})
         assert {:ok, _result} = EventStream.result(stream, 1_000)
       end
     )

@@ -5,10 +5,10 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   Supports PKCE authorization URL generation, automatic localhost callback capture
   with manual code fallback, headless device-code sign-in (`login_device_code/1`),
   code/token exchange, refresh, and encrypted secret resolution.
-  `import_codex_cli_login/1` explicitly copies a ChatGPT OAuth login from the selected
-  Codex CLI auth file into a canonical secret payload. Import never contacts the
-  network or modifies the source file; callers own encrypted storage and refresh
-  persistence through `:persist_secret`.
+  `decode_codex_cli_login/1` converts a Codex CLI ChatGPT login (the contents of its
+  `auth.json`, read by the caller) into a canonical secret payload without contacting
+  the network; callers own encrypted storage and refresh persistence through
+  `:persist_secret`.
   """
 
   import LemonAi.Auth.OAuthFlow, only: [non_empty_binary: 1, notify_auth: 3, notify_progress: 2]
@@ -268,80 +268,22 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   end
 
   @doc """
-  Import an existing Codex CLI ChatGPT login without refreshing or writing it.
+  Decode the contents of a Codex CLI `auth.json` ChatGPT login into the
+  canonical refreshable OAuth secret, without refreshing or storing it.
 
-  Reads only `:path`, or `CODEX_HOME/auth.json`, or `HOME/.codex/auth.json`
-  (in that order). Returns the canonical refreshable OAuth secret, not an encoded
-  string. Expired access tokens are accepted when refreshable; resolution refreshes
-  them later. API-key logins and incomplete OAuth data return credential-free errors.
+  Pure: the caller locates and reads the file. Expired access tokens are accepted
+  when refreshable; resolution refreshes them later. API-key logins and
+  incomplete OAuth data return credential-free errors.
   """
-  @spec import_codex_cli_login(keyword()) :: {:ok, oauth_secret()} | {:error, atom() | tuple()}
-  def import_codex_cli_login(opts \\ []) do
-    with {:ok, path} <- codex_auth_path(opts),
-         {:ok, contents} <- File.read(path),
-         {:ok, login} <- decode_codex_login(contents),
-         {:ok, secret} <- import_codex_tokens(login) do
-      {:ok, secret}
-    else
-      {:error, reason} when is_atom(reason) -> {:error, reason}
-    end
-  end
-
-  @doc """
-  Reports whether a refreshable Codex CLI ChatGPT login is present, without
-  returning credentials, refreshing tokens, or changing the source file.
-  """
-  @spec codex_cli_login_status(keyword()) :: :present | :absent | {:unusable, atom()}
-  def codex_cli_login_status(opts \\ []) do
-    case import_codex_cli_login(opts) do
-      {:ok, _secret} ->
-        :present
-
-      {:error, :enoent} ->
-        :absent
-
-      {:error, reason}
-      when reason in [
-             :not_chatgpt_oauth,
-             :invalid_access_token,
-             :missing_refresh_token,
-             :invalid_expiry,
-             :missing_account_id,
-             :invalid_codex_cli_login
-           ] ->
-        {:unusable, reason}
-
-      {:error, _reason} ->
-        {:unusable, :invalid_codex_cli_login}
-    end
-  end
-
-  defp codex_auth_path(opts) do
-    case Keyword.get(opts, :path) do
-      nil ->
-        home = non_empty_binary(System.get_env("HOME"))
-        codex_home = non_empty_binary(System.get_env("CODEX_HOME"))
-
-        cond do
-          codex_home -> {:ok, Path.join(codex_home, "auth.json")}
-          home -> {:ok, Path.join([home, ".codex", "auth.json"])}
-          true -> {:error, :missing_home}
-        end
-
-      path when is_binary(path) and path != "" ->
-        {:ok, path}
-
-      _ ->
-        {:error, :invalid_codex_auth_path}
-    end
-  end
-
-  defp decode_codex_login(contents) do
+  @spec decode_codex_cli_login(binary()) :: {:ok, oauth_secret()} | {:error, atom()}
+  def decode_codex_cli_login(contents) when is_binary(contents) do
     case Jason.decode(contents) do
-      {:ok, login} when is_map(login) -> {:ok, login}
+      {:ok, login} when is_map(login) -> import_codex_tokens(login)
       _ -> {:error, :invalid_codex_cli_login}
     end
   end
+
+  def decode_codex_cli_login(_contents), do: {:error, :invalid_codex_cli_login}
 
   defp import_codex_tokens(%{"tokens" => tokens} = login) when is_map(tokens) do
     access_token = non_empty_binary(tokens["access_token"])
@@ -494,19 +436,6 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       fallback: &refresh_fallback?/1,
       resolve: &OAuthSecret.access_token/1
     })
-  end
-
-  @doc """
-  Resolve a Codex access token from process environment values.
-
-  Resolution order:
-  1. `OPENAI_CODEX_API_KEY`
-  2. `CHATGPT_TOKEN`
-  """
-  @spec resolve_access_token() :: String.t() | nil
-  def resolve_access_token do
-    non_empty_binary(System.get_env("OPENAI_CODEX_API_KEY")) ||
-      non_empty_binary(System.get_env("CHATGPT_TOKEN"))
   end
 
   defp refresh_due?(secret) do

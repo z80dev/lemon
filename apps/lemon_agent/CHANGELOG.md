@@ -84,6 +84,15 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - Sibling requirements are `~> 0.3.0` (`lemon_ai`, `lemon_core`), derived from
   this package's own version: every 0.x minor may break, so a 0.4 sibling no
   longer resolves (#730).
+- **Breaking (0.3.0):** the model runtime owns ambient and deployment credential
+  discovery (#719): `LemonAgent.ModelRuntime.OmpAuthBroker` (supervised here;
+  `config :lemon_agent, :omp_broker_watch`), `OmpToken`, `OmpConfig`,
+  `AmbientCredentials` (Claude Code file/env tokens, Codex CLI import and status,
+  persisted Kimi device id) and `VertexToken` (service account,
+  `GOOGLE_APPLICATION_CREDENTIALS` or `gcloud`, cached, 15 s deadline; minted per
+  request by the `google_vertex` credential callback). Writing a refreshed Claude
+  Code login uses `LemonCore.ConfinedFS.replace/5` (0600 staging file, atomic
+  rename, bound to the bytes the refresh started from).
 - **Breaking (0.3.0):** agent events are delta-only (#571). Migration: handlers
   must accumulate deltas instead of expecting full partial messages on every
   event; `{:message_update, message, event}` becomes `{:message_update, event}`.

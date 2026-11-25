@@ -18,11 +18,6 @@ defmodule LemonAi.Providers.MistralConversations do
   def provider_id, do: :mistral
 
   @impl true
-  def get_env_api_key do
-    System.get_env("MISTRAL_API_KEY")
-  end
-
-  @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = options) do
     # Adjust base_url to append /v1 for OpenAI-compatible endpoint
     adjusted_model = %{model | base_url: "#{model.base_url}/v1"}

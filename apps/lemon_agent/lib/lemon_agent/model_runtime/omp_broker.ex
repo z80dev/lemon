@@ -4,7 +4,7 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
 
   The broker (`omp auth-broker serve`) holds the canonical credential vault and
   performs every OAuth refresh. Lemon reads access tokens and API keys from its
-  redacted snapshot through `LemonAi.Auth.OmpAuthBroker`; refresh tokens never
+  redacted snapshot through `LemonAgent.ModelRuntime.OmpAuthBroker`; refresh tokens never
   reach Lemon and nothing is written to Lemon's secret store.
 
   ## Endpoint
@@ -15,7 +15,7 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
       default `http://127.0.0.1:8765` (`omp auth-broker serve`'s default bind).
     * Token: `OMP_AUTH_BROKER_TOKEN` (environment, else a Lemon secret of that
       name), else omp's `<config root>/auth-broker.token`
-      (`LemonAi.Auth.OmpConfig`).
+      (`LemonAgent.ModelRuntime.OmpConfig`).
 
   ## Provider config
 
@@ -44,8 +44,7 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
 
   require Logger
 
-  alias LemonAi.Auth.{OmpAuthBroker, OmpConfig}
-  alias LemonAgent.ModelRuntime.ProviderNames
+  alias LemonAgent.ModelRuntime.{OmpAuthBroker, OmpConfig, ProviderNames}
   alias LemonCore.Secrets
 
   @default_url "http://127.0.0.1:8765"

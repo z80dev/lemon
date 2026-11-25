@@ -1,7 +1,7 @@
 defmodule LemonCli.Setup.OmpSetupTest do
   use ExUnit.Case, async: false
 
-  alias LemonAi.Auth.OmpAuthBroker
+  alias LemonAgent.ModelRuntime.OmpAuthBroker
   alias LemonCli.Onboarding.Runner
   alias LemonCli.Setup.Omp
 

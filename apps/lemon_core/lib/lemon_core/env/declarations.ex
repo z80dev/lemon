@@ -385,11 +385,11 @@ defmodule LemonCore.Env.Declarations do
       type: :string,
       default: nil,
       doc:
-        "Standard POSIX home directory; used for default `.lemon` locations and OAuth token caches.",
+        "Standard POSIX home directory; used for default `.lemon` locations, other tools' login files read by the model runtime, and OAuth token caches.",
       secret?: false,
       required?: false,
       area: :platform,
-      apps: [:lemon_core, :lemon_ai, :coding_agent]
+      apps: [:lemon_core, :lemon_ai, :lemon_agent, :coding_agent]
     },
     %{
       name: :mix_env,

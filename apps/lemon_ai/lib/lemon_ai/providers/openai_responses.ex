@@ -10,9 +10,9 @@ defmodule LemonAi.Providers.OpenAIResponses do
 
   ## Configuration
 
-  The provider uses the following environment variables:
-  - `OPENAI_API_KEY` - API key for OpenAI
-  - `PI_CACHE_RETENTION` - Set to "long" for 24h prompt cache retention
+  Credentials come from `api_key` in stream options (`LemonAi.stream/3` falls
+  back to `OPENAI_API_KEY` for OpenAI itself). `PI_CACHE_RETENTION` set to
+  "long" requests 24h prompt cache retention.
 
   ## Usage
 
@@ -41,7 +41,6 @@ defmodule LemonAi.Providers.OpenAIResponses do
   }
 
   alias LemonAi.EventStream
-  alias LemonAi.Models.Presets
   alias LemonAi.Providers.HttpTrace
   alias LemonAi.Providers.OpenAIResponsesShared
   alias LemonAi.Providers.RequestHeaders
@@ -63,11 +62,6 @@ defmodule LemonAi.Providers.OpenAIResponses do
   def provider_id, do: :openai
 
   @impl true
-  def get_env_api_key do
-    System.get_env("OPENAI_API_KEY")
-  end
-
-  @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
     StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end
@@ -77,7 +71,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
     trace_id = HttpTrace.new_trace_id("openai-responses")
 
     try do
-      api_key = get_api_key(model, opts)
+      api_key = get_api_key(opts)
 
       if is_nil(api_key) and not allow_missing_api_key?(model) do
         raise missing_api_key_error(model.provider)
@@ -168,51 +162,14 @@ defmodule LemonAi.Providers.OpenAIResponses do
     end
   end
 
-  # OPENAI_API_KEY is only a fallback for OpenAI itself; other providers using
-  # this wire format must resolve their own credentials.
-  defp get_api_key(model, opts) do
-    cond do
-      is_binary(opts.api_key) and opts.api_key != "" ->
-        opts.api_key
-
-      api_key = get_provider_env_key(model.provider) ->
-        api_key
-
-      api_key = openai_env_api_key(model.provider) ->
-        api_key
-
-      true ->
-        nil
-    end
+  # Credentials come only from the options; `LemonAi.stream/3` applies the
+  # library-caller environment fallback per provider.
+  defp get_api_key(opts) do
+    if is_binary(opts.api_key) and opts.api_key != "", do: opts.api_key
   end
-
-  defp present?(value), do: is_binary(value) and value != ""
-
-  defp openai_env_api_key(provider) when provider in [:openai, "openai"] do
-    api_key = get_env_api_key()
-    if present?(api_key), do: api_key
-  end
-
-  defp openai_env_api_key(_provider), do: nil
 
   defp allow_missing_api_key?(%Model{compat: %{allow_missing_api_key: true}}), do: true
   defp allow_missing_api_key?(_model), do: false
-
-  defp get_provider_env_key(provider) do
-    env_var =
-      case provider do
-        :opencode -> "OPENCODE_API_KEY"
-        "opencode" -> "OPENCODE_API_KEY"
-        _ -> nil
-      end
-
-    env_vars = if env_var, do: [env_var], else: Presets.env_vars(provider)
-
-    Enum.find_value(env_vars, fn var ->
-      value = System.get_env(var)
-      if present?(value), do: value
-    end)
-  end
 
   defp missing_api_key_error(:opencode),
     do:

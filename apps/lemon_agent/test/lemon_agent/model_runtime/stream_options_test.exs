@@ -85,7 +85,6 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
       api_key: "fake-key",
       api_key_authoritative: true,
       access_token: "fake-token",
-      service_account_json: "fake-service",
       project: "old-project",
       location: "old-location",
       headers: %{"authorization" => "fake-token"},
@@ -108,7 +107,6 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
     assert clean.api_key == nil
     refute clean.api_key_authoritative
     assert clean.access_token == nil
-    assert clean.service_account_json == nil
     assert clean.project == nil
     assert clean.location == nil
     assert clean.headers == %{}
@@ -201,7 +199,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
 
     assert opts.project == "project-from-secret"
     assert opts.location == "us-central1"
-    assert opts.service_account_json == "{\"client_email\":\"svc@example.com\"}"
+    refute Map.has_key?(opts.provider_options.google_vertex, :service_account_json)
     assert opts.provider_options.google_vertex.project == "project-from-secret"
     assert opts.provider_options.google_vertex.location == "us-central1"
   end

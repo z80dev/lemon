@@ -1002,8 +1002,7 @@ LemonAi.Supervisor (one_for_one; owns the retained slot lease/cap and provider f
   ├── Registry (LemonAi.CallDispatcherRegistry)
   ├── DynamicSupervisor (LemonAi.ProviderSupervisor) -- per-provider breakers/limiters/slots
   ├── LemonAi.ModelCache -- model availability ETS owner
-  ├── LemonAi.Auth.Cache -- token and fingerprint ETS owner
-  └── LemonAi.Auth.OmpAuthBroker -- broker snapshot ETS owner and watchers
+  └── LemonAi.Auth.Cache -- token and fingerprint ETS owner
 ```
 
 `LemonAi.ProviderRegistry` lives outside the tree in `:persistent_term`, so provider
@@ -1020,8 +1019,8 @@ a caller-owned table. This cache never stores omp refresh credentials.
 
 ## Adding a provider
 
-Implement the `LemonAi.Provider` behaviour (`stream/3`, `provider_id/0`, `api_id/0`, and
-optionally `get_env_api_key/0`), add a catalog file under `priv/models/` with a
+Implement the `LemonAi.Provider` behaviour (`stream/3`, `provider_id/0`, `api_id/0`;
+credentials come only from the stream options), add a catalog file under `priv/models/` with a
 `LemonAi.Models.*` module that loads it, add any new API/provider value to the
 explicit allowlist in `LemonAi.Models.Catalog`, and register the module in
 `LemonAi.Application`:
@@ -1071,21 +1070,33 @@ not provide durable revision guarantees. In a Lemon runtime, inject
 `LemonCore.Secrets.get_with_revision/2` with environment fallback disabled and
 `LemonCore.Secrets.set_if_revision/4` with the returned revision.
 
-The ambient exception is `LemonAi.Auth.AnthropicOAuth.resolve_access_token/0`, which
-reads Claude Code credentials and writes a refresh it performs back to
-`~/.claude/.credentials.json` so Claude Code's rotated login stays valid; this file path
-does not use the stored-secret callbacks.
+Providers read credentials only from `LemonAi.Types.StreamOptions`; they never read
+credential files, run `gcloud` or other external processes. Discovering other tools'
+logins (Claude Code, the Codex CLI), omp's auth broker and minting Google Vertex AI
+tokens belong to the caller; in a Lemon runtime, `lemon_agent`'s model runtime does
+them and injects the results. `LemonAi.Auth.OpenAICodexOAuth.decode_codex_cli_login/1`
+converts the contents of a Codex CLI login the caller read. Kimi Code's
+`x-msh-device-id` comes from `config :lemon_ai, :kimi_device_id` (a string or MFA);
+without one it is derived from the host name and home directory.
 
-Common environment variables (used as a standalone fallback when a key isn't passed in
-options):
+For library callers, `LemonAi.stream/3` and `complete/3` fill a missing or empty `api_key`
+from the provider's environment variables (`LemonAi.Models.Presets.env_vars/1`, the
+package's only provider environment table). A passed `api_key`, `access_token`,
+provider-option `api_key` or `api_key_authoritative: true` disables the fallback.
+Common variables:
 
 | Variable | Provider |
 |----------|----------|
-| `ANTHROPIC_API_KEY` | Anthropic (and Kimi/OpenCode/MiniMax compat) |
-| `OPENAI_API_KEY` | OpenAI family |
+| `ANTHROPIC_API_KEY` | Anthropic |
+| `OPENAI_API_KEY` | OpenAI (never sent to another OpenAI-compatible provider) |
+| `OPENAI_CODEX_API_KEY` / `CHATGPT_TOKEN` | OpenAI Codex |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI Studio (also `GOOGLE_API_KEY`, `GEMINI_API_KEY`) |
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` | Bedrock |
+| `KIMI_API_KEY` / `MOONSHOT_API_KEY` | Kimi, Kimi Code |
+
+Google Vertex AI has no environment fallback: pass an OAuth `access_token`. Bedrock
+takes AWS credentials in `headers`/`provider_options` (`aws_access_key_id`,
+`aws_secret_access_key`, `aws_session_token`, `aws_region`).
 
 Debug/diagnostic toggles: `LEMON_AI_HTTP_TRACE=1` (HTTP trace logging),
 `LEMON_AI_PROMPT_DIAGNOSTICS=1` (prompt size/token diagnostics), `LEMON_AI_DEBUG=1`

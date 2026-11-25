@@ -1054,6 +1054,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   always-empty `policy` field, `summary.policyCount` and
   `summary.cleanup.includesPolicy`. A guard test fails when a policy table is
   read without a production writer (#709).
+- **Breaking:** `lemon_ai` no longer ships omp broker/token/config modules, ambient
+  Claude Code/Codex CLI/Kimi device-id discovery, provider `get_env_api_key/0`
+  tables or Vertex `gcloud`/`GOOGLE_APPLICATION_CREDENTIALS` minting; they live in
+  `lemon_agent`'s model runtime, which injects the results (#719). Vertex tokens are
+  minted once per source with caching and a deadline instead of a `gcloud` spawn per
+  request, and a refreshed Claude Code login is written back atomically with a
+  private (0600) temporary file, so a crash leaves the previous file intact.
+
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.

@@ -2,7 +2,7 @@ defmodule LemonAgent.ModelRuntime.OmpBrokerTest do
   use ExUnit.Case, async: false
 
   alias LemonAgent.ModelRuntime.Credentials
-  alias LemonAi.Auth.OmpAuthBroker
+  alias LemonAgent.ModelRuntime.OmpAuthBroker
 
   @env ~w(OMP_AUTH_BROKER_URL OMP_AUTH_BROKER_TOKEN OMP_AUTH_GATEWAY_TOKEN ANTHROPIC_API_KEY
           HOME PI_CONFIG_DIR OMP_PROFILE PI_PROFILE)

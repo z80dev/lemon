@@ -102,22 +102,6 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
     |> Map.merge(Map.drop(overrides, [:reasoning, :input]))
   end
 
-  # ============================================================================
-  # Provider Identification Tests
-  # ============================================================================
-
-  describe "provider identification" do
-    test "get_env_api_key reads from environment" do
-      System.put_env("AZURE_OPENAI_API_KEY", "test-azure-key")
-      assert AzureOpenAIResponses.get_env_api_key() == "test-azure-key"
-      System.delete_env("AZURE_OPENAI_API_KEY")
-    end
-
-    test "get_env_api_key returns nil when not set" do
-      assert AzureOpenAIResponses.get_env_api_key() == nil
-    end
-  end
-
   test "modern Azure reasoning preserves max and omits incompatible temperature" do
     test_pid = self()
 

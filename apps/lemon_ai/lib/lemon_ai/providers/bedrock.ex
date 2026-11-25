@@ -44,12 +44,6 @@ defmodule LemonAi.Providers.Bedrock do
   def api_id, do: :bedrock_converse_stream
 
   @impl true
-  def get_env_api_key do
-    # Bedrock uses AWS credentials, not a simple API key
-    nil
-  end
-
-  @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
     LemonAi.Providers.StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end

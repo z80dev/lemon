@@ -52,6 +52,22 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - **Breaking:** catalog compat flag `anthropic_effort_only` (its last users, the
   `kimi` K3/`kimi-for-coding` entries, now use `adaptive_thinking`) (#525).
   Migration: declare `adaptive_thinking` with `reasoning_efforts` instead.
+- **Breaking (0.3.0):** Lemon deployment credential discovery left the package
+  (#719). `LemonAi.Auth.OmpAuthBroker`, `OmpToken` and `OmpConfig` (and their
+  supervised broker cache) moved to `lemon_agent`; `AnthropicOAuth.resolve_access_token/0`,
+  `OpenAICodexOAuth.resolve_access_token/0`, `import_codex_cli_login/1`,
+  `codex_cli_login_status/1` and `KimiCodeOAuth.device_id/1` are removed; every
+  provider's `get_env_api_key/0` and the `LemonAi.Provider` callback are removed;
+  `StreamOptions.service_account_json` is removed and `GoogleVertex` no longer
+  reads `GOOGLE_APPLICATION_CREDENTIALS` or runs `gcloud`. Migration: pass
+  credentials in stream options (Vertex: an OAuth `access_token`); decode a Codex
+  CLI login the caller read with `OpenAICodexOAuth.decode_codex_cli_login/1`;
+  supply the Kimi device id through `config :lemon_ai, :kimi_device_id` (string
+  or MFA; default `KimiCodeOAuth.derived_device_id/1`). `LemonAi.stream/3` keeps
+  one library fallback: a request without any credential reads the provider's
+  variables from `LemonAi.Models.Presets.env_vars/1`, now the only provider
+  environment table. Codex request headers read the macOS version from the system
+  plist instead of running `sw_vers`.
 - Unused `LemonAi.Models.supports_xhigh?/1`, `models_equal?/2`,
   `adjust_max_tokens_for_thinking/3,4` and `get_model_ids/1` helpers. Use
   `supports_xhigh/1` and `get_models/1` for supported model queries.

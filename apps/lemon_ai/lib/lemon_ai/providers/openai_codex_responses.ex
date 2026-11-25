@@ -87,11 +87,6 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   def provider_id, do: :openai_codex
 
   @impl true
-  def get_env_api_key do
-    System.get_env("OPENAI_CODEX_API_KEY") || System.get_env("CHATGPT_TOKEN")
-  end
-
-  @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
     StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end
@@ -101,10 +96,10 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
     output = init_assistant_message(model, api_override: :openai_codex_responses)
 
     try do
-      api_key = opts.api_key || get_env_api_key()
+      api_key = opts.api_key
 
       if !api_key || api_key == "" do
-        raise "ChatGPT token is required. Set OPENAI_CODEX_API_KEY / CHATGPT_TOKEN, or configure an OAuth api_key_secret."
+        raise "ChatGPT token is required. Pass api_key (an OAuth access token), or set OPENAI_CODEX_API_KEY / CHATGPT_TOKEN when calling LemonAi.stream/3."
       end
 
       # Extract account ID from JWT
@@ -302,13 +297,19 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
     end
   end
 
+  # Read the product version from the system plist; providers never spawn
+  # processes on the request path.
   defp get_darwin_version do
-    case System.cmd("sw_vers", ["-productVersion"]) do
-      {version, 0} -> String.trim(version)
-      _ -> ""
+    case File.read("/System/Library/CoreServices/SystemVersion.plist") do
+      {:ok, plist} ->
+        case Regex.run(~r{<key>ProductVersion</key>\s*<string>([0-9.]+)</string>}, plist) do
+          [_, version] -> version
+          _ -> ""
+        end
+
+      _ ->
+        ""
     end
-  rescue
-    _ -> ""
   end
 
   defp get_linux_version do

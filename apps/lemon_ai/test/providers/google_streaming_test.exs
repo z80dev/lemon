@@ -9,20 +9,12 @@ defmodule LemonAi.Providers.GoogleStreamingTest do
     {:ok, _} = Application.ensure_all_started(:lemon_ai)
 
     previous_defaults = Req.default_options()
-    prev_google = System.get_env("GOOGLE_GENERATIVE_AI_API_KEY")
     Req.default_options(plug: {Req.Test, __MODULE__})
     Req.Test.set_req_test_to_shared(%{})
-    System.put_env("GOOGLE_GENERATIVE_AI_API_KEY", "google-test-key")
 
     on_exit(fn ->
       Req.default_options(previous_defaults)
       Req.Test.set_req_test_to_private(%{})
-
-      if is_binary(prev_google) do
-        System.put_env("GOOGLE_GENERATIVE_AI_API_KEY", prev_google)
-      else
-        System.delete_env("GOOGLE_GENERATIVE_AI_API_KEY")
-      end
     end)
 
     :ok
@@ -65,7 +57,7 @@ defmodule LemonAi.Providers.GoogleStreamingTest do
 
     context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-    {:ok, stream} = Google.stream(model, context, %StreamOptions{})
+    {:ok, stream} = Google.stream(model, context, %StreamOptions{api_key: "google-test-key"})
 
     assert EventStream.collect_text(stream) == "Hello world"
     assert {:ok, result} = EventStream.result(stream)
@@ -109,7 +101,7 @@ defmodule LemonAi.Providers.GoogleStreamingTest do
 
     context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-    {:ok, stream} = Google.stream(model, context, %StreamOptions{})
+    {:ok, stream} = LemonAi.stream(model, context, %StreamOptions{})
 
     assert_receive {:request_headers, headers}, 1000
     assert {"x-goog-api-key", "opencode-env-key"} in headers
@@ -204,6 +196,7 @@ defmodule LemonAi.Providers.GoogleStreamingTest do
 
     opts =
       %StreamOptions{
+        api_key: "google-test-key",
         temperature: 0.3,
         max_tokens: 256,
         reasoning: :low,
@@ -268,7 +261,12 @@ defmodule LemonAi.Providers.GoogleStreamingTest do
 
     model = LemonAi.Models.get_model(:google, "gemini-4-argon")
     context = Context.new(messages: [%UserMessage{content: "Hi"}])
-    opts = %StreamOptions{reasoning: :minimal, thinking_budgets: %{budget_tokens: 8192}}
+
+    opts = %StreamOptions{
+      api_key: "google-test-key",
+      reasoning: :minimal,
+      thinking_budgets: %{budget_tokens: 8192}
+    }
 
     {:ok, stream} = Google.stream(model, context, opts)
 
@@ -355,7 +353,7 @@ defmodule LemonAi.Providers.GoogleStreamingTest do
 
     context = Context.new(messages: [%UserMessage{content: "Hi"}], tools: tools)
 
-    {:ok, stream} = Google.stream(model, context, %StreamOptions{})
+    {:ok, stream} = Google.stream(model, context, %StreamOptions{api_key: "google-test-key"})
 
     assert_receive {:request_body, req_body}, 1000
     refute Map.has_key?(req_body, "toolConfig")

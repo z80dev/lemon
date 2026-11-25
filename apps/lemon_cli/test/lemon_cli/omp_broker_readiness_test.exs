@@ -1,7 +1,7 @@
 defmodule LemonCli.OmpBrokerReadinessTest do
   use ExUnit.Case, async: false
 
-  alias LemonAi.Auth.OmpAuthBroker
+  alias LemonAgent.ModelRuntime.OmpAuthBroker
   alias LemonCore.Doctor.Checks.Providers
   alias LemonCore.Setup.Readiness
 

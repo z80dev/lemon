@@ -212,47 +212,134 @@ defmodule LemonAi.Providers.GoogleVertexTest do
       EventStream.result(stream, 1000)
     end
 
-    test "uses service_account_json option when access token is absent" do
-      System.delete_env("GOOGLE_APPLICATION_CREDENTIALS")
-
-      model = test_model()
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{project: "proj", location: "us-central1", service_account_json: "{"}
-
-      {:ok, stream} = GoogleVertex.stream(model, context, opts)
-
-      assert {:error, %AssistantMessage{error_message: message}} =
-               EventStream.result(stream, 5000)
-
-      assert message =~ "Failed to parse service account JSON"
-    end
-
-    test "uses GOOGLE_APPLICATION_CREDENTIALS file when present" do
-      System.delete_env("GOOGLE_APPLICATION_CREDENTIALS_JSON")
-
-      credentials_path =
-        Path.join(
-          System.tmp_dir!(),
-          "google_vertex_sa_#{System.unique_integer([:positive])}.json"
-        )
-
-      File.write!(credentials_path, "{")
-      System.put_env("GOOGLE_APPLICATION_CREDENTIALS", credentials_path)
+    test "an injected token streams without any process spawn or ambient credential read" do
+      dir = Path.join(System.tmp_dir!(), "vertex_no_cmd_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      marker = Path.join(dir, "gcloud-ran")
+      gcloud = Path.join(dir, "gcloud")
+      File.write!(gcloud, "#!/bin/sh\n: > '#{marker}'\necho tripwire-token\n")
+      File.chmod!(gcloud, 0o700)
+      credentials = Path.join(dir, "sa.json")
+      File.write!(credentials, "{")
+      previous_path = System.get_env("PATH")
+      System.put_env("PATH", dir <> ":" <> (previous_path || ""))
+      System.put_env("GOOGLE_APPLICATION_CREDENTIALS", credentials)
 
       on_exit(fn ->
-        File.rm_rf(credentials_path)
+        System.put_env("PATH", previous_path || "")
+        File.rm_rf(dir)
       end)
 
-      model = test_model()
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:auth, Plug.Conn.get_req_header(conn, "authorization")})
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
+      end)
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      calls =
+        trace_spawn_calls(fn ->
+          {:ok, stream} =
+            LemonAi.stream(test_model(), context, default_opts(access_token: "injected-token"))
+
+          assert {:ok, %AssistantMessage{}} = EventStream.result(stream, 5_000)
+        end)
+
+      assert calls == []
+      assert_received {:auth, ["Bearer injected-token"]}
+      refute File.exists?(marker)
+    end
+
+    test "without a token it refuses instead of reading GOOGLE_APPLICATION_CREDENTIALS or gcloud" do
+      dir = Path.join(System.tmp_dir!(), "vertex_refuse_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      marker = Path.join(dir, "gcloud-ran")
+      gcloud = Path.join(dir, "gcloud")
+      File.write!(gcloud, "#!/bin/sh\n: > '#{marker}'\necho tripwire-token\n")
+      File.chmod!(gcloud, 0o700)
+      previous_path = System.get_env("PATH")
+      System.put_env("PATH", dir <> ":" <> (previous_path || ""))
+      System.put_env("GOOGLE_APPLICATION_CREDENTIALS", Path.join(dir, "missing.json"))
+
+      on_exit(fn ->
+        System.put_env("PATH", previous_path || "")
+        File.rm_rf(dir)
+      end)
+
+      Req.Test.stub(__MODULE__, fn _conn -> flunk("no request without a token") end)
+
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
       opts = %StreamOptions{project: "proj", location: "us-central1"}
 
-      {:ok, stream} = GoogleVertex.stream(model, context, opts)
+      {:ok, stream} = LemonAi.stream(test_model(), context, opts)
 
       assert {:error, %AssistantMessage{error_message: message}} =
-               EventStream.result(stream, 5000)
+               EventStream.result(stream, 5_000)
 
-      assert message =~ "Failed to parse service account JSON"
+      assert message =~ "requires an OAuth access token"
+      refute File.exists?(marker)
+    end
+
+    test "a caller-reported unreadable service account refuses even with a token" do
+      Req.Test.stub(__MODULE__, fn _conn -> flunk("no request after a credential refusal") end)
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      opts = %{
+        default_opts()
+        | provider_options: %{google_vertex: %{credential_error: :service_account_unavailable}}
+      }
+
+      {:ok, stream} = GoogleVertex.stream(test_model(), context, opts)
+
+      assert {:error, %AssistantMessage{error_message: message}} =
+               EventStream.result(stream, 5_000)
+
+      assert message =~ "could not be read"
+    end
+
+    test "the spawn tracer observes System.cmd in a process started under it" do
+      calls =
+        trace_spawn_calls(fn ->
+          Task.async(fn -> System.cmd("true", []) end) |> Task.await()
+        end)
+
+      assert {System, :cmd} in calls
+    end
+  end
+
+  # Every `System.cmd/3` and `:erlang.open_port/2` call made by processes
+  # started while `fun` runs (the stream worker among them).
+  defp trace_spawn_calls(fun) do
+    patterns = [{System, :cmd, :_}, {:erlang, :open_port, :_}]
+    Enum.each(patterns, &:erlang.trace_pattern(&1, true, [:global]))
+    :erlang.trace(:new_processes, true, [:call, {:tracer, self()}])
+
+    try do
+      fun.()
+    after
+      :erlang.trace(:new_processes, false, [:call])
+      Enum.each(patterns, &:erlang.trace_pattern(&1, false, [:global]))
+    end
+
+    ref = :erlang.trace_delivered(:all)
+    assert_receive {:trace_delivered, :all, ^ref}, 5_000
+    collect_trace_calls([])
+  end
+
+  defp collect_trace_calls(acc) do
+    receive do
+      {:trace, _pid, :call, {module, function, _args}} ->
+        collect_trace_calls([{module, function} | acc])
+    after
+      0 -> Enum.reverse(acc)
     end
   end
 

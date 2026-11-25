@@ -356,33 +356,26 @@ defmodule LemonAi.Auth.KimiCodeOAuthTest do
     assert :image in LemonAi.Models.get_model(:kimi_coding, "kimi-k2.5-coding").input
   end
 
-  describe "device_id/1" do
+  describe "device_id/0" do
     setup do
-      home = Path.join(System.tmp_dir!(), "kimi_device_#{System.unique_integer([:positive])}")
-      File.mkdir_p!(home)
-      on_exit(fn -> File.rm_rf!(home) end)
-      {:ok, home: home, path: Path.join([home, ".lemon", "kimi-device-id"])}
-    end
-
-    test "fingerprints stay in the supervised cache after the first caller exits", %{
-      home: home,
-      path: path
-    } do
       key = {KimiCodeOAuth, :request_headers}
-      previous_home = System.get_env("HOME")
       previous_headers = Cache.get(key)
-      System.put_env("HOME", home)
+      previous_id = Application.get_env(:lemon_ai, :kimi_device_id)
       Cache.delete(key)
 
       on_exit(fn ->
-        if previous_home,
-          do: System.put_env("HOME", previous_home),
-          else: System.delete_env("HOME")
+        if previous_id,
+          do: Application.put_env(:lemon_ai, :kimi_device_id, previous_id),
+          else: Application.delete_env(:lemon_ai, :kimi_device_id)
 
-        if previous_headers,
-          do: Cache.put(key, previous_headers),
-          else: Cache.delete(key)
+        if previous_headers, do: Cache.put(key, previous_headers), else: Cache.delete(key)
       end)
+
+      {:ok, key: key}
+    end
+
+    test "fingerprints stay in the supervised cache after the first caller exits", %{key: key} do
+      Application.put_env(:lemon_ai, :kimi_device_id, "injected-device-id")
 
       task = Task.async(fn -> KimiCodeOAuth.request_headers() end)
       headers = Task.await(task)
@@ -390,8 +383,9 @@ defmodule LemonAi.Auth.KimiCodeOAuthTest do
       assert_receive {:DOWN, ^monitor, :process, _, _}
       assert Cache.get(key) == headers
       assert :persistent_term.get(key, :missing) == :missing
+      assert Map.new(headers)["x-msh-device-id"] == "injected-device-id"
 
-      File.write!(path, "replacement-device-id\n")
+      Application.put_env(:lemon_ai, :kimi_device_id, "replacement-device-id")
       assert KimiCodeOAuth.request_headers() == headers
 
       Cache.delete(key)
@@ -400,40 +394,34 @@ defmodule LemonAi.Auth.KimiCodeOAuthTest do
                "replacement-device-id"
     end
 
-    test "seeds the pre-persistence identity privately and keeps it across host renames",
-         %{home: home, path: path} do
-      legacy = legacy_id("old-host", home)
+    test "uses the caller's id, string or MFA, and never touches the filesystem" do
+      home = Path.join(System.tmp_dir!(), "kimi_device_#{System.unique_integer([:positive])}")
+      previous_home = System.get_env("HOME")
+      System.put_env("HOME", home)
 
-      assert KimiCodeOAuth.device_id(home: home, hostname: "old-host") == legacy
-      assert File.read!(path) == legacy <> "\n"
-      assert Bitwise.band(File.stat!(path).mode, 0o777) == 0o600
+      on_exit(fn ->
+        if previous_home,
+          do: System.put_env("HOME", previous_home),
+          else: System.delete_env("HOME")
+      end)
 
-      assert KimiCodeOAuth.device_id(home: home, hostname: "renamed-host") == legacy
+      Application.put_env(:lemon_ai, :kimi_device_id, "  stored-id\n")
+      assert KimiCodeOAuth.device_id() == "stored-id"
+
+      Application.put_env(:lemon_ai, :kimi_device_id, {String, :duplicate, ["ab", 2]})
+      assert KimiCodeOAuth.device_id() == "abab"
+
+      for fallback <- [nil, "\n", {Kernel, :raise, ["boom"]}] do
+        Application.put_env(:lemon_ai, :kimi_device_id, fallback)
+        assert KimiCodeOAuth.device_id() == KimiCodeOAuth.derived_device_id()
+      end
+
+      refute File.exists?(home)
     end
 
-    test "uses an existing id and reseeds an empty file", %{home: home, path: path} do
-      File.mkdir_p!(Path.dirname(path))
-      File.write!(path, "  existing-device-id\n")
-      assert KimiCodeOAuth.device_id(home: home, hostname: "h") == "existing-device-id"
-
-      File.write!(path, "\n")
-      seeded = KimiCodeOAuth.device_id(home: home, hostname: "h")
-      assert seeded =~ ~r/^[0-9a-f]{32}$/
-      assert File.read!(path) == seeded <> "\n"
-    end
-
-    test "falls back to the derived id when the file cannot be read or written",
-         %{home: home, path: path} do
-      # A directory in place of the file can be neither read as an id nor replaced.
-      blocked = Path.join(home, "blocked")
-      File.mkdir_p!(Path.join([blocked, ".lemon", "kimi-device-id"]))
-      assert KimiCodeOAuth.device_id(home: blocked, hostname: "h") == legacy_id("h", blocked)
-      assert File.dir?(Path.join([blocked, ".lemon", "kimi-device-id"]))
-
-      # A file where ~/.lemon belongs prevents creating the directory.
-      File.write!(Path.join(home, ".lemon"), "not a directory")
-      assert KimiCodeOAuth.device_id(home: home, hostname: "h") == legacy_id("h", home)
-      refute File.exists?(path)
+    test "the derived id is the pre-persistence identity" do
+      assert KimiCodeOAuth.derived_device_id(hostname: "old-host", home: "/home/u") ==
+               legacy_id("old-host", "/home/u")
     end
   end
 

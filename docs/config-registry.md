@@ -264,14 +264,14 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_OMP_IDLE_TIMEOUT_MS` | integer | `1800000` |  | `lemon_omp` | Close an idle omp process after this many milliseconds (0 disables). Sessions stay resumable. |
 | `LEMON_OMP_MAX_SESSIONS` | integer | `4` |  | `lemon_omp` | Maximum number of live omp processes Lemon supervises at once. |
 | `LEMON_OMP_SESSION_DIR` | string | _(none)_ |  | `lemon_omp` | Lemon's omp history directory (default: Lemon state dir/omp/sessions). Set to omp to use omp's own default. |
-| `PI_CODING_AGENT_DIR` | string | _(none)_ |  | `lemon_omp` | omp's agent directory; Lemon reads `<dir>/sessions` for read-only session discovery. |
-| `PI_CONFIG_DIR` | string | `.omp` |  | `lemon_omp` | omp's config directory name under HOME, used when PI_CODING_AGENT_DIR is unset. |
+| `PI_CODING_AGENT_DIR` | string | _(none)_ |  | `lemon_omp`, `lemon_agent` | omp's agent directory; Lemon reads `<dir>/sessions` for read-only session discovery. |
+| `PI_CONFIG_DIR` | string | `.omp` |  | `lemon_omp`, `lemon_agent` | omp's config directory name under HOME, used when PI_CODING_AGENT_DIR is unset. |
 
 ### Platform
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
-| `HOME` | string | _(none)_ |  | `lemon_core`, `lemon_ai`, `coding_agent` | Standard POSIX home directory; used for default `.lemon` locations and OAuth token caches. |
+| `HOME` | string | _(none)_ |  | `lemon_core`, `lemon_ai`, `lemon_agent`, `coding_agent` | Standard POSIX home directory; used for default `.lemon` locations, other tools' login files read by the model runtime, and OAuth token caches. |
 | `MIX_ENV` | string | _(none)_ |  | `lemon_core` | Standard Mix environment (dev/test/prod). |
 | `RELEASE_NAME` | string | _(none)_ |  | `lemon_core` | Standard Elixir release name; selects which endpoint(s) boot in a multi-app release. |
 | `RELEASE_NODE` | string | _(none)_ |  | `lemon_core` | Standard Elixir release node name; presence indicates a running release (vs. `mix`). |
@@ -290,6 +290,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
 | `ANTHROPIC_API_KEY` | string | _(none)_ | yes | `lemon_ai` | Anthropic API key. |
+| `ANTHROPIC_TOKEN` | string | _(none)_ | yes | `lemon_agent` | Static Claude subscription OAuth token, used only when Anthropic `auth_source = "oauth"` has no stored Lemon login. |
 | `AWS_ACCESS_KEY_ID` | string | _(none)_ | yes | `lemon_core`, `lemon_agent` | AWS access key id for Bedrock (ecosystem-standard name). |
 | `AWS_DEFAULT_REGION` | string | _(none)_ |  | `lemon_core` | AWS region fallback (ecosystem-standard AWS CLI name). |
 | `AWS_PROFILE` | string | _(none)_ |  | `lemon_agent` | Named AWS CLI credentials profile to resolve Bedrock credentials from. |
@@ -302,11 +303,13 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` | string | _(none)_ |  | `lemon_core` | JSON map of model id to Azure OpenAI deployment name. |
 | `AZURE_OPENAI_RESOURCE_NAME` | string | _(none)_ |  | `lemon_core` | Azure OpenAI resource name. |
 | `CHATGPT_TOKEN` | string | _(none)_ | yes | `lemon_ai` | ChatGPT/Codex session token (fallback for OPENAI_CODEX_API_KEY). |
+| `CLAUDE_CODE_OAUTH_TOKEN` | string | _(none)_ | yes | `lemon_agent` | Claude Code OAuth token (as `claude setup-token` prints), checked before ANTHROPIC_TOKEN for the same ambient fallback. |
+| `CODEX_HOME` | string | _(none)_ |  | `lemon_agent` | Codex CLI home directory; importing a Codex CLI login reads `<dir>/auth.json` (default `~/.codex`). |
 | `GCLOUD_PROJECT` | string | _(none)_ |  | `lemon_ai`, `lemon_cli`, `lemon_core` | Google Cloud project id (gcloud CLI convention name). |
 | `GEMINI_API_KEY` | string | _(none)_ | yes | `lemon_ai` | Gemini API key (alt name). |
 | `GITHUB_COPILOT_CLIENT_ID` | string | _(none)_ |  | `lemon_ai` | GitHub Copilot OAuth client id override. |
 | `GOOGLE_API_KEY` | string | _(none)_ | yes | `lemon_ai` | Google Generative AI API key (alt name). |
-| `GOOGLE_APPLICATION_CREDENTIALS` | string | _(none)_ | yes | `lemon_ai`, `lemon_agent` | Path to a Google service-account JSON credentials file (ecosystem-standard name). |
+| `GOOGLE_APPLICATION_CREDENTIALS` | string | _(none)_ | yes | `lemon_agent` | Path to a Google service-account JSON credentials file (ecosystem-standard name); Lemon mints Vertex AI tokens from it. |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | string | _(none)_ | yes | `lemon_core` | Inline Google service-account JSON credentials. |
 | `GOOGLE_CLOUD_LOCATION` | string | _(none)_ |  | `lemon_core` | Google Cloud / Vertex AI region. |
 | `GOOGLE_CLOUD_PROJECT` | string | _(none)_ |  | `lemon_ai`, `lemon_cli`, `lemon_core` | Google Cloud project id (ecosystem-standard name). |
@@ -320,6 +323,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `OMP_AUTH_BROKER_URL` | string | _(none)_ |  | `lemon_agent` | omp auth broker base URL for `auth_source = "omp_broker"` providers (default http://127.0.0.1:8765); a same-named Lemon secret also works. |
 | `OMP_AUTH_GATEWAY_TOKEN` | string | _(none)_ | yes | `lemon_agent` | Bearer for the `omp_gateway` provider; defaults to omp's `auth-gateway.token`. |
 | `OMP_AUTH_GATEWAY_URL` | string | _(none)_ |  | `lemon_agent` | Base URL (`/v1` root) of the omp auth gateway used by the `omp_gateway` provider (default http://127.0.0.1:4000/v1). |
+| `OMP_PROFILE`<br>_(alias: `PI_PROFILE`)_ | string | _(none)_ |  | `lemon_agent` | omp profile whose config root holds the auth broker/gateway token files (`profiles/<name>`); PI_PROFILE applies only when unset. |
 | `OPENAI_API_KEY` | string | _(none)_ | yes | `lemon_ai` | OpenAI API key. |
 | `OPENAI_CODEX_API_KEY` | string | _(none)_ | yes | `lemon_ai` | OpenAI Codex API key. |
 | `OPENAI_CODEX_OAUTH_CLIENT_ID` | string | _(none)_ |  | `lemon_ai` | OpenAI Codex OAuth client id override. |

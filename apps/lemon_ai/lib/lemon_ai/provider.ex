@@ -3,7 +3,9 @@ defmodule LemonAi.Provider do
   Behaviour for LLM provider implementations.
 
   Each provider (Anthropic, OpenAI, Google, etc.) implements this behaviour
-  to provide a unified streaming interface.
+  to provide a unified streaming interface. Providers read credentials only from
+  `LemonAi.Types.StreamOptions`; they never consult the environment, credential
+  files or external processes.
 
   ## Implementing a Provider
 
@@ -29,11 +31,6 @@ defmodule LemonAi.Provider do
   """
   @callback stream(Model.t(), Context.t(), StreamOptions.t()) ::
               {:ok, EventStream.t()} | {:error, term()}
-
-  @doc """
-  Get the API key from environment variables for this provider.
-  """
-  @callback get_env_api_key() :: String.t() | nil
 
   @doc """
   Provider identifier atom.
@@ -102,6 +99,4 @@ defmodule LemonAi.Provider do
     _ = LemonAi.Retry.wait(ms, sleep_fun: policy.sleep_fun)
     :ok
   end
-
-  @optional_callbacks [get_env_api_key: 0]
 end

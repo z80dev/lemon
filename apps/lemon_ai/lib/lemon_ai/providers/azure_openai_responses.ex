@@ -89,11 +89,6 @@ defmodule LemonAi.Providers.AzureOpenAIResponses do
   def provider_id, do: :"azure-openai-responses"
 
   @impl true
-  def get_env_api_key do
-    System.get_env("AZURE_OPENAI_API_KEY")
-  end
-
-  @impl true
   def stream(%Model{} = model, %Context{} = context, %StreamOptions{} = opts) do
     LemonAi.Providers.StreamingHelper.start_streaming(model, context, opts, &do_stream/4)
   end

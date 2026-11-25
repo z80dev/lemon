@@ -42,10 +42,6 @@ defmodule LemonAi.Providers.BedrockStreamingTest do
     test "api_id returns :bedrock_converse_stream" do
       assert Bedrock.api_id() == :bedrock_converse_stream
     end
-
-    test "get_env_api_key returns nil (uses AWS credentials instead)" do
-      assert Bedrock.get_env_api_key() == nil
-    end
   end
 
   # ============================================================================

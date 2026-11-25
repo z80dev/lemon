@@ -4,10 +4,12 @@ defmodule LemonCli.Onboarding.Runner do
 
   @moduledoc false
 
+  alias LemonAgent.ModelRuntime.AmbientCredentials
   alias LemonAgent.ModelRuntime.Credentials
-  alias LemonAi.Auth.{KimiCodeOAuth, OmpToken}
   alias LemonAgent.ModelRuntime.CustomProviders
   alias LemonAgent.ModelRuntime.ModelCatalog
+  alias LemonAgent.ModelRuntime.OmpToken
+  alias LemonAi.Auth.KimiCodeOAuth
   alias LemonAi.Models.Discovery
   alias LemonAi.Models.Presets
   alias LemonCli.CLI
@@ -619,8 +621,7 @@ defmodule LemonCli.Onboarding.Runner do
       nil when auth_mode == :codex_cli ->
         io.info.("Importing your Codex login and loading models…")
 
-        result =
-          spec.oauth_module.import_codex_cli_login(path: opts[:codex_auth_path])
+        result = AmbientCredentials.import_codex_cli_login(path: opts[:codex_auth_path])
 
         {normalize_oauth_result!(result, spec.oauth_module, spec),
          secret_provider_for_auth(spec, :oauth)}
@@ -704,9 +705,6 @@ defmodule LemonCli.Onboarding.Runner do
 
         function_exported?(oauth_module, :login_device_flow, 0) ->
           oauth_module.login_device_flow()
-
-        function_exported?(oauth_module, :resolve_access_token, 0) ->
-          oauth_module.resolve_access_token()
 
         true ->
           fail!(

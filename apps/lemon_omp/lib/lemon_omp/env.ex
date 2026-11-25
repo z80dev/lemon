@@ -95,7 +95,7 @@ defmodule LemonOmp.Env do
       secret?: false,
       required?: false,
       area: :omp,
-      apps: [:lemon_omp]
+      apps: [:lemon_omp, :lemon_agent]
     },
     %{
       name: :omp_config_dir,
@@ -107,7 +107,7 @@ defmodule LemonOmp.Env do
       secret?: false,
       required?: false,
       area: :omp,
-      apps: [:lemon_omp]
+      apps: [:lemon_omp, :lemon_agent]
     }
   ]
 end

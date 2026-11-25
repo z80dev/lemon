@@ -1,4 +1,4 @@
-defmodule LemonAi.Auth.OmpToken do
+defmodule LemonAgent.ModelRuntime.OmpToken do
   @moduledoc """
   Access-only bridge to omp's Kimi Code login (`omp token kimi-code`, or
   `kimi-code-global` for kimi.ai accounts through the `:provider` option).

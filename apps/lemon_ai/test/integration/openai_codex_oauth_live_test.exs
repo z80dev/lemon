@@ -4,7 +4,7 @@ defmodule LemonAi.Integration.OpenAICodexOAuthLiveTest do
   @moduletag :integration
   @moduletag timeout: 180_000
 
-  alias LemonAi.Auth.OpenAICodexOAuth
+  alias LemonAi.Models.Presets
   alias LemonAi.EventStream
   alias LemonAi.Models
   alias LemonAi.Providers.OpenAICodexResponses
@@ -16,16 +16,16 @@ defmodule LemonAi.Integration.OpenAICodexOAuthLiveTest do
     :ok
   end
 
-  test "can resolve Codex OAuth token from encrypted secret store" do
-    token = OpenAICodexOAuth.resolve_access_token()
+  test "can read a Codex OAuth token from the opt-in environment" do
+    token = Presets.env_api_key(:openai_codex)
     assert is_binary(token)
     assert token != ""
     # JWT-like shape (header.payload.sig) to avoid printing/handling token content.
     assert length(String.split(token, ".")) == 3
   end
 
-  test "can make a minimal Codex Responses request using secret-store OAuth token" do
-    token = OpenAICodexOAuth.resolve_access_token()
+  test "can make a minimal Codex Responses request using the environment token" do
+    token = Presets.env_api_key(:openai_codex)
     assert is_binary(token)
     assert token != ""
 

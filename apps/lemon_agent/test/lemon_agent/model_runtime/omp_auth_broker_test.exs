@@ -1,12 +1,12 @@
-defmodule LemonAi.Auth.OmpAuthBrokerTest do
+defmodule LemonAgent.ModelRuntime.OmpAuthBrokerTest do
   use ExUnit.Case, async: false
 
-  alias LemonAi.Auth.OmpAuthBroker
+  alias LemonAgent.ModelRuntime.OmpAuthBroker
 
   @endpoint %{url: "http://broker.test:8765", token: "broker-bearer"}
 
   setup do
-    {:ok, _} = Application.ensure_all_started(:lemon_ai)
+    {:ok, _} = Application.ensure_all_started(:lemon_agent)
     OmpAuthBroker.invalidate_all()
     on_exit(&OmpAuthBroker.invalidate_all/0)
     :ok
@@ -285,7 +285,7 @@ defmodule LemonAi.Auth.OmpAuthBrokerTest do
   end
 
   describe "snapshot watcher" do
-    @table :lemon_ai_omp_auth_broker
+    @table :lemon_agent_omp_auth_broker
 
     defp watch_opts, do: opts(watch: true, watch_wait_ms: 50)
 

@@ -1273,56 +1273,14 @@ defmodule LemonAi.Error do
     name = provider_name(provider)
 
     env_vars =
-      case name do
-        "anthropic" ->
-          ["ANTHROPIC_API_KEY"]
-
-        "openai" ->
-          ["OPENAI_API_KEY"]
-
-        "google" ->
-          ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
-
-        "azure_openai_responses" ->
-          ["AZURE_OPENAI_API_KEY"]
-
-        "openai_codex" ->
-          ["OPENAI_CODEX_API_KEY", "CHATGPT_TOKEN"]
-
-        "groq" ->
-          ["GROQ_API_KEY"]
-
-        "mistral" ->
-          ["MISTRAL_API_KEY"]
-
-        "xai" ->
-          ["XAI_API_KEY"]
-
-        "cerebras" ->
-          ["CEREBRAS_API_KEY"]
-
-        "deepseek" ->
-          ["DEEPSEEK_API_KEY"]
-
-        "openrouter" ->
-          ["OPENROUTER_API_KEY"]
-
-        "opencode" ->
-          ["OPENCODE_API_KEY"]
-
-        "zai" ->
-          ["ZAI_API_KEY"]
-
-        "minimax" ->
-          ["MINIMAX_API_KEY"]
-
-        "fireworks" ->
-          ["FIREWORKS_API_KEY"]
-
-        _ ->
+      case Presets.env_vars(provider) do
+        [] ->
           Enum.find_value(Presets.all(), [], fn preset ->
             if Atom.to_string(preset.id) == name, do: preset.env_vars
           end)
+
+        vars ->
+          vars
       end
 
     env_hint = if env_vars == [], do: "", else: "set #{Enum.join(env_vars, " or ")} or "

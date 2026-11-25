@@ -317,7 +317,6 @@ defmodule CodingAgent.Session.AutoThinkingTest do
     original_options = %StreamOptions{
       project: "initial-project",
       location: "initial-location",
-      service_account_json: "synthetic-initial-account",
       access_token: "synthetic-initial-token",
       headers: %{"X-Initial-Secret" => "synthetic-header"},
       provider_options: %{anthropic: %{token: "synthetic-provider-option"}},
@@ -346,7 +345,6 @@ defmodule CodingAgent.Session.AutoThinkingTest do
     assert destination.reasoning == :high
     assert destination.project == nil
     assert destination.location == nil
-    assert destination.service_account_json == nil
     assert destination.access_token == nil
     assert destination.headers == %{}
     assert destination.provider_options == %{}
