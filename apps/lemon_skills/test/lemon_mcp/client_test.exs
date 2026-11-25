@@ -372,7 +372,11 @@ defmodule LemonMCP.ClientTest do
     assert_receive {:port_open, {:spawn_executable, ^executable}, opts}
     assert opts[:args] == ["-c", "exit 0"]
     assert opts[:cd] == File.cwd!()
-    assert opts[:env] == [{~c"MCP_HOST_TEST", ~c"value"}]
+
+    # False options unset inherited variables; only the declared value is added.
+    assert Enum.reject(opts[:env], fn {_key, value} -> value == false end) ==
+             [{~c"MCP_HOST_TEST", ~c"value"}]
+
     refute_receive {:port_open, _, _}
   end
 
