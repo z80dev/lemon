@@ -1604,7 +1604,12 @@ defmodule CodingAgent.Tools.Lsp do
     end
   end
 
+  defp connection_error({:file, :invalid_document_encoding, path}, _server),
+    do: "Cannot send #{path} to the language server: the file is not valid UTF-8 text"
+
   defp connection_error({:file, reason, path}, _server), do: "Cannot read #{path}: #{reason}"
+
+  defp connection_error({:session_crashed, _class}, server), do: session_crashed(server.label)
 
   defp connection_error(:command_unavailable, server),
     do: "#{server.label} is not installed. #{server.install_hint}"
@@ -1661,11 +1666,19 @@ defmodule CodingAgent.Tools.Lsp do
        when reason in [:unknown_lsp_session, :session_lost],
        do: {:error, :session_lost}
 
+  defp response({:error, {:session_crashed, _class}}, _ctx, conn, _method),
+    do: {:error, session_crashed(conn.server.label)}
+
   defp response({:error, reason}, _ctx, _conn, method) when is_binary(reason),
     do: {:error, "LSP #{method}: #{reason}"}
 
   defp response({:error, reason}, _ctx, _conn, method),
     do: {:error, "LSP #{method} failed: #{inspect(reason)}"}
+
+  # The session's work may or may not have reached the server, so the request
+  # is neither replayed nor suggested again.
+  defp session_crashed(label),
+    do: "#{label} failed while handling this request; it was not retried"
 
   defp lsp_error(conn, method, error) do
     message = if is_map(error), do: error["message"] || inspect(error), else: inspect(error)
