@@ -360,44 +360,66 @@ defmodule CodingAgent.TestSupport.LiveProviderOwnershipProbe do
       end
     }
 
+    ref = make_ref()
+    owner = self()
+
+    :ok =
+      :telemetry.attach(
+        ref,
+        [:lemon_ai, :model_call, :stop],
+        fn _, _, %{provider: provider}, _ ->
+          if provider in [@startup_provider, @failure_provider] do
+            send(owner, {ref, provider, self()})
+          end
+        end,
+        nil
+      )
+
     try do
-      with_session(cwd, a, settings(providers, routing), [tool], fn session ->
-        Agent.update(holder, fn _ -> session end)
-        :ok = Session.prompt(session, "Use the fixture switch tool, then answer.")
-        events = await(:session, [])
-        idle!(:session, session)
-        {events, selection_recorded?(session, b)}
-      end)
+      result =
+        with_session(cwd, a, settings(providers, routing), [tool], fn session ->
+          Agent.update(holder, fn _ -> session end)
+          :ok = Session.prompt(session, "Use the fixture switch tool, then answer.")
+          events = await(:session, [])
+          idle!(:session, session)
+          {events, selection_recorded?(session, b)}
+        end)
+
+      settle_provider_work!(breaker, ref)
+      result
     after
-      try do
-        Agent.stop(holder)
-        settle_provider_work!(breaker, System.monotonic_time(:millisecond) + 5_000)
-      after
-        Supervisor.stop(health)
-        CredentialHealth.record_success(@failure_provider, "default")
-        CredentialHealth.record_success(@startup_provider, "env:LIVE_OWNER_POOL")
-      end
+      :telemetry.detach(ref)
+      Agent.stop(holder)
+      Supervisor.stop(health)
+      CredentialHealth.record_success(@failure_provider, "default")
+      CredentialHealth.record_success(@startup_provider, "env:LIVE_OWNER_POOL")
     end
   end
 
-  defp settle_provider_work!(breaker, deadline) do
+  defp settle_provider_work!(breaker, ref) do
+    # Owner DOWN can release a slot before the tracker commits provider health.
+    # Join only this fixture's trackers, not unrelated sessions' stream tasks.
+    for provider <- [@startup_provider, @failure_provider, @startup_provider] do
+      receive do
+        {^ref, ^provider, tracker} ->
+          monitor = Process.monitor(tracker)
+
+          receive do
+            {:DOWN, ^monitor, :process, ^tracker, _} -> :ok
+          after
+            5_000 -> raise "fixture provider tracker did not exit: #{provider}"
+          end
+      after
+        5_000 -> raise "fixture provider did not report terminal accounting: #{provider}"
+      end
+    end
+
     {:ok, state} = GenServer.call(breaker, :get_state)
 
-    # Owner DOWN can release a slot before terminal tracking commits health.
-    # This private sandbox's model tasks must all end before their health
-    # supervisor stops, including successful startup-provider callbacks.
-    if state.failure_count == 1 and
-         Task.Supervisor.children(LemonAi.StreamTaskSupervisor) == [] and
-         LemonAi.CallDispatcher.get_active_requests(@startup_provider) == 0 and
-         LemonAi.CallDispatcher.get_active_requests(@failure_provider) == 0 do
-      :ok
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        raise "fixture provider terminal accounting did not settle"
-      else
-        Process.sleep(10)
-        settle_provider_work!(breaker, deadline)
-      end
+    unless state.failure_count == 1 and
+             LemonAi.CallDispatcher.get_active_requests(@startup_provider) == 0 and
+             LemonAi.CallDispatcher.get_active_requests(@failure_provider) == 0 do
+      raise "fixture provider terminal accounting did not settle"
     end
   end
 
