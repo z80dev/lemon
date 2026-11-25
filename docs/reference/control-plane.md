@@ -6,23 +6,17 @@ for framing, authentication and the domain-specific method reference.
 
 ## HTTP and protocol errors
 
-Non-`/v1` HTTP failures use `{"error":{"code":"UNAUTHORIZED","message":"..."}}`,
-with the same string codes as WebSocket error frames. ACP HTTP authentication
-failures use this HTTP envelope; authenticated ACP method replies retain JSON-RPC
-framing and numeric method-error codes. Local or explicitly enabled `/v1/*`
-retains OpenAI-compatible errors (`error.message` and `error.type`); remote
-hidden routes use the generic 404 envelope. `/healthz` remains `{"ok":true}`.
+HTTP failures use `{"error":{"code":"UNAUTHORIZED","message":"..."}}`, with the
+same string codes as WebSocket error frames; unknown and remote-hidden routes use
+the generic 404 envelope. ACP method replies over `/acp/ws` retain JSON-RPC
+framing and numeric method-error codes. `/healthz` remains `{"ok":true}`.
+There is no OpenAI-compatible `/v1` API and no single-shot `POST /acp` endpoint.
 
-HTTP authentication errors name `Authorization: Bearer <token>` and the server's
-token configuration: `LEMON_ACP_API_TOKEN` for `/acp`,
-`LEMON_OPENAI_COMPAT_API_TOKEN` for `/v1/*` (both also accept `x-api-key`), and
-`LEMON_CONTROL_PLANE_OPERATOR_TOKEN` for `/acp/ws`. Managed launchers store the
-operator token at `~/.lemon/run/control-plane-<port>.token`. Native `/ws` clients
-send that token in `connect.params.auth.token`, not an HTTP header.
-OpenAI/ACP HTTP authentication falls back to that operator token when its
-dedicated token is unset; both APIs require authentication by default.
-Off-loopback main peers see only `/ws` and `/healthz` unless the corresponding
-HTTP API is explicitly enabled with a dedicated token. See
+`/acp/ws` authentication errors name `Authorization: Bearer <token>` and
+`LEMON_CONTROL_PLANE_OPERATOR_TOKEN`. Managed launchers store the operator token
+at `~/.lemon/run/control-plane-<port>.token`. Native `/ws` clients send that
+token in `connect.params.auth.token`, not an HTTP header. Off-loopback main peers
+see only `/ws` and `/healthz`. See
 [listener exposure](../config.md#listener-exposure-breaking-default-change).
 The separate node gateway on `127.0.0.1:4044` is the forwarding target for remote
 nodes: only node/enrollment `/ws` and `/healthz`, never operators.

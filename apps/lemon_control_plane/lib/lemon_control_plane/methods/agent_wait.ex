@@ -24,8 +24,11 @@ defmodule LemonControlPlane.Methods.AgentWait do
     include_answer = Map.get(params, "includeAnswer", true)
 
     cond do
-      is_nil(run_id) ->
+      not (is_binary(run_id) and run_id != "") ->
         {:error, {:invalid_request, "runId is required", nil}}
+
+      not (is_integer(timeout_ms) and timeout_ms >= 0) ->
+        {:error, {:invalid_request, "timeoutMs must be a nonnegative integer", nil}}
 
       not is_boolean(include_answer) ->
         {:error, {:invalid_request, "includeAnswer must be a boolean", nil}}
@@ -38,41 +41,30 @@ defmodule LemonControlPlane.Methods.AgentWait do
           {:error, :timeout} ->
             {:error, {:timeout, "Run did not complete within timeout", run_id}}
 
-          {:error, reason} ->
-            {:error, {:internal_error, "Failed to wait for run", reason}}
+          {:error, :unavailable} ->
+            {:error, {:unavailable, "Run status is unavailable", nil}}
         end
     end
   end
 
+  # Subscribing before the RunStore check closes the completion race. A run
+  # status that cannot be read is unavailable, never "still running".
   defp wait_for_run(run_id, timeout_ms) do
-    # Subscribe to run events
-    LemonCore.Bus.subscribe("run:#{run_id}")
+    topic = LemonCore.Bus.run_topic(run_id)
+    LemonCore.Bus.subscribe(topic)
 
-    # Check if already completed
-    case check_run_completed(run_id) do
-      {:ok, result} ->
-        LemonCore.Bus.unsubscribe("run:#{run_id}")
-        {:ok, result}
-
-      :running ->
-        wait_loop(run_id, timeout_ms)
-    end
-  rescue
-    e ->
-      LemonCore.Bus.unsubscribe("run:#{run_id}")
-      {:error, Exception.message(e)}
-  end
-
-  defp check_run_completed(run_id) do
-    case LemonCore.RunStore.get(run_id) do
-      %{summary: %{completed: completed}} when not is_nil(completed) ->
+    case LemonCore.RunStore.fetch(run_id) do
+      {:ok, %{summary: %{completed: completed}}} when not is_nil(completed) ->
+        LemonCore.Bus.unsubscribe(topic)
         {:ok, completed}
 
-      _ ->
-        :running
+      {:ok, _running_or_absent} ->
+        wait_loop(run_id, timeout_ms)
+
+      {:error, _reason} ->
+        LemonCore.Bus.unsubscribe(topic)
+        {:error, :unavailable}
     end
-  rescue
-    _ -> :running
   end
 
   defp wait_loop(run_id, timeout_ms) do

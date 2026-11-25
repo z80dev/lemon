@@ -30,10 +30,10 @@ Choose the smallest exposure you need:
   Main and web non-loopback binds require an operator token; protect browser
   login with TLS. Binding a socket does not configure encryption or a firewall.
 
-Non-loopback main-controller traffic is limited to `/ws` and `/healthz` by
-default. Remote OpenAI-compatible/ACP HTTP access needs explicit
-`LEMON_CONTROL_PLANE_REMOTE_HTTP` opt-in and dedicated API tokens. OpenAI/ACP
-also require bearer authentication locally (falling back to the operator token);
+Non-loopback main-controller traffic is limited to `/ws` and `/healthz`. The
+OpenAI-compatible `/v1` API, the single-shot `POST /acp` endpoint, their
+`LEMON_OPENAI_COMPAT_API_TOKEN`/`LEMON_ACP_API_TOKEN` tokens and the
+`LEMON_CONTROL_PLANE_REMOTE_HTTP` opt-in are removed; editors use `lemon acp`.
 A2A requires peer authentication. Do not restore tokenless access to make a proxy
 work. See the [security model](../security/threat-model.md#listener-exposure).
 

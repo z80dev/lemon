@@ -4,6 +4,26 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** the OpenAI-compatible `/v1` HTTP API, the single-shot
+  `POST /acp` endpoint, their dedicated API-token principals
+  (`Authorize.authenticate_api/3`, `LEMON_ACP_API_TOKEN` and the OpenAI-compat
+  token and image-fetch variables), the `LEMON_CONTROL_PLANE_REMOTE_HTTP`
+  opt-in and the ACP API-workspace confinement they required. The loopback
+  `/acp/ws` transport behind `lemon acp` is unchanged; remote peers reach only
+  `/ws` and `/healthz` (#711).
+
+### Fixed
+
+- `agent.wait` reports `UNAVAILABLE` when the run store cannot be read instead
+  of waiting out the timeout, never puts a raw exception message in error
+  details, and validates `runId`/`timeoutMs`. `cron.runs` never renders a
+  non-text output term onto the wire (#620).
+- A method with any scope beyond `:read` that raises, throws or whose async task
+  dies now answers `INTERNAL_ERROR` with `details.retrySafe: false`, so clients
+  never retry a mutation that may already have applied (#616).
+
 ### Added
 
 - Admin-only `browser.stop` stops the local browser driver and the Chrome it
@@ -50,6 +70,14 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Changed
 
+- **Breaking:** the `agent` method takes `sessionKey`, `agentId` and `queueMode`
+  (the advertised schema spelling) and an optional fixed `runId`; the old
+  `session_key`, `agent_id` and `queue_mode` are rejected instead of being
+  silently ignored. It submits through the `chat.send` receipt path and returns
+  `runId`, `sessionKey`, `state`, `effectiveMode`, `targetRunId` and
+  `retrySafe: false`. An `agentId` naming a managed profile runs as that
+  profile's chat in its workspace and rejects a caller `cwd`. Unknown queue
+  modes are rejected (#620).
 - `node.process.run`, `.get` and `.cancel` receipts accept the terminal state
   `failed` (null exit and outputs): the destination proved the program never
   started. Terminal receipts now retire on the destination 24 hours after they

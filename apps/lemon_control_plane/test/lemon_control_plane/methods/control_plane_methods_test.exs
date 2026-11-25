@@ -52,8 +52,12 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       key = "agent-submit-#{System.unique_integer([:positive, :monotonic])}"
 
       LemonCore.Idempotency.put(:agent, key, %{
-        "run_id" => "run_cached",
-        "session_key" => "agent:builder:main"
+        "runId" => "run_cached",
+        "sessionKey" => "agent:builder:main",
+        "state" => "accepted",
+        "effectiveMode" => "new_run",
+        "targetRunId" => "run_cached",
+        "retrySafe" => false
       })
 
       on_exit(fn -> LemonCore.Idempotency.delete(:agent, key) end)
@@ -62,8 +66,8 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
         Agent.handle(
           %{
             "prompt" => "private prompt body",
-            "agent_id" => "builder",
-            "queue_mode" => "steer",
+            "agentId" => "builder",
+            "queueMode" => "steer",
             "model" => "openai:gpt-4.1",
             "project_memory_capture" => false,
             "idempotency_key" => key
@@ -71,7 +75,7 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
           %{}
         )
 
-      assert result["run_id"] == "run_cached"
+      assert result["runId"] == "run_cached"
       assert result["summary"]["agentId"] == "builder"
       assert result["summary"]["sessionKey"] == "agent:builder:main"
       assert result["summary"]["runId"] == "run_cached"

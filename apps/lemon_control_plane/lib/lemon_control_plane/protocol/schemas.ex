@@ -216,7 +216,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "sessionKey" => :string,
         "agentId" => :string,
         "queueMode" => :string,
+        "runId" => :string,
         "model" => :string,
+        "cwd" => :string,
+        "idempotency_key" => :string,
         "project_memory_capture" => :boolean,
         "session_mode" => :string,
         "persona" => :boolean

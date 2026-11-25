@@ -149,6 +149,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - The packaged runtime refuses to boot, naming the fix, when its store backend
   is not durable, `exqlite` is unavailable or a required `lemon_core` service
   group is deselected, instead of running with run history silently off (#92).
+- **Breaking:** the control-plane `agent` method takes `sessionKey`, `agentId`,
+  `queueMode` and an optional fixed `runId`, rejects the old snake_case
+  spellings, returns the `chat.send` receipt (`runId`, `sessionKey`, `state`,
+  `effectiveMode`, `targetRunId`, `retrySafe`), and runs an `agentId` that names
+  a managed profile as that profile's chat in its own workspace (a caller `cwd`
+  is refused). A submit whose reply is lost keeps its fixed run ID, and a retry
+  with the same `idempotency_key` reconciles to that one run. `lemon print`
+  uses the new fields (#620).
+
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
@@ -288,6 +297,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `503` naming the stopped applications instead of a constant `200`; `lemon
   doctor` reports an expected application that failed to start or stopped
   (#726).
+- `agent.wait` returns `UNAVAILABLE` when the run store cannot be read instead
+  of reporting a timeout, and no longer copies a raw exception message into its
+  error details (#620).
 - One-shot CLI commands (`lemon doctor`, `config`, `secrets`, `usage`, `context`,
   `learn`, `learning`, `mcp`, `update`, `migrate`, `providers`, `setup`, and the
   `mix lemon.secrets*`/`lemon.config`/`lemon.usage` tasks) boot the core in a
@@ -819,6 +831,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   registered and reported as a configured channel. Every remaining built-in
   adapter is startable from canonical config; the shared Node port bridge keeps
   only XMTP's automatic restart mode (#699).
+- **Breaking:** the OpenAI-compatible `/v1` API (`/v1/models`,
+  `/v1/chat/completions`, `/v1/responses`, `/v1/runs`), the single-shot HTTP
+  `POST /acp` endpoint, `LEMON_OPENAI_COMPAT_API_TOKEN` (and its
+  `LEMON_OPENAI_COMPAT_TOKEN` alias), `LEMON_OPENAI_COMPAT_IMAGE_URL_*`,
+  `LEMON_ACP_API_TOKEN` and `LEMON_CONTROL_PLANE_REMOTE_HTTP`. No in-repo or
+  known external client used them and support policy made no compatibility
+  commitment. Editors use `lemon acp` over the unchanged loopback `/acp/ws`;
+  off-loopback peers reach only `/ws` and `/healthz` (#711).
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.

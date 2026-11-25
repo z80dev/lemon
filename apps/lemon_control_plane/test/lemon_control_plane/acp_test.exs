@@ -1,11 +1,7 @@
 defmodule LemonControlPlane.ACPTest do
   use ExUnit.Case, async: false
 
-  import Plug.Conn
-  import Plug.Test
-
   alias LemonControlPlane.ACP
-  alias LemonControlPlane.HTTP.Router
   alias LemonCore.Store
 
   defmodule InterruptedHistory do
@@ -79,9 +75,6 @@ defmodule LemonControlPlane.ACPTest do
   def pause_permission_resolution(_event, _measurements, _metadata, _config), do: :ok
 
   setup do
-    previous_token = System.get_env("LEMON_ACP_API_TOKEN")
-    System.delete_env("LEMON_ACP_API_TOKEN")
-
     keys =
       Enum.map(
         [:acp_submitter, :acp_waiter, :acp_canceller],
@@ -94,10 +87,6 @@ defmodule LemonControlPlane.ACPTest do
     clear_exec_approvals()
 
     on_exit(fn ->
-      if previous_token,
-        do: System.put_env("LEMON_ACP_API_TOKEN", previous_token),
-        else: System.delete_env("LEMON_ACP_API_TOKEN")
-
       for {{app, key}, value} <- previous do
         if is_nil(value) do
           Application.delete_env(app, key)
@@ -475,30 +464,6 @@ defmodule LemonControlPlane.ACPTest do
     assert_receive {:submitted_after_reload, request}
     assert request.session_key =~ "agent:default:acp-"
     assert request.prompt == "continue"
-  end
-
-  test "serves ACP JSON-RPC over HTTP with optional bearer auth" do
-    System.put_env("LEMON_ACP_API_TOKEN", "acp-secret")
-
-    missing =
-      :post
-      |> json_conn("/acp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "initialize"})
-      |> Router.call([])
-
-    assert missing.status == 401
-
-    assert Jason.decode!(missing.resp_body)["error"]["code"] == "UNAUTHORIZED"
-    assert Jason.decode!(missing.resp_body)["error"]["message"] =~ "Authorization: Bearer <token>"
-    assert Jason.decode!(missing.resp_body)["error"]["message"] =~ "LEMON_ACP_API_TOKEN"
-
-    ok =
-      :post
-      |> json_conn("/acp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "initialize"})
-      |> put_req_header("authorization", "Bearer acp-secret")
-      |> Router.call([])
-
-    assert ok.status == 200
-    assert Jason.decode!(ok.resp_body)["result"]["agentInfo"]["name"] == "Lemon"
   end
 
   test "emits ACP session/update notifications while stdio prompt waits" do
@@ -1659,14 +1624,6 @@ defmodule LemonControlPlane.ACPTest do
         "_meta" => %{"lemon" => %{"wait" => false}}
       }
     })
-  end
-
-  defp json_conn(method, path, body) do
-    method
-    |> conn(path, Jason.encode!(body))
-    # The router refuses non-loopback Host headers from loopback peers.
-    |> Map.put(:host, "localhost")
-    |> put_req_header("content-type", "application/json")
   end
 
   defp get_acp_session!(session_id) do

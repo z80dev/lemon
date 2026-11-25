@@ -374,5 +374,6 @@ defmodule LemonControlPlane.Methods.CronRuns do
   defp truncate(value, max) when is_binary(value),
     do: String.slice(value, 0, max) <> "...[truncated]"
 
-  defp truncate(value, _), do: inspect(value, limit: 200)
+  # `CronRun.output` is text; any other term is never rendered onto the wire.
+  defp truncate(_value, _max), do: nil
 end
