@@ -50,10 +50,17 @@ defmodule CodingAgent.Session.NotifierBackpressureTest do
              Enum.take(events, 2) ++
                [{:message_update, {:text_delta, 0, "hello"}}] ++ Enum.drop(events, 4)
 
-    assert elem(Enum.at(delivered, 2), 3)["seq"] == 4
     assert {:ok, replay} = EventLog.replay(state.event_log, initial, 100)
-    assert Enum.map(replay.events, & &1.event) == events
-    assert replay.cursor["seq"] == length(events)
+
+    assert [
+             %{events: [%{type: :delta, payload: %{text: "hel"}}]},
+             %{events: [%{type: :delta, payload: %{text: "lo"}}]} = latest_delta,
+             %{events: [%{type: :run_completed}]}
+           ] = replay.events
+
+    assert Enum.map(replay.events, & &1.cursor["seq"]) == [1, 2, 3]
+    assert elem(Enum.at(delivered, 2), 3) == latest_delta.cursor
+    assert replay.cursor["seq"] == 3
   end
 
   test "each subscriber batches within its own count budget and terminal flushes first" do
@@ -235,9 +242,9 @@ defmodule CodingAgent.Session.NotifierBackpressureTest do
   test "replacement and dead subscriber cleanup remove monitors and fence old delivery" do
     consumer = frozen_consumer()
     {_unsubscribe, state} = Notifier.subscribe_direct(state(), consumer, self())
-    [{^consumer, old_ref, old_delivery}] = state.event_listeners
+    assert [{^consumer, old_ref, old_delivery, :agent}] = state.event_listeners
     {_unsubscribe, state} = Notifier.subscribe_direct(state, consumer, self())
-    assert [{^consumer, new_ref, _}] = state.event_listeners
+    assert [{^consumer, new_ref, _, :agent}] = state.event_listeners
     refute old_ref == new_ref
     assert LemonCore.Bus.Delivery.closed?(old_delivery)
     Process.exit(consumer, :kill)
