@@ -55,11 +55,13 @@ defmodule LemonCore.Store do
 
   One-shot client VMs (see `LemonCore.Application` boot modes) start the store
   with `sweep: false`, leaving sweeps to the runtime that owns the database.
-  Writable clients add `defer_to_runtime: true`: when a live runtime holds the
-  database's ownership lock (`LemonCore.RuntimeOwner.held?/1`, checked once at
-  start), every mutation returns `{:error, :runtime_owned}` and the command must
-  ask that runtime to write instead, so the client is never a second writer
-  beside it. Read-only commands add `read_only: true`: every mutation returns
+  Writable clients add `defer_to_runtime: true`: the store holds the
+  database's runtime ownership lock for its whole life
+  (`LemonCore.RuntimeOwner.client_lease/3`). When a live runtime already holds
+  it, or a runtime starting later takes it over, every further mutation
+  returns `{:error, :runtime_owned}` and the command must ask that runtime to
+  write instead, so the client is never a second writer beside it. Read-only
+  commands add `read_only: true`: every mutation returns
   `{:error, :read_only}`. Refused mutations never reach the backend, and
   run/introspection appends are dropped. `write_access/1` reports which applies.
 
@@ -787,17 +789,24 @@ defmodule LemonCore.Store do
     end
   end
 
-  # A writable client defers to a runtime holding the database's ownership
-  # lock; an in-memory store cannot be shared, so it never defers.
+  # A writable client leases the database's ownership lock for its lifetime
+  # and steps aside when a runtime takes over; an in-memory store cannot be
+  # shared, so it never defers.
   defp write_refusal(config, backend_state) do
     cond do
       Keyword.get(config, :read_only, false) == true ->
         :read_only
 
       Keyword.get(config, :defer_to_runtime, false) == true and
-        match?(%{path: path} when is_binary(path), backend_state) and
-          LemonCore.RuntimeOwner.held?(LemonCore.RuntimeOwner.lock_path(backend_state.path)) ->
-        :runtime_owned
+          match?(%{path: path} when is_binary(path), backend_state) ->
+        store = self()
+        step_aside = fn -> GenServer.call(store, :defer_to_runtime, :infinity) end
+        lock = LemonCore.RuntimeOwner.lock_path(backend_state.path)
+
+        case LemonCore.RuntimeOwner.client_lease(lock, store, step_aside) do
+          :leased -> nil
+          :held -> :runtime_owned
+        end
 
       true ->
         nil
@@ -889,6 +898,11 @@ defmodule LemonCore.Store do
     do: {:reply, {:error, state.write_refusal}, state}
 
   def handle_call(:write_access, _from, state), do: {:reply, :ok, state}
+
+  # A runtime took the client lease over: refuse every later write. Calls are
+  # serialized, so a write in progress has finished when this replies.
+  def handle_call(:defer_to_runtime, _from, state),
+    do: {:reply, :ok, %{state | read_only: true, write_refusal: :runtime_owned}}
 
   def handle_call(:location, _from, state) do
     path =

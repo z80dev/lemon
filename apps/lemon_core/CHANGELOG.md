@@ -8,11 +8,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
-- Writable client stores (`defer_to_runtime: true`) refuse every mutation with
-  `{:error, :runtime_owned}` while a live runtime holds the database's
-  ownership lock (`LemonCore.RuntimeOwner.held?/1`); `Store.write_access/1`
-  reports it. `Secrets.list/1` on a client store hides expired rows without
-  pruning them (#667).
+- Writable client stores (`defer_to_runtime: true`) hold the database's
+  runtime ownership lock for their lifetime (`RuntimeOwner.client_lease/3`):
+  beside a running runtime they refuse every mutation with
+  `{:error, :runtime_owned}`, and a runtime booting later takes the lease over
+  (the client turns read-only first), so one VM writes whichever starts first.
+  `Store.write_access/1` reports it. `Secrets.list/1` on a client store hides
+  expired rows without pruning them (#667).
 
 ### Removed
 
