@@ -22,6 +22,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `call/3`, and provider callback groups are required. Failed reads are explicit
   errors; runtime and credential mutations whose callback failed after dispatch
   return `{:error, :outcome_unknown}` and must be reconciled before retry (#626).
+- `[skills.learning_nudge]` (with operator-only `background_review`) is a
+  validated `config.toml` table, resolved as `config.skills.learning_nudge`; a
+  project layer may only set `enabled = false` or raise the reminder intervals
+  (#655).
 - `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
   fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
   instead of launching a browser (#660).

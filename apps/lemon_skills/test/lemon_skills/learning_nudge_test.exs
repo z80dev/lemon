@@ -1,7 +1,8 @@
 defmodule LemonSkills.LearningNudgeTest do
   use ExUnit.Case, async: false
 
-  alias LemonSkills.{Config, LearningNudge}
+  alias LemonSkills.LearningNudge
+  alias LemonSkills.TestSupport.LearningNudgeConfig
 
   @moduletag :tmp_dir
 
@@ -16,6 +17,8 @@ defmodule LemonSkills.LearningNudgeTest do
     end)
 
     cwd = Path.join(tmp_dir, "project")
+    File.mkdir_p!(cwd)
+    LearningNudgeConfig.isolate!(tmp_dir)
     server = start_supervised!({LearningNudge, name: nil})
     session = spawn(fn -> receive do: (:stop -> :ok) end)
     on_exit(fn -> send(session, :stop) end)
@@ -23,18 +26,38 @@ defmodule LemonSkills.LearningNudgeTest do
     %{server: server, request: request}
   end
 
-  test "a project skills.json cannot speed up or re-enable reminders", ctx do
+  test "a project config.toml cannot speed up or re-enable reminders", ctx do
     configure(ctx, %{"enabled" => false})
 
-    Config.save_config(
-      %{"learning_nudge" => %{"enabled" => true, "memory_turn_interval" => 1}},
-      false,
-      ctx.request.cwd
-    )
+    LearningNudgeConfig.put_project!(ctx.request.cwd, %{
+      "enabled" => true,
+      "memory_turn_interval" => 1
+    })
 
     for _ <- 1..12, do: assert(turn(ctx) == :skip)
 
     configure(ctx, %{})
+    for _ <- 1..9, do: assert(turn(ctx) == :skip)
+    assert {:ok, _} = turn(ctx)
+  end
+
+  test "a project config.toml can lengthen the interval or turn reminders off", ctx do
+    configure(ctx, %{"memory_turn_interval" => 2})
+    LearningNudgeConfig.put_project!(ctx.request.cwd, %{"memory_turn_interval" => 4})
+
+    for _ <- 1..3, do: assert(turn(ctx) == :skip)
+    assert {:ok, _} = turn(ctx)
+
+    LearningNudgeConfig.put_project!(ctx.request.cwd, %{"enabled" => false})
+    for _ <- 1..12, do: assert(turn(ctx) == :skip)
+  end
+
+  test "learning_nudge left in skills.json is no longer read", ctx do
+    path = LemonSkills.Config.global_config_file()
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, ~s({"learning_nudge": {"memory_turn_interval": 1}}))
+    configure(ctx, %{})
+
     for _ <- 1..9, do: assert(turn(ctx) == :skip)
     assert {:ok, _} = turn(ctx)
   end
@@ -169,9 +192,8 @@ defmodule LemonSkills.LearningNudgeTest do
 
   defp turn(ctx), do: LearningNudge.contribute(ctx.request, server: ctx.server)
 
-  defp configure(_ctx, settings) do
-    Config.save_config(%{"learning_nudge" => settings})
-  end
+  defp configure(ctx, settings),
+    do: LearningNudgeConfig.put_operator!(ctx.request.cwd, settings)
 
   defp dispatch(ctx, name) do
     :telemetry.execute(

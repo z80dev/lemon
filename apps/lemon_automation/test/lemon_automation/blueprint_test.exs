@@ -131,13 +131,10 @@ defmodule LemonAutomation.BlueprintTest do
     destination = Path.join(profile["paths"]["skills"], "daily-note")
     assert File.regular?(Path.join(destination, "SKILL.md"))
 
-    config =
-      profile["paths"]["workspace"]
-      |> LemonSkills.Config.project_config_file()
-      |> File.read!()
-      |> Jason.decode!()
-
-    refute "daily-note" in config["disabled"]
+    # Nothing was disabled, so enabling writes no project skill state.
+    workspace = profile["paths"]["workspace"]
+    refute LemonSkills.Config.skill_disabled?("daily-note", workspace)
+    refute File.exists?(LemonSkills.Config.project_config_file(workspace))
 
     job_id = activated["automation"]["id"]
     job = CronStore.get_job(job_id)
@@ -165,6 +162,43 @@ defmodule LemonAutomation.BlueprintTest do
     assert Enum.count(CronManager.list(), &(&1.id == job_id)) == 1
 
     on_exit(fn -> _ = CronManager.remove(job_id) end)
+  end
+
+  @tag :tmp_dir
+  test "a curator-archived skill stays archived and disabled through a blueprint apply", %{
+    tmp_dir: root
+  } do
+    profile_id = unique_id("archive-profile")
+    profile_opts = profile_opts(root)
+    assert {:ok, profile} = ProfileStore.create(%{id: profile_id}, profile_opts)
+    bundle = write_bundle(root, unique_id("archive-bundle"), unique_id("archive-job"))
+    opts = [profile_opts: profile_opts, refresh_fun: fn _ -> :ok end]
+    workspace = profile["paths"]["workspace"]
+
+    assert {:ok, preview} = Blueprint.preview(bundle, profile_id, opts)
+
+    assert {:ok, activated} =
+             Blueprint.activate(bundle, profile_id, preview["confirmationDigest"], opts)
+
+    on_exit(fn -> _ = CronManager.remove(activated["automation"]["id"]) end)
+
+    # The curator archives the skill: disable it, then mark it archived.
+    usage = [scope: :project, cwd: workspace]
+    assert :ok = LemonSkills.Config.disable("daily-note", global: false, cwd: workspace)
+    assert :ok = LemonSkills.Usage.set_state("daily-note", :archived, usage)
+    config_path = LemonSkills.Config.project_config_file(workspace)
+    config_before = File.read!(config_path)
+
+    assert {:ok, replay} = Blueprint.preview(bundle, profile_id, opts)
+    assert [%{"action" => "enable"}] = replay["skills"]
+
+    assert {:error, {:skill_enable_failed, _}} =
+             Blueprint.activate(bundle, profile_id, replay["confirmationDigest"], opts)
+
+    assert File.read!(config_path) == config_before
+    assert LemonSkills.Config.skill_disabled?("daily-note", workspace)
+    assert LemonSkills.Usage.archived?("daily-note", usage)
+    assert File.regular?(Path.join([profile["paths"]["skills"], "daily-note", "SKILL.md"]))
   end
 
   @tag :tmp_dir

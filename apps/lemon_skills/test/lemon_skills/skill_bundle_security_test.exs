@@ -298,7 +298,7 @@ defmodule LemonSkills.SkillBundleSecurityTest do
     test "refuses content of disabled and audit-blocked skills", %{cwd: cwd} do
       write_project_skill!(cwd, "off-skill", "DISABLED-BODY")
       write_project_skill!(cwd, "blocked-skill", "BLOCKED-BODY")
-      assert :ok = Config.save_config(%{"disabled" => ["off-skill"]}, false, cwd)
+      assert :ok = Config.disable("off-skill", global: false, cwd: cwd)
 
       :ok =
         Lockfile.put({:project, cwd}, %{

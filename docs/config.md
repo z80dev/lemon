@@ -54,6 +54,8 @@ Policy that may only be narrowed:
 - `runtime.tools.bash.git_guard`, `runtime.secret_obfuscation.enabled`,
   `memory.write_approval`, `skills.write_approval`: only `true`
 - `memory.auto_recall`: only `false`; `[features]` flags: only `"off"`
+- `skills.learning_nudge.enabled`: only `false`; `memory_turn_interval` and
+  `skill_tool_threshold`: only at or above the global value
 - `runtime.tools.lsp.servers.<id>.disabled`: only `true`
 - `profiles.<id>.tool_policy`: intersected with the effective global profile
   policy, including the inherited `runtime.tools.approval_mode`; a project
@@ -3859,23 +3861,26 @@ slash command. Direct messages always run.
 Forum topic management:
 - `/topic <name>`: create a new topic in the current Telegram forum supergroup.
 
-## Learning Reminders (skills.json)
+## Learning Reminders
 
-Learning reminder settings use the existing skills configuration, **not**
-`config.toml`: global `~/.lemon/agent/skills.json` (or `LEMON_AGENT_DIR/skills.json`)
-and project `<cwd>/.lemon/skills.json`. A project file can only narrow the
-global one: `enabled = false`, or a larger `memory_turn_interval` /
-`skill_tool_threshold`; every other project `learning_nudge` key (including
-`background_review`) is ignored.
+Learning reminder settings live in `config.toml` under `[skills.learning_nudge]`.
+A project `.lemon/config.toml` can only narrow the global table: `enabled = false`,
+or a `memory_turn_interval` / `skill_tool_threshold` at or above the effective
+global value. `[skills.learning_nudge.background_review]` (model, timeouts, turn
+caps) is operator-only; a project value is ignored with a warning.
 
-```json
-{
-  "learning_nudge": {
-    "enabled": true,
-    "memory_turn_interval": 10,
-    "skill_tool_threshold": 15
-  }
-}
+`skills.json` is skill state only (the `disabled` list): a `learning_nudge` object
+left there is no longer read, and `lemon doctor` warns about it. Move it here.
+
+```toml
+[skills.learning_nudge]
+enabled = true
+memory_turn_interval = 10
+skill_tool_threshold = 15
+
+[skills.learning_nudge.background_review]
+enabled = false
+# model = "openai:gpt-4o-mini"
 ```
 
 | Key | Default | Meaning |
@@ -3890,8 +3895,9 @@ global one: `enabled = false`, or a larger `memory_turn_interval` /
 | `background_review.max_tool_turns` | `3` | Maximum assistant tool-use turns (maximum 10). |
 | `background_review.timeout_ms` | `60000` | Review execution timeout (maximum 300000). |
 
-Numeric settings must be positive integers; invalid values use their defaults.
-Configuration is read at the next user turn. With background review disabled,
+Numeric settings must be positive integers and unknown keys are rejected; an
+invalid value is a configuration error reported by config validation and
+`lemon doctor`. Configuration is read at the next user turn. With background review disabled,
 the fixed reminder text is bounded volatile context with no extra model calls,
 memory reads, automatic saves or transcript scans. Enabling background review
 costs **one additional model run per accepted trigger**, using the parent model
