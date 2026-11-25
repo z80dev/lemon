@@ -96,7 +96,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   behind `LemonMedia.Providers.run/1` with one shared retry helper; Google
   service-account tokens are cached until expiry instead of re-signed per job.
   Channel voice-note transcription and voice replies and the gateway voice
-  call's ElevenLabs synthesis now call the `lemon_media` clients;
+  call's ElevenLabs synthesis and Deepgram streaming now call the `lemon_media` clients;
   transcription errors shown in chat carry a redacted provider error label
   instead of the raw provider message (#722).
 - **Breaking:** media tools (`media_generate_image`, `media_generate_speech`,

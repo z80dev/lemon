@@ -254,7 +254,7 @@ in-process subagents.
 |--------|------|---------|
 | `LemonGateway.Voice.CallSession` | `voice/call_session.ex` | Per-call state machine owning supervised, deadline-bound LLM/TTS work |
 | `LemonGateway.Voice.TwilioWebSocket` | `voice/twilio_websocket.ex` | WebSocket handler for Twilio Media Streams |
-| `LemonGateway.Voice.DeepgramClient` | `voice/deepgram_client.ex` | WebSocket client for Deepgram STT |
+| `LemonGateway.Voice.DeepgramCall` | `voice/deepgram_call.ex` | Per-call lifecycle and transcript routing for `LemonMedia.Providers.DeepgramStream` |
 | `LemonGateway.Voice.WebhookRouter` | `voice/webhook_router.ex` | Voice webhook HTTP routing |
 | `LemonGateway.Voice.RecordingManager` | `voice/recording_manager.ex` | Starts dual-channel call recording via Twilio REST API |
 | `LemonGateway.Voice.RecordingDownloader` | `voice/recording_downloader.ex` | Downloads and saves Twilio recordings locally |
@@ -334,7 +334,7 @@ Incoming Call -> Twilio -> Voice.WebhookRouter -> CallSession state machine
                                                TwilioWebSocket
                                             (mulaw audio frames)
                                                       |
-                                               DeepgramClient
+                                               DeepgramStream
                                             (raw audio -> text)
                                                       |
                                                LemonGateway.AI
@@ -540,7 +540,7 @@ Custom health checks can be registered via the `:health_checks` application envi
 | `plug` + `bandit` | HTTP servers (health port 4042, SMS webhooks, voice webhooks) |
 | `gen_smtp` + `mail` | SMTP email handling |
 | `earmark_parser` | Markdown-to-Telegram entity rendering |
-| `websockex` + `websock_adapter` | WebSocket clients (Deepgram STT, Twilio Media Streams) |
+| `websock_adapter` | Twilio Media Streams WebSocket ingress |
 
 ## Testing
 
