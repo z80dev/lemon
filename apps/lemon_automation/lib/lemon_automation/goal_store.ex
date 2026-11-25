@@ -340,7 +340,7 @@ defmodule LemonAutomation.GoalStore do
   end
 
   @doc false
-  # The goal row of a session, for `LemonAgent.SessionParticipant`.
+  # The goal row of a session, for `LemonAutomation.GoalSessionParticipant`.
   @spec lifecycle_tables() :: [atom()]
   def lifecycle_tables, do: [@table]
 

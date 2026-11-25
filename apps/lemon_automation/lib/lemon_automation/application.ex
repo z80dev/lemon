@@ -21,6 +21,13 @@ defmodule LemonAutomation.Application do
       LemonSkills.CuratorReferences.register(LemonAutomation.CuratorReferences, pid)
       register_tools()
       :ok = LemonCore.AutomationCommands.register(LemonAutomation.ChatCommands)
+
+      :ok =
+        LemonCore.SessionLifecycle.Participant.register(
+          :goals,
+          LemonAutomation.GoalSessionParticipant
+        )
+
       {:ok, pid}
     end
   end

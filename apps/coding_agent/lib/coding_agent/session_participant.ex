@@ -6,9 +6,10 @@ defmodule CodingAgent.SessionParticipant do
   The session's native sessions are the one its chat state resumes and any
   still registered for the key. Deleting the session stops those (idle,
   under the lifecycle fence) processes, deletes their JSONL journals (live
-  and maintenance-archived copies) and drops their provider pins and todo
-  cache. A journal is staged by an atomic rename next to it and removed only
-  after the canonical deletion commits; a failure before that renames it back.
+  and maintenance-archived copies), including the todos they contain, and
+  drops provider pins. A journal is staged by an atomic rename next to it
+  and removed only after the canonical deletion commits; a failure before
+  that renames it back.
 
   Reset keeps journals: the reset session starts a new native session and the
   unreferenced journal ages into maintenance archiving.
@@ -18,7 +19,6 @@ defmodule CodingAgent.SessionParticipant do
 
   alias CodingAgent.{Config, SessionManager, SessionSupervisor}
   alias CodingAgent.Session.Ownership
-  alias CodingAgent.Tools.TodoStore
   alias LemonAgent.ModelRuntime.SessionPins
 
   @impl true
@@ -30,8 +30,7 @@ defmodule CodingAgent.SessionParticipant do
        %{
          ids: ids,
          journals: Enum.map(journals, &{&1, staged_path(&1)}),
-         pins: for(id <- ids, pin = SessionPins.get(id), into: %{}, do: {id, pin}),
-         todos: for(id <- ids, todos = TodoStore.get(id), todos != [], into: %{}, do: {id, todos})
+         pins: for(id <- ids, pin = SessionPins.get(id), into: %{}, do: {id, pin})
        }}
     end
   end
@@ -40,10 +39,7 @@ defmodule CodingAgent.SessionParticipant do
   def delete(session_key, :delete, snapshot) do
     with :ok <- stop_live(session_key),
          :ok <- each(snapshot.journals, &stage/1) do
-      Enum.each(snapshot.ids, fn id ->
-        :ok = SessionPins.clear(id)
-        :ok = TodoStore.delete(id)
-      end)
+      Enum.each(snapshot.ids, &(:ok = SessionPins.clear(&1)))
     end
   end
 
@@ -51,8 +47,7 @@ defmodule CodingAgent.SessionParticipant do
   def verify_deleted(session_key, :delete, snapshot) do
     with [] <- live(session_key),
          {:ok, []} <- journals(snapshot.ids),
-         true <-
-           Enum.all?(snapshot.ids, &(is_nil(SessionPins.get(&1)) and TodoStore.get(&1) == [])) do
+         true <- Enum.all?(snapshot.ids, &is_nil(SessionPins.get(&1))) do
       :ok
     else
       _remaining_or_unreadable -> {:error, :native_session_remains}
@@ -65,7 +60,6 @@ defmodule CodingAgent.SessionParticipant do
       SessionPins.pin(id, pin.provider, pin.credential_ref, pin.model_id)
     end)
 
-    Enum.each(snapshot.todos, fn {id, todos} -> TodoStore.put(id, todos) end)
     each(snapshot.journals, &unstage/1)
   end
 

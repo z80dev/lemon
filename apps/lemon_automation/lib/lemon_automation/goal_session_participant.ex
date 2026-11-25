@@ -1,4 +1,4 @@
-defmodule LemonAgent.SessionParticipant do
+defmodule LemonAutomation.GoalSessionParticipant do
   @moduledoc """
   `LemonCore.SessionLifecycle.Participant` for the session goal: deleting a
   session clears its goal (emitting `:goal_cleared`, which stops goal loops).
@@ -8,7 +8,7 @@ defmodule LemonAgent.SessionParticipant do
 
   @behaviour LemonCore.SessionLifecycle.Participant
 
-  alias LemonAgent.Workspace.GoalStore
+  alias LemonAutomation.GoalStore
   alias LemonCore.SessionLifecycle.StoreRows
 
   @impl true
