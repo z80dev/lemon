@@ -932,15 +932,14 @@ This is useful for:
 
 ## Extensions Status Tool
 
-The agent has access to a built-in `extensions_status` tool that allows it to self-diagnose plugin loading issues, conflicts, and reload extensions during a session. This is useful for debugging when:
+The agent has access to a built-in, read-only `extensions_status` tool that lets it self-diagnose plugin loading issues and conflicts during a session. This is useful for debugging when:
 - An expected tool isn't available
 - Extensions fail to load with syntax or compile errors
 - Tool name conflicts prevent extension tools from being used
-- Extensions have been added, modified, or removed during the session
 
 ### Using the Tool
 
-The agent can call the tool with optional `action` and `include_details` parameters:
+The agent can call the tool with an optional `include_details` parameter:
 
 ```
 # Summary view (default)
@@ -948,20 +947,11 @@ extensions_status {}
 
 # Detailed view with source paths and modules
 extensions_status {"include_details": true}
-
-# Reload extensions (re-discover and refresh tool registry)
-extensions_status {"action": "reload"}
-
-# Reload with details
-extensions_status {"action": "reload", "include_details": true}
 ```
 
-### Actions
-
-| Action | Description |
-|--------|-------------|
-| `status` | Get the current extension status report (default) |
-| `reload` | Re-discover extensions from all paths, refresh the tool registry, and update the status report |
+The tool only reports status. It cannot reload extensions: a model turn always
+runs while its session is streaming, and reloads are refused then. Operators
+reload idle sessions (see [Reloading Extensions](#reloading-extensions)).
 
 ### Output Format
 
@@ -998,9 +988,7 @@ Conflicts are listed under a `### Conflicts` heading in the Tool Registry sectio
 and a `## WASM Runtime` section appears when WASM status is available. The Tool
 Disclosure section shows whether tool disclosure is active (see
 [Tool Disclosure](config.md#tool-disclosure)); with `include_details: true` and
-active disclosure it also lists the disclosed and hidden tool names. A `reload`
-action returns the same sections under an `# Extensions Reloaded` heading with a
-`Reloaded at` line.
+active disclosure it also lists the disclosed and hidden tool names.
 
 When `include_details: true`, extension entries also show:
 - Source file path
@@ -1009,13 +997,11 @@ When `include_details: true`, extension entries also show:
 
 ### Reloading Extensions
 
-The `reload` action allows the agent to refresh the extension system without restarting the session. This is useful when:
-- New extension files have been added to the extensions directories
-- Existing extensions have been modified
-- Extensions have been removed and should no longer be loaded
-
-Reload is refused with an error while the session is streaming, and requires an
-active session (there is nothing to reload in fallback mode).
+Reloading refreshes the extension system without restarting a session, after
+extension files were added, modified or removed. It is an operator action:
+`CodingAgent.Session.reload_extensions/1` reloads one idle session (a
+development code reload does this for every idle session). A session that is
+streaming refuses the reload with `{:error, :already_streaming}`.
 
 When reload is triggered:
 1. Providers registered by the session's previous load are unregistered
@@ -1033,10 +1019,6 @@ with a finite retry limit; exhausted contention is an explicit load error in the
 status report, and the simpler `load_extensions/1` API logs the failure.
 
 ```elixir
-# Reload via tool (from within agent)
-extensions_status {"action": "reload"}
-
-# Reload via Session API (from external code)
 {:ok, report} = CodingAgent.Session.reload_extensions(session)
 ```
 

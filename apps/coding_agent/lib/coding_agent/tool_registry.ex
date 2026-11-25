@@ -66,7 +66,6 @@ defmodule CodingAgent.ToolRegistry do
     {:find, Tools.Find},
     {:semantic_find, Tools.SemanticFind},
     {:ls, Tools.Ls},
-    {:report_issue, Tools.ReportIssue},
     {:webfetch, Tools.WebFetch},
     {:websearch, Tools.WebSearch},
     {:browser_tabs, Tools.BrowserTabs},

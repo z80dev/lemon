@@ -13,6 +13,9 @@ All notable changes to `lemon_control_plane` are documented here.
   opt-in and the ACP API-workspace confinement they required. The loopback
   `/acp/ws` transport behind `lemon acp` is unchanged; remote peers reach only
   `/ws` and `/healthz` (#711).
+- `sessions.active.list` harness snapshots no longer include `requirements`
+  (feature-requirement progress had no writer); an unreadable stopped-session
+  todo history still fails the request explicitly (#706).
 
 ### Fixed
 

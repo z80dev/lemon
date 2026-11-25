@@ -3,9 +3,6 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
   @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
 
-  alias CodingAgent.Tools.FeatureRequirements
-  alias CodingAgent.Tools.TodoStore
-  alias CodingAgent.Tools.TodoWrite
   alias LemonAi.Types.{Model, ModelCost}
 
   alias LemonControlPlane.Methods.{
@@ -75,7 +72,8 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
     assert {:ok, %{"sessions" => [%{"harness" => harness}]}} =
              SessionsActiveList.handle(params, %{})
 
-    assert is_map(harness["requirements"])
+    assert harness["todos"]["total"] == 1
+    refute Map.has_key?(harness, "requirements")
   end
 
   test "cron timelines fail explicitly without breaking history-only reads", %{run_id: run_id} do
@@ -199,48 +197,11 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       })
 
     run_id = "run_cp_introspection_#{token}"
-    requirements_cwd = Path.join(System.tmp_dir!(), "cp_introspection_requirements_#{token}")
+    session_cwd = Path.join(System.tmp_dir!(), "cp_introspection_session_#{token}")
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
     old_session_coordinator = Application.get_env(:lemon_router, :session_coordinator)
 
-    File.mkdir_p!(requirements_cwd)
-
-    now = DateTime.utc_now() |> DateTime.to_iso8601()
-
-    :ok =
-      FeatureRequirements.save_requirements(
-        %{
-          project_name: "Control Plane Harness Projection",
-          original_prompt: "Track long-running task progress",
-          created_at: now,
-          version: "1.0",
-          features: [
-            %{
-              id: "feature-001",
-              description: "Expose harness data",
-              status: :completed,
-              dependencies: [],
-              priority: :high,
-              acceptance_criteria: ["harness appears in sessions.active.list"],
-              notes: "",
-              created_at: now,
-              updated_at: now
-            },
-            %{
-              id: "feature-002",
-              description: "Validate requirements progress",
-              status: :pending,
-              dependencies: ["feature-001"],
-              priority: :medium,
-              acceptance_criteria: ["requirements section is included"],
-              notes: "",
-              created_at: now,
-              updated_at: nil
-            }
-          ]
-        },
-        requirements_cwd
-      )
+    File.mkdir_p!(session_cwd)
 
     :ok = LemonCore.RouterBridge.configure(router: RouterBridgeStub)
     RouterBridgeStub.set_active_sessions([%{session_key: session_key, run_id: run_id}])
@@ -252,23 +213,23 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
     :ok =
       LemonCore.Introspection.record(
         :session_started,
-        %{cwd: requirements_cwd},
+        %{cwd: session_cwd},
         run_id: run_id,
         session_key: session_key,
         agent_id: agent_id
       )
 
     assert {:ok, native} =
-             CodingAgent.ControlPlaneProvider.session_create(session_key, requirements_cwd)
+             CodingAgent.ControlPlaneProvider.session_create(session_key, session_cwd)
 
     native_path =
-      CodingAgent.SessionManager.session_file_path(requirements_cwd, native["sessionId"])
+      CodingAgent.SessionManager.session_file_path(session_cwd, native["sessionId"])
 
     session =
       start_supervised!(
         {CodingAgent.Session,
-         cwd: requirements_cwd,
-         workspace_dir: Path.join(requirements_cwd, "workspace"),
+         cwd: session_cwd,
+         workspace_dir: Path.join(session_cwd, "workspace"),
          session_file: native_path,
          session_key: session_key,
          model: fixture_model(),
@@ -276,9 +237,10 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       )
 
     assert %LemonAgent.Types.AgentToolResult{} =
-             TodoWrite.execute(
+             CodingAgent.Tools.Todo.execute(
                "todo",
                %{
+                 "action" => "write",
                  "todos" => [
                    %{"id" => "todo-introspection-1", "content" => "verify harness projection"}
                  ]
@@ -300,12 +262,11 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       restore_router_bridge(old_router_bridge)
       restore_session_coordinator(old_session_coordinator)
       LemonCore.Store.delete(:runs, run_id)
-      TodoStore.delete(native["sessionId"])
       LemonCore.ChatStateStore.delete(session_key)
       LemonCore.RunStore.delete_session(session_key)
-      File.rm_rf!(CodingAgent.Config.sessions_dir(requirements_cwd))
+      File.rm_rf!(CodingAgent.Config.sessions_dir(session_cwd))
       CodingAgent.Checkpoint.delete(checkpoint.id, session_key)
-      File.rm_rf(requirements_cwd)
+      File.rm_rf(session_cwd)
     end)
 
     {:ok,
@@ -313,7 +274,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
        agent_id: agent_id,
        session_key: session_key,
        run_id: run_id,
-       requirements_cwd: requirements_cwd
+       session_cwd: session_cwd
      }}
   end
 
@@ -397,11 +358,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       refute unavailable_wire =~ private_path
     end
 
-    test "lists active sessions with filters", %{
-      agent_id: agent_id,
-      session_key: session_key,
-      requirements_cwd: requirements_cwd
-    } do
+    test "lists active sessions with filters", %{agent_id: agent_id, session_key: session_key} do
       assert SessionsActiveList.name() == "sessions.active.list"
       assert SessionsActiveList.scopes() == [:read]
 
@@ -436,12 +393,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert is_map(session["harness"])
       assert session["harness"]["todos"]["total"] == 1
       assert session["harness"]["checkpoints"]["count"] >= 1
-
-      assert session["harness"]["requirements"]["project_name"] ==
-               "Control Plane Harness Projection"
-
-      assert session["harness"]["requirements"]["percentage"] == 50
-      assert session["harness"]["requirements"]["cwd"] == requirements_cwd
+      refute Map.has_key?(session["harness"], "requirements")
     end
 
     test "list returns a bounded unavailable error when routing state is down" do

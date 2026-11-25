@@ -128,7 +128,6 @@ export default {
               { text: "User questions", link: "/tools/ask" },
               { text: "Checkpoints and rewind", link: "/tools/checkpoint" },
               { text: "Todo plans", link: "/tools/todo" },
-              { text: "Tool issue reports", link: "/tools/report-issue" },
               { text: "Web", link: "/tools/web" },
               { text: "Firecrawl", link: "/tools/firecrawl" },
               { text: "Media", link: "/tools/media" },

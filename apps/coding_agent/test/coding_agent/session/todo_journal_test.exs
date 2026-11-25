@@ -4,7 +4,7 @@ defmodule CodingAgent.Session.TodoJournalTest do
   alias CodingAgent.{Session, SessionManager, SettingsManager, ToolPolicy}
   alias CodingAgent.Session.{BudgetLedger, Planning, Todos, WasmBridge}
   alias CodingAgent.SessionManager.SessionEntry
-  alias CodingAgent.Tools.{Todo, TodoStore, TodoStoreOwner}
+  alias CodingAgent.Tools.Todo
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, ToolCall, Usage}
 
@@ -82,7 +82,6 @@ defmodule CodingAgent.Session.TodoJournalTest do
     assert SessionManager.get_entry(saved, b)
     assert SessionManager.get_entry(saved, c)
     GenServer.stop(session)
-    TodoStore.clear()
     resumed = start_session(root, session_file: path)
     assert_views(resumed, original)
     assert Session.get_state(resumed).budget_usage == spent
@@ -93,7 +92,7 @@ defmodule CodingAgent.Session.TodoJournalTest do
     assert File.read!(external) == "changed after the effect"
   end
 
-  test "live WASM host todo route journals and restores every view without a model or ETS authority",
+  test "live WASM host todo route journals and restores every view without a model",
        %{tmp_dir: root} do
     session = start_session(root)
     original = host(session, %{"action" => "write", "todos" => pending()})["todos"]
@@ -103,11 +102,10 @@ defmodule CodingAgent.Session.TodoJournalTest do
     assert host(session, %{"action" => "write", "todos" => completed})["todos"] == completed
     b = leaf(session)
     navigate(session, a)
-    TodoStore.clear()
     assert_host_views(session, original)
 
     alternate =
-      original |> Enum.map(&Map.put(&1, "status", "in_progress")) |> TodoStore.normalize()
+      original |> Enum.map(&Map.put(&1, "status", "in_progress")) |> Todo.normalize()
 
     assert host(session, %{"action" => "write", "todos" => alternate})["todos"] == alternate
     c = leaf(session)
@@ -116,7 +114,6 @@ defmodule CodingAgent.Session.TodoJournalTest do
     assert {{:ok, ^alternate}, _} = Todos.materialize(saved)
     assert Enum.count(SessionManager.entries(saved), &(&1.custom_type == "lemon.todo")) == 3
     GenServer.stop(session)
-    TodoStore.clear()
     resumed = start_session(root, session_file: path)
 
     for {branch, expected} <- [{a, original}, {b, completed}, {c, alternate}] do
@@ -456,30 +453,6 @@ defmodule CodingAgent.Session.TodoJournalTest do
              state.session_manager.header.id
   end
 
-  test "clearing and restarting the ETS owner cannot resurrect an abandoned branch", %{
-    tmp_dir: root
-  } do
-    session = start_session(root)
-    original = write(session, pending()).details.todos
-    a = leaf(session)
-    done = write(session, Enum.map(original, &Map.put(&1, "status", "completed"))).details.todos
-    b = leaf(session)
-    navigate(session, a)
-    id = Session.get_state(session).session_manager.header.id
-    TodoStore.put(id, done)
-    assert_views(session, original)
-    TodoStore.clear()
-    assert_views(session, original)
-
-    assert :ok = Supervisor.terminate_child(CodingAgent.Supervisor, TodoStoreOwner)
-    assert {:ok, _} = Supervisor.restart_child(CodingAgent.Supervisor, TodoStoreOwner)
-    assert TodoStore.get(id) == []
-    assert_views(session, original)
-    assert TodoStore.get(id) == original
-    navigate(session, b)
-    assert_views(session, done)
-  end
-
   test "planning mode, approved context and complete plan projections follow the same branch", %{
     tmp_dir: root
   } do
@@ -580,7 +553,6 @@ defmodule CodingAgent.Session.TodoJournalTest do
     after_failure = Session.get_state(session)
     assert after_failure.session_manager.by_id == before.session_manager.by_id
     assert after_failure.session_manager.leaf_id == before.session_manager.leaf_id
-    assert TodoStore.get(before.session_manager.header.id) == original
     assert_views(session, original)
     assert {:ok, saved} = SessionManager.load_from_file(before.session_file)
     assert {{:ok, ^original}, _} = Todos.materialize(saved)
@@ -671,7 +643,6 @@ defmodule CodingAgent.Session.TodoJournalTest do
     assert {:ok, loaded} = SessionManager.load_from_file(path)
     assert {{:ok, ^leaked}, nil} = Todos.materialize(loaded)
     assert File.read!(path) == bytes
-    TodoStore.put(manager.header.id, leaked)
     session = start_session(root, session_file: path)
 
     for {branch, expected} <- [{empty, []}, {a, legacy}, {read_leaf, legacy}, {b, leaked}] do
@@ -835,7 +806,7 @@ defmodule CodingAgent.Session.TodoJournalTest do
   end
 
   defp assert_host_views(session, todos) do
-    details = TodoStore.result_details(todos) |> Jason.encode!() |> Jason.decode!()
+    details = Todo.result_details(todos) |> Jason.encode!() |> Jason.decode!()
 
     for action <- ["read", "progress", "actionable"] do
       result = host(session, %{"action" => action})
@@ -843,12 +814,12 @@ defmodule CodingAgent.Session.TodoJournalTest do
       assert result["plan"] == details["plan"]
 
       if action == "progress" do
-        progress = TodoStore.progress(todos) |> Jason.encode!() |> Jason.decode!()
+        progress = Todo.progress(todos) |> Jason.encode!() |> Jason.decode!()
         assert Map.take(result, Map.keys(progress)) == progress
       end
 
       if action == "actionable" do
-        actionable = TodoStore.result_details(TodoStore.actionable(todos))
+        actionable = Todo.result_details(Todo.actionable(todos))
         assert result["actionable"] == actionable.todos
       end
     end
@@ -879,7 +850,7 @@ defmodule CodingAgent.Session.TodoJournalTest do
   end
 
   defp assert_views(session, todos) do
-    details = TodoStore.result_details(todos)
+    details = Todo.result_details(todos)
 
     for action <- ["read", "progress", "actionable"] do
       result = view(session, action)
@@ -895,15 +866,15 @@ defmodule CodingAgent.Session.TodoJournalTest do
       if action == "progress",
         do:
           assert(
-            Map.take(result.details, Map.keys(TodoStore.progress(todos))) ==
-              TodoStore.progress(todos)
+            Map.take(result.details, Map.keys(Todo.progress(todos))) ==
+              Todo.progress(todos)
           )
 
       if action == "actionable",
         do:
           assert(
             result.details.actionable ==
-              TodoStore.result_details(TodoStore.actionable(todos)).todos
+              Todo.result_details(Todo.actionable(todos)).todos
           )
     end
   end

@@ -1,18 +1,17 @@
-defmodule CodingAgent.Tools.AstReportSwapRaceTest do
+defmodule CodingAgent.Tools.AstGrepSwapRaceTest do
   @moduledoc """
-  Deterministic check-then-use races against `ast_grep` replace and
-  `report_issue`.
+  Deterministic check-then-use race against `ast_grep` replace.
 
   `FileServerTap` swaps a checked entry for a symlink to a location outside
   the trusted root right after the last path-based validation, the way a
-  concurrent local writer could. The tools' file I/O must then stay below the
+  concurrent local writer could. The tool's file I/O must then stay below the
   root (descriptor-bound) and refuse, leaving the outside untouched.
   """
 
   use ExUnit.Case, async: false
 
   alias CodingAgent.MutationLock
-  alias CodingAgent.Tools.{AstGrep, ReportIssue}
+  alias CodingAgent.Tools.AstGrep
   alias LemonCore.Testing.FileServerTap
 
   @moduletag :tmp_dir
@@ -79,43 +78,6 @@ defmodule CodingAgent.Tools.AstReportSwapRaceTest do
     assert tree(ctx.outside) == before
     assert %{is_error: true, details: %{applied: false}} = result
     assert File.read!(Path.join(inner <> ".moved", "target.ts")) == "oldApi(1)"
-  end
-
-  test "report_issue never appends to or chmods a log entry swapped after validation", ctx do
-    directory = Path.join(ctx.root, "spill")
-    log = Path.join(directory, "tool-issues.jsonl")
-    victim = Path.join(ctx.outside, "victim.txt")
-    File.mkdir_p!(directory)
-    File.write!(log, "")
-    File.chmod!(log, 0o600)
-    File.write!(victim, "victim\n")
-    File.chmod!(victim, 0o644)
-    before = tree(ctx.outside)
-    test = self()
-
-    # Validation lstats the log, then stats it for write access; the swap
-    # happens at that last check, so the check itself follows the new symlink.
-    hook = fn request ->
-      if {elem(request, 0), FileServerTap.path(request)} == {:read_file_info, log} and
-           not Process.get(:swapped, false) do
-        FileServerTap.swap_for_symlink(log, victim)
-        Process.put(:swapped, true)
-        send(test, :swapped)
-      end
-    end
-
-    opts = [session_id: "race", context_guardrails: [spill_dir: directory]]
-
-    result =
-      FileServerTap.with_tap(hook, fn ->
-        ReportIssue.execute("race", %{"note" => "planted"}, nil, nil, ctx.root, opts)
-      end)
-
-    assert_received :swapped
-    assert tree(ctx.outside) == before
-    assert Bitwise.band(File.stat!(victim).mode, 0o777) == 0o644
-    assert {:error, message} = result
-    assert message =~ "symlink"
   end
 
   defp fake_backend(dir) do

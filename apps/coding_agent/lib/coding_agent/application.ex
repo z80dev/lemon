@@ -40,7 +40,6 @@ defmodule CodingAgent.Application do
         {LemonCore.TaskSupervisor, name: CodingAgent.Search.TaskSupervisor},
         CodingAgent.Search.SingleFlight
       ]),
-      CodingAgent.Tools.TodoStoreOwner,
       CodingAgent.Tools.Bash.ShellState,
       CodingAgent.Session.UserPrompt,
       CodingAgent.MutationLock,

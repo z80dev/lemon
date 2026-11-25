@@ -502,7 +502,7 @@ that asked, never with more authority:
   reachable, plus SSH when your own global Git configuration sets
   `protocol.ssh.allow=always`; pushes use only your global credential helpers.
 - Workers' and reviewers' file-changing tools (write, edit, patch, ast_grep
-  rewrites, archive and SQLite writes, LSP edits) only change files inside
+  rewrites, LSP edits) only change files inside
   their own worktree (or the allowed in-place workspace); any other target,
   absolute or `..`, is refused. Shell and code-execution tools are not
   confined this way: deny `bash`/`eval` for cards that must not run code.
