@@ -210,6 +210,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `RouterBridge.run_receipt/1` documents definite `:rejected` and `:terminal`
+  outcomes separately from an ambiguous submission (#81).
 - `Durable.sync_file` no longer leaks a stray port `EXIT` message to its caller
   (#555).
 - Credential redaction classifies trailing separator-delimited and camelCase

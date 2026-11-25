@@ -36,7 +36,10 @@ defmodule LemonRouter.Application do
         LemonCore.Supervision.subtree(LemonRouter.ConversationSupervisor, [
           {Registry, keys: :unique, name: LemonRouter.RunRegistry},
           {Registry, keys: :unique, name: LemonRouter.SessionRegistry},
-          {Registry, keys: :unique, name: LemonRouter.ConversationRegistry},
+          {Registry,
+           keys: :unique,
+           name: LemonRouter.ConversationRegistry,
+           meta: [admission_epoch: :crypto.strong_rand_bytes(16)]},
           {DynamicSupervisor,
            strategy: :one_for_one,
            name: LemonRouter.RunSupervisor,
