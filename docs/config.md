@@ -1769,12 +1769,12 @@ values. `lemon secrets check` reports a resolved credential only as `present`.
 
 ## Dotenv Autoload
 
-Source launchers (`./bin/lemon`, `./bin/lemon-gateway`, `./bin/lemon-control-plane`)
-load one `.env` file at startup, and the config reloader re-reads it when it
-changes:
+Source launchers (`./bin/lemon` and `./bin/lemon-gateway`, which runs
+`./bin/lemon start`) load one `.env` file at startup, and the config reloader
+re-reads it when it changes:
 
 - `$LEMON_DOTENV_DIR/.env` when `LEMON_DOTENV_DIR` is set in the launching
-  environment (or `--dotenv-dir` for `lemon-control-plane`);
+  environment;
 - otherwise `~/.lemon/.env`.
 
 Environment variables override every config file, so this file is operator

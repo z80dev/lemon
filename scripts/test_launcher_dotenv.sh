@@ -35,14 +35,25 @@ done
 printf '#!/usr/bin/env bash\nexit 1\n' > "$FAKE_BIN/security"
 chmod +x "$FAKE_BIN/security"
 
+# Free ports keep the launcher's health probe from reusing a developer runtime.
+free_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+CONTROL_PORT="$(free_port)"
+WEB_PORT="$(free_port)"
+
+# run_launcher <dotenv dir or ""> <launcher> [args...]
 run_launcher() {
-  local launcher="$1"
-  shift
+  local dotenv=() launcher="$2"
+  [ -z "$1" ] || dotenv=(LEMON_DOTENV_DIR="$1")
+  shift 2
   rm -f "$RECORD"
   (
     cd "$REPO"
-    env -u LEMON_DOTENV_DIR HOME="$FAKE_HOME" PATH="$FAKE_BIN:$PATH" \
-      LEMON_SECRETS_MASTER_KEY=test "$@" "$ROOT/bin/$launcher" --no-distribution >/dev/null
+    env -u LEMON_DOTENV_DIR -u LEMON_STORE_PATH -u LEMON_RUNTIME_PID_FILE \
+      -u LEMON_RUNTIME_LOG_FILE HOME="$FAKE_HOME" PATH="$FAKE_BIN:$PATH" \
+      LEMON_CONTROL_PLANE_PORT="$CONTROL_PORT" LEMON_WEB_PORT="$WEB_PORT" \
+      LEMON_SECRETS_MASTER_KEY=test ${dotenv[@]+"${dotenv[@]}"} "$ROOT/bin/$launcher" "$@" --no-distribution >/dev/null
   )
   cat "$RECORD"
 }
@@ -56,18 +67,15 @@ expect() {
   echo "ok: $name"
 }
 
-for launcher in lemon-gateway lemon-control-plane; do
-  expect "$launcher default" "$(run_launcher "$launcher")" "$FAKE_HOME/.lemon"
+# lemon-gateway is `lemon start` under another node name; run both for real.
+for launcher in lemon-gateway "lemon start"; do
+  # shellcheck disable=SC2086 # "lemon start" is launcher plus command
+  expect "$launcher default" "$(run_launcher "" $launcher)" "$FAKE_HOME/.lemon"
+  # shellcheck disable=SC2086
   expect "$launcher explicit" \
-    "$(run_launcher "$launcher" LEMON_DOTENV_DIR="$TEST_DIR/operator")" "$TEST_DIR/operator"
+    "$(run_launcher "$TEST_DIR/operator" $launcher)" "$TEST_DIR/operator"
 done
 
-# bin/lemon starts a supervised daemon, so check its single dotenv export.
-# shellcheck disable=SC2016 # literal launcher text, not an expansion
-grep -q 'export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LEMON_HOME_DIR}"' "$ROOT/bin/lemon" || {
-  echo "FAIL: bin/lemon must default LEMON_DOTENV_DIR to the Lemon home" >&2
-  exit 1
-}
 if grep -n 'LEMON_DOTENV_DIR.*LAUNCH_CWD\|DOTENV_DIR.*LAUNCH_CWD' "$ROOT"/bin/lemon*; then
   echo "FAIL: a launcher still loads .env from the launch directory" >&2
   exit 1
