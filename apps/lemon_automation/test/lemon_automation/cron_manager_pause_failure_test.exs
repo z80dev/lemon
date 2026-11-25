@@ -228,7 +228,7 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
     assert {:ok, []} = CronStore.list_jobs_result()
     inject({:list, :cron_jobs})
     assert {:error, :store_unavailable} = CronStore.list_jobs_result()
-    assert [] = CronStore.list_jobs()
+    assert_raise RuntimeError, "Store could not list :cron_jobs", &CronStore.list_jobs/0
   end
 
   test "resume reloads jobs lost from memory during a paused restart", context do
@@ -242,8 +242,9 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
     {:ok, restarted} = initialized_manager()
     assert restarted.jobs == %{}
     assert restarted.restoration_pending
+    refute restarted.restoration_initial
 
-    assert {:reply, {:error, :store_unavailable}, restarted} =
+    assert {:reply, {:error, :store_unavailable}, ^restarted} =
              CronManager.handle_call(:resume_all, from(), restarted)
 
     assert {:ok, %{paused_at_ms: ^paused_at}} = CronStore.global_pause()
@@ -478,7 +479,7 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
     inject({:list, :cron_runs})
     assert {:error, :store_unavailable} = CronStore.pending_retries_result()
     assert {:error, :store_unavailable} = CronStore.active_runs_result()
-    assert [] = CronStore.pending_retries()
+    assert_raise RuntimeError, "Store could not list :cron_runs", &CronStore.pending_retries/0
   end
 
   for failure <- [
