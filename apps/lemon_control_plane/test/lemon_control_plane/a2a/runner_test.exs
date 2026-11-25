@@ -28,6 +28,9 @@ defmodule LemonControlPlane.A2A.RunnerTest do
         5_000 -> {:error, :test_submit_timeout}
       end
     end
+
+    @impl true
+    defdelegate run_receipt(run_id), to: LemonRouter.RunOrchestrator
   end
 
   defmodule AbortRouter do
@@ -366,6 +369,28 @@ defmodule LemonControlPlane.A2A.RunnerTest do
            ]
 
     cleanup_task(task_id, context_id, message_id, run_id)
+  end
+
+  test "a recorded rejection resolves an unknown A2A task without another submission" do
+    context_id = unique_id("rejected-unknown-context")
+    message_id = unique_id("rejected-unknown-message")
+    assert {:stream, task_id} = start_message(context_id, message_id)
+    assert_receive {:a2a_submit_blocked, %{run_id: run_id}, runner_pid}
+    runner_ref = Process.monitor(runner_pid)
+    table = LemonRouter.RunOrchestrator.admission_table()
+
+    on_exit(fn ->
+      Store.delete(table, run_id)
+      cleanup_task(task_id, context_id, message_id, run_id)
+    end)
+
+    assert :ok = Store.put(table, run_id, %{state: "rejected", terminal: true})
+    send(runner_pid, {:release_a2a_submit, {:error, :outcome_unknown}})
+    assert_receive {:DOWN, ^runner_ref, :process, ^runner_pid, :normal}, 1_000
+
+    assert {:ok, rendered} = Handler.handle("GetTask", %{"id" => task_id}, "local")
+    assert get_in(rendered, ["status", "state"]) == "TASK_STATE_FAILED"
+    refute_receive {:a2a_submit_blocked, _request, _pid}, 100
   end
 
   test "an accepted run reply timeout stays reattachable and later reconciles" do

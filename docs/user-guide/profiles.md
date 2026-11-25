@@ -273,7 +273,11 @@ before the receipt query. It does not read private run history. An ambiguous
 admission fence returns `state: "outcome_unknown"` with nullable `sessionKey`,
 `effectiveMode` and `targetRunId`. A run ID that an abort fenced before dispatch
 returns `state: "aborted"`: it never ran and never will, and `agent.wait` has no
-completion for it. Missing IDs return `NOT_FOUND`; query failures
+completion for it. `state: "rejected"` means the recorded attempt did not
+execute (`retrySafe: true`); an explicit retry can use the same intent ID.
+`state: "terminal"` means a completion was recorded without an accepted
+receipt. It does not authorize retry: use `agent.wait` to see the outcome.
+Missing IDs return `NOT_FOUND`; query failures
 remain `UNAVAILABLE`, not missing or idle. Use `agent.wait` for final answer,
 success/error and explicit `cancelled` proof, following `targetRunId` for merged
 or steered work. `includeAnswer: false` provides status-only completion: `answer`

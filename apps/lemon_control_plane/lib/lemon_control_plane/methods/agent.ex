@@ -278,17 +278,23 @@ defmodule LemonControlPlane.Methods.Agent do
     receipt = if run_id, do: LemonCore.RouterBridge.run_receipt(run_id), else: :unknown
 
     case receipt do
-      {:ok, %{state: :accepted}} ->
+      {:ok, %{state: state}} when state in [:accepted, :terminal] ->
         result = %{"run_id" => run_id, "session_key" => session_key}
         _ = LemonCore.Idempotency.complete(claim, result)
         {:ok, result}
 
-      {:ok, %{state: :aborted}} ->
+      {:ok, %{state: state}} when state in [:aborted, :rejected] ->
         retry_safe = LemonCore.Idempotency.release(claim) == :ok
 
+        {code, message} =
+          case state do
+            :aborted -> {"SUBMISSION_ABORTED", "The earlier request was aborted before it ran"}
+            :rejected -> {"SUBMISSION_REJECTED", "The earlier request was rejected before it ran"}
+          end
+
         {:error,
-         Errors.error(:conflict, "The earlier request was aborted before it ran", %{
-           "code" => "SUBMISSION_ABORTED",
+         Errors.error(:conflict, message, %{
+           "code" => code,
            "runId" => run_id,
            "sessionKey" => session_key,
            "retrySafe" => retry_safe

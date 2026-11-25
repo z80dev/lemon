@@ -167,6 +167,23 @@ defmodule LemonControlPlane.Methods.AgentIdempotencyTest do
     assert_receive {:submitted, ^run_id}, 15_000
   end
 
+  test "a recorded rejection releases the pending agent claim without resubmitting", ctx do
+    run_id = LemonCore.Id.run_id()
+    pending = %{"run_id" => run_id, "session_key" => ctx.session_key}
+    assert {:new, _} = LemonCore.Idempotency.begin(:agent, ctx.key, pending)
+    table = LemonRouter.RunOrchestrator.admission_table()
+    assert :ok = Store.put(table, run_id, %{state: "rejected", terminal: true})
+    on_exit(fn -> Store.delete(table, run_id) end)
+
+    assert {:error,
+            {:conflict, _message,
+             %{"code" => "SUBMISSION_REJECTED", "runId" => ^run_id, "retrySafe" => true}}} =
+             Agent.handle(params(ctx), %{})
+
+    assert {:new, _} = LemonCore.Idempotency.begin(:agent, ctx.key, pending)
+    refute_receive {:submitted, _}, 100
+  end
+
   test "an unknown outcome keeps its run id past the TTL and is never resubmitted", ctx do
     FaultBackend.set_op(:put_new, :router_run_admissions, :error)
 

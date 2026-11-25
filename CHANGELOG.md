@@ -557,6 +557,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   its error instead of an empty mirror (`RunStore.list_sessions`, channel known
   targets and gateway progress no longer read as empty). SQLite table reads
   decode every row and report the number of corrupt rows (#618).
+- Fixed-ID run receipts distinguish definite rejection from unknown admission.
+  Router-owner loss reconciles unclaimed handoffs without replay, and queued
+  runs recheck durable cancellation before starting (#81).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
