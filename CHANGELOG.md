@@ -250,7 +250,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   acknowledges slash commands and buttons on arrival (replies follow as edits
   or follow-ups), so a queued command no longer misses the 3 s window, and
   file transfers, thread creation and media preparation run beside the event
-  queue (#650).
+  queue. Telegram start-up, including a retry after another runtime released
+  the poller lock, reads the stored offset and resolves the bot identity
+  (`getMe`) in a supervised task, so a slow Telegram API no longer blocks
+  pairing or drains; allowlist changes made meanwhile apply once it starts
+  (#650).
 - Skill lockfile and audit-state writes wait up to ten seconds for their file
   lock instead of one, so concurrent skill installs in one runtime are no
   longer refused with `lock_timeout` while the lock is merely busy (#499).

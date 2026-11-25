@@ -287,4 +287,81 @@ defmodule LemonChannels.Adapters.Telegram.TransportAsyncPollTest do
     assert Process.alive?(transcriber)
     send(transcriber, :release)
   end
+
+  defmodule SlowIdentityAPI do
+    def get_me(token) do
+      send(:persistent_term.get({__MODULE__, token}), {:get_me, self()})
+
+      receive do
+        :release -> {:ok, %{"ok" => true, "result" => %{"id" => 5, "username" => "slow_bot"}}}
+      end
+    end
+
+    def get_updates(token, _offset, _timeout) do
+      send(:persistent_term.get({__MODULE__, token}), :polled)
+      {:ok, %{"ok" => true, "result" => []}}
+    end
+
+    def set_my_commands(_token, _commands), do: {:ok, %{"ok" => true}}
+  end
+
+  test "lock retry starts in a task: allowlist and drain are answered while getMe blocks" do
+    token = "slow-identity-#{System.unique_integer([:positive])}"
+    :persistent_term.put({SlowIdentityAPI, token}, self())
+    on_exit(fn -> :persistent_term.erase({SlowIdentityAPI, token}) end)
+
+    # Another runtime holds the token, so start-up goes through the retry path.
+    holder = spawn(fn -> Process.sleep(:infinity) end)
+
+    lock =
+      {PollerLock,
+       "telegram-poller-" <> Base.encode16(:crypto.hash(:sha256, token), case: :lower)}
+
+    :yes = :global.register_name(lock, holder)
+
+    {:ok, server} =
+      GenServer.start(Transport,
+        config: %{
+          bot_token: token,
+          account_id: "slow-identity",
+          api_mod: SlowIdentityAPI,
+          allowed_chat_ids: [1],
+          poll_interval_ms: 60_000,
+          poller_lock_retry_ms: 20
+        }
+      )
+
+    on_exit(fn -> if Process.alive?(server), do: GenServer.stop(server) end)
+    assert :sys.get_state(server, 1_000)[:awaiting_poller_lock]
+    Process.exit(holder, :kill)
+
+    assert_receive {:get_me, identity_task}, 2_000
+    assert :ok = GenServer.call(server, {:update_allowlist, :add, 99}, 1_000)
+    assert :ok = GenServer.call(server, :drain_pause, 1_000)
+    send(identity_task, :release)
+
+    started = wait_for_state(server, &Map.has_key?(&1, :bot_id))
+    assert {started.bot_id, started.bot_username} == {5, "slow_bot"}
+    assert started.allowed_chat_ids == [1, 99]
+    assert started.drain_paused?
+    refute_receive :polled, 100
+  end
+
+  defp wait_for_state(server, fun, attempts \\ 100) do
+    state = :sys.get_state(server, 1_000)
+
+    cond do
+      fun.(state) ->
+        state
+
+      attempts == 0 ->
+        flunk("transport did not reach the expected state: #{inspect(state)}")
+
+      true ->
+        receive do
+        after
+          10 -> wait_for_state(server, fun, attempts - 1)
+        end
+    end
+  end
 end
