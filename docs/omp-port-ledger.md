@@ -66,6 +66,7 @@ app-suite references below.
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/model_resolver.ex` | omp / pi-mono; source revision unknown | native port | `apps/coding_agent/test/coding_agent/session/model_resolver_test.exs` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/model_roles.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/model_roles_test.exs` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/omp_auth_broker.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/omp_auth_broker_test.exs` |
+| `apps/lemon_agent/lib/lemon_agent/model_runtime/omp_auth_config.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_core/test/lemon_core/config/validator_test.exs`, `apps/lemon_cli/test/lemon_cli/omp_readiness_test.exs` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/omp_broker.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/omp_broker_test.exs` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/omp_config.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/omp_broker_test.exs` |
 | `apps/lemon_agent/lib/lemon_agent/model_runtime/omp_token.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_agent/test/lemon_agent/model_runtime/omp_token_test.exs` |
@@ -83,13 +84,11 @@ app-suite references below.
 | `apps/lemon_cli/lib/lemon_cli/onboarding/runner.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_cli/test/lemon_cli/onboarding/runner_test.exs` |
 | `apps/lemon_cli/lib/lemon_cli/provider_live_check.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_cli/test/lemon_cli/provider_live_check_test.exs` |
 | `apps/lemon_cli/lib/lemon_cli/providers_command.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_cli/test/lemon_cli/providers_command_test.exs` |
+| `apps/lemon_cli/lib/lemon_cli/service/readiness.ex` | omp auth-broker health probe; source revision unknown | native port | `apps/lemon_cli/test/lemon_cli/service_test.exs` |
+| `apps/lemon_cli/lib/lemon_cli/service/role.ex` | omp auth-broker serve command and config-root selectors; source revision unknown | native port | `apps/lemon_cli/test/lemon_cli/service_test.exs` |
 | `apps/lemon_cli/lib/lemon_cli/setup/omp.ex` | omp auth-broker client contract; source revision unknown | native port | `apps/lemon_cli/test/lemon_cli/setup/omp_setup_test.exs` |
 | `apps/lemon_cli/lib/lemon_cli/setup/provider_auth.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_cli/test/lemon_cli/setup/provider_auth_test.exs` |
 | `apps/lemon_control_plane/lib/lemon_control_plane/methods/omp.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_control_plane/test` |
-| `apps/lemon_core/lib/lemon_core/config/providers.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_core/test/lemon_core/config/providers_test.exs` |
-| `apps/lemon_core/lib/lemon_core/doctor/checks/providers.ex` | omp / pi-mono; source revision unknown | native port | `apps/lemon_core/test` |
-| `apps/lemon_core/lib/lemon_core/service/readiness.ex` | omp auth-broker health probe; source revision unknown | native port | `apps/lemon_core/test/lemon_core/service_test.exs` |
-| `apps/lemon_core/lib/lemon_core/service/role.ex` | omp auth-broker serve command and config-root selectors; source revision unknown | native port | `apps/lemon_core/test/lemon_core/service_test.exs` |
 | `apps/lemon_omp/lib/lemon_omp.ex` | omp / pi-mono; source revision unknown | delegate via lemon_omp (native adapter) | `apps/lemon_omp/test` |
 | `apps/lemon_omp/lib/lemon_omp/config.ex` | omp / pi-mono; source revision unknown | delegate via lemon_omp (native adapter) | `apps/lemon_omp/test/lemon_omp/config_test.exs` |
 | `apps/lemon_omp/lib/lemon_omp/env.ex` | omp / pi-mono; source revision unknown | delegate via lemon_omp (native adapter) | `apps/lemon_omp/test` |
