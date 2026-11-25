@@ -46,8 +46,8 @@ defmodule LemonCli.CLITest do
     original_openai_api_key = System.get_env("OPENAI_API_KEY")
     original_default_provider = System.get_env("LEMON_DEFAULT_PROVIDER")
     original_default_model = System.get_env("LEMON_DEFAULT_MODEL")
-    original_secrets_config = Application.get_env(:lemon_core, LemonCore.Secrets)
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env, :file])
+    original_secrets_config = Application.get_env(:lemon_core, :secrets)
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env, :file])
 
     System.put_env("HOME", home)
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
@@ -59,8 +59,8 @@ defmodule LemonCli.CLITest do
 
     on_exit(fn ->
       if original_secrets_config,
-        do: Application.put_env(:lemon_core, LemonCore.Secrets, original_secrets_config),
-        else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+        do: Application.put_env(:lemon_core, :secrets, original_secrets_config),
+        else: Application.delete_env(:lemon_core, :secrets)
 
       if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
 
@@ -447,23 +447,23 @@ defmodule LemonCli.CLITest do
   end
 
   test "doctor shows passing browser selection without verbose", %{tmp_dir: tmp_dir} do
-    keys = [:browser_provider_probe, :browser_provider_lcu_probe]
-    previous = Map.new(keys, &{&1, Application.fetch_env(:lemon_core, &1)})
-    Application.put_env(:lemon_core, :browser_provider_lcu_probe, fn -> {:error, "missing"} end)
+    keys = [:provider_probe, :lcu_probe]
+    previous = Map.new(keys, &{&1, Application.fetch_env(:lemon_browser, &1)})
+    Application.put_env(:lemon_browser, :lcu_probe, fn -> {:error, "missing"} end)
 
-    Application.put_env(:lemon_core, :browser_provider_probe, fn
+    Application.put_env(:lemon_browser, :provider_probe, fn
       "local" -> {:ok, "ready"}
       _ -> {:error, "missing"}
     end)
 
     on_exit(fn ->
       Enum.each(previous, fn
-        {key, {:ok, value}} -> Application.put_env(:lemon_core, key, value)
-        {key, :error} -> Application.delete_env(:lemon_core, key)
+        {key, {:ok, value}} -> Application.put_env(:lemon_browser, key, value)
+        {key, :error} -> Application.delete_env(:lemon_browser, key)
       end)
     end)
 
-    expected = LemonCore.BrowserProvider.resolve()
+    expected = LemonBrowser.Provider.resolve()
     assert expected.provider == "local"
 
     output =
@@ -590,7 +590,7 @@ defmodule LemonCli.CLITest do
     System.delete_env("LEMON_SECRETS_MASTER_KEY")
     # Stub the directory flush so the key-file path also runs on macOS, which
     # has no synchronous one (that refusal is covered in KeyRotationTest).
-    Application.put_env(:lemon_core, LemonCore.Secrets,
+    Application.put_env(:lemon_core, :secrets,
       key_providers: [:env, :file],
       directory_sync: fn _dir -> :ok end
     )

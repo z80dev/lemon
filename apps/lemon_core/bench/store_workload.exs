@@ -14,9 +14,9 @@ defmodule LemonCore.Bench.StoreWorkload do
     File.mkdir_p!(root)
     env = "LEMON_STORE_BENCH_KEY"
     old_env = System.get_env(env)
-    old_config = Application.get_env(:lemon_core, Secrets)
+    old_config = Application.get_env(:lemon_core, :secrets)
     System.put_env(env, Base.encode64(:crypto.strong_rand_bytes(32)))
-    Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: env)
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env], env_var: env)
     store = :store_workload
     history = :store_workload_history
     usage = Module.concat(Secrets, Usage)
@@ -33,7 +33,10 @@ defmodule LemonCore.Bench.StoreWorkload do
 
     children = if Code.ensure_loaded?(usage), do: children ++ [usage], else: children
     runtime_cache = Module.concat(LemonCore, RuntimeCache)
-    children = if Code.ensure_loaded?(runtime_cache), do: [runtime_cache | children], else: children
+
+    children =
+      if Code.ensure_loaded?(runtime_cache), do: [runtime_cache | children], else: children
+
     {:ok, supervisor} = Supervisor.start_link(children, strategy: :one_for_one)
 
     try do
@@ -84,7 +87,11 @@ defmodule LemonCore.Bench.StoreWorkload do
 
               {op, elapsed}
             end
-          end, max_concurrency: workers, timeout: :infinity, ordered: false)
+          end,
+          max_concurrency: workers,
+          timeout: :infinity,
+          ordered: false
+        )
         |> Enum.flat_map(fn {:ok, result} -> result end)
 
       duration = System.monotonic_time(:microsecond) - started
@@ -114,8 +121,8 @@ defmodule LemonCore.Bench.StoreWorkload do
       if old_env, do: System.put_env(env, old_env), else: System.delete_env(env)
 
       if old_config,
-        do: Application.put_env(:lemon_core, Secrets, old_config),
-        else: Application.delete_env(:lemon_core, Secrets)
+        do: Application.put_env(:lemon_core, :secrets, old_config),
+        else: Application.delete_env(:lemon_core, :secrets)
     end
   end
 

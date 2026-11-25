@@ -9,7 +9,8 @@ defmodule CodingAgent.SessionMaintenanceTest do
   }
 
   alias CodingAgent.Session.Ownership
-  alias LemonCore.{AgentRuntime, SessionLifecycle, Store}
+  alias LemonCore.{AgentRuntime, Store}
+  alias LemonControlPlane.SessionLifecycle
 
   @cutoff 1_700_000_000_000
   @old_seconds 1_600_000_000

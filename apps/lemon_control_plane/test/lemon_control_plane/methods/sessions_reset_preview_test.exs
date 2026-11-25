@@ -14,6 +14,7 @@ defmodule LemonControlPlane.Methods.SessionsResetPreviewTest do
   alias LemonControlPlane.ACP
   alias LemonControlPlane.Methods.SessionsReset
   alias LemonControlPlane.Protocol.Schemas
+  alias LemonControlPlane.SessionLifecycle
 
   alias LemonCore.{
     ChatState,
@@ -23,7 +24,6 @@ defmodule LemonControlPlane.Methods.SessionsResetPreviewTest do
     RunHistoryStore,
     RunRequest,
     RunStore,
-    SessionLifecycle,
     SessionMetadataStore,
     Store
   }

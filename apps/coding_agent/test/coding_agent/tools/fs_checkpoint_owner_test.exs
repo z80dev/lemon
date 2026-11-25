@@ -5,7 +5,7 @@ defmodule CodingAgent.Tools.FsCheckpointOwnerTest do
   alias CodingAgent.Tools.Edit
   alias CodingAgent.Tools.FsCheckpoint, as: CheckpointTool
   alias LemonAgent.Types.AgentToolResult
-  alias LemonCore.Doctor.CheckpointDiagnostics
+  alias LemonAgent.Doctor.CheckpointDiagnostics
 
   @moduletag :tmp_dir
 
@@ -42,8 +42,8 @@ defmodule CodingAgent.Tools.FsCheckpointOwnerTest do
     victim = Path.join(root, "victim.json")
 
     for {fun, owner} <- [
-          {&LemonCore.Checkpoint.delete_all/1, "forged-all"},
-          {&LemonCore.Checkpoint.prune(&1, 0), "forged-prune"}
+          {&LemonAgent.Checkpoint.delete_all/1, "forged-all"},
+          {&LemonAgent.Checkpoint.prune(&1, 0), "forged-prune"}
         ] do
       File.write!(victim, "{}")
 
@@ -75,7 +75,7 @@ defmodule CodingAgent.Tools.FsCheckpointOwnerTest do
     # Session lifecycle prepends session_key after session_id (reload order).
     opts = [session_key: "agent:victim:main", run_id: "run-1", session_id: "child-session"]
     %AgentToolResult{details: %{checkpoint_id: id}} = Edit.execute("e", args, nil, nil, ws, opts)
-    assert {:ok, %{session_id: "child-session"}} = LemonCore.Checkpoint.load(id)
+    assert {:ok, %{session_id: "child-session"}} = LemonAgent.Checkpoint.load(id)
 
     # Without a trusted session id no key- or run-owned checkpoint is created.
     File.write!(path, "one\n")
@@ -118,8 +118,8 @@ defmodule CodingAgent.Tools.FsCheckpointOwnerTest do
              )
 
     assert File.read!(path) == "after\n"
-    assert LemonCore.Checkpoint.exists?(by_id.id)
-    assert LemonCore.Checkpoint.exists?(by_key.id)
+    assert LemonAgent.Checkpoint.exists?(by_id.id)
+    assert LemonAgent.Checkpoint.exists?(by_key.id)
   end
 
   test "diff does not read through a pre-existing substituted parent symlink", %{
@@ -154,8 +154,8 @@ defmodule CodingAgent.Tools.FsCheckpointOwnerTest do
     ws: ws,
     checkpoint_dir: dir
   } do
-    {:ok, mine} = LemonCore.Checkpoint.create("mine")
-    {:ok, theirs} = LemonCore.Checkpoint.create("theirs")
+    {:ok, mine} = LemonAgent.Checkpoint.create("mine")
+    {:ok, theirs} = LemonAgent.Checkpoint.create("theirs")
     File.write!(Path.join(dir, "chk_ffffffffffffffff.json"), "not json")
     _ = ws
 

@@ -89,14 +89,14 @@ defmodule LemonCli.Setup.WizardTest do
 
     original_home = System.get_env("HOME")
     original_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
-    original_secrets_config = Application.get_env(:lemon_core, LemonCore.Secrets)
+    original_secrets_config = Application.get_env(:lemon_core, :secrets)
 
     System.put_env("HOME", home)
     System.delete_env("LEMON_SECRETS_MASTER_KEY")
     # Setup behavior is covered against deterministic providers. Exercising the
     # real macOS Keychain here can block on an OS prompt and leaves uncertainty
     # about whether a timed-out write succeeded.
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env, :file])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env, :file])
     clear_secrets_table()
 
     # Probes in the full wizard must not depend on what this machine listens on.
@@ -111,8 +111,8 @@ defmodule LemonCli.Setup.WizardTest do
         else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
 
       if original_secrets_config,
-        do: Application.put_env(:lemon_core, LemonCore.Secrets, original_secrets_config),
-        else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+        do: Application.put_env(:lemon_core, :secrets, original_secrets_config),
+        else: Application.delete_env(:lemon_core, :secrets)
 
       Enum.each(original_ports, fn
         {var, nil} -> System.delete_env(var)
@@ -409,7 +409,7 @@ defmodule LemonCli.Setup.WizardTest do
       config_path: config_path,
       key_file: key_file
     } do
-      Application.put_env(:lemon_core, LemonCore.Secrets,
+      Application.put_env(:lemon_core, :secrets,
         key_providers: [__MODULE__.FailingKeyProvider, :env, :file]
       )
 
@@ -1306,16 +1306,16 @@ defmodule LemonCli.Setup.WizardTest do
 
   describe "run_full/3 — progress and keychain cost" do
     setup do
-      previous = Application.get_env(:lemon_core, LemonCore.Secrets)
+      previous = Application.get_env(:lemon_core, :secrets)
       {:ok, _agent} = CountingKeychain.start()
 
-      Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [CountingKeychain])
+      Application.put_env(:lemon_core, :secrets, key_providers: [CountingKeychain])
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
 
       on_exit(fn ->
         if previous,
-          do: Application.put_env(:lemon_core, LemonCore.Secrets, previous),
-          else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+          do: Application.put_env(:lemon_core, :secrets, previous),
+          else: Application.delete_env(:lemon_core, :secrets)
       end)
 
       :ok

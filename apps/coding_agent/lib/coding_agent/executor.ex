@@ -4,7 +4,7 @@ defmodule CodingAgent.Executor do
 
   Requests with no execution node, or with `node: "local"`, start the normal
   in-process session runner. A named node starts a remote runner backed by
-  `LemonCore.NodeRegistry`; model credentials are always resolved by the
+  `LemonAgent.NodeRegistry`; model credentials are always resolved by the
   destination because executor options are never serialized to that node.
   """
 

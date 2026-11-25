@@ -13,15 +13,19 @@ defmodule LemonCore.Secrets.Source.Command do
   def configured?(_source), do: false
 
   @impl true
-  def bootstrap_ready?(%SourceConfig{secret_env: secret_env}, opts) do
+  def executable(%SourceConfig{argv: [program | _]}), do: program
+  def executable(_source), do: nil
+
+  @impl true
+  def bootstrap_ready?(%SourceConfig{secret_env: secret_env}, bootstrap) do
     Enum.all?(secret_env, fn {_env_name, secret_name} ->
-      LemonCore.Secrets.exists_local?(secret_name, opts)
+      match?({:ok, _, _}, bootstrap.(secret_name))
     end)
   end
 
   @impl true
-  def fetch(%SourceConfig{} = source, opts) do
-    with {:ok, env} <- command_env(source, opts),
+  def fetch(%SourceConfig{} = source, bootstrap) do
+    with {:ok, env} <- command_env(source, bootstrap),
          {:ok, result} <-
            SourceRunner.run(source.argv,
              timeout_ms: source.timeout_ms,
@@ -33,7 +37,7 @@ defmodule LemonCore.Secrets.Source.Command do
     end
   end
 
-  defp command_env(source, opts) do
+  defp command_env(source, bootstrap) do
     inherited =
       Enum.reduce(source.pass_env, %{}, fn name, acc ->
         case System.get_env(name) do
@@ -44,7 +48,7 @@ defmodule LemonCore.Secrets.Source.Command do
 
     Enum.reduce_while(source.secret_env, {:ok, inherited}, fn {env_name, secret_name},
                                                               {:ok, acc} ->
-      case LemonCore.Secrets.resolve_local(secret_name, opts) do
+      case bootstrap.(secret_name) do
         {:ok, value, _source} -> {:cont, {:ok, Map.put(acc, env_name, value)}}
         {:error, _reason} -> {:halt, {:error, :bootstrap_secret_missing}}
       end

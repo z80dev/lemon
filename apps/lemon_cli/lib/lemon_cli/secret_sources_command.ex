@@ -6,7 +6,7 @@ defmodule LemonCli.SecretSourcesCommand do
   @exit_usage 2
   @source_id ~r/^[a-z][a-z0-9_-]{0,63}$/
 
-  alias LemonCore.Secrets.External
+  alias LemonCore.Secrets
 
   @spec run([String.t()]) :: 0 | 1 | 2
   def run(["status" | args]), do: run_status(args)
@@ -20,7 +20,7 @@ defmodule LemonCli.SecretSourcesCommand do
   defp run_status(args) do
     with {:ok, opts, []} <- parse(args, false),
          nil <- opts[:source_id] do
-      result = External.status(project_dir: opts[:project_dir] || File.cwd!())
+      result = Secrets.external_status(project_dir: opts[:project_dir] || File.cwd!())
       print(result, opts[:json] || false, :status)
       @exit_ok
     else
@@ -34,7 +34,7 @@ defmodule LemonCli.SecretSourcesCommand do
     with {:ok, opts, positional} <- parse(args, true),
          {:ok, source_id} <- parse_source_id(opts[:source_id], positional) do
       result =
-        External.test(
+        Secrets.test_external(
           project_dir: opts[:project_dir] || File.cwd!(),
           source_id: source_id
         )

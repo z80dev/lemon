@@ -27,7 +27,7 @@ defmodule LemonCore.TrustedRoot do
 
   ## Assistant homes are never projects
 
-  The assistant home (`LemonCore.Cwd.assistant_home/0`, the channel default
+  The assistant home (`LemonCore.Paths.assistant_home/0`, the channel default
   cwd) and every profile workspace (`<lemon home>/profiles/<id>/workspace`)
   hold bootstrap and memory files (`AGENTS.md`, `MEMORY.md`, `USER.md`, ...)
   that reach a prompt only through the persona/session-scope gated bootstrap
@@ -240,7 +240,7 @@ defmodule LemonCore.TrustedRoot do
         {:error, _} -> []
       end
 
-    [LemonCore.Cwd.assistant_home() | workspaces]
+    [LemonCore.Paths.assistant_home() | workspaces]
     |> Enum.flat_map(fn dir ->
       case realpath(dir) do
         {:ok, real} -> [real]

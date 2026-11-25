@@ -317,7 +317,7 @@ defmodule LemonSkills.Usage do
     lock_path = path <> ".lock"
 
     with :ok <- File.mkdir_p(Path.dirname(lock_path)) do
-      LemonCore.Service.Lock.with_lock_path(lock_path, [timeout: 500], fun)
+      LemonCore.FileLock.with_lock_path(lock_path, [timeout: 500], fun)
     end
   end
 

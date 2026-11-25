@@ -118,7 +118,7 @@ defmodule LemonBrowser.TernBackendTest do
     assert {:ok, _} = request("navigate", %{"url" => "https://example.com/"}, opts)
     [{session, _}] = Registry.lookup(LemonBrowser.TernSessionRegistry, scope(opts))
     client = :sys.get_state(session).client
-    LemonCore.Tern.close(client)
+    LemonBrowser.Tern.close(client)
     assert_eventually(fn -> is_nil(:sys.get_state(session).client) end)
     assert Process.alive?(session)
     assert {:ok, _} = request("snapshot", %{}, opts)

@@ -20,7 +20,6 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
   alias LemonControlPlane.Auth.TokenStore
   alias LemonControlPlane.NodeStore
 
-
   @impl true
   def name, do: "connect.challenge"
 
@@ -56,7 +55,7 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
          "verified" => true,
          "identityType" => identity["type"],
          "identityId" => identity_id(identity),
-        "tokenTtlMs" => TokenStore.node_session_ttl_ms(),
+         "tokenTtlMs" => TokenStore.node_session_ttl_ms(),
          "credentialDelivery" => %{
            "includesSessionToken" => true
          },
@@ -76,11 +75,15 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
          session_opts
        )
        when is_binary(node_id) do
-    opts = Keyword.merge(session_opts, ttl_ms: TokenStore.node_session_ttl_ms(), conn_id: ctx[:conn_id])
+    opts =
+      Keyword.merge(session_opts,
+        ttl_ms: TokenStore.node_session_ttl_ms(),
+        conn_id: ctx[:conn_id]
+      )
 
     with {:ok, token_info} <- TokenStore.replace_node_session(token, identity, opts),
          {:ok, generation} <- session_generation(token_info.identity),
-         :ok <- LemonCore.NodeRegistry.revoke_session(node_id, generation) do
+         :ok <- LemonAgent.NodeRegistry.revoke_session(node_id, generation) do
       verified_response(token_info.identity, token)
     else
       {:error, _} = error -> issue_session_error(error)
@@ -90,7 +93,7 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
   defp issue_session(identity, token, ctx, _session_opts) do
     with {:ok, _token_info} <-
            TokenStore.store(token, identity,
-            ttl_ms: TokenStore.node_session_ttl_ms(),
+             ttl_ms: TokenStore.node_session_ttl_ms(),
              conn_id: ctx[:conn_id]
            ) do
       verified_response(identity, token)

@@ -2,7 +2,8 @@ defmodule LemonControlPlane.Methods.NodeSecretProofsTest do
   use ExUnit.Case, async: false
   alias LemonControlPlane.{NodeIO, NodeSecretProofs, NodeStore}
   alias LemonControlPlane.Methods.{NodeSecretsSet, Registry}
-  alias LemonCore.{NodeRegistry, Store}
+  alias LemonCore.Store
+  alias LemonAgent.NodeRegistry
 
   setup do
     node_id = LemonCore.Id.uuid()

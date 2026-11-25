@@ -8,7 +8,8 @@ defmodule LemonWeb.ManagementLiveTest do
   import Phoenix.LiveViewTest
   import Plug.Conn, only: [get_resp_header: 2]
 
-  alias LemonCore.{RunStore, SessionLifecycle, Store}
+  alias LemonCore.{RunStore, Store}
+  alias LemonControlPlane.SessionLifecycle
   alias Phoenix.LiveView.Channel
 
   @day_ms 86_400_000

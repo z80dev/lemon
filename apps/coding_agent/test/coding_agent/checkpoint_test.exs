@@ -23,7 +23,7 @@ defmodule CodingAgent.CheckpointTest do
       path = Path.join(tmp_dir, "audit.txt")
       File.write!(path, "before\n")
 
-      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_key) end)
+      on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_key) end)
 
       :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(run_id))
 
@@ -98,15 +98,15 @@ defmodule CodingAgent.CheckpointTest do
   describe "list/1" do
     test "returns checkpoints sorted by timestamp" do
       session_id = unique_session("list-sorted")
-      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_id) end)
 
       # Create multiple checkpoints
-      {:ok, _cp1} = LemonCore.Checkpoint.create(session_id, metadata: %{order: 1})
+      {:ok, _cp1} = LemonAgent.Checkpoint.create(session_id, metadata: %{order: 1})
       :timer.sleep(10)
       # Ensure different timestamps
-      {:ok, _cp2} = LemonCore.Checkpoint.create(session_id, metadata: %{order: 2})
+      {:ok, _cp2} = LemonAgent.Checkpoint.create(session_id, metadata: %{order: 2})
       :timer.sleep(10)
-      {:ok, _cp3} = LemonCore.Checkpoint.create(session_id, metadata: %{order: 3})
+      {:ok, _cp3} = LemonAgent.Checkpoint.create(session_id, metadata: %{order: 3})
 
       checkpoints = Checkpoint.list(session_id)
 
@@ -125,12 +125,12 @@ defmodule CodingAgent.CheckpointTest do
       session_b = unique_session("session-b")
 
       on_exit(fn ->
-        LemonCore.Checkpoint.delete_all(session_a)
-        LemonCore.Checkpoint.delete_all(session_b)
+        LemonAgent.Checkpoint.delete_all(session_a)
+        LemonAgent.Checkpoint.delete_all(session_b)
       end)
 
-      {:ok, _} = LemonCore.Checkpoint.create(session_a, metadata: %{session: "a"})
-      {:ok, _} = LemonCore.Checkpoint.create(session_b, metadata: %{session: "b"})
+      {:ok, _} = LemonAgent.Checkpoint.create(session_a, metadata: %{session: "a"})
+      {:ok, _} = LemonAgent.Checkpoint.create(session_b, metadata: %{session: "b"})
 
       a_checkpoints = Checkpoint.list(session_a)
       assert length(a_checkpoints) == 1
@@ -141,13 +141,13 @@ defmodule CodingAgent.CheckpointTest do
   describe "delete/1" do
     test "deletes a checkpoint" do
       session_id = unique_session("delete")
-      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_id) end)
 
-      {:ok, checkpoint} = LemonCore.Checkpoint.create(session_id)
+      {:ok, checkpoint} = LemonAgent.Checkpoint.create(session_id)
 
-      assert LemonCore.Checkpoint.exists?(checkpoint.id)
+      assert LemonAgent.Checkpoint.exists?(checkpoint.id)
       assert :ok = Checkpoint.delete(checkpoint.id, session_id)
-      refute LemonCore.Checkpoint.exists?(checkpoint.id)
+      refute LemonAgent.Checkpoint.exists?(checkpoint.id)
     end
 
     test "returns not_found for a well-formed non-existent checkpoint" do
@@ -162,11 +162,11 @@ defmodule CodingAgent.CheckpointTest do
   describe "stats/1" do
     test "returns checkpoint statistics" do
       session_id = unique_session("stats")
-      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_id) end)
 
-      {:ok, cp1} = LemonCore.Checkpoint.create(session_id)
+      {:ok, cp1} = LemonAgent.Checkpoint.create(session_id)
       :timer.sleep(10)
-      {:ok, cp2} = LemonCore.Checkpoint.create(session_id)
+      {:ok, cp2} = LemonAgent.Checkpoint.create(session_id)
 
       stats = Checkpoint.stats(session_id)
 
@@ -192,7 +192,7 @@ defmodule CodingAgent.CheckpointTest do
       created = Path.join(tmp_dir, "created.txt")
       File.write!(existing, "before\n")
 
-      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_id) end)
 
       {:ok, checkpoint} =
         Checkpoint.create_filesystem(session_id, [existing, created],
@@ -225,7 +225,7 @@ defmodule CodingAgent.CheckpointTest do
       File.write!(first, "one\n")
       File.write!(second, "two\n")
 
-      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_id) end)
 
       {:ok, checkpoint} = Checkpoint.create_filesystem(session_id, [first, second], cwd: tmp_dir)
 

@@ -9,7 +9,8 @@ defmodule LemonRouter.NativeSessionOwnerTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.CheckpointStatusMessage
-  alias LemonCore.{Checkpoint, Event, ResumeToken, RunStore, SessionKey}
+  alias LemonCore.{Event, ResumeToken, RunStore, SessionKey}
+  alias LemonAgent.Checkpoint
   alias LemonRouter.RunProcess.CompactionTrigger
   alias LemonRouter.SubmissionBuilder
 

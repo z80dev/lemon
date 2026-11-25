@@ -125,8 +125,8 @@ defmodule LemonCli.Onboarding.ProviderIdentityTest do
       Runner.ensure_required_apps!()
 
       saved = Map.new(["HOME", "LEMON_SECRETS_MASTER_KEY"], &{&1, System.get_env(&1)})
-      secrets_config = Application.get_env(:lemon_core, Secrets)
-      Application.put_env(:lemon_core, Secrets, key_providers: [:env, :file])
+      secrets_config = Application.get_env(:lemon_core, :secrets)
+      Application.put_env(:lemon_core, :secrets, key_providers: [:env, :file])
       System.put_env("HOME", home)
       System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
       clear_secrets_table()
@@ -135,8 +135,8 @@ defmodule LemonCli.Onboarding.ProviderIdentityTest do
         clear_secrets_table()
 
         if secrets_config,
-          do: Application.put_env(:lemon_core, Secrets, secrets_config),
-          else: Application.delete_env(:lemon_core, Secrets)
+          do: Application.put_env(:lemon_core, :secrets, secrets_config),
+          else: Application.delete_env(:lemon_core, :secrets)
 
         Enum.each(saved, fn {key, value} ->
           if value, do: System.put_env(key, value), else: System.delete_env(key)

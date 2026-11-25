@@ -14,10 +14,10 @@ defmodule LemonCli.Setup.VerificationScopeWireTest do
     File.mkdir_p!(root)
     original_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
     original_key = System.get_env("XAI_API_KEY")
-    original_secrets = Application.fetch_env(:lemon_core, Secrets)
+    original_secrets = Application.fetch_env(:lemon_core, :secrets)
     System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
     System.put_env("XAI_API_KEY", "fixture-ambient-wrong-principal")
-    Application.put_env(:lemon_core, Secrets, key_providers: [:env])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env])
     clear_secrets()
 
     {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
@@ -66,8 +66,8 @@ defmodule LemonCli.Setup.VerificationScopeWireTest do
       restore_system("XAI_API_KEY", original_key)
 
       case original_secrets do
-        {:ok, value} -> Application.put_env(:lemon_core, Secrets, value)
-        :error -> Application.delete_env(:lemon_core, Secrets)
+        {:ok, value} -> Application.put_env(:lemon_core, :secrets, value)
+        :error -> Application.delete_env(:lemon_core, :secrets)
       end
 
       File.rm_rf!(root)

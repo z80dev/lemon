@@ -6,7 +6,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCommandAuthorityTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.Telegram.TriggerMode
-  alias LemonCore.{ChatScope, Checkpoint, ResumeToken, RunStore, SessionKey}
+  alias LemonCore.{ChatScope, ResumeToken, RunStore, SessionKey}
+  alias LemonAgent.Checkpoint
 
   defmodule TestRouter do
     use LemonCore.RouterBridge.Router

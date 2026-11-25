@@ -110,7 +110,9 @@ defmodule LemonControlPlane.Methods.SessionsRoutingMetaTest do
 
     test "projects the durable lifecycle row and routing the status bar reads" do
       %{key: key, agent: agent} = durable_session_with_run()
-      {:ok, _} = LemonCore.SessionLifecycle.patch(key, %{title: "Release prep", pinned: true})
+
+      {:ok, _} =
+        LemonControlPlane.SessionLifecycle.patch(key, %{title: "Release prep", pinned: true})
 
       LemonCore.PolicyStore.put_session(key, %{
         model: "claude-sonnet-4-20250514",

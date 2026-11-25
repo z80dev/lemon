@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.UsageCostDetailsTest do
   use ExUnit.Case, async: false
 
   alias LemonControlPlane.Methods.{UsageCost, UsageStatus}
-  alias LemonCore.{UsageLedger, UsageStore}
+  alias LemonAgent.{UsageLedger, UsageStore}
 
   setup do
     today = Date.utc_today() |> Date.to_iso8601()
@@ -121,7 +121,7 @@ defmodule LemonControlPlane.Methods.UsageCostDetailsTest do
     assert status["runs"] == 1
 
     assert {:ok, %{records: [record], incomplete: true}} =
-             UsageStore.records(%{
+             LemonControlPlane.UsageRecords.query(%{
                "runId" => run_id,
                "fromMs" => 0,
                "toMs" => System.system_time(:millisecond) + 1

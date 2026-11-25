@@ -254,7 +254,7 @@ document on stderr and use exit `1`; invalid arguments use exit `2`.
 
 ## Durable session management
 
-`lemon sessions` adapts `LemonCore.SessionLifecycle` without reimplementing
+`lemon sessions` adapts `LemonControlPlane.SessionLifecycle` without reimplementing
 store queries. List/search/show/history reads are bounded; `sessions stats`
 returns exact matched/store/run/status totals with capped, path-safe agent and
 origin dimensions; history is always redacted. Title/pin/archive updates
@@ -347,8 +347,9 @@ schema, bounds, and bootstrap-secret rules.
 
 ## Backup and restore
 
-`lemon backup contract|create|list|verify|restore` is implemented by the same
-Mix-free `LemonCli.CLI` handler in source and packaged runtimes. Every
+`lemon backup contract|create|list|verify|restore` is implemented by
+`LemonCli.Backup` behind the same Mix-free `LemonCli.CLI` handler in source and
+packaged runtimes (`lemon uninstall` likewise by `LemonCli.Uninstall`). Every
 subcommand supports `--json`; success writes one document to stdout and exits
 `0`, verification/operational failure writes one redacted document to stderr
 and exits `1`, and invalid options exit `2`.

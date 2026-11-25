@@ -813,7 +813,7 @@ controller_unit() {
   return 1
 }
 
-# LemonCore.Service logs every controller to the same role log, regardless of
+# LemonCli.Service logs every controller to the same role log, regardless of
 # the control port.
 controller_log() { printf '%s\n' "$LEMON_HOME_DIR/logs/controller.log"; }
 

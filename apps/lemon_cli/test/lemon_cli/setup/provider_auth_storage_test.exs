@@ -17,15 +17,15 @@ defmodule LemonCli.Setup.ProviderAuthStorageTest do
     key_path = Path.join(root, "master_key")
     File.write!(key_path, Base.encode64(:crypto.strong_rand_bytes(32)))
     File.chmod!(key_path, 0o600)
-    previous_settings = Application.fetch_env(:lemon_core, Secrets)
+    previous_settings = Application.fetch_env(:lemon_core, :secrets)
     previous_ambient = System.get_env("ANTHROPIC_API_KEY")
-    Application.put_env(:lemon_core, Secrets, key_providers: [:file], key_file: key_path)
+    Application.put_env(:lemon_core, :secrets, key_providers: [:file], key_file: key_path)
     System.put_env("ANTHROPIC_API_KEY", "private-ambient-key")
 
     on_exit(fn ->
       case previous_settings do
-        {:ok, settings} -> Application.put_env(:lemon_core, Secrets, settings)
-        :error -> Application.delete_env(:lemon_core, Secrets)
+        {:ok, settings} -> Application.put_env(:lemon_core, :secrets, settings)
+        :error -> Application.delete_env(:lemon_core, :secrets)
       end
 
       if previous_ambient,

@@ -1,0 +1,1498 @@
+defmodule LemonControlPlane.SessionLifecycle do
+  @moduledoc """
+  Shared session lifecycle service for operator surfaces.
+
+  The service composes the canonical run history, chat state, and policy stores
+  rather than creating a second conversation store. It adds bounded
+  search/listing, title/pin/archive metadata, redacted portable exports, and a
+  confirmation-bound prune flow.
+
+  Session discovery ignores malformed legacy index rows so one damaged record
+  cannot hide otherwise valid sessions from operator surfaces.
+
+  Historical tool phases expose `id` as the native tool-call identifier when
+  supplied and `action_id` as the logical event action identifier. All phases
+  remain available so operator surfaces can reconcile a single tool card.
+
+  Pruning is intentionally guarded: previews are dry-run by default, archived
+  sessions are the default (and safest) candidate set, pinned sessions are
+  excluded unless explicitly requested, and execution requires the token from
+  a preview of the exact current candidate set.
+  """
+
+  alias LemonCore.{
+    AgentIdentity,
+    ChatStateStore,
+    LifecycleFenceStore,
+    PolicyStore,
+    RunStore,
+    SessionMetadataStore,
+    SessionResetPreview
+  }
+
+  alias LemonCore.SessionLifecycle.Participant
+
+  @default_limit 100
+  @max_limit 500
+  @default_history_limit 50
+  @max_history_limit 200
+  @max_export_bytes 750_000
+  @max_export_text_bytes 16_000
+  @max_export_collection_items 100
+  @max_export_depth 6
+  @default_stats_group_limit 10
+  @max_stats_group_limit 50
+  @max_stats_query_bytes 512
+  @stats_version 1
+  @export_version 1
+  @prune_version 1
+  @reset_digest_version 1
+  # Metadata of a session without stored annotations, as `merge_metadata/1`
+  # reports it (equal timestamps mean "never updated").
+  @unannotated %{title: nil, pinned: false, archived: false, created_at_ms: 0, updated_at_ms: 0}
+
+  @type session_row :: %{
+          session_key: String.t(),
+          agent_id: String.t() | nil,
+          origin: atom() | String.t(),
+          created_at_ms: integer() | nil,
+          updated_at_ms: integer() | nil,
+          run_count: non_neg_integer(),
+          title: String.t() | nil,
+          pinned: boolean(),
+          archived: boolean(),
+          metadata_updated_at_ms: integer() | nil
+        }
+
+  @doc "List durable sessions with bounded lifecycle filters and text search."
+  @spec list(keyword()) :: %{
+          sessions: [session_row()],
+          total: non_neg_integer(),
+          matched: non_neg_integer()
+        }
+  def list(opts \\ []) do
+    limit = bounded_integer(Keyword.get(opts, :limit), @default_limit, 1, @max_limit)
+    offset = bounded_integer(Keyword.get(opts, :offset), 0, 0, 1_000_000)
+    query = normalize_query(Keyword.get(opts, :query))
+
+    all_sessions = all_sessions()
+
+    sessions =
+      all_sessions
+      |> filter_equal(:agent_id, Keyword.get(opts, :agent_id))
+      |> filter_boolean(:pinned, Keyword.get(opts, :pinned, :all))
+      |> filter_boolean(:archived, Keyword.get(opts, :archived, :all))
+      |> filter_query(query, opts)
+      |> Enum.sort_by(fn row ->
+        {not row.pinned, -(row.updated_at_ms || 0), row.session_key}
+      end)
+
+    matched = length(sessions)
+
+    %{
+      sessions: sessions |> Enum.drop(offset) |> Enum.take(limit),
+      total: length(all_sessions),
+      matched: matched
+    }
+  rescue
+    _ -> %{sessions: [], total: 0, matched: 0}
+  catch
+    :exit, _ -> %{sessions: [], total: 0, matched: 0}
+  end
+
+  @doc """
+  Aggregate durable-session statistics without returning conversation content.
+
+  The report uses the same agent, pin, archive, and redacted-history query
+  filters as `list/1`. Totals are exact for valid canonical session-index rows;
+  dimension responses are bounded and deterministically ordered. Session keys,
+  titles, prompts, answers, paths, URLs, and credential material are never
+  included.
+  """
+  @spec stats(keyword()) ::
+          {:ok, map()} | {:error, :invalid_query | :session_store_unavailable}
+  def stats(opts \\ []), do: stats(opts, RunStore)
+
+  @doc false
+  @spec stats(keyword(), module()) ::
+          {:ok, map()} | {:error, :invalid_query | :session_store_unavailable}
+  def stats(opts, run_store) when is_list(opts) and is_atom(run_store) do
+    query = normalize_query(Keyword.get(opts, :query))
+
+    with :ok <- validate_stats_query(query) do
+      group_limit =
+        bounded_integer(
+          Keyword.get(opts, :group_limit),
+          @default_stats_group_limit,
+          1,
+          @max_stats_group_limit
+        )
+
+      all = all_sessions(run_store)
+
+      matched =
+        all
+        |> filter_equal(:agent_id, Keyword.get(opts, :agent_id))
+        |> filter_boolean(:pinned, Keyword.get(opts, :pinned, :all))
+        |> filter_boolean(:archived, Keyword.get(opts, :archived, :all))
+        |> filter_query(query, opts, run_store)
+
+      {:ok,
+       %{
+         version: @stats_version,
+         redacted: true,
+         filters: stats_filters(opts, query),
+         totals: stats_totals(all, matched),
+         breakdowns: %{
+           agents: dimension_breakdown(matched, :agent_id, group_limit),
+           origins: dimension_breakdown(matched, :origin, group_limit)
+         },
+         cleanup: %{
+           includes_session_keys: false,
+           includes_titles: false,
+           includes_messages: false,
+           includes_prompts: false,
+           includes_answers: false,
+           includes_paths: false,
+           includes_urls: false,
+           includes_credentials: false,
+           max_dimension_entries: group_limit
+         }
+       }}
+    end
+  rescue
+    _ -> {:error, :session_store_unavailable}
+  catch
+    :exit, _ -> {:error, :session_store_unavailable}
+  end
+
+  @doc "Fetch one durable session row, or `nil` when the session is unknown."
+  @spec get(String.t()) :: session_row() | nil
+  def get(session_key) when is_binary(session_key) do
+    RunStore.list_sessions()
+    |> Enum.find_value(fn
+      {^session_key, session} when is_map(session) -> merge_metadata(session)
+      {_key, %{session_key: ^session_key} = session} -> merge_metadata(session)
+      _other -> nil
+    end)
+  end
+
+  @doc "Fetch one lifecycle row with an explicit owner-unavailable receipt."
+  def fetch(session_key) when is_binary(session_key) do
+    case RunStore.fetch_session_index(session_key) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, session} when is_map(session) -> {:ok, merge_metadata(session)}
+      _ -> {:error, :session_store_unavailable}
+    end
+  end
+
+  @doc "Resolve a fork source's agent from its canonical key or durable session index."
+  @spec fork_agent_id(String.t()) :: {:ok, String.t()} | {:error, atom()}
+  def fork_agent_id(session_key) when is_binary(session_key) do
+    case LemonCore.SessionKey.agent_id(session_key) do
+      agent_id when is_binary(agent_id) and agent_id != "" ->
+        {:ok, agent_id}
+
+      _ ->
+        case get(session_key) do
+          %{agent_id: agent_id} when is_binary(agent_id) and agent_id != "" ->
+            if LemonCore.SessionKey.valid?(LemonCore.SessionKey.main(agent_id)),
+              do: {:ok, agent_id},
+              else: {:error, :invalid_session_key}
+
+          _ ->
+            {:error, :session_not_found}
+        end
+    end
+  rescue
+    _ -> {:error, :session_store_unavailable}
+  catch
+    :exit, _ -> {:error, :session_store_unavailable}
+  end
+
+  def fork_agent_id(_), do: {:error, :invalid_session_key}
+
+  @doc """
+  Register a newly forked native session in canonical discovery and metadata.
+
+  The native runtime owns the copied conversation and resume mapping. A fork
+  starts with zero runs of its own and independent, unnamed lifecycle metadata.
+  """
+  @spec register_fork(String.t(), String.t()) :: :ok | {:error, term()}
+  def register_fork(source_session_key, destination_session_key) do
+    with {:ok, agent_id} <- fork_agent_id(source_session_key),
+         true <- destination_session_key != source_session_key,
+         true <- LemonCore.SessionKey.agent_id(destination_session_key) == agent_id,
+         :ok <- RunStore.create_session_index(destination_session_key, agent_id, :control_plane),
+         {:ok, _} <-
+           SessionMetadataStore.patch(destination_session_key, %{
+             title: nil,
+             pinned: false,
+             archived: false
+           }) do
+      :ok
+    else
+      value when value in [nil, false, ""] -> {:error, :invalid_session_key}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc "Patch title, pin, or archive state for an existing durable session."
+  @spec patch(String.t(), map()) :: {:ok, session_row()} | {:error, term()}
+  def patch(session_key, attrs) when is_binary(session_key) and is_map(attrs) do
+    if get(session_key) do
+      with {:ok, _metadata} <- SessionMetadataStore.patch(session_key, attrs),
+           %{} = session <- get(session_key) do
+        {:ok, session}
+      else
+        nil -> {:error, :not_found}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Return structured run history suitable for chat resume or inspection.
+
+  Tool entries retain their stable `action_id` and newest-first event order.
+  Consumers reconstructing one card per invocation should group by run/action
+  identity and retain the latest phase; distinct calls may share the same title.
+  """
+  @spec history(String.t(), keyword()) :: [map()]
+  def history(session_key, opts \\ []) when is_binary(session_key) do
+    limit =
+      bounded_integer(Keyword.get(opts, :limit), @default_history_limit, 1, @max_history_limit)
+
+    redact? = Keyword.get(opts, :redact, true) != false
+
+    RunStore.history(session_key, limit: limit)
+    |> Enum.map(fn {run_id, data} -> format_run(run_id, data, redact?) end)
+    |> Enum.sort_by(&(&1.started_at_ms || 0), :asc)
+  end
+
+  @doc "Build an always-redacted JSON, JSONL, Markdown or HTML export with integrity metadata."
+  @spec export(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def export(session_key, opts \\ []) when is_binary(session_key) do
+    with %{} = session <- get(session_key),
+         {:ok, format} <- normalize_export_format(Keyword.get(opts, :format, :json)) do
+      runs = history(session_key, limit: @max_history_limit, redact: true)
+      exported_at_ms = System.system_time(:millisecond)
+
+      {payload, content, omitted_run_count} =
+        fit_export(session, runs, exported_at_ms, format)
+
+      digest = sha256(content)
+
+      {:ok,
+       %{
+         format: format,
+         content: content,
+         sha256: digest,
+         filename: export_filename(session_key, format),
+         bytes: byte_size(content),
+         run_count: length(payload["runs"]),
+         available_run_count: length(runs),
+         omitted_run_count: omitted_run_count,
+         redacted: true,
+         cleanup: export_cleanup(omitted_run_count),
+         exported_at_ms: exported_at_ms
+       }}
+    else
+      nil -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Preview or execute a confirmation-bound stale-session prune.
+
+  Candidates are built from strict reads of the session index and every
+  session's metadata: when either cannot be read, preview and execution return
+  `{:error, :session_store_unavailable}` before any confirmation is checked or
+  any session deleted. Each deletion re-checks the pin (and, for
+  `archived_only`, the archive flag) on its strict pre-delete snapshot.
+
+  Every deletion must hold the session's lifecycle fence and prove it idle, so
+  execution deletes through `:fenced_delete`, a `(session_key, delete_opts ->
+  result)` function that runs `delete/2` under the router's fence (see
+  `LemonRouter.with_session_lifecycle_fence/3`). Without it every deletion is
+  refused with `{:error, :fence_generation_required}`.
+  """
+  @spec prune(keyword()) :: {:ok, map()} | {:error, term()}
+  def prune(opts) when is_list(opts) do
+    with {:ok, older_than_ms} <- require_timestamp(Keyword.get(opts, :older_than_ms)) do
+      archived_only = Keyword.get(opts, :archived_only, true) != false
+      include_pinned = Keyword.get(opts, :include_pinned, false) == true
+      dry_run = Keyword.get(opts, :dry_run, true) != false
+
+      with {:ok, candidates} <- prune_candidates(older_than_ms, archived_only, include_pinned) do
+        prune_candidates_checked(
+          candidates,
+          opts,
+          older_than_ms,
+          archived_only,
+          include_pinned,
+          dry_run
+        )
+      end
+    end
+  end
+
+  defp prune_candidates_checked(
+         candidates,
+         opts,
+         older_than_ms,
+         archived_only,
+         include_pinned,
+         dry_run
+       ) do
+    token = prune_token(older_than_ms, archived_only, include_pinned, candidates)
+
+    if dry_run do
+      {:ok,
+       prune_result(candidates, token, older_than_ms, archived_only, include_pinned, true, [])}
+    else
+      execute_prune(
+        candidates,
+        token,
+        Keyword.get(opts, :confirm_token),
+        Keyword.get(opts, :fenced_delete, &delete/2),
+        older_than_ms,
+        archived_only,
+        include_pinned
+      )
+    end
+  end
+
+  @doc """
+  Preview or execute native journal maintenance through the registered runtime.
+
+  `:older_than_ms` is an exact positive millisecond cutoff; `:dry_run` defaults
+  to true. Execution requires the preview's single-use `:confirm_token`.
+  Maintenance archives cold inactive journals, retaining their artifacts, and
+  sweeps only managed orphan spill directories. Reports contain bounded hashes,
+  never filesystem paths. Failed or unknown mutations must not be retried.
+  """
+  @spec maintenance(keyword()) :: {:ok, map()} | {:error, term()}
+  def maintenance(opts) when is_list(opts),
+    do: LemonControlPlane.SessionMaintenance.maintenance(opts)
+
+  @doc """
+  Preview or execute a verified reset of a session's conversation: delete its
+  run history, chat state, session policy, transient ACP run pointers and
+  registered `:reset` participants' state, keeping its index and lifecycle metadata.
+
+  When `:dry_run` is `true` (the default when `:confirm_token` is omitted), this
+  reads the session's current state strictly, computes a digest covering run
+  history count, latest run, chat state, session policy, ACP metadata and
+  participant snapshots, retains a single-use `:confirm_token`, and mutates nothing.
+
+  When executing (`dry_run: false`, or `:confirm_token` supplied with `:dry_run`
+  omitted), callers must hold the router's admission fence for the session (see
+  `LemonRouter.with_session_lifecycle_fence/3`) and pass `:fence_generation`
+  along with the preview's `:confirm_token`. The token is matched against the
+  live state digest and consumed durably before any mutation. Chat state, policy,
+  ACP run pointers and participant state are deleted and verified first and
+  restored on failure. Run history cannot be restored, so it is deleted and
+  verified by its owner before staged participant data is discarded.
+  `{:error, :outcome_unknown}` means the reset may have partially applied:
+  reconcile, never retry automatically.
+  """
+  @spec reset(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def reset(session_key, opts \\ []) when is_binary(session_key) and is_list(opts) do
+    confirm_token = Keyword.get(opts, :confirm_token)
+    dry_run? = Keyword.get(opts, :dry_run, is_nil(confirm_token))
+
+    if dry_run? do
+      preview_reset(session_key)
+    else
+      execute_reset(session_key, confirm_token, opts)
+    end
+  end
+
+  defp preview_reset(session_key) do
+    with {:ok, state} <- strict_reset_state(session_key),
+         {:ok, token} <- SessionResetPreview.retain(session_key, state.digest) do
+      {:ok, reset_result(state, true, token, false)}
+    end
+  end
+
+  defp execute_reset(_session_key, token, _opts)
+       when not is_binary(token) or token == "",
+       do: {:error, :confirmation_required}
+
+  defp execute_reset(session_key, confirm_token, opts) do
+    # Rollback restores these snapshots, so an unreadable row stops the reset
+    # before consuming the token or applying any mutation.
+    with :ok <- fence_held(session_key, opts),
+         {:ok, state} <- strict_reset_state(session_key),
+         :ok <- SessionResetPreview.consume(session_key, confirm_token, state.digest),
+         snapshots = %{
+           chat: state.chat,
+           policy: state.policy,
+           metadata: if(state.has_acp_run_state, do: state.metadata, else: nil),
+           participants: state.participants
+         },
+         :ok <- reset_ancillary(session_key, snapshots),
+         :ok <- fence_still_held(session_key, opts),
+         :ok <- reset_history(session_key),
+         :ok <- commit_participants(session_key, state.participants) do
+      {:ok, reset_result(state, false, nil, true)}
+    else
+      {:error, :fence_lost_mid_operation} -> {:error, :outcome_unknown}
+      error -> error
+    end
+  end
+
+  defp strict_reset_state(session_key) do
+    with {:ok, history_count} <- strict_fetch(RunStore.fetch_history_count(session_key)),
+         {:ok, latest_history} <- strict_fetch(RunStore.fetch_history(session_key, limit: 1)),
+         {:ok, chat} <- strict_fetch(ChatStateStore.fetch(session_key)),
+         {:ok, policy} <- strict_fetch(PolicyStore.fetch_session(session_key)),
+         {:ok, metadata} <- strict_fetch(SessionMetadataStore.fetch(session_key)),
+         {:ok, participants} <- Participant.snapshot_all(session_key, :reset) do
+      acp = if is_map(metadata), do: Map.get(metadata, :acp), else: nil
+
+      latest_run_id =
+        case latest_history do
+          [{run_id, _data} | _] -> run_id
+          _ -> nil
+        end
+
+      digest =
+        {@reset_digest_version, session_key, history_count, latest_run_id, chat, policy, acp,
+         participants}
+        |> :erlang.term_to_binary()
+        |> sha256()
+
+      {:ok,
+       %{
+         session_key: session_key,
+         digest: digest,
+         run_history_count: history_count,
+         chat: chat,
+         policy: policy,
+         metadata: metadata,
+         acp: acp,
+         participants: participants,
+         has_chat_state: chat != nil,
+         has_session_policy: policy != nil,
+         has_acp_metadata: is_map(acp),
+         has_acp_run_state: acp_has_run_state?(acp)
+       }}
+    end
+  end
+
+  defp reset_result(state, dry_run?, confirm_token, verified?) do
+    base = %{
+      session_key: state.session_key,
+      dry_run: dry_run?,
+      digest: state.digest,
+      run_history_count: state.run_history_count,
+      has_chat_state: state.has_chat_state,
+      has_session_policy: state.has_session_policy,
+      has_acp_metadata: state.has_acp_metadata,
+      has_acp_run_state: state.has_acp_run_state,
+      verified: verified?
+    }
+
+    if is_binary(confirm_token), do: Map.put(base, :confirm_token, confirm_token), else: base
+  end
+
+  defp acp_has_run_state?(%{} = acp),
+    do: Map.get(acp, :last_run_id) != nil or Map.get(acp, :cancelled_run_id) != nil
+
+  defp acp_has_run_state?(_), do: false
+
+  defp strict_fetch({:ok, _} = ok), do: ok
+  defp strict_fetch(_unreadable), do: {:error, :session_store_unavailable}
+
+  # A mutation runs only while the fence generation it was granted is held. A
+  # router that released the fence (its owner presumed dead) may already admit
+  # new work for the session, so a lost fence stops the mutation outright. A
+  # mutation without a generation never runs.
+  defp fence_held(session_key, opts) do
+    case Keyword.fetch(opts, :fence_generation) do
+      {:ok, generation} when is_binary(generation) ->
+        fence_result(LifecycleFenceStore.check_generation(session_key, generation))
+
+      _missing ->
+        {:error, :fence_generation_required}
+    end
+  end
+
+  defp fence_result(:ok), do: :ok
+  defp fence_result({:error, :fence_lost}), do: {:error, :fence_lost}
+  defp fence_result({:error, _unreadable}), do: {:error, :session_store_unavailable}
+
+  # After the first mutation a lost or unreadable fence leaves the operation
+  # partly applied; nothing more, not even a restore, may be written.
+  defp fence_still_held(session_key, opts) do
+    case fence_held(session_key, opts) do
+      :ok -> :ok
+      {:error, _} -> {:error, :fence_lost_mid_operation}
+    end
+  end
+
+  defp reset_ancillary(session_key, snapshots) do
+    result =
+      with :ok <- normalize_delete_result(ChatStateStore.delete(session_key)),
+           :ok <- normalize_delete_result(PolicyStore.delete_session(session_key)),
+           :ok <- normalize_delete_result(SessionMetadataStore.clear_acp_run_state(session_key)),
+           :ok <- verify_reset_ancillary(session_key) do
+        Participant.delete_all(session_key, snapshots.participants)
+      end
+
+    with {:error, reason} <- result do
+      case restore_ancillary_state(session_key, snapshots) do
+        :ok -> {:error, reason}
+        {:error, _} -> {:error, :outcome_unknown}
+      end
+    end
+  end
+
+  defp verify_reset_ancillary(session_key) do
+    with {:ok, nil} <- ChatStateStore.fetch(session_key),
+         {:ok, nil} <- PolicyStore.fetch_session(session_key),
+         {:ok, acp} <- SessionMetadataStore.fetch_acp(session_key),
+         false <- acp_has_run_state?(acp) do
+      :ok
+    else
+      _remaining_or_unreadable -> {:error, :ancillary_deletion_not_verified}
+    end
+  end
+
+  # Participants staged their deletion before the canonical commit; discarding
+  # the staged data can no longer be undone or reported as a definite failure.
+  defp commit_participants(session_key, participants) do
+    case Participant.commit_all(session_key, participants) do
+      :ok -> :ok
+      {:error, _} -> {:error, :outcome_unknown}
+    end
+  end
+
+  # The history owner confirms the delete (SQL failures propagate) and a strict
+  # read then verifies it; anything else may have partly applied.
+  defp reset_history(session_key) do
+    with :ok <- normalize_delete_result(RunStore.delete_history(session_key)),
+         {:ok, []} <- RunStore.fetch_history(session_key, limit: 1) do
+      :ok
+    else
+      _ -> {:error, :outcome_unknown}
+    end
+  end
+
+  @doc """
+  Delete a session and every piece of session-keyed state, then release only
+  the deleted session incarnation's identity.
+
+  Besides chat state, policy, lifecycle metadata, the session index and run
+  history, every participant registered for `:delete` (see
+  `LemonCore.SessionLifecycle.Participant`: memory documents, goals, channel
+  indexes, web workspace, native journals, model pins, approval grants, …)
+  is snapshotted strictly before the first mutation, deleted and verified
+  before the canonical commit. `verified: true` means every one of them
+  verified its deletion.
+
+  Callers must hold the router's admission fence for the session (see
+  `LemonRouter.with_session_lifecycle_fence/3`) and pass the fence's
+  `:fence_generation`, which is checked before the first mutation and again
+  before the canonical commit; without it nothing is changed and
+  `{:error, :fence_generation_required}` is returned. An unreadable store
+  returns an error before any mutation. A failure before the canonical commit
+  restores chat state, policy, metadata and every participant and returns a
+  definite `{:error, reason}`. A failure after it, a lost fence mid-operation,
+  or a failed restore, returns `{:error, :outcome_unknown}`: reconcile, never
+  retry automatically.
+  """
+  @spec delete(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def delete(session_key, opts) when is_binary(session_key) and is_list(opts) do
+    with :ok <- fence_held(session_key, opts),
+         {:ok, incarnation} <- deletion_incarnation(session_key) do
+      delete_incarnation(session_key, opts, incarnation)
+    end
+  end
+
+  defp delete_incarnation(session_key, opts, incarnation) do
+    existed = incarnation != nil
+    run_delete_fun = Keyword.get(opts, :run_delete_fun, &RunStore.delete_session/1)
+    canonical_verify_fun = Keyword.get(opts, :canonical_verify_fun, &verify_canonical_deleted/1)
+
+    # Rollback restores these snapshots, so an unreadable row must stop the
+    # delete before any mutation rather than be recorded as absent and lost.
+    with :ok <- fence_held(session_key, opts),
+         {:ok, snapshots} <- ancillary_snapshots(session_key),
+         :ok <- delete_guard(snapshots.metadata, opts),
+         {:ok, participants} <- Participant.snapshot_all(session_key, :delete) do
+      snapshots = Map.put(snapshots, :participants, participants)
+
+      result =
+        with :ok <- normalize_delete_result(ChatStateStore.delete(session_key)),
+             :ok <- normalize_delete_result(PolicyStore.delete_session(session_key)),
+             :ok <- normalize_delete_result(SessionMetadataStore.delete(session_key)),
+             :ok <- verify_ancillary_deleted(session_key),
+             :ok <- Participant.delete_all(session_key, participants),
+             :ok <- fence_still_held(session_key, opts),
+             :ok <- normalize_delete_result(run_delete_fun.(session_key)) do
+          # The canonical commit was accepted: any later failure leaves it applied.
+          with :ok <- canonical_verify_fun.(session_key),
+               :ok <- release_agent_identity(session_key, incarnation),
+               :ok <- Participant.commit_all(session_key, participants) do
+            {:ok, %{session_key: session_key, existed: existed, verified: true}}
+          else
+            _ -> {:error, :outcome_unknown}
+          end
+        end
+
+      case result do
+        {:ok, _} = ok ->
+          ok
+
+        {:error, :fence_lost_mid_operation} ->
+          {:error, :outcome_unknown}
+
+        {:error, reason} ->
+          # Identity release happens only after canonical deletion verifies, so a
+          # failed canonical commit cannot erase or restore over a renamed handle.
+          # Ancillary snapshots remain recoverable; run history is not.
+          case restore_ancillary_state(session_key, snapshots) do
+            :ok -> {:error, reason}
+            {:error, _} -> {:error, :outcome_unknown}
+          end
+      end
+    end
+  end
+
+  defp ancillary_snapshots(session_key) do
+    with {:ok, chat} <- ChatStateStore.fetch(session_key),
+         {:ok, policy} <- PolicyStore.fetch_session(session_key),
+         {:ok, metadata} <- SessionMetadataStore.fetch(session_key) do
+      {:ok, %{chat: chat, policy: policy, metadata: metadata}}
+    else
+      {:error, _reason} -> {:error, :session_store_unavailable}
+    end
+  end
+
+  # Prune deletes only what its confirmed candidate set allowed; a pin or
+  # unarchive that landed after the candidates were read stops the delete.
+  defp delete_guard(metadata, opts) do
+    cond do
+      Keyword.get(opts, :refuse_pinned, false) and metadata_flag?(metadata, :pinned) ->
+        {:error, :session_pinned}
+
+      Keyword.get(opts, :require_archived, false) and not metadata_flag?(metadata, :archived) ->
+        {:error, :session_not_archived}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp metadata_flag?(%{} = metadata, flag), do: Map.get(metadata, flag) == true
+  defp metadata_flag?(_metadata, _flag), do: false
+
+  defp all_sessions, do: all_sessions(RunStore)
+
+  defp all_sessions(run_store) do
+    run_store.list_sessions()
+    |> Enum.flat_map(fn
+      {_key, session} when is_map(session) ->
+        case read(session, :session_key) do
+          session_key when is_binary(session_key) and session_key != "" ->
+            [merge_metadata(session)]
+
+          _invalid_or_legacy_row ->
+            []
+        end
+
+      _other ->
+        []
+    end)
+  end
+
+  # Destructive callers read the index and every row's metadata strictly: an
+  # unreadable pin is never an unpinned session.
+  defp strict_sessions do
+    case RunStore.fetch_sessions() do
+      {:ok, entries} ->
+        Enum.reduce_while(entries, {:ok, []}, fn
+          {_key, session}, {:ok, rows} when is_map(session) ->
+            case read(session, :session_key) do
+              session_key when is_binary(session_key) and session_key != "" ->
+                case SessionMetadataStore.fetch(session_key) do
+                  {:ok, metadata} ->
+                    {:cont, {:ok, [session_row(session, metadata || @unannotated) | rows]}}
+
+                  {:error, _reason} ->
+                    {:halt, {:error, :session_store_unavailable}}
+                end
+
+              _invalid_or_legacy_row ->
+                {:cont, {:ok, rows}}
+            end
+
+          _other, acc ->
+            {:cont, acc}
+        end)
+
+      {:error, _reason} ->
+        {:error, :session_store_unavailable}
+    end
+  end
+
+  defp merge_metadata(session),
+    do: session_row(session, SessionMetadataStore.get(read(session, :session_key)))
+
+  defp session_row(session, metadata) do
+    session_key = read(session, :session_key)
+
+    %{
+      session_key: session_key,
+      agent_id: read(session, :agent_id),
+      origin: read(session, :origin) || :unknown,
+      created_at_ms: read(session, :created_at_ms),
+      updated_at_ms: read(session, :updated_at_ms),
+      run_count: integer_or_zero(read(session, :run_count)),
+      title: metadata.title,
+      pinned: metadata.pinned,
+      archived: metadata.archived,
+      metadata_updated_at_ms:
+        if(
+          metadata.updated_at_ms == metadata.created_at_ms and metadata.title == nil and
+            not metadata.pinned and not metadata.archived,
+          do: nil,
+          else: metadata.updated_at_ms
+        )
+    }
+  end
+
+  defp filter_equal(rows, _field, nil), do: rows
+  defp filter_equal(rows, _field, ""), do: rows
+
+  defp filter_equal(rows, field, expected),
+    do: Enum.filter(rows, &(Map.get(&1, field) == expected))
+
+  defp filter_boolean(rows, _field, value) when value in [:all, nil], do: rows
+
+  defp filter_boolean(rows, field, value) when is_boolean(value),
+    do: Enum.filter(rows, &(Map.get(&1, field) == value))
+
+  defp filter_boolean(rows, _field, _value), do: rows
+
+  defp filter_query(rows, nil, _opts), do: rows
+
+  defp filter_query(rows, query, opts) do
+    filter_query(rows, query, opts, RunStore)
+  end
+
+  defp filter_query(rows, nil, _opts, _run_store), do: rows
+
+  defp filter_query(rows, query, opts, run_store) do
+    history_limit =
+      bounded_integer(Keyword.get(opts, :search_history_limit), 25, 1, @default_history_limit)
+
+    Enum.filter(rows, fn row ->
+      row_text =
+        [row.session_key, row.agent_id, row.origin, row.title]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.map_join("\n", &to_string/1)
+        |> String.downcase()
+
+      String.contains?(row_text, query) or
+        history_matches?(row.session_key, query, history_limit, run_store)
+    end)
+  end
+
+  defp history_matches?(session_key, query, limit, run_store) do
+    run_store.history(session_key, limit: limit)
+    |> Enum.any?(fn {_run_id, data} ->
+      summary = read(data, :summary) || %{}
+      completed = read(summary, :completed) || %{}
+
+      [read(summary, :prompt), read(completed, :answer)]
+      |> Enum.filter(&is_binary/1)
+      |> Enum.map_join("\n", &LemonCore.Redact.text(&1, strict: true))
+      |> String.downcase()
+      |> String.contains?(query)
+    end)
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  defp stats_filters(opts, query) do
+    %{
+      agent_id: present_filter?(Keyword.get(opts, :agent_id)),
+      pinned: normalized_boolean_filter(Keyword.get(opts, :pinned, :all)),
+      archived: normalized_boolean_filter(Keyword.get(opts, :archived, :all)),
+      query: not is_nil(query),
+      query_bytes: if(is_binary(query), do: byte_size(query), else: 0)
+    }
+  end
+
+  defp stats_totals(all, matched) do
+    timestamps =
+      matched
+      |> Enum.map(& &1.updated_at_ms)
+      |> Enum.filter(&is_integer/1)
+
+    %{
+      store_sessions: length(all),
+      matched_sessions: length(matched),
+      active_sessions: Enum.count(matched, &(not &1.archived)),
+      archived_sessions: Enum.count(matched, & &1.archived),
+      pinned_sessions: Enum.count(matched, & &1.pinned),
+      unpinned_sessions: Enum.count(matched, &(not &1.pinned)),
+      titled_sessions: Enum.count(matched, &present_filter?(&1.title)),
+      runs: Enum.reduce(matched, 0, fn row, total -> total + row.run_count end),
+      oldest_updated_at_ms: min_or_nil(timestamps),
+      newest_updated_at_ms: max_or_nil(timestamps)
+    }
+  end
+
+  defp dimension_breakdown(rows, field, limit) do
+    frequencies =
+      rows
+      |> Enum.map(&(Map.get(&1, field) |> safe_dimension()))
+      |> Enum.frequencies()
+
+    entries =
+      frequencies
+      |> Enum.sort_by(fn {value, count} -> {-count, value} end)
+      |> Enum.take(limit)
+      |> Enum.map(fn {value, count} -> %{value: value, count: count} end)
+
+    %{
+      entries: entries,
+      distinct: map_size(frequencies),
+      omitted: max(map_size(frequencies) - length(entries), 0)
+    }
+  end
+
+  defp safe_dimension(nil), do: "unknown"
+
+  defp safe_dimension(value) do
+    original = value |> stringify() |> String.trim()
+    redacted = LemonCore.Redact.text(original, strict: true)
+
+    cond do
+      original == "" ->
+        "unknown"
+
+      redacted != original or path_or_url?(original) ->
+        "redacted:" <> (original |> sha256() |> binary_part(0, 12))
+
+      true ->
+        original
+        |> String.replace(~r/\s+/, " ")
+        |> truncate_dimension()
+    end
+  end
+
+  defp path_or_url?(value) do
+    String.contains?(value, ["/", "\\", "://"]) or
+      String.starts_with?(String.downcase(value), ["file:", "http:", "https:"])
+  end
+
+  defp truncate_dimension(value) when byte_size(value) <= 96, do: value
+
+  defp truncate_dimension(value) do
+    value
+    |> binary_part(0, 96)
+    |> String.replace_invalid()
+    |> Kernel.<>("…")
+  end
+
+  defp present_filter?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_filter?(_value), do: false
+
+  defp normalized_boolean_filter(value) when is_boolean(value), do: value
+  defp normalized_boolean_filter(_value), do: "all"
+
+  defp min_or_nil([]), do: nil
+  defp min_or_nil(values), do: Enum.min(values)
+
+  defp max_or_nil([]), do: nil
+  defp max_or_nil(values), do: Enum.max(values)
+
+  defp format_run(run_id, data, redact?) do
+    summary = read(data, :summary) || %{}
+    completed = read(summary, :completed) || %{}
+    events = normalize_list(read(data, :events))
+
+    %{
+      run_id: to_string(run_id),
+      started_at_ms: read(data, :started_at) || read(summary, :started_at),
+      engine: read(summary, :engine),
+      prompt: maybe_redact(read(summary, :prompt), redact?),
+      answer: maybe_redact(read(completed, :answer), redact?),
+      ok: read(completed, :ok),
+      error: sanitize_term(read(completed, :error), redact?),
+      duration_ms: read(summary, :duration_ms),
+      tools: extract_tools(events, redact?),
+      event_count: length(events)
+    }
+  end
+
+  defp extract_tools(events, redact?) do
+    events
+    |> Enum.filter(&action_event?/1)
+    |> Enum.take(200)
+    |> Enum.map(fn event ->
+      action = read(event, :action) || %{}
+      detail = read(action, :detail)
+      action_id = read(action, :id)
+      tool_call_id = read(detail, :tool_call_id) || action_id
+      redacted_action_id = maybe_redact(action_id, redact?)
+
+      tool_id =
+        if tool_call_id == action_id,
+          do: redacted_action_id,
+          else: maybe_redact(tool_call_id, redact?)
+
+      %{
+        id: tool_id,
+        action_id: redacted_action_id,
+        title: maybe_redact(read(action, :title), redact?),
+        kind: stringify(read(action, :kind)),
+        phase: stringify(read(event, :phase)),
+        ok: read(event, :ok),
+        detail: sanitize_term(detail, redact?),
+        message: maybe_redact(read(event, :message), redact?)
+      }
+    end)
+  end
+
+  defp action_event?(event) when is_map(event),
+    do: read(event, :__event__) == :action_event or is_map(read(event, :action))
+
+  defp action_event?(_event), do: false
+
+  defp export_session(session) do
+    %{
+      "sessionKey" => session.session_key,
+      "agentId" => session.agent_id,
+      "origin" => stringify(session.origin),
+      "title" => maybe_redact(session.title, true),
+      "pinned" => session.pinned,
+      "archived" => session.archived,
+      "createdAtMs" => session.created_at_ms,
+      "updatedAtMs" => session.updated_at_ms,
+      "runCount" => session.run_count
+    }
+  end
+
+  defp export_run(run) do
+    %{
+      "runId" => run.run_id,
+      "startedAtMs" => run.started_at_ms,
+      "engine" => run.engine,
+      "prompt" => run.prompt,
+      "answer" => run.answer,
+      "ok" => run.ok,
+      "error" => run.error,
+      "durationMs" => run.duration_ms,
+      "tools" => Enum.map(run.tools, &stringify_keys/1),
+      "eventCount" => run.event_count
+    }
+  end
+
+  defp encode_export(payload, :json), do: Jason.encode!(payload, pretty: true) <> "\n"
+
+  defp encode_export(payload, :markdown) do
+    session = payload["session"]
+    title = session["title"] || session["sessionKey"]
+
+    runs =
+      payload["runs"]
+      |> Enum.map_join("\n\n", fn run ->
+        tools =
+          run["tools"]
+          |> Enum.map_join("\n", fn tool ->
+            "- `#{markdown_escape(tool["kind"] || "tool")}` #{markdown_escape(tool["title"] || "Tool call")} (#{markdown_escape(tool["phase"] || "unknown")})"
+          end)
+
+        """
+        ## Run #{markdown_escape(run["runId"])}
+
+        **Prompt**
+
+        #{markdown_block(run["prompt"])}
+
+        **Answer**
+
+        #{markdown_block(run["answer"])}
+
+        **Tools**
+
+        #{if tools == "", do: "_No tool calls recorded._", else: tools}
+        """
+        |> String.trim()
+      end)
+
+    """
+    # #{markdown_escape(title)}
+
+    - Session: `#{markdown_escape(session["sessionKey"])}`
+    - Agent: `#{markdown_escape(session["agentId"] || "unknown")}`
+    - Runs: #{length(payload["runs"])}
+    - Redacted export: yes
+
+    #{runs}
+    """
+    |> String.trim()
+    |> Kernel.<>("\n")
+  end
+
+  defp encode_export(payload, :jsonl) do
+    header =
+      payload
+      |> Map.delete("runs")
+      |> Map.put("type", "session")
+
+    lines =
+      Enum.map([header | Enum.map(payload["runs"], &Map.put(&1, "type", "run"))], fn record ->
+        Jason.encode!(record)
+      end)
+
+    Enum.join(lines, "\n") <> "\n"
+  end
+
+  # Self-contained document: inline CSS only, no scripts or external resources.
+  # Every interpolated value is HTML-escaped.
+  defp encode_export(payload, :html) do
+    session = payload["session"]
+    title = session["title"] || session["sessionKey"]
+
+    runs =
+      Enum.map_join(payload["runs"], "\n", fn run ->
+        tools =
+          case run["tools"] do
+            [] ->
+              "<p class=\"empty\">No tool calls recorded.</p>"
+
+            tools ->
+              items =
+                Enum.map_join(tools, "\n", fn tool ->
+                  "<li><code>#{html_escape(tool["kind"] || "tool")}</code> #{html_escape(tool["title"] || "Tool call")} (#{html_escape(tool["phase"] || "unknown")})</li>"
+                end)
+
+              "<ul>\n#{items}\n</ul>"
+          end
+
+        status =
+          case run["ok"] do
+            true -> "ok"
+            false -> "failed"
+            _ -> "unknown"
+          end
+
+        """
+        <section class="run">
+        <h2>Run #{html_escape(run["runId"])}</h2>
+        <p class="meta">Status: #{status}#{if run["error"], do: " - " <> html_escape(run["error"]), else: ""}</p>
+        <h3>Prompt</h3>
+        #{html_block(run["prompt"])}
+        <h3>Answer</h3>
+        #{html_block(run["answer"])}
+        <h3>Tools</h3>
+        #{tools}
+        </section>
+        """
+      end)
+
+    """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>#{html_escape(title)}</title>
+    <style>
+    body{font-family:system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1d1d1f;background:#fff}
+    h1{font-size:1.6rem}h2{font-size:1.2rem;margin-top:0}h3{font-size:1rem;margin-bottom:.25rem}
+    .meta,.empty{color:#6e6e73}
+    .run{border:1px solid #d2d2d7;border-radius:.5rem;padding:1rem;margin:1rem 0}
+    pre{white-space:pre-wrap;word-break:break-word;background:#f5f5f7;padding:.75rem;border-radius:.375rem;margin:0}
+    code{background:#f5f5f7;padding:0 .25rem;border-radius:.25rem}
+    </style>
+    </head>
+    <body>
+    <h1>#{html_escape(title)}</h1>
+    <ul class="meta">
+    <li>Session: <code>#{html_escape(session["sessionKey"])}</code></li>
+    <li>Agent: <code>#{html_escape(session["agentId"] || "unknown")}</code></li>
+    <li>Runs: #{length(payload["runs"])}</li>
+    <li>Redacted export: yes</li>
+    </ul>
+    #{runs}
+    </body>
+    </html>
+    """
+  end
+
+  defp fit_export(session, runs, exported_at_ms, format) do
+    do_fit_export(session, Enum.map(runs, &export_run/1), exported_at_ms, format, 0)
+  end
+
+  defp do_fit_export(session, runs, exported_at_ms, format, omitted_run_count) do
+    payload = %{
+      "version" => @export_version,
+      "exportedAtMs" => exported_at_ms,
+      "redacted" => true,
+      "cleanup" => export_cleanup(omitted_run_count),
+      "session" => export_session(session),
+      "runs" => runs
+    }
+
+    content = encode_export(payload, format)
+
+    if byte_size(content) <= @max_export_bytes or runs == [] do
+      {payload, content, omitted_run_count}
+    else
+      do_fit_export(session, tl(runs), exported_at_ms, format, omitted_run_count + 1)
+    end
+  end
+
+  defp prune_candidates(older_than_ms, archived_only, include_pinned) do
+    with {:ok, sessions} <- strict_sessions() do
+      {:ok,
+       sessions
+       |> filter_boolean(:archived, if(archived_only, do: true, else: :all))
+       |> Enum.filter(fn row ->
+         is_integer(row.updated_at_ms) and row.updated_at_ms < older_than_ms
+       end)
+       |> Enum.filter(fn row -> include_pinned or not row.pinned end)
+       |> Enum.sort_by(& &1.session_key)}
+    end
+  end
+
+  defp prune_token(older_than_ms, archived_only, include_pinned, candidates) do
+    payload =
+      {@prune_version, older_than_ms, archived_only, include_pinned,
+       Enum.map(candidates, fn row ->
+         {row.session_key, row.updated_at_ms, row.metadata_updated_at_ms, row.title, row.pinned,
+          row.archived}
+       end)}
+
+    payload |> :erlang.term_to_binary() |> sha256()
+  end
+
+  defp execute_prune(_candidates, _token, confirm, _delete, _older, _archived, _pinned)
+       when not is_binary(confirm) or confirm == "",
+       do: {:error, :confirmation_required}
+
+  defp execute_prune(
+         candidates,
+         token,
+         confirm,
+         fenced_delete,
+         older_than_ms,
+         archived_only,
+         include_pinned
+       ) do
+    if secure_equal?(token, confirm) do
+      {deleted, failures} =
+        Enum.reduce(candidates, {[], []}, fn row, {deleted, failures} ->
+          case fenced_delete.(row.session_key,
+                 refuse_pinned: not include_pinned,
+                 require_archived: archived_only
+               ) do
+            {:ok, _} ->
+              {[row.session_key | deleted], failures}
+
+            {:error, reason} ->
+              {deleted, [%{session_key: row.session_key, reason: reason} | failures]}
+          end
+        end)
+
+      result =
+        prune_result(
+          candidates,
+          token,
+          older_than_ms,
+          archived_only,
+          include_pinned,
+          false,
+          Enum.reverse(deleted)
+        )
+        |> Map.put(:failures, Enum.reverse(failures))
+
+      if failures == [], do: {:ok, result}, else: {:error, {:partial_failure, result}}
+    else
+      {:error, :confirmation_mismatch}
+    end
+  end
+
+  defp prune_result(
+         candidates,
+         token,
+         older_than_ms,
+         archived_only,
+         include_pinned,
+         dry_run,
+         deleted
+       ) do
+    %{
+      dry_run: dry_run,
+      older_than_ms: older_than_ms,
+      archived_only: archived_only,
+      include_pinned: include_pinned,
+      confirmation_token: token,
+      candidate_session_keys: Enum.map(candidates, & &1.session_key),
+      candidate_count: length(candidates),
+      deleted_session_keys: deleted,
+      deleted_count: length(deleted),
+      verified: not dry_run and length(deleted) == length(candidates)
+    }
+  end
+
+  defp deletion_incarnation(session_key) do
+    case RunStore.ensure_session_incarnation(session_key) do
+      {:ok, index} -> {:ok, index.incarnation}
+      {:error, :not_found} -> {:ok, nil}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp release_agent_identity(session_key, incarnation) do
+    case RunStore.ensure_session_incarnation(session_key) do
+      {:ok, %{incarnation: ^incarnation}} ->
+        {:error, :delete_not_verified}
+
+      result when elem(result, 0) == :ok or result == {:error, :not_found} ->
+        # A replacement may already exist, or register after this read. The
+        # scope CAS removes only the old incarnation, while still fencing
+        # in-flight claims when the scope/entry was absent.
+        case AgentIdentity.remove("operator", "session://" <> session_key, incarnation) do
+          {:error, :invalid_id} -> :ok
+          removed -> removed
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  # Verification reads are strict: an unreadable owner is never evidence that
+  # the row it holds is gone.
+  defp verify_ancillary_deleted(session_key) do
+    with {:ok, nil} <- ChatStateStore.fetch(session_key),
+         {:ok, nil} <- PolicyStore.fetch_session(session_key),
+         {:ok, nil} <- SessionMetadataStore.fetch(session_key) do
+      :ok
+    else
+      _remaining_or_unreadable -> {:error, :ancillary_deletion_not_verified}
+    end
+  end
+
+  # An unavailable history owner must not read as an empty, deleted history.
+  defp verify_canonical_deleted(session_key) do
+    with {:ok, sessions} <- RunStore.fetch_sessions(),
+         false <- Enum.any?(sessions, &indexes_session?(&1, session_key)),
+         {:ok, []} <- RunStore.fetch_history(session_key, limit: 1) do
+      :ok
+    else
+      _remaining_or_unreadable -> {:error, :canonical_deletion_not_verified}
+    end
+  end
+
+  defp indexes_session?({session_key, session}, session_key) when is_map(session), do: true
+  defp indexes_session?({_key, %{session_key: session_key}}, session_key), do: true
+  defp indexes_session?(_entry, _session_key), do: false
+
+  defp restore_ancillary_state(session_key, snapshots) do
+    results = [
+      Participant.restore_all(session_key, snapshots.participants),
+      if(snapshots.chat, do: ChatStateStore.put(session_key, snapshots.chat), else: :ok),
+      if(snapshots.policy, do: PolicyStore.put_session(session_key, snapshots.policy), else: :ok),
+      if(snapshots.metadata, do: SessionMetadataStore.restore(snapshots.metadata), else: :ok)
+    ]
+
+    if Enum.all?(results, &(&1 == :ok)), do: :ok, else: {:error, :restore_failed}
+  end
+
+  defp normalize_delete_result(:ok), do: :ok
+  defp normalize_delete_result({:error, reason}), do: {:error, reason}
+  defp normalize_delete_result(other), do: {:error, {:unexpected_delete_result, other}}
+
+  defp sanitize_term(value, false), do: value
+  defp sanitize_term(value, true), do: sanitize_redacted(value, 0)
+
+  defp sanitize_redacted(_value, depth) when depth >= @max_export_depth,
+    do: "[OMITTED: depth limit]"
+
+  defp sanitize_redacted(nil, _depth), do: nil
+
+  defp sanitize_redacted(value, _depth) when is_binary(value),
+    do: value |> LemonCore.Redact.text(strict: true) |> truncate_export_text()
+
+  defp sanitize_redacted(value, _depth) when is_atom(value), do: Atom.to_string(value)
+  defp sanitize_redacted(value, _depth) when is_number(value) or is_boolean(value), do: value
+
+  defp sanitize_redacted(%{__struct__: _} = value, depth),
+    do: value |> Map.from_struct() |> sanitize_redacted(depth)
+
+  defp sanitize_redacted(value, depth) when is_map(value) do
+    Map.new(value, fn {key, nested} ->
+      key_string = to_string(key)
+
+      safe =
+        if LemonCore.Redact.sensitive_key?(key_string),
+          do: "[REDACTED]",
+          else: sanitize_redacted(nested, depth + 1)
+
+      {key_string, safe}
+    end)
+    |> Enum.take(@max_export_collection_items)
+    |> Map.new()
+  end
+
+  defp sanitize_redacted(value, depth) when is_list(value),
+    do:
+      value
+      |> Enum.take(@max_export_collection_items)
+      |> Enum.map(&sanitize_redacted(&1, depth + 1))
+
+  defp sanitize_redacted(value, depth) when is_tuple(value),
+    do: value |> Tuple.to_list() |> sanitize_redacted(depth + 1)
+
+  defp sanitize_redacted(value, _depth),
+    do:
+      value
+      |> inspect(limit: 100)
+      |> LemonCore.Redact.text(strict: true)
+      |> truncate_export_text()
+
+  defp maybe_redact(value, false), do: value
+
+  defp maybe_redact(value, true) when is_binary(value),
+    do: value |> LemonCore.Redact.text(strict: true) |> truncate_export_text()
+
+  defp maybe_redact(value, true), do: sanitize_term(value, true)
+
+  defp stringify_keys(map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)
+
+  defp normalize_export_format(value) when value in [:json, "json"], do: {:ok, :json}
+  defp normalize_export_format(value) when value in [:jsonl, "jsonl", "ndjson"], do: {:ok, :jsonl}
+  defp normalize_export_format(value) when value in [:html, "html"], do: {:ok, :html}
+
+  defp normalize_export_format(value) when value in [:markdown, "markdown", "md"],
+    do: {:ok, :markdown}
+
+  defp normalize_export_format(_value), do: {:error, :unsupported_format}
+
+  defp export_cleanup(omitted_run_count) do
+    %{
+      "redactsSensitiveText" => true,
+      "redactsSensitiveKeys" => true,
+      "includesSelectedToolFields" => true,
+      "includesRawEvents" => false,
+      "includesRunRecords" => false,
+      "includesCredentials" => false,
+      "includesSecretValues" => false,
+      "maxBytes" => @max_export_bytes,
+      "omittedRunCount" => omitted_run_count,
+      "truncatedForByteLimit" => omitted_run_count > 0
+    }
+  end
+
+  defp export_filename(session_key, format) do
+    safe = String.replace(session_key, ~r/[^A-Za-z0-9._-]+/, "-")
+    extension = export_extension(format)
+    "lemon-session-#{safe}.#{extension}"
+  end
+
+  defp export_extension(:json), do: "json"
+  defp export_extension(:jsonl), do: "jsonl"
+  defp export_extension(:markdown), do: "md"
+  defp export_extension(:html), do: "html"
+
+  defp html_escape(nil), do: ""
+
+  defp html_escape(value) do
+    value
+    |> html_text()
+    |> String.replace("&", "&amp;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+    |> String.replace("\"", "&quot;")
+    |> String.replace("'", "&#39;")
+  end
+
+  defp html_text(value) when is_binary(value), do: value
+  defp html_text(value) when is_atom(value) or is_number(value), do: to_string(value)
+  defp html_text(value), do: inspect(value, limit: 20, printable_limit: 500)
+
+  defp html_block(nil), do: "<p class=\"empty\">Not recorded.</p>"
+  defp html_block(value), do: "<pre>#{html_escape(value)}</pre>"
+
+  defp markdown_block(nil), do: "_Not recorded._"
+
+  defp markdown_block(value) do
+    value
+    |> to_string()
+    |> String.replace("```", "` ` `")
+    |> then(&"```text\n#{&1}\n```")
+  end
+
+  defp markdown_escape(nil), do: ""
+
+  defp markdown_escape(value),
+    do: value |> to_string() |> String.replace(~r/([`*_{}\[\]<>#])/, "\\\\\\1")
+
+  defp normalize_query(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "" -> nil
+      query -> query
+    end
+  end
+
+  defp normalize_query(_value), do: nil
+
+  defp validate_stats_query(query)
+       when is_binary(query) and byte_size(query) > @max_stats_query_bytes,
+       do: {:error, :invalid_query}
+
+  defp validate_stats_query(_query), do: :ok
+
+  defp require_timestamp(value) when is_integer(value) and value > 0, do: {:ok, value}
+  defp require_timestamp(_value), do: {:error, :invalid_older_than_ms}
+
+  defp bounded_integer(value, _default, min, max) when is_integer(value),
+    do: value |> max(min) |> min(max)
+
+  defp bounded_integer(_value, default, _min, _max), do: default
+
+  defp normalize_list(value) when is_list(value), do: value
+  defp normalize_list(_value), do: []
+
+  defp integer_or_zero(value) when is_integer(value) and value >= 0, do: value
+  defp integer_or_zero(_value), do: 0
+
+  defp stringify(nil), do: nil
+  defp stringify(value) when is_binary(value), do: value
+  defp stringify(value) when is_atom(value), do: Atom.to_string(value)
+  defp stringify(value), do: to_string(value)
+
+  defp read(map, key) when is_map(map), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
+  defp read(_map, _key), do: nil
+
+  defp truncate_export_text(text) when byte_size(text) <= @max_export_text_bytes, do: text
+
+  defp truncate_export_text(text) do
+    prefix = binary_part(text, 0, @max_export_text_bytes)
+    String.replace_invalid(prefix) <> "…[TRUNCATED]"
+  end
+
+  defp sha256(value) when is_binary(value),
+    do: :crypto.hash(:sha256, value) |> Base.encode16(case: :lower)
+
+  defp secure_equal?(left, right) when is_binary(left) and is_binary(right),
+    do: byte_size(left) == byte_size(right) and :crypto.hash_equals(left, right)
+
+  defp secure_equal?(_left, _right), do: false
+end

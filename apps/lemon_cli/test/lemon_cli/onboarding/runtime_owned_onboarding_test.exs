@@ -30,9 +30,9 @@ defmodule LemonCli.Onboarding.RuntimeOwnedOnboardingTest do
     previous_home = System.get_env("HOME")
     System.put_env("HOME", home)
     previous_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
-    previous_secrets = Application.fetch_env(:lemon_core, LemonCore.Secrets)
+    previous_secrets = Application.fetch_env(:lemon_core, :secrets)
     System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env])
 
     # The controller's provider identity already exists in the shared store.
     seed =
@@ -50,7 +50,7 @@ defmodule LemonCli.Onboarding.RuntimeOwnedOnboardingTest do
 
     holder =
       spawn(fn ->
-        LemonCore.Service.Lock.with_lock_path(lock, [], fn ->
+        LemonCore.FileLock.with_lock_path(lock, [], fn ->
           send(test, :runtime_lock_held)
           receive do: (:release -> :ok)
         end)
@@ -89,8 +89,8 @@ defmodule LemonCli.Onboarding.RuntimeOwnedOnboardingTest do
         else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
 
       case previous_secrets do
-        {:ok, config} -> Application.put_env(:lemon_core, LemonCore.Secrets, config)
-        :error -> Application.delete_env(:lemon_core, LemonCore.Secrets)
+        {:ok, config} -> Application.put_env(:lemon_core, :secrets, config)
+        :error -> Application.delete_env(:lemon_core, :secrets)
       end
     end)
 

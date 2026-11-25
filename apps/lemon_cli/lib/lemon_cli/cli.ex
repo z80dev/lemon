@@ -26,7 +26,7 @@ defmodule LemonCli.CLI do
   alias LemonCli.Onboarding.LogSilencer
   alias LemonCli.Onboarding.Runner
   alias LemonCli.Setup.{Gateway, Provider, Wizard}
-  alias LemonCore.Backup
+  alias LemonCli.Backup
   alias LemonCore.Config.Modular
   alias LemonCore.Config.Summary
   alias LemonCore.Doctor
@@ -35,7 +35,7 @@ defmodule LemonCli.CLI do
   alias LemonCore.Runtime.{Env, Health}
   alias LemonCore.Secrets.MasterKey
   alias LemonCore.Setup.Readiness
-  alias LemonCore.Update.ConfigMigrator
+  alias LemonCli.Update.ConfigMigrator
 
   defmodule Error do
     @moduledoc """

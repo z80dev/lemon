@@ -2,10 +2,8 @@ defmodule LemonCore.Secrets.Receipts do
   @moduledoc false
   import Kernel, except: [binding: 1]
 
-  import Kernel, except: [binding: 1]
-
   alias LemonCore.MapHelpers
-  alias LemonCore.Secrets
+  alias LemonCore.Secrets.Record
 
   @capacity 128
   @fields [:ciphertext, :nonce, :salt, :version, :staged, :expires_at]
@@ -32,6 +30,8 @@ defmodule LemonCore.Secrets.Receipts do
       :error -> Map.get(entry, "receipts", [])
     end
   end
+
+  def tombstone(entry), do: %{receipts: entries(entry)}
 
   def receipt_only?(entry) when is_map(entry) do
     receipts = entries(entry)
@@ -103,7 +103,7 @@ defmodule LemonCore.Secrets.Receipts do
   end
 
   def current?(entry, receipt) do
-    Secrets.value_entry?(entry) and not Secrets.expired_entry?(entry) and
+    Record.value?(entry) and not Record.expired?(entry) and
       field(receipt, :binding) == binding(entry)
   end
 

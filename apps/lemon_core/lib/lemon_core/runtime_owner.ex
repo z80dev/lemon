@@ -4,7 +4,7 @@ defmodule LemonCore.RuntimeOwner do
 
   Several VMs can open the same SQLite store: the daemon, a node worker that
   shares the credential store, an `iex` session. Only the first runtime VM to
-  start holds a `LemonCore.Service.Lock` on `<database>.runtime.lock` for its
+  start holds a `LemonCore.FileLock` on `<database>.runtime.lock` for its
   lifetime; that VM alone may run recovery that assumes every other runtime is
   gone, such as `LemonCore.ExecApprovalExpiry` expiring approvals owned by an
   earlier incarnation. A VM that finds the lock held by a live runtime is a
@@ -26,7 +26,7 @@ defmodule LemonCore.RuntimeOwner do
 
   require Logger
 
-  alias LemonCore.Service.Lock
+  alias LemonCore.FileLock, as: Lock
 
   @acquire_timeout_ms 5_000
   @contention_timeout_ms 3_000

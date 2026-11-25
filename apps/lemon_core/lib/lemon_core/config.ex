@@ -264,8 +264,10 @@ defmodule LemonCore.Config do
     Map.put(agent_map, :tools, tools_map)
   end
 
+  # Registered `[runtime.tools.<id>]` tables keep the flat legacy shape
+  # `agent.tools[id]` that every reader expects.
   defp convert_tools(tools) do
-    %{
+    Map.merge(tools.sections || %{}, %{
       auto_resize_images: tools.auto_resize_images,
       approval_mode: tools.approval_mode,
       edit: tools.edit,
@@ -276,9 +278,8 @@ defmodule LemonCore.Config do
       disclosure: tools.disclosure,
       checkpoint: tools.checkpoint,
       semantic_find: tools.semantic_find,
-      browser: tools.browser,
       computer_use: tools.computer_use
-    }
+    })
   end
 
   defp convert_tui(tui) do

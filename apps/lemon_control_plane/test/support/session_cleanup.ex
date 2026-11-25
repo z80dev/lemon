@@ -4,7 +4,8 @@ defmodule LemonControlPlane.TestSupport.SessionCleanup do
   # a lifecycle fence generation taken directly in the fence store, without the
   # router's idle proof.
 
-  alias LemonCore.{LifecycleFenceStore, SessionLifecycle}
+  alias LemonCore.LifecycleFenceStore
+  alias LemonControlPlane.SessionLifecycle
 
   def delete(session_key, opts \\ []) when is_binary(session_key) do
     fenced(

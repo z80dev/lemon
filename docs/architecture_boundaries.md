@@ -16,8 +16,8 @@ reference-only seams that permit runtime dispatch without a Mix dependency.
 | `lemon_automation` | platform | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_router`, `lemon_skills` | *(none)* | *(none)* |
 | `lemon_browser` | platform | `lemon_core` | *(none)* | *(none)* |
 | `lemon_channels` | platform | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media` | *(none)* | *(none)* |
-| `lemon_cli` | satellite | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* | `coding_agent`, `lemon_channels`, `lemon_media`, `lemon_router` |
-| `lemon_computer_use` | satellite | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* | *(none)* |
+| `lemon_cli` | platform | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_memory`, `lemon_skills` | `lemon_control_plane` | `coding_agent`, `lemon_channels`, `lemon_media`, `lemon_router` |
+| `lemon_computer_use` | satellite | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_cli`, `lemon_core` | *(none)* | *(none)* |
 | `lemon_control_plane` | platform | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_memory`, `lemon_omp`, `lemon_router`, `lemon_skills` | *(none)* | *(none)* |
 | `lemon_core` | foundation | *(none)* | *(none)* | *(none)* |
 | `lemon_evals` | satellite | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* | *(none)* |
@@ -149,6 +149,20 @@ contracts, acknowledgement checks and failure policies. These domain APIs are
 not interchangeable registries. Missing consumers
 retain their documented degradation; reached mutation failures remain
 `:outcome_unknown` and queries never masquerade as successful empty state.
+
+Product configuration and diagnostics register with the foundation instead of
+being named by it: chat platforms own their `[gateway.<id>]` sections
+(`:gateway_channels`), optional drivers own their `[runtime.tools.<id>]` tables
+(`:tool_sections`, e.g. `LemonBrowser.Config`), every app declares its
+environment variables (`:env_registries`) and domain doctor checks
+(`:doctor_checks`). The provider runtime owns extra auth fields and validation
+(`:provider_auth_extension`), while each external secret source supplies its
+settings and supervised read implementation (`:secret_source_types`).
+Unregistered secret source types fail closed; core retains its encrypted
+store and argv-only command source. Runtime product child specifications
+(`:runtime_control_children`) are started after Store ownership, before
+terminal effects can replay. A Hex consumer need not load any product
+driver or runtime app.
 
 ## Skill Source Taxonomy
 

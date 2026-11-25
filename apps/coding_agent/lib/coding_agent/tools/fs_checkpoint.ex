@@ -141,7 +141,7 @@ defmodule CodingAgent.Tools.FsCheckpoint do
   end
 
   defp checkpoint_id(%{"checkpoint_id" => value}) when is_binary(value) and value != "" do
-    if LemonCore.Checkpoint.valid_id?(value),
+    if LemonAgent.Checkpoint.valid_id?(value),
       do: {:ok, value},
       else: {:error, "checkpoint not found"}
   end

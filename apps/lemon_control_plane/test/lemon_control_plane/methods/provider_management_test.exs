@@ -5,7 +5,7 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
   alias LemonControlPlane.Auth.TokenStore
   alias LemonControlPlane.Methods.{Registry, NodeProvidersManagementApiKeySet}
   alias LemonControlPlane.NodeStore
-  alias LemonCore.NodeRegistry
+  alias LemonAgent.NodeRegistry
 
   @operations LemonCore.ProviderManagement.operations()
 

@@ -233,10 +233,10 @@ defmodule LemonCli.ServiceCommand do
 
     result =
       case operation do
-        :install -> LemonCore.Service.install(roles, opts)
-        :status -> LemonCore.Service.status(roles, opts)
-        :repair -> LemonCore.Service.repair(roles, opts)
-        :uninstall -> LemonCore.Service.uninstall(roles, opts)
+        :install -> LemonCli.Service.install(roles, opts)
+        :status -> LemonCli.Service.status(roles, opts)
+        :repair -> LemonCli.Service.repair(roles, opts)
+        :uninstall -> LemonCli.Service.uninstall(roles, opts)
       end
 
     case result do

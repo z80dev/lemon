@@ -29,13 +29,11 @@ defmodule LemonCore.Doctor do
   return `LemonCore.Doctor.Check.outside_runtime/3` instead of a warning.
   """
   alias LemonCore.Doctor.Checks.{
-    Browser,
     Config,
     NodeTools,
     Providers,
     Runtime,
-    Secrets,
-    Usage
+    Secrets
   }
 
   alias LemonCore.Doctor.{Check, LiveChecks, Report}
@@ -43,10 +41,8 @@ defmodule LemonCore.Doctor do
   @builtin_checks [
     Config,
     Secrets,
-    Browser,
     Runtime,
     Providers,
-    Usage,
     NodeTools
   ]
 

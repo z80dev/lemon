@@ -14,5 +14,4 @@ Code.require_file("../../lemon_platform_test/test_support.exs", __DIR__)
 
 # Compile and load support files
 Code.require_file("support/http_stub.ex", __DIR__)
-Code.require_file("support/update_fixture_server.ex", __DIR__)
 Code.require_file("support/session_cleanup.ex", __DIR__)

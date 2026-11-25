@@ -887,7 +887,7 @@ defmodule LemonControlPlane.ACP do
         |> replay_unfinished_tools(session, opts)
 
       :unavailable ->
-        LemonCore.SessionLifecycle.history(session.session_key, limit: 200)
+        LemonControlPlane.SessionLifecycle.history(session.session_key, limit: 200)
         |> Enum.each(fn run ->
           for {kind, text} <- [
                 {"user_message_chunk", run.prompt},

@@ -28,7 +28,7 @@ defmodule LemonCore.ExecApprovalExpiry do
 
   require Logger
 
-  alias LemonCore.{ExecApprovals, ExecApprovalStore}
+  alias LemonCore.ExecApprovalStore
 
   @runtime_key {__MODULE__, :runtime_id}
   # Shorter than the Store call timeout, so a slow store fails session start
@@ -104,8 +104,17 @@ defmodule LemonCore.ExecApprovalExpiry do
   defp notify(owner), do: GenServer.cast(__MODULE__, {:expire, owner})
 
   @impl true
+  # `:approvals` is the resolution module (`LemonCore.ExecApprovals`), supplied
+  # by the application child spec so this worker never calls back into it at
+  # compile/xref level.
   def init(opts) do
-    state = %{sessions: %{}, monitors: %{}, ready: false, retry_ms: @retry_initial_ms}
+    state = %{
+      approvals: Keyword.fetch!(opts, :approvals),
+      sessions: %{},
+      monitors: %{},
+      ready: false,
+      retry_ms: @retry_initial_ms
+    }
 
     # A client VM never recovers, so it cannot expire another runtime's
     # approvals, and it refuses resolution (`ensure_ready/0`).
@@ -136,7 +145,7 @@ defmodule LemonCore.ExecApprovalExpiry do
   # gone. A follower restores its own monitors and changes no other record.
   defp recover(state, owner?) do
     with {:ok, _count} <-
-           if(owner?, do: safely(&ExecApprovals.reconcile_runtime/0), else: {:ok, 0}),
+           if(owner?, do: safely(fn -> state.approvals.reconcile_runtime() end), else: {:ok, 0}),
          {:ok, owners} <- safely(&ExecApprovalStore.fetch_session_owners/0),
          {:ok, state} <- restore_owners(owners, state, owner?),
          {:ok, rows} <- safely(&ExecApprovalStore.fetch_pending_list/0) do
@@ -203,7 +212,7 @@ defmodule LemonCore.ExecApprovalExpiry do
 
   @impl true
   def handle_cast({:expire, owner}, state) do
-    expire(owner)
+    expire(state, owner)
     {:noreply, state}
   end
 
@@ -216,7 +225,7 @@ defmodule LemonCore.ExecApprovalExpiry do
         {:noreply, state}
 
       {id, monitors} ->
-        expire({:session, id})
+        expire(state, {:session, id})
         _ = if state.sessions[id] == pid, do: ExecApprovalStore.delete_session_owner(id)
 
         sessions =
@@ -251,8 +260,8 @@ defmodule LemonCore.ExecApprovalExpiry do
 
   defp registered_session(_id), do: nil
 
-  defp expire({kind, _id} = owner) do
-    case safely_expire(owner) do
+  defp expire(state, {kind, _id} = owner) do
+    case safely_expire(state.approvals, owner) do
       {:ok, _count} ->
         :ok
 
@@ -261,8 +270,8 @@ defmodule LemonCore.ExecApprovalExpiry do
     end
   end
 
-  defp safely_expire(owner) do
-    ExecApprovals.expire_owner(owner)
+  defp safely_expire(approvals, owner) do
+    approvals.expire_owner(owner)
   catch
     _kind, _reason -> {:error, :store_unavailable}
   end

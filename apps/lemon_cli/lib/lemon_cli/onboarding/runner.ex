@@ -1219,7 +1219,7 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   defp open_url_in_browser(url) when is_binary(url) and url != "" do
-    case LemonCore.Tern.open_user_page(url) do
+    case LemonBrowser.Tern.open_user_page(url) do
       :ok -> :ok
       {:error, _} -> open_url_in_system_browser(url)
     end

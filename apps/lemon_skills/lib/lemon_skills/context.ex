@@ -17,7 +17,8 @@ defmodule LemonSkills.Context do
   """
 
   alias LemonSkills.Context.{Document, URLFetcher}
-  alias LemonCore.{SafeGit, SessionLifecycle}
+  alias LemonCore.SafeGit
+  alias LemonCore.RuntimeSeam
 
   @version 1
   @default_max_output_bytes 120_000
@@ -245,7 +246,7 @@ defmodule LemonSkills.Context do
   end
 
   defp resolve_session(reference, key, opts, budget) do
-    export_fun = Keyword.get(opts, :session_export_fun, &SessionLifecycle.export/2)
+    export_fun = Keyword.get(opts, :session_export_fun, &export_session/2)
 
     with {:ok, export} <- export_fun.(key, format: :markdown),
          :ok <- under_size(export.bytes, budget.max_input_bytes) do
@@ -263,6 +264,14 @@ defmodule LemonSkills.Context do
     else
       {:error, reason} -> omit(reference, reason_name(reason))
     end
+  end
+
+  defp export_session(key, opts) do
+    :context_session_exporter
+    |> RuntimeSeam.provider()
+    |> RuntimeSeam.invoke(:export, [key, opts],
+      unavailable: {:error, :session_export_unavailable}
+    )
   end
 
   defp source(reference, type, label, content, selected_items, omissions, metadata) do

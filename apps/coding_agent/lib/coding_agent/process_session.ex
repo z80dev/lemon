@@ -68,8 +68,8 @@ defmodule CodingAgent.ProcessSession do
   require Logger
 
   alias CodingAgent.ProcessStore
-  alias LemonCore.TerminalBackends
-  alias LemonCore.TerminalBackends.{Docker, Ssh}
+  alias CodingAgent.TerminalBackends
+  alias CodingAgent.TerminalBackends.{Docker, Ssh}
 
   @default_max_log_lines 1000
   # A line longer than this (for example `\r` progress output with no

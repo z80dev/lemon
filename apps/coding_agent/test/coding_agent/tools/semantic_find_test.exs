@@ -7,7 +7,8 @@ defmodule CodingAgent.Tools.SemanticFindTest do
   alias CodingAgent.Tools.SemanticFind.Candidates
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{AssistantMessage, Context, Cost, TextContent, Usage}
-  alias LemonCore.{Store, UsageLedger, UsageStore}
+  alias LemonCore.Store
+  alias LemonAgent.{UsageLedger, UsageStore}
 
   @moduletag :tmp_dir
 
@@ -422,7 +423,7 @@ defmodule CodingAgent.Tools.SemanticFindTest do
       now = System.system_time(:millisecond)
 
       assert {:ok, %{records: records}} =
-               UsageStore.records(
+               LemonControlPlane.UsageRecords.query(
                  %{"fromMs" => now - 60_000, "toMs" => now + 60_000, "runId" => "run-42"},
                  store: store
                )

@@ -268,7 +268,7 @@ Initial stable 1.0 support targets:
   `/checkpoint restore`, with redacted lifecycle event counts/history, pushed
   active-run event notices, support-bundle metadata, and rollback command
   guidance. Shared checkpoint storage and filesystem rollback are owned by
-  `LemonCore.Checkpoint`; channel restore is limited to the chat's own native
+  `LemonAgent.Checkpoint`; channel restore is limited to the chat's own native
   session (as bound to that chat by the router) and requires the single-use
   token issued by a fresh restore preview to the same sender, which expires
   after five minutes and is invalidated by a later change to the target files.

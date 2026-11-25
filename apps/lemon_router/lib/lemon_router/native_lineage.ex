@@ -9,13 +9,14 @@ defmodule LemonRouter.NativeLineage do
   An interrupted reservation is not retryable.
 
   Profile `node` placement is a durable-ID or unique-live-name selector. Admission
-  resolves it once via `LemonCore.NodeRegistry` (exact ID first) and seals the actual
+  resolves it once via `LemonAgent.NodeRegistry` (exact ID first) and seals the actual
   durable ID, connection PID and session generation; execution metadata carries the
   durable ID. Later checks re-resolve the same selector and fail closed on any
   change, never falling back to local.
   """
 
-  alias LemonCore.{InvocationProof, MapHelpers, NodeRegistry, ProfileStore, RunRequest, Store}
+  alias LemonCore.{InvocationProof, MapHelpers, ProfileStore, RunRequest, Store}
+  alias LemonAgent.NodeRegistry
   alias LemonRouter.Submission
 
   @table :router_run_admissions

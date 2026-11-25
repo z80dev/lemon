@@ -9,7 +9,7 @@ defmodule LemonCli.UpdateCommand do
   """
 
   alias LemonCli.CommandRegistry
-  alias LemonCore.Update.Remote
+  alias LemonCli.Update.Remote
 
   @spec run([String.t()]) :: 0 | 1 | 2
   def run(args) do

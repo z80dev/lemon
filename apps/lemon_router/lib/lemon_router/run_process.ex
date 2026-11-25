@@ -502,8 +502,8 @@ defmodule LemonRouter.RunProcess do
 
   def handle_event(:internal, {:present, event, retried?}, :presenting, state) do
     case present(state, event, retried?) do
-      :ok -> TerminalOutbox.ack(state.run_id, :presentation)
-      {:error, _} -> TerminalOutbox.failed(state.run_id, :presentation)
+      :ok -> LemonCore.Store.update_terminal_effect(state.run_id, :presentation, :done)
+      {:error, _} -> LemonCore.Store.update_terminal_effect(state.run_id, :presentation, :failed)
     end
 
     _ =
@@ -1091,7 +1091,7 @@ defmodule LemonRouter.RunProcess do
       _ = release_execution(state)
 
       if committed_execution?(phase, state.run_id) do
-        TerminalOutbox.failed(state.run_id, :presentation)
+        LemonCore.Store.update_terminal_effect(state.run_id, :presentation, :failed)
         record_termination(state, :answer_presentation_failed, reason)
       else
         record_termination(state, :run_failed, reason)

@@ -32,7 +32,8 @@ defmodule LemonCore.ConfigReloaderTest do
 
     # Ensure ConfigCache is available
     if !LemonCore.ConfigCache.available?() do
-      {:ok, _pid} = LemonCore.ConfigCache.start_link([])
+      {:ok, _pid} =
+        LemonCore.ConfigCache.start_link(load_base: &LemonCore.Config.load_base_from_disk/1)
     end
 
     if Process.whereis(LemonCore.PubSub) == nil do

@@ -3,7 +3,7 @@ defmodule LemonCore.Secrets.KeyProvider.File do
   Master key provider backed by a file on disk.
 
   Defaults to `~/.lemon/secrets_master_key`; configure another location with
-  `config :lemon_core, LemonCore.Secrets, key_file: "/etc/lemon/master_key"`
+  `config :lemon_core, :secrets, key_file: "/etc/lemon/master_key"`
   or the `:key_file` option.
 
   This is the provisioning target on platforms without a system keychain: the
@@ -85,7 +85,7 @@ defmodule LemonCore.Secrets.KeyProvider.File do
   @doc """
   Whether a replaced key file can be made durable on this host: runs the
   directory flush on the key file's directory and returns its result.
-  `LemonCore.Secrets.KeyRotation` refuses to rotate a file key without it.
+  the rotation command refuses to rotate a file key without it.
   The flush is `LemonCore.Durable.sync_directory/1` unless the
   `:directory_sync` option supplies another function.
   """

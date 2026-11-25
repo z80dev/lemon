@@ -268,11 +268,11 @@ defmodule CodingAgent.Tools.OperatorStateProtectionTest do
   describe "checkpoint restore" do
     test "a checkpoint forged through write cannot restore operator state", ctx do
       session_id = "operator-state-#{System.unique_integer([:positive])}"
-      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_id) end)
 
       config = Path.join(ctx.state, "config.toml")
       id = "chk_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
-      forged = Path.join(LemonCore.Checkpoint.checkpoint_dir(), id <> ".json")
+      forged = Path.join(LemonAgent.Checkpoint.checkpoint_dir(), id <> ".json")
 
       write(ctx.workspace, forged, forged_checkpoint(id, session_id, config, "[evil]\n"))
 
@@ -290,14 +290,14 @@ defmodule CodingAgent.Tools.OperatorStateProtectionTest do
 
     test "restore refuses operator-state roots in a checkpoint file", ctx do
       session_id = "operator-state-#{System.unique_integer([:positive])}"
-      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_id) end)
 
       config = Path.join(ctx.state, "config.toml")
       id = "chk_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
-      File.mkdir_p!(LemonCore.Checkpoint.checkpoint_dir())
+      File.mkdir_p!(LemonAgent.Checkpoint.checkpoint_dir())
 
       File.write!(
-        Path.join(LemonCore.Checkpoint.checkpoint_dir(), id <> ".json"),
+        Path.join(LemonAgent.Checkpoint.checkpoint_dir(), id <> ".json"),
         forged_checkpoint(id, session_id, config, "[evil]\n")
       )
 
@@ -317,10 +317,10 @@ defmodule CodingAgent.Tools.OperatorStateProtectionTest do
 
     test "restore refuses a root that contains operator state", ctx do
       session_id = "operator-state-#{System.unique_integer([:positive])}"
-      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_id) end)
 
       id = "chk_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
-      File.mkdir_p!(LemonCore.Checkpoint.checkpoint_dir())
+      File.mkdir_p!(LemonAgent.Checkpoint.checkpoint_dir())
 
       # An empty directory snapshot of the home directory would remove ~/.lemon.
       checkpoint =
@@ -334,7 +334,7 @@ defmodule CodingAgent.Tools.OperatorStateProtectionTest do
         })
         |> Jason.encode!()
 
-      File.write!(Path.join(LemonCore.Checkpoint.checkpoint_dir(), id <> ".json"), checkpoint)
+      File.write!(Path.join(LemonAgent.Checkpoint.checkpoint_dir(), id <> ".json"), checkpoint)
 
       assert {:error, message} =
                FsCheckpoint.execute(

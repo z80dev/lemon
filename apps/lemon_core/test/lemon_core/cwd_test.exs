@@ -34,14 +34,14 @@ defmodule LemonCore.CwdTest do
     refute File.exists?(home)
     assert Cwd.channel_default_cwd() == home
     assert File.dir?(home)
-    assert Cwd.assistant_home() == home
+    assert LemonCore.Paths.assistant_home() == home
   end
 
   test "operator runs keep the home-directory default" do
     Application.put_env(:lemon_core, @gateway_config_key, %{default_cwd: nil})
 
     assert Cwd.default_cwd() in [System.user_home(), File.cwd!()]
-    refute Cwd.default_cwd() == Cwd.assistant_home()
+    refute Cwd.default_cwd() == LemonCore.Paths.assistant_home()
   end
 
   test "a configured gateway.default_cwd wins for channel runs", %{tmp: tmp} do

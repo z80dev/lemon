@@ -23,7 +23,7 @@ defmodule CodingAgent.Tools.Browser do
   def tool(cwd, opts, spec) do
     {resolution, opts} =
       Keyword.pop_lazy(opts, :browser_provider_resolution, fn ->
-        LemonCore.BrowserProvider.resolve(opts)
+        LemonBrowser.Provider.resolve(opts)
       end)
 
     # Routing reads the selection and, when nothing is available, its reason;

@@ -650,17 +650,21 @@ defmodule CodingAgent.ControlPlaneProvider do
               end
 
             {:error, :session_not_found} ->
-              cond do
-                live_session(session_key) != nil ->
-                  {:error, :busy}
+              if live_session(session_key) != nil do
+                {:error, :busy}
+              else
+                case LemonCore.RunStore.fetch_session_index(session_key) do
+                  {:ok, nil} ->
+                    with {:ok, session} <- create_native_session(session_key, cwd) do
+                      {:ok, %{"sessionId" => session.header.id, "created" => true}}
+                    end
 
-                LemonCore.SessionLifecycle.get(session_key) != nil ->
-                  {:error, :unsupported_session}
+                  {:ok, _indexed_session} ->
+                    {:error, :unsupported_session}
 
-                true ->
-                  with {:ok, session} <- create_native_session(session_key, cwd) do
-                    {:ok, %{"sessionId" => session.header.id, "created" => true}}
-                  end
+                  {:error, _} = error ->
+                    error
+                end
               end
 
             {:error, _} = error ->

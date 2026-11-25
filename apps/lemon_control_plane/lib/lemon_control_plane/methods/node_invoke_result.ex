@@ -3,7 +3,7 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
   Handler for `node.invoke.result`.
 
   A node may complete only invocations owned by the node ID and live session of
-  its authenticated connection. The live `LemonCore.NodeRegistry` invocation is
+  its authenticated connection. The live `LemonAgent.NodeRegistry` invocation is
   the sole authority: it validates the result and delivers it to the
   invocation's recipient. Nothing is persisted here.
   """
@@ -68,7 +68,7 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
          result,
          error
        ) do
-    case LemonCore.NodeRegistry.complete_session(
+    case LemonAgent.NodeRegistry.complete_session(
            authenticated_node_id,
            connection_pid,
            generation,

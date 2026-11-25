@@ -246,7 +246,7 @@ defmodule CodingAgent.Tools.WriteTest do
       path = Path.join(tmp_dir, "checkpointed.txt")
       File.write!(path, "before")
 
-      on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
+      on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_id) end)
 
       result =
         Write.execute(

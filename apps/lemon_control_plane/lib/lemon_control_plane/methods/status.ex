@@ -70,7 +70,7 @@ defmodule LemonControlPlane.Methods.Status do
     {providers, providers_state} =
       snapshot([], fn -> LemonAgent.ModelRuntime.ProviderStatus.summary() end)
 
-    browser = LemonCore.BrowserProvider.resolve()
+    browser = LemonBrowser.Provider.resolve()
 
     {:ok,
      %{

@@ -4,7 +4,7 @@ defmodule LemonCore.Secrets.KeyLock do
   secrets master key: `LemonCore.Secrets.MasterKey.init/1`, key rotation and a
   backup restore that installs credentials.
 
-  It is a `LemonCore.Service.Lock` directory lock named
+  It is a `LemonCore.FileLock` directory lock named
   `.secrets_master_key.lock` next to the key file (`~/.lemon` by default), so
   separate CLI, Mix and runtime OS processes of one user exclude each other
   even when they use different key providers or different stores: the
@@ -58,7 +58,7 @@ defmodule LemonCore.Secrets.KeyLock do
         wait = KeyProvider.option(opts, :key_lock_wait_ms, @default_wait_ms)
 
         result =
-          LemonCore.Service.Lock.with_lock_path(path, [timeout: wait], fn ->
+          LemonCore.FileLock.with_lock_path(path, [timeout: wait], fn ->
             Process.put(@held, MapSet.put(held, path))
 
             try do

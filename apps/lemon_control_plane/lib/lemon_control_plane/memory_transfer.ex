@@ -9,7 +9,8 @@ defmodule LemonControlPlane.MemoryTransfer do
   """
 
   alias LemonControlPlane.Protocol.Errors
-  alias LemonCore.{JSONPayload, NodeRegistry, ProfileStore, Store}
+  alias LemonCore.{JSONPayload, ProfileStore, Store}
+  alias LemonAgent.NodeRegistry
   alias LemonSkills.ProfileMemoryTransfer
 
   @table :control_memory_transfers

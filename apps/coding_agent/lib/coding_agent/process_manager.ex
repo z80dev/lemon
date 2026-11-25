@@ -16,7 +16,7 @@ defmodule CodingAgent.ProcessManager do
   use DynamicSupervisor
 
   alias CodingAgent.{ProcessSession, ProcessStore}
-  alias LemonCore.{TerminalBackendPolicy, TerminalBackends}
+  alias CodingAgent.{TerminalBackendPolicy, TerminalBackends}
 
   # Default max log lines (used by ProcessSession)
 

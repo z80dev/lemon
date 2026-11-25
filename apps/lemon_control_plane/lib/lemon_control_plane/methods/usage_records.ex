@@ -9,7 +9,7 @@ defmodule LemonControlPlane.Methods.UsageRecords do
   def scopes, do: [:read]
   @impl true
   def handle(params, _ctx) do
-    case LemonCore.UsageStore.records(params) do
+    case LemonControlPlane.UsageRecords.query(params) do
       {:ok, page} ->
         {:ok,
          %{

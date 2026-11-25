@@ -14,7 +14,7 @@ defmodule CodingAgent.Tools.FsCheckpointTest do
     path = Path.join(tmp_dir, "file.txt")
     File.write!(path, "before\n")
 
-    on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
+    on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_id) end)
 
     {:ok, checkpoint} =
       Checkpoint.create_filesystem(session_id, [path], cwd: tmp_dir, tool: "test")
@@ -39,7 +39,7 @@ defmodule CodingAgent.Tools.FsCheckpointTest do
       execute(tmp_dir, %{"action" => "delete", "checkpoint_id" => checkpoint.id}, session_id)
 
     assert delete.details.deleted
-    refute LemonCore.Checkpoint.exists?(checkpoint.id)
+    refute LemonAgent.Checkpoint.exists?(checkpoint.id)
   end
 
   test "traversal and absolute checkpoint ids are rejected and touch nothing", %{
@@ -81,7 +81,7 @@ defmodule CodingAgent.Tools.FsCheckpointTest do
       })
     )
 
-    up = String.duplicate("../", length(Path.split(LemonCore.Checkpoint.checkpoint_dir())))
+    up = String.duplicate("../", length(Path.split(LemonAgent.Checkpoint.checkpoint_dir())))
     traversal = up <> String.trim_leading(Path.rootname(forged), "/")
     absolute = Path.rootname(forged)
 
@@ -96,10 +96,10 @@ defmodule CodingAgent.Tools.FsCheckpointTest do
     end
 
     for id <- [traversal, absolute] do
-      assert {:error, :not_found} = LemonCore.Checkpoint.load(id)
-      assert {:error, :not_found} = LemonCore.Checkpoint.restore_filesystem(id, session_id)
-      assert {:error, :not_found} = LemonCore.Checkpoint.delete(id, session_id)
-      refute LemonCore.Checkpoint.exists?(id)
+      assert {:error, :not_found} = LemonAgent.Checkpoint.load(id)
+      assert {:error, :not_found} = LemonAgent.Checkpoint.restore_filesystem(id, session_id)
+      assert {:error, :not_found} = LemonAgent.Checkpoint.delete(id, session_id)
+      refute LemonAgent.Checkpoint.exists?(id)
     end
 
     assert File.read!(target) == "current\n"
@@ -114,7 +114,7 @@ defmodule CodingAgent.Tools.FsCheckpointTest do
     path = Path.join(tmp_dir, "owned.txt")
     File.write!(path, "before\n")
 
-    on_exit(fn -> LemonCore.Checkpoint.delete_all(owner) end)
+    on_exit(fn -> LemonAgent.Checkpoint.delete_all(owner) end)
 
     {:ok, checkpoint} = Checkpoint.create_filesystem(owner, [path], cwd: tmp_dir, tool: "test")
     File.write!(path, "after\n")
@@ -130,7 +130,7 @@ defmodule CodingAgent.Tools.FsCheckpointTest do
     refute Map.has_key?(CheckpointTool.tool(tmp_dir).parameters["properties"], "session_id")
 
     assert File.read!(path) == "after\n"
-    assert LemonCore.Checkpoint.exists?(checkpoint.id)
+    assert LemonAgent.Checkpoint.exists?(checkpoint.id)
 
     assert {:error, "fs_checkpoint requires a current session"} =
              CheckpointTool.execute("call_1", %{"action" => "list"}, nil, nil, tmp_dir, [])
@@ -148,12 +148,12 @@ defmodule CodingAgent.Tools.FsCheckpointTest do
     File.write!(path, "inside\n")
     File.write!(outside, "outside\n")
 
-    on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
+    on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_id) end)
 
     {:ok, checkpoint} =
       Checkpoint.create_filesystem(session_id, [path], cwd: tmp_dir, tool: "test")
 
-    file = Path.join(LemonCore.Checkpoint.checkpoint_dir(), checkpoint.id <> ".json")
+    file = Path.join(LemonAgent.Checkpoint.checkpoint_dir(), checkpoint.id <> ".json")
     stored = Jason.decode!(File.read!(file))
 
     evil = %{
@@ -202,7 +202,7 @@ defmodule CodingAgent.Tools.FsCheckpointTest do
     path = Path.join(tmp_dir, "edit.txt")
     File.write!(path, "alpha\nbeta\n")
 
-    on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
+    on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_id) end)
 
     result =
       Edit.execute(
@@ -226,7 +226,7 @@ defmodule CodingAgent.Tools.FsCheckpointTest do
     path = Path.join(tmp_dir, "patch.txt")
     File.write!(path, "before\n")
 
-    on_exit(fn -> LemonCore.Checkpoint.delete_all(session_id) end)
+    on_exit(fn -> LemonAgent.Checkpoint.delete_all(session_id) end)
 
     patch = "*** Begin Patch\n*** Update File: patch.txt\n@@\n-before\n+after\n*** End Patch\n"
 

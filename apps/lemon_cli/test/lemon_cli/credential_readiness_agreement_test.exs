@@ -40,11 +40,11 @@ defmodule LemonCli.CredentialReadinessAgreementTest do
       @ambient ++ Enum.flat_map(ProviderNames.all_canonical_names(), &ProviderNames.env_vars/1)
 
     previous_env = Map.new(names, &{&1, System.get_env(&1)})
-    previous_settings = Map.new([Secrets, :paths], &{&1, Application.fetch_env(:lemon_core, &1)})
+    previous_settings = Map.new([:secrets, :paths], &{&1, Application.fetch_env(:lemon_core, &1)})
     Enum.each(previous_env, fn {name, _} -> System.delete_env(name) end)
     System.put_env("HOME", home)
     Application.put_env(:lemon_core, :paths, home_dir: home)
-    Application.put_env(:lemon_core, Secrets, key_providers: [:file], key_file: key_a)
+    Application.put_env(:lemon_core, :secrets, key_providers: [:file], key_file: key_a)
 
     store =
       start_supervised!(%{
@@ -197,7 +197,7 @@ defmodule LemonCli.CredentialReadinessAgreementTest do
     name = write_config(ctx, "openai", ~s(api_key_secret = "agreement_openai"))
     assert_agree(ctx, name, true, "decryptable")
 
-    Application.put_env(:lemon_core, Secrets, key_providers: [:file], key_file: ctx.key_b)
+    Application.put_env(:lemon_core, :secrets, key_providers: [:file], key_file: ctx.key_b)
     assert {:error, _} = Secrets.get("agreement_openai")
 
     assert Credentials.credential_readiness(
@@ -230,7 +230,7 @@ defmodule LemonCli.CredentialReadinessAgreementTest do
 
     traced = [
       LemonCore.Secrets.Crypto,
-      LemonCore.Secrets.KeyRotation,
+      LemonCli.Secrets.KeyRotation,
       LemonCore.Secrets.External,
       LemonCore.Secrets.Usage,
       LemonAi.Auth.OAuthSecretResolver,

@@ -247,7 +247,7 @@ defmodule LemonCore.ProviderIdentity do
   defp builtin_name?(dashed) do
     normalized = String.replace(dashed, "-", "_")
 
-    normalized in ["omp", "omp_gateway", "omp_auth_gateway"] or
+    LemonCore.Config.Providers.AuthExtension.call(:public_provider?, [dashed], false) or
       Enum.any?(@providers, fn {canonical, meta} ->
         normalized in [canonical, String.replace(meta.config_name, "-", "_")] or
           normalized in Enum.map(meta.aliases, &String.replace(&1, "-", "_"))

@@ -15,9 +15,9 @@ defmodule LemonControlPlane.Methods.CommandsListTest do
     File.mkdir_p!(Path.join(workspace, ".lemon/commands"))
 
     previous = Map.new(~w(LEMON_AGENT_DIR HOME), &{&1, System.get_env(&1)})
-    previous_agent_dir = Application.fetch_env(:coding_agent, :agent_dir)
+    previous_agent_dir = Application.fetch_env(:lemon_core, :agent_dir)
     System.delete_env("LEMON_AGENT_DIR")
-    Application.put_env(:coding_agent, :agent_dir, agent_dir)
+    Application.put_env(:lemon_core, :agent_dir, agent_dir)
     System.put_env("HOME", home)
 
     on_exit(fn ->
@@ -27,8 +27,8 @@ defmodule LemonControlPlane.Methods.CommandsListTest do
       end)
 
       case previous_agent_dir do
-        {:ok, value} -> Application.put_env(:coding_agent, :agent_dir, value)
-        :error -> Application.delete_env(:coding_agent, :agent_dir)
+        {:ok, value} -> Application.put_env(:lemon_core, :agent_dir, value)
+        :error -> Application.delete_env(:lemon_core, :agent_dir)
       end
 
       File.rm_rf!(root)

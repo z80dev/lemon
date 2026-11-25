@@ -10,7 +10,7 @@ defmodule LemonCli.MigrateCommand do
   conflicts unless `--overwrite` is set, and asks before writing unless `--yes`
   is set. Apply and rollback run offline: they refuse while a Lemon runtime
   uses the target and hold the restore lifecycle locks throughout. Apply first
-  takes a `LemonCore.Backup` bundle of the Lemon home (credential material
+  takes a `LemonCli.Backup` bundle of the Lemon home (credential material
   excluded) unless `--no-backup` is set.
   Omitted `--overwrite` and `--yes` flags are false: conflicts still fail
   closed, and declining confirmation leaves the destination untouched.

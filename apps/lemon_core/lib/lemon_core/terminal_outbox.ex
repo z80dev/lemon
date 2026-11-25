@@ -13,7 +13,6 @@ defmodule LemonCore.TerminalOutbox do
   @batch_size 8
   @interval_ms 5_000
   @live_grace_ms 30_000
-  @max_auto_attempts 8
 
   def start_link(opts),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -22,16 +21,7 @@ defmodule LemonCore.TerminalOutbox do
   def decision(server \\ Store, run_id), do: Store.fetch(server, :run_terminals, run_id)
 
   @doc "Read the committed replay source while an effect remains unacknowledged."
-  def pending(server \\ Store, run_id) do
-    with {:ok, %{digest: digest}} <- decision(server, run_id),
-         {:ok, row} <- Store.fetch(server, @table, run_id) do
-      case row do
-        %{digest: ^digest} -> {:ok, row}
-        nil -> {:ok, nil}
-        _ -> {:error, :invalid_terminal_payload}
-      end
-    end
-  end
+  def pending(server \\ Store, run_id), do: Store.terminal_pending(server, run_id)
 
   @doc "Read effect status and retry counts without exposing the replay payload."
   def delivery_status(run_id) do
@@ -71,7 +61,7 @@ defmodule LemonCore.TerminalOutbox do
         end
 
       error ->
-        _ = failed(server, run_id, :projections)
+        _ = Store.update_terminal_effect(server, run_id, :projections, :failed)
         error
     end
   end
@@ -143,53 +133,6 @@ defmodule LemonCore.TerminalOutbox do
   end
 
   @doc false
-  def ack(server \\ Store, run_id, effect), do: update(server, run_id, effect, :done, 3)
-
-  @doc false
-  def failed(server \\ Store, run_id, effect), do: update(server, run_id, effect, :failed, 3)
-
-  defp update(_server, _run_id, _effect, _status, 0), do: {:error, :concurrent_update}
-
-  defp update(server, run_id, effect, status, remaining) do
-    case pending(server, run_id) do
-      {:ok, row} when is_map(row) ->
-        replacement =
-          case {Map.fetch!(row, effect), status} do
-            {:done, _} -> row
-            {_, :failed} -> row |> Map.put(effect, :failed) |> count_failure(effect)
-            {_, :done} -> Map.put(row, effect, :done)
-          end
-
-        result =
-          if Enum.all?([:notification, :projections, :presentation], &(replacement[&1] == :done)) do
-            Store.compare_and_delete(server, @table, run_id, row)
-          else
-            if replacement == row,
-              do: :ok,
-              else:
-                Store.compare_and_swap(server, @table, run_id, row, replacement, durable: true)
-          end
-
-        case result do
-          {:error, :mismatch} -> update(server, run_id, effect, status, remaining - 1)
-          other -> other
-        end
-
-      {:ok, nil} ->
-        :ok
-
-      error ->
-        error
-    end
-  end
-
-  defp count_failure(row, effect) do
-    counts = Map.get(row, :failures, %{})
-    count = min(Map.get(counts, effect, 0) + 1, @max_auto_attempts)
-    Map.put(row, :failures, Map.put(counts, effect, count))
-  end
-
-  @doc false
   def publish(server \\ Store, run_id, %Event{type: :run_completed, ts_ms: ts_ms}) do
     with_pending(server, run_id, &publish_pending(server, run_id, &1, ts_ms))
   end
@@ -204,7 +147,8 @@ defmodule LemonCore.TerminalOutbox do
     with {:ok, %{attempt_id: attempt_id}} <- decision(server, run_id),
          event = completion_event(run_id, summary, ts_ms),
          :ok <- Bus.publish_run_lifecycle(Event.identify_run(event, run_id, attempt_id)) do
-      _ = ack(server, run_id, :notification)
+      # Publishing succeeded; if acknowledging fails replay can duplicate it.
+      _ = Store.update_terminal_effect(server, run_id, :notification, :done)
       :ok
     end
   end
@@ -289,14 +233,14 @@ defmodule LemonCore.TerminalOutbox do
 
   defp retryable?(row, effect) do
     Map.fetch!(row, effect) != :done and
-      Map.get(Map.get(row, :failures, %{}), effect, 0) < @max_auto_attempts
+      Map.get(Map.get(row, :failures, %{}), effect, 0) < Store.terminal_effect_retry_limit()
   end
 
   defp repair_presentation(server, run_id, record) do
     case Application.get_env(:lemon_core, :terminal_presentation_replayer) do
       {module, function} ->
         case apply(module, function, [run_id, record]) do
-          :ok -> ack(server, run_id, :presentation)
+          :ok -> Store.update_terminal_effect(server, run_id, :presentation, :done)
           :busy -> {:error, :presentation_busy}
           {:error, _} -> presentation_failed(server, run_id)
         end
@@ -311,7 +255,7 @@ defmodule LemonCore.TerminalOutbox do
   end
 
   defp presentation_failed(server, run_id) do
-    _ = failed(server, run_id, :presentation)
+    _ = Store.update_terminal_effect(server, run_id, :presentation, :failed)
     {:error, :presentation_failed}
   end
 end

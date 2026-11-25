@@ -4,7 +4,8 @@ defmodule LemonControlPlane.Methods.NodeProcessTest do
   alias LemonControlPlane.{NodeIO, NodeStore}
   alias LemonControlPlane.Methods.{NodeProcessSupport, Registry}
   alias LemonControlPlane.Protocol.Schemas
-  alias LemonCore.{NodeRegistry, Store}
+  alias LemonCore.Store
+  alias LemonAgent.NodeRegistry
 
   @receipt_fields ~w(processId nodeId state exitCode stdoutBase64 stderrBase64 outputTruncated)
 

@@ -1,0 +1,1889 @@
+defmodule LemonCli.Update.RemoteTest do
+  use ExUnit.Case, async: false
+
+  alias LemonCli.Update.FixtureServer
+  alias LemonCli.Update.Remote
+
+  setup do
+    path = LemonCore.Paths.global_config()
+    previous = File.read(path)
+    grant_private_mirror!([])
+
+    on_exit(fn ->
+      case previous do
+        {:ok, contents} -> File.write!(path, contents)
+        _ -> File.rm(path)
+      end
+    end)
+
+    :ok
+  end
+
+  @moduletag :tmp_dir
+
+  defp manifest(version, artifacts, schema \\ 2) do
+    Jason.encode!(%{
+      "schema" => schema,
+      "version" => version,
+      "channel" => "stable",
+      "commit" => "deadbeef",
+      "built_at" => "2026-08-16T00:00:00Z",
+      "otp" => "28",
+      "elixir" => "1.19.0",
+      "artifacts" => artifacts
+    })
+  end
+
+  defp artifact(file, profile, platform, sha256, size) do
+    %{
+      "file" => file,
+      "profile" => profile,
+      "platform" => platform,
+      "os" => "linux",
+      "arch" => "x86_64",
+      "sha256" => sha256,
+      "size" => size
+    }
+  end
+
+  defp build_fixture_tarball(tmp_dir, version \\ "2099.01.0", extra_files \\ %{}) do
+    src = Path.join(tmp_dir, "src")
+    File.mkdir_p!(Path.join(src, "bin"))
+
+    write_executable!(
+      Path.join(src, "bin/lemon"),
+      fixture_launcher(version)
+    )
+
+    Enum.each(extra_files, fn {relative, contents} ->
+      path = Path.join(src, relative)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, contents)
+    end)
+
+    tarball = Path.join(tmp_dir, "artifact.tar.gz")
+    {_output, 0} = System.cmd("tar", ["-czf", tarball, "-C", src, "."])
+
+    digest(tarball)
+  end
+
+  # A tarball shaped like a release but missing the executable bit on its
+  # launcher — the staged tree must never be promoted.
+  defp build_unusable_tarball(tmp_dir) do
+    src = Path.join(tmp_dir, "bad-src")
+    File.mkdir_p!(Path.join(src, "bin"))
+    File.write!(Path.join(src, "bin/lemon"), "#!/bin/sh\necho hi\n")
+    tarball = Path.join(tmp_dir, "bad-artifact.tar.gz")
+    {_output, 0} = System.cmd("tar", ["-czf", tarball, "-C", src, "."])
+
+    digest(tarball)
+  end
+
+  defp build_unusable_tui_tarball(tmp_dir) do
+    src = Path.join(tmp_dir, "bad-tui-src")
+    File.mkdir_p!(Path.join(src, "tui/bin"))
+    File.write!(Path.join(src, "tui/bin/lemon-tui"), "#!/bin/sh\necho tui\n")
+    tarball = Path.join(tmp_dir, "bad-tui-artifact.tar.gz")
+    {_output, 0} = System.cmd("tar", ["-czf", tarball, "-C", src, "tui"])
+
+    digest(tarball)
+  end
+
+  defp write_executable!(path, contents) do
+    File.write!(path, contents)
+    File.chmod!(path, 0o755)
+  end
+
+  # The TUI ships a single top-level tui/ directory so it can be unpacked over
+  # the runtime's staging directory without colliding with bin/ or lib/.
+  defp build_fixture_tui_tarball(tmp_dir) do
+    src = Path.join(tmp_dir, "tui-src")
+    File.mkdir_p!(Path.join(src, "tui/bin"))
+    write_executable!(Path.join(src, "tui/bin/lemon-tui"), "#!/bin/sh\necho tui\n")
+    tarball = Path.join(tmp_dir, "tui-artifact.tar.gz")
+    {_output, 0} = System.cmd("tar", ["-czf", tarball, "-C", src, "tui"])
+
+    digest(tarball)
+  end
+
+  defp digest(tarball) do
+    bytes = File.read!(tarball)
+    sha256 = :sha256 |> :crypto.hash(bytes) |> Base.encode16(case: :lower)
+    {bytes, sha256, byte_size(bytes)}
+  end
+
+  defp start_server(router) do
+    {:ok, base_url, socket} = FixtureServer.start(router)
+    on_exit(fn -> :gen_tcp.close(socket) end)
+    base_url
+  end
+
+  defp manifest_router(body) do
+    fn
+      "/releases/latest/download/manifest.json" -> {:redirect, "/manifest-body.json"}
+      "/manifest-body.json" -> {200, "application/json", body}
+      _ -> {404, "text/plain", "not found"}
+    end
+  end
+
+  defp artifact_router(manifest_body, path, bytes) do
+    downloads_router(manifest_body, %{path => bytes})
+  end
+
+  defp downloads_router(manifest_body, downloads) do
+    fn
+      "/releases/latest/download/manifest.json" ->
+        {:redirect, "/manifest-body.json"}
+
+      "/manifest-body.json" ->
+        {200, "application/json", manifest_body}
+
+      path ->
+        case Map.fetch(downloads, path) do
+          {:ok, bytes} -> {200, "application/gzip", bytes}
+          :error -> {404, "text/plain", "not found"}
+        end
+    end
+  end
+
+  defp install_layout(tmp_dir, release_version) do
+    home = Path.join(tmp_dir, "home")
+    state = Path.join(home, ".lemon")
+    release_root = Path.join([state, "versions", release_version])
+    File.mkdir_p!(Path.join(release_root, "bin"))
+
+    write_executable!(
+      Path.join(release_root, "bin/lemon"),
+      fixture_launcher(release_version)
+    )
+
+    File.ln_s!(release_version, Path.join([state, "versions", "current"]))
+    grant_private_mirror!(home_dir: home)
+    {home, state, release_root}
+  end
+
+  # The fixture servers listen on loopback, which only an explicit operator
+  # `[update] private_mirror = true` admits.
+  defp grant_private_mirror!(paths_opts, contents \\ "[update]\nprivate_mirror = true\n") do
+    path = LemonCore.Paths.global_config(paths_opts)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, contents)
+  end
+
+  defp remote_opts(base_url, home, release_root) do
+    [
+      base_url: base_url,
+      channel: "stable",
+      platform: "test-platform",
+      profile: "test_profile",
+      paths_opts: [home_dir: home],
+      release_root: release_root,
+      current_version: Path.basename(release_root)
+    ]
+  end
+
+  defp fixture_launcher(version, snapshot \\ "stopped", restart_status \\ 0) do
+    """
+    #!/bin/sh
+    [ -z "${RELEASE_ROOT:-}${RELEASE_VSN:-}${RELEASE_NAME:-}" ] || exit 91
+    case "$1:$2" in
+      version:) echo #{version} ;;
+      __update-daemon:snapshot) echo #{snapshot} ;;
+      __update-daemon:restart)
+        root="$(cd "$(dirname "$0")/.." && pwd -P)"
+        state="$(dirname "$(dirname "$root")")"
+        selected="$(cd "$root/../current" && pwd -P)"
+        [ "$root" = "$selected" ] || exit 92
+        [ "$3" = "#{snapshot}" ] || exit 93
+        [ -x "$4/bin/lemon" ] || exit 94
+        [ -d "$state/updates/receipts" ] || exit 95
+        printf '%s\\n' "#{version}" >> "$state/restarts"
+        exit #{restart_status}
+        ;;
+      *) exit 96 ;;
+    esac
+    """
+  end
+
+  defp lifecycle_fixture(tmp_dir, snapshot, new_status \\ 0, old_status \\ 0) do
+    {bytes, sha256, size} =
+      build_fixture_tarball(tmp_dir, "2099.01.0", %{
+        "bin/lemon" => fixture_launcher("2099.01.0", snapshot, new_status)
+      })
+
+    artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+    body = manifest("2099.01.0", artifacts)
+
+    base_url =
+      start_server(artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", bytes))
+
+    {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+    write_executable!(
+      Path.join(release_root, "bin/lemon"),
+      fixture_launcher("2020.01.0", snapshot, old_status)
+    )
+
+    {remote_opts(base_url, home, release_root), state}
+  end
+
+  defp rollback_opts(opts, state, receipt) do
+    opts
+    |> Keyword.put(:release_root, Path.join([state, "versions", "2099.01.0"]))
+    |> Keyword.put(:current_version, "2099.01.0")
+    |> Keyword.put(:receipt, receipt["id"])
+    |> Keyword.put(:confirm, receipt["rollback_digest"])
+  end
+
+  defp apply_confirmed(opts) do
+    opts = Keyword.put_new(opts, :current_version, Path.basename(opts[:release_root]))
+
+    with {:ok, plan} <- Remote.plan(opts) do
+      Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+    end
+  end
+
+  defp tree_fingerprint(root) do
+    case File.lstat(root) do
+      {:ok, %File.Stat{type: :directory, mode: mode}} ->
+        children =
+          root
+          |> File.ls!()
+          |> Enum.sort()
+          |> Enum.flat_map(&tree_fingerprint_entry(Path.join(root, &1), &1))
+
+        [{".", :directory, Bitwise.band(mode, 0o777)} | children]
+
+      {:error, :enoent} ->
+        :missing
+    end
+  end
+
+  defp tree_fingerprint_entry(path, relative) do
+    case File.lstat!(path) do
+      %File.Stat{type: :directory, mode: mode} ->
+        children =
+          path
+          |> File.ls!()
+          |> Enum.sort()
+          |> Enum.flat_map(fn child ->
+            tree_fingerprint_entry(Path.join(path, child), Path.join(relative, child))
+          end)
+
+        [{relative, :directory, Bitwise.band(mode, 0o777)} | children]
+
+      %File.Stat{type: :regular, mode: mode} ->
+        [{relative, :regular, Bitwise.band(mode, 0o777), digest_bytes(File.read!(path))}]
+
+      %File.Stat{type: :symlink} ->
+        [{relative, :symlink, File.read_link!(path)}]
+
+      %File.Stat{type: type} ->
+        [{relative, type}]
+    end
+  end
+
+  defp digest_bytes(bytes), do: :sha256 |> :crypto.hash(bytes) |> Base.encode16(case: :lower)
+
+  describe "check/1" do
+    test "update artifact host overrides the shared installer host without app config" do
+      names = ~w(LEMON_UPDATE_BASE_URL LEMON_INSTALL_BASE_URL)
+      previous = Map.take(System.get_env(), names)
+
+      on_exit(fn ->
+        Enum.each(names, &System.delete_env/1)
+        System.put_env(previous)
+      end)
+
+      installer = start_server(manifest_router(manifest("2098.01.0", [])))
+      updater = start_server(manifest_router(manifest("2099.01.0", [])))
+      System.put_env("LEMON_INSTALL_BASE_URL", installer)
+      System.put_env("LEMON_UPDATE_BASE_URL", updater)
+
+      assert {:ok, %{latest: "2099.01.0"}} = Remote.check(channel: "stable")
+      assert {:ok, %{latest: "2098.01.0"}} = Remote.check(base_url: installer, channel: "stable")
+
+      System.delete_env("LEMON_UPDATE_BASE_URL")
+      assert {:ok, %{latest: "2098.01.0"}} = Remote.check(channel: "stable")
+    end
+
+    test "rejects a manifest that does not declare schema 2" do
+      body = manifest("2020.01.0", [], 1)
+      base_url = start_server(manifest_router(body))
+
+      assert {:error, {:unsupported_manifest_schema, 1}} =
+               Remote.check(base_url: base_url, channel: "stable")
+    end
+
+    test "rejects a manifest with no schema field at all" do
+      base_url = start_server(manifest_router(Jason.encode!(%{"version" => "2020.01.0"})))
+
+      assert {:error, :missing_manifest_schema} =
+               Remote.check(base_url: base_url, channel: "stable")
+    end
+
+    test "selects the artifact matching the given platform and profile" do
+      artifacts = [
+        artifact("lemon-a.tar.gz", "lemon_runtime_full", "linux-x86_64", "aa", 10),
+        artifact("lemon-b.tar.gz", "lemon_runtime_min", "linux-x86_64", "bb", 10),
+        artifact("lemon-c.tar.gz", "lemon_runtime_full", "darwin-arm64", "cc", 10)
+      ]
+
+      base_url = start_server(manifest_router(manifest("2099.01.0", artifacts)))
+      opts = [base_url: base_url, channel: "stable"]
+
+      assert {:ok, %{artifact: %{"file" => "lemon-a.tar.gz"}}} =
+               Remote.check(opts ++ [platform: "linux-x86_64", profile: "lemon_runtime_full"])
+
+      assert {:ok, %{artifact: %{"file" => "lemon-b.tar.gz"}}} =
+               Remote.check(opts ++ [platform: "linux-x86_64", profile: "lemon_runtime_min"])
+
+      assert {:ok, %{artifact: %{"file" => "lemon-c.tar.gz"}}} =
+               Remote.check(opts ++ [platform: "darwin-arm64", profile: "lemon_runtime_full"])
+
+      assert {:ok, %{artifact: nil}} =
+               Remote.check(opts ++ [platform: "linux-arm64", profile: "lemon_runtime_full"])
+    end
+
+    test "reports the TUI artifact for the same platform alongside the runtime" do
+      artifacts = [
+        artifact("lemon-a.tar.gz", "lemon_runtime_full", "linux-x86_64", "aa", 10),
+        artifact("lemon-tui-x86.tar.gz", "lemon_tui", "linux-x86_64", "bb", 10),
+        artifact("lemon-tui-arm.tar.gz", "lemon_tui", "linux-arm64", "cc", 10)
+      ]
+
+      base_url = start_server(manifest_router(manifest("2099.01.0", artifacts)))
+
+      assert {:ok, %{artifact: %{"file" => "lemon-a.tar.gz"}, tui_artifact: tui}} =
+               Remote.check(
+                 base_url: base_url,
+                 channel: "stable",
+                 platform: "linux-x86_64",
+                 profile: "lemon_runtime_full"
+               )
+
+      assert tui["file"] == "lemon-tui-x86.tar.gz"
+    end
+
+    test "tui_artifact is nil when the release publishes no TUI" do
+      artifacts = [artifact("lemon-a.tar.gz", "lemon_runtime_full", "linux-x86_64", "aa", 10)]
+      base_url = start_server(manifest_router(manifest("2099.01.0", artifacts)))
+
+      assert {:ok, %{artifact: %{"file" => "lemon-a.tar.gz"}, tui_artifact: nil}} =
+               Remote.check(
+                 base_url: base_url,
+                 channel: "stable",
+                 platform: "linux-x86_64",
+                 profile: "lemon_runtime_full"
+               )
+    end
+
+    test "LEMON_NO_TUI=1 opts out of the TUI artifact, as it does in the installer" do
+      env = LemonPlatformTest.Testing.HermeticEnv.snapshot_env(["LEMON_NO_TUI"])
+      on_exit(fn -> LemonPlatformTest.Testing.HermeticEnv.restore_env(env) end)
+      System.put_env("LEMON_NO_TUI", "1")
+
+      artifacts = [
+        artifact("lemon-a.tar.gz", "lemon_runtime_full", "linux-x86_64", "aa", 10),
+        artifact("lemon-tui.tar.gz", "lemon_tui", "linux-x86_64", "bb", 10)
+      ]
+
+      base_url = start_server(manifest_router(manifest("2099.01.0", artifacts)))
+
+      assert {:ok, %{artifact: %{"file" => "lemon-a.tar.gz"}, tui_artifact: nil}} =
+               Remote.check(
+                 base_url: base_url,
+                 channel: "stable",
+                 platform: "linux-x86_64",
+                 profile: "lemon_runtime_full"
+               )
+    end
+
+    test "update_available? is false when the manifest carries no version" do
+      base_url = start_server(manifest_router(Jason.encode!(%{"schema" => 2, "artifacts" => []})))
+
+      assert {:ok, %{update_available?: false, latest: nil}} =
+               Remote.check(base_url: base_url, channel: "stable")
+    end
+
+    test "update_available? is true when the manifest version is newer than current" do
+      current = LemonCore.BuildInfo.version()
+      artifacts = [artifact("pkg.tar.gz", "p", "linux-x86_64", "aa", 1)]
+      base_url = start_server(manifest_router(manifest("~#{current}~newer", artifacts)))
+
+      assert {:ok, %{update_available?: true}} =
+               Remote.check(
+                 base_url: base_url,
+                 channel: "stable",
+                 platform: "linux-x86_64",
+                 profile: "p"
+               )
+    end
+
+    test "a non-stable channel without a pin is rejected before any request is made" do
+      assert {:error, {:channel_requires_pin, "preview"}} =
+               Remote.check(base_url: "http://127.0.0.1:1", channel: "preview")
+    end
+  end
+
+  describe "apply/1 — layout guard" do
+    test "refuses to run when the release root is not under <state>/versions/", %{
+      tmp_dir: tmp_dir
+    } do
+      home = Path.join(tmp_dir, "home")
+
+      opts = [
+        base_url: "http://127.0.0.1:1",
+        channel: "stable",
+        paths_opts: [home_dir: home],
+        release_root: "/opt/lemon/current"
+      ]
+
+      assert {:error, :unsupported_layout} = apply_confirmed(opts)
+    end
+  end
+
+  describe "apply/1 — checksum" do
+    test "rejects a checksum mismatch and deletes the partial download", %{tmp_dir: tmp_dir} do
+      {bytes, _sha256, size} = build_fixture_tarball(tmp_dir)
+
+      artifacts = [
+        artifact("pkg.tar.gz", "test_profile", "test-platform", String.duplicate("0", 64), size)
+      ]
+
+      body = manifest("2099.01.0", artifacts)
+
+      router = artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", bytes)
+      base_url = start_server(router)
+
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      opts = [
+        base_url: base_url,
+        channel: "stable",
+        platform: "test-platform",
+        profile: "test_profile",
+        paths_opts: [home_dir: home],
+        release_root: release_root
+      ]
+
+      assert {:error, {:checksum_mismatch, _}} = apply_confirmed(opts)
+      refute File.exists?(Path.join([state, "tmp", "pkg.tar.gz"]))
+      refute File.dir?(Path.join([state, "versions", "2099.01.0"]))
+    end
+
+    test "a bad TUI checksum aborts the whole update, staging neither half", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      {tui_bytes, _tui_sha, tui_size} = build_fixture_tui_tarball(tmp_dir)
+
+      artifacts = [
+        artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size),
+        artifact("tui.tar.gz", "lemon_tui", "test-platform", String.duplicate("0", 64), tui_size)
+      ]
+
+      router =
+        downloads_router(manifest("2099.01.0", artifacts), %{
+          "/releases/download/v2099.01.0/pkg.tar.gz" => bytes,
+          "/releases/download/v2099.01.0/tui.tar.gz" => tui_bytes
+        })
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      opts = [
+        base_url: base_url,
+        channel: "stable",
+        platform: "test-platform",
+        profile: "test_profile",
+        paths_opts: [home_dir: home],
+        release_root: release_root
+      ]
+
+      assert {:error, {:checksum_mismatch, _}} = apply_confirmed(opts)
+
+      versions_dir = Path.join(state, "versions")
+      refute File.dir?(Path.join(versions_dir, "2099.01.0"))
+      refute File.exists?(Path.join(versions_dir, "2099.01.0.partial"))
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join(versions_dir, "current"))
+
+      # The verified runtime tarball is discarded too — nothing is left staged.
+      refute File.exists?(Path.join([state, "tmp", "pkg.tar.gz"]))
+      refute File.exists?(Path.join([state, "tmp", "tui.tar.gz"]))
+    end
+  end
+
+  describe "apply/1 — staging safety" do
+    test "refuses to promote a tarball whose bin/lemon is not executable", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_unusable_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+
+      router =
+        artifact_router(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          bytes
+        )
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      assert {:error, {:incomplete_release, "bin/lemon"}} =
+               apply_confirmed(remote_opts(base_url, home, release_root))
+
+      versions_dir = Path.join(state, "versions")
+      refute File.exists?(Path.join(versions_dir, "2099.01.0"))
+      refute File.exists?(Path.join(versions_dir, "2099.01.0.partial"))
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join(versions_dir, "current"))
+      assert File.ls!(Path.join(state, "tmp")) == []
+    end
+
+    test "refuses to promote when the staged TUI is not executable", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      {tui_bytes, tui_sha, tui_size} = build_unusable_tui_tarball(tmp_dir)
+
+      artifacts = [
+        artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size),
+        artifact("tui.tar.gz", "lemon_tui", "test-platform", tui_sha, tui_size)
+      ]
+
+      router =
+        downloads_router(manifest("2099.01.0", artifacts), %{
+          "/releases/download/v2099.01.0/pkg.tar.gz" => bytes,
+          "/releases/download/v2099.01.0/tui.tar.gz" => tui_bytes
+        })
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      assert {:error, {:incomplete_release, "tui/bin/lemon-tui"}} =
+               apply_confirmed(remote_opts(base_url, home, release_root))
+
+      versions_dir = Path.join(state, "versions")
+      refute File.exists?(Path.join(versions_dir, "2099.01.0"))
+      refute File.exists?(Path.join(versions_dir, "2099.01.0.partial"))
+      assert File.ls!(Path.join(state, "tmp")) == []
+    end
+
+    test "keeps an existing usable install of the same version instead of re-extracting it", %{
+      tmp_dir: tmp_dir
+    } do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+
+      router =
+        artifact_router(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          bytes
+        )
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      # The target version is already on disk and usable — the directory
+      # `current` would point at. Deleting it to make room is the failure mode
+      # this guards.
+      versions_dir = Path.join(state, "versions")
+      existing = Path.join(versions_dir, "2099.01.0")
+      File.mkdir_p!(Path.join(existing, "bin"))
+
+      write_executable!(
+        Path.join(existing, "bin/lemon"),
+        "#!/bin/sh\nif [ \"$1\" = version ]; then echo 2099.01.0; else echo existing; fi\n"
+      )
+
+      sentinel = Path.join(existing, "SENTINEL")
+      File.write!(sentinel, "keep me")
+
+      assert {:ok, %{staged: "2099.01.0"}} =
+               apply_confirmed(remote_opts(base_url, home, release_root))
+
+      assert File.exists?(sentinel)
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join(versions_dir, "current"))
+      refute File.exists?(Path.join(versions_dir, "2099.01.0.partial"))
+    end
+
+    test "replaces an existing broken install of the same version", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+
+      router =
+        artifact_router(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          bytes
+        )
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      versions_dir = Path.join(state, "versions")
+      broken = Path.join(versions_dir, "2099.01.0")
+      File.mkdir_p!(broken)
+      File.write!(Path.join(broken, "TRUNCATED"), "no launcher here")
+
+      assert {:ok, %{staged: "2099.01.0"}} =
+               apply_confirmed(remote_opts(base_url, home, release_root))
+
+      assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
+      refute File.exists?(Path.join([versions_dir, "2099.01.0", "TRUNCATED"]))
+
+      # The moved-aside copy is discarded once the swap lands, and must not
+      # show up as a rollback candidate in the meantime.
+      assert versions_dir |> File.ls!() |> Enum.filter(&String.contains?(&1, ".broken.")) == []
+    end
+
+    test "an exception during staging returns a stable error and leaves no partial directory", %{
+      tmp_dir: tmp_dir
+    } do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+
+      router =
+        artifact_router(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          bytes
+        )
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      # ~/.lemon/tmp occupied by a regular file makes the download's
+      # `File.mkdir_p!` raise, the class of failure that used to sail past
+      # every explicit cleanup path.
+      File.mkdir_p!(state)
+      File.write!(Path.join(state, "tmp"), "not a directory")
+
+      assert {:error, :staging_failed} =
+               apply_confirmed(remote_opts(base_url, home, release_root))
+
+      versions_dir = Path.join(state, "versions")
+      refute File.exists?(Path.join(versions_dir, "2099.01.0.partial"))
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join(versions_dir, "current"))
+      assert File.dir?(Path.join(versions_dir, "2020.01.0"))
+    end
+  end
+
+  describe "apply/1 — success" do
+    test "downloads, verifies, extracts, and atomically flips current", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+      body = manifest("2099.01.0", artifacts)
+
+      router = artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", bytes)
+      base_url = start_server(router)
+
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      opts = [
+        base_url: base_url,
+        channel: "stable",
+        platform: "test-platform",
+        profile: "test_profile",
+        paths_opts: [home_dir: home],
+        release_root: release_root
+      ]
+
+      assert {:ok, %{staged: "2099.01.0", restart_required: false, restart: "not_running"}} =
+               apply_confirmed(opts)
+
+      versions_dir = Path.join(state, "versions")
+      assert File.dir?(Path.join(versions_dir, "2099.01.0"))
+      assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join(versions_dir, "current"))
+      refute File.exists?(Path.join([state, "tmp", "pkg.tar.gz"]))
+    end
+
+    test "stages the runtime and the TUI into the same version directory", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      {tui_bytes, tui_sha, tui_size} = build_fixture_tui_tarball(tmp_dir)
+
+      artifacts = [
+        artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size),
+        artifact("tui.tar.gz", "lemon_tui", "test-platform", tui_sha, tui_size)
+      ]
+
+      router =
+        downloads_router(manifest("2099.01.0", artifacts), %{
+          "/releases/download/v2099.01.0/pkg.tar.gz" => bytes,
+          "/releases/download/v2099.01.0/tui.tar.gz" => tui_bytes
+        })
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      opts = [
+        base_url: base_url,
+        channel: "stable",
+        platform: "test-platform",
+        profile: "test_profile",
+        paths_opts: [home_dir: home],
+        release_root: release_root
+      ]
+
+      assert {:ok, %{staged: "2099.01.0", restart_required: false, restart: "not_running"}} =
+               apply_confirmed(opts)
+
+      versions_dir = Path.join(state, "versions")
+      assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
+      assert File.exists?(Path.join([versions_dir, "2099.01.0", "tui", "bin", "lemon-tui"]))
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join(versions_dir, "current"))
+      refute File.exists?(Path.join([state, "tmp", "pkg.tar.gz"]))
+      refute File.exists?(Path.join([state, "tmp", "tui.tar.gz"]))
+    end
+
+    test "updates the runtime alone when the release publishes no TUI", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+
+      router =
+        artifact_router(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          bytes
+        )
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      opts = [
+        base_url: base_url,
+        channel: "stable",
+        platform: "test-platform",
+        profile: "test_profile",
+        paths_opts: [home_dir: home],
+        release_root: release_root
+      ]
+
+      assert {:ok, %{staged: "2099.01.0"}} = apply_confirmed(opts)
+
+      versions_dir = Path.join(state, "versions")
+      assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
+      refute File.exists?(Path.join([versions_dir, "2099.01.0", "tui"]))
+    end
+
+    test "prunes old versions, keeping the newly staged one plus the 2 most recent others", %{
+      tmp_dir: tmp_dir
+    } do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+      body = manifest("2099.01.0", artifacts)
+
+      router = artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", bytes)
+      base_url = start_server(router)
+
+      {home, state, release_root} = install_layout(tmp_dir, "2018.01.0")
+      versions_dir = Path.join(state, "versions")
+
+      for v <- ["2015.01.0", "2016.01.0", "2017.01.0"] do
+        File.mkdir_p!(Path.join(versions_dir, v))
+      end
+
+      opts = [
+        base_url: base_url,
+        channel: "stable",
+        platform: "test-platform",
+        profile: "test_profile",
+        paths_opts: [home_dir: home],
+        release_root: release_root
+      ]
+
+      assert {:ok, %{staged: "2099.01.0"}} = apply_confirmed(opts)
+
+      assert File.dir?(Path.join(versions_dir, "2099.01.0"))
+      assert File.dir?(Path.join(versions_dir, "2018.01.0"))
+      assert File.dir?(Path.join(versions_dir, "2017.01.0"))
+      assert File.dir?(Path.join(versions_dir, "2016.01.0"))
+      refute File.dir?(Path.join(versions_dir, "2015.01.0"))
+    end
+
+    test "is a no-op when already up to date", %{tmp_dir: tmp_dir} do
+      current = "2018.01.0"
+
+      artifacts = [
+        artifact("pkg.tar.gz", "test_profile", "test-platform", String.duplicate("a", 64), 1)
+      ]
+
+      body = manifest(current, artifacts)
+      base_url = start_server(manifest_router(body))
+
+      {home, _state, release_root} = install_layout(tmp_dir, "2018.01.0")
+
+      opts = [
+        base_url: base_url,
+        channel: "stable",
+        platform: "test-platform",
+        profile: "test_profile",
+        paths_opts: [home_dir: home],
+        release_root: release_root
+      ]
+
+      assert {:ok, %{staged: nil, restart_required: false}} = apply_confirmed(opts)
+    end
+  end
+
+  describe "managed daemon lifecycle" do
+    test "apply and rollback restart the selected release only after commit", %{tmp_dir: tmp_dir} do
+      {opts, state} = lifecycle_fixture(tmp_dir, String.duplicate("a", 64))
+      inherited = Map.take(System.get_env(), ~w(RELEASE_ROOT RELEASE_VSN RELEASE_NAME))
+      System.put_env("RELEASE_ROOT", opts[:release_root])
+      System.put_env("RELEASE_VSN", "2020.01.0")
+      System.put_env("RELEASE_NAME", "test_profile")
+
+      on_exit(fn ->
+        Enum.each(~w(RELEASE_ROOT RELEASE_VSN RELEASE_NAME), &System.delete_env/1)
+        System.put_env(inherited)
+      end)
+
+      assert {:ok, %{restart: "restarted", restart_required: false, receipt: receipt}} =
+               apply_confirmed(opts)
+
+      assert File.read!(Path.join(state, "restarts")) == "2099.01.0\n"
+
+      assert {:ok, %{active: "2020.01.0", restart: "restarted", restart_required: false}} =
+               Remote.rollback(rollback_opts(opts, state, receipt))
+
+      assert File.read!(Path.join(state, "restarts")) == "2099.01.0\n2020.01.0\n"
+    end
+
+    test "a stopped installation stays stopped after both apply and rollback", %{tmp_dir: tmp_dir} do
+      {opts, state} = lifecycle_fixture(tmp_dir, "stopped")
+
+      assert {:ok, %{restart: "not_running", restart_required: false, receipt: receipt}} =
+               apply_confirmed(opts)
+
+      assert {:ok, %{restart: "not_running", restart_required: false}} =
+               Remote.rollback(rollback_opts(opts, state, receipt))
+
+      refute File.exists?(Path.join(state, "restarts"))
+    end
+
+    test "unverifiable ownership refuses the update without moving the pointer", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state} = lifecycle_fixture(tmp_dir, "foreign")
+      assert {:error, :daemon_ownership_unverified} = apply_confirmed(opts)
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      refute File.exists?(Path.join(state, "restarts"))
+      refute File.exists?(Path.join([state, "versions", "2099.01.0"]))
+      assert {:ok, []} = Remote.history(opts)
+    end
+
+    test "rollback refuses newly foreign ownership before changing selection", %{tmp_dir: tmp_dir} do
+      {opts, state} = lifecycle_fixture(tmp_dir, "stopped")
+      assert {:ok, %{receipt: receipt}} = apply_confirmed(opts)
+
+      write_executable!(
+        Path.join([state, "versions", "2099.01.0", "bin/lemon"]),
+        fixture_launcher("2099.01.0", "foreign")
+      )
+
+      assert {:error, :daemon_ownership_unverified} =
+               Remote.rollback(rollback_opts(opts, state, receipt))
+
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      refute File.exists?(Path.join(state, "restarts"))
+    end
+
+    test "restart failure preserves committed apply result and rollback authorization", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state} = lifecycle_fixture(tmp_dir, String.duplicate("a", 64), 1)
+
+      assert {:error, {:daemon_restart_failed, result}} = apply_confirmed(opts)
+      assert result.restart == "failed"
+      assert result.restart_required
+      assert result.staged == "2099.01.0"
+      assert result.receipt["rollback_digest"]
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      assert {:ok, [receipt]} = Remote.history(opts)
+      assert receipt == result.receipt
+      assert receipt["status"] == "applied"
+    end
+
+    test "restart failure after rollback does not undo its committed pointer or receipt", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state} = lifecycle_fixture(tmp_dir, String.duplicate("a", 64), 0, 1)
+      assert {:ok, %{receipt: receipt}} = apply_confirmed(opts)
+
+      assert {:error, {:daemon_restart_failed, result}} =
+               Remote.rollback(rollback_opts(opts, state, receipt))
+
+      assert result.active == "2020.01.0"
+      assert result.restart_required
+      assert result.receipt["status"] == "rolled_back"
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+    end
+
+    test "download and checksum failures never invoke the restart hook", %{tmp_dir: tmp_dir} do
+      for failure <- [:download, :checksum] do
+        dir = Path.join(tmp_dir, to_string(failure))
+        File.mkdir_p!(dir)
+        {opts, state} = lifecycle_fixture(dir, String.duplicate("a", 64))
+
+        bad_artifact =
+          artifact("pkg.tar.gz", "test_profile", "test-platform", String.duplicate("0", 64), 1)
+
+        body = manifest("2099.01.0", [bad_artifact])
+
+        router =
+          if failure == :download,
+            do: manifest_router(body),
+            else: artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", "x")
+
+        result = apply_confirmed(Keyword.put(opts, :base_url, start_server(router)))
+
+        if failure == :download,
+          do: assert({:error, {:download_http_status, 404}} = result),
+          else: assert({:error, {:checksum_mismatch, _}} = result)
+
+        assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+        refute File.exists?(Path.join(state, "restarts"))
+      end
+    end
+  end
+
+  describe "plan/apply/rollback transaction receipts" do
+    test "plan and wrong or stale digests leave the managed tree byte-for-byte unchanged", %{
+      tmp_dir: tmp_dir
+    } do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+      {:ok, manifest_state} = Agent.start_link(fn -> manifest("2099.01.0", artifacts) end)
+
+      router = fn
+        "/releases/latest/download/manifest.json" -> {:redirect, "/manifest-body.json"}
+        "/manifest-body.json" -> {200, "application/json", Agent.get(manifest_state, & &1)}
+        "/releases/download/v2099.01.0/pkg.tar.gz" -> {200, "application/gzip", bytes}
+        _ -> {404, "text/plain", "not found"}
+      end
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+      opts = remote_opts(base_url, home, release_root)
+      before = tree_fingerprint(state)
+
+      assert {:ok, plan} = Remote.plan(opts)
+      assert before == tree_fingerprint(state)
+      refute File.exists?(Path.join(state, "updates"))
+
+      assert {:error, :confirmation_mismatch} =
+               Remote.apply(Keyword.put(opts, :confirm, String.duplicate("0", 64)))
+
+      assert before == tree_fingerprint(state)
+
+      changed =
+        manifest("2099.01.0", artifacts)
+        |> Jason.decode!()
+        |> Map.put("commit", "cafebabe")
+        |> Jason.encode!()
+
+      Agent.update(manifest_state, fn _ -> changed end)
+
+      assert {:error, :confirmation_mismatch} =
+               Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+
+      assert before == tree_fingerprint(state)
+      refute File.exists?(Path.join(state, "updates"))
+    end
+
+    test "exact apply writes private content-free history, is replay-safe, and exact rollback works",
+         %{
+           tmp_dir: tmp_dir
+         } do
+      planted = "PLANTED_UPDATE_TOKEN_8e9d3a"
+
+      {bytes, sha256, size} =
+        build_fixture_tarball(tmp_dir, "2099.01.0", %{"lib/planted.txt" => planted})
+
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+      body = manifest("2099.01.0", artifacts)
+      router = artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", bytes)
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+      opts = remote_opts(base_url, home, release_root)
+
+      assert {:ok, plan} = Remote.plan(opts)
+
+      assert {:ok, %{staged: "2099.01.0", receipt: receipt}} =
+               Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+
+      assert {:ok, [history]} = Remote.history(Keyword.put(opts, :limit, 1))
+      assert history == receipt
+      assert history["status"] == "applied"
+      assert history["checkpoint_id"]
+      assert history["rollback_digest"]
+
+      updates_root = Path.join(state, "updates")
+
+      for path <- Path.wildcard(Path.join(updates_root, "**/*.json")) do
+        assert {:ok, %File.Stat{mode: mode, type: :regular}} = File.stat(path)
+        assert Bitwise.band(mode, 0o777) == 0o600
+        recorded = File.read!(path)
+        refute recorded =~ planted
+        refute recorded =~ tmp_dir
+        refute recorded =~ base_url
+      end
+
+      after_apply = tree_fingerprint(state)
+
+      assert {:error, :stale_running_release} =
+               Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+
+      assert after_apply == tree_fingerprint(state)
+
+      rollback_opts = [
+        paths_opts: [home_dir: home],
+        release_root: Path.join([state, "versions", "2099.01.0"]),
+        current_version: "2099.01.0",
+        receipt: receipt["id"],
+        confirm: receipt["rollback_digest"]
+      ]
+
+      assert {:error, :confirmation_mismatch} =
+               Remote.rollback(Keyword.put(rollback_opts, :confirm, String.duplicate("0", 64)))
+
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+
+      assert {:ok, %{active: "2020.01.0", receipt: rollback_receipt}} =
+               Remote.rollback(rollback_opts)
+
+      assert rollback_receipt["rolled_back_receipt_id"] == receipt["id"]
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      assert {:ok, [latest, original]} = Remote.history(Keyword.put(rollback_opts, :limit, 2))
+      assert latest["action"] == "rollback"
+      assert original["id"] == receipt["id"]
+    end
+
+    test "a stale rollback receipt never moves a newer active pointer", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+      body = manifest("2099.01.0", artifacts)
+      router = artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", bytes)
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+      opts = remote_opts(base_url, home, release_root)
+
+      assert {:ok, %{receipt: receipt}} = apply_confirmed(opts)
+
+      newer = Path.join([state, "versions", "2100.01.0"])
+      File.mkdir_p!(Path.join(newer, "bin"))
+      write_executable!(Path.join(newer, "bin/lemon"), "#!/bin/sh\necho 2100.01.0\n")
+      current = Path.join([state, "versions", "current"])
+      File.rm!(current)
+      :ok = File.ln_s("2100.01.0", current)
+
+      stale_opts = [
+        paths_opts: [home_dir: home],
+        release_root: newer,
+        current_version: "2100.01.0",
+        receipt: receipt["id"],
+        confirm: receipt["rollback_digest"]
+      ]
+
+      assert {:error, :stale_current_version} = Remote.rollback(stale_opts)
+      assert {:ok, "2100.01.0"} = File.read_link(current)
+    end
+
+    test "post-promotion verification failure restores the exact old pointer", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+      body = manifest("2099.01.0", artifacts)
+      router = artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", bytes)
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      opts =
+        remote_opts(base_url, home, release_root)
+        |> Keyword.put(:active_verify_fun, fn
+          "2099.01.0" -> {:error, :injected_active_failure}
+          _version -> :ok
+        end)
+
+      assert {:ok, plan} = Remote.plan(opts)
+
+      assert {:error, :injected_active_failure} =
+               Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+
+      versions = Path.join(state, "versions")
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join(versions, "current"))
+      assert File.dir?(Path.join(versions, "2099.01.0"))
+      assert {:ok, [failed]} = Remote.history(Keyword.put(opts, :limit, 1))
+      assert failed["status"] == "failed_injected_active_failure"
+    end
+  end
+
+  describe "rollback/1" do
+    test "refuses to run outside the versions/ layout", %{tmp_dir: tmp_dir} do
+      home = Path.join(tmp_dir, "home")
+
+      assert {:error, :unsupported_layout} =
+               Remote.rollback(paths_opts: [home_dir: home], release_root: "/opt/lemon/current")
+    end
+
+    test "flips current back to the newest retained non-active version", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+      body = manifest("2099.01.0", artifacts)
+
+      router = artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", bytes)
+      base_url = start_server(router)
+
+      {home, state, release_root} = install_layout(tmp_dir, "2018.01.0")
+      versions_dir = Path.join(state, "versions")
+
+      opts = [
+        base_url: base_url,
+        channel: "stable",
+        platform: "test-platform",
+        profile: "test_profile",
+        paths_opts: [home_dir: home],
+        release_root: release_root
+      ]
+
+      assert {:ok, %{staged: "2099.01.0", receipt: receipt}} = apply_confirmed(opts)
+
+      rollback_opts = [
+        paths_opts: [home_dir: home],
+        release_root: Path.join(versions_dir, "2099.01.0"),
+        current_version: "2099.01.0",
+        receipt: receipt["id"],
+        confirm: receipt["rollback_digest"]
+      ]
+
+      assert {:ok, %{active: "2018.01.0"}} = Remote.rollback(rollback_opts)
+      assert {:ok, "2018.01.0"} = File.read_link(Path.join(versions_dir, "current"))
+    end
+
+    test "requires an exact update receipt instead of choosing a retained version", %{
+      tmp_dir: tmp_dir
+    } do
+      home = Path.join(tmp_dir, "home")
+      state = Path.join(home, ".lemon")
+      versions_dir = Path.join(state, "versions")
+      only = Path.join(versions_dir, "2099.01.0")
+      File.mkdir_p!(Path.join(only, "bin"))
+      write_executable!(Path.join(only, "bin/lemon"), "#!/bin/sh\necho 2099.01.0\n")
+      File.rm(Path.join(versions_dir, "current"))
+      :ok = File.ln_s("2099.01.0", Path.join(versions_dir, "current"))
+
+      assert {:error, :invalid_receipt_id} =
+               Remote.rollback(
+                 paths_opts: [home_dir: home],
+                 release_root: only,
+                 current_version: "2099.01.0"
+               )
+    end
+  end
+
+  describe "lemon bot backend co-artifact" do
+    test "stages and flips the backend beside the runtime and records both versions", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, _bot_root} = bot_fixture(tmp_dir)
+
+      assert {:ok, %{staged: "2099.01.0", receipt: receipt}} = apply_confirmed(opts)
+
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+
+      assert {:ok, "versions/2099.01.0-stable-test-platform"} =
+               File.read_link(Path.join([state, "lemon_bot", "current"]))
+
+      assert File.exists?(
+               Path.join([
+                 state,
+                 "lemon_bot",
+                 "versions",
+                 "2099.01.0-stable-test-platform",
+                 "bot/bin/lemon-bot"
+               ])
+             )
+
+      assert receipt["from_bot_version"] == "2026.10.0-stable-test-platform"
+      assert receipt["to_bot_version"] == "2099.01.0-stable-test-platform"
+      refute File.exists?(Path.join([state, "tmp", "bot.tar.gz"]))
+
+      refute File.exists?(
+               Path.join([
+                 state,
+                 "lemon_bot",
+                 "versions",
+                 "2099.01.0-stable-test-platform.partial"
+               ])
+             )
+    end
+
+    test "the backend artifact is part of the plan digest", %{tmp_dir: tmp_dir} do
+      {opts, _state, bot_root} = bot_fixture(tmp_dir)
+
+      assert {:ok, with_bot} = Remote.plan(opts)
+      assert with_bot.bot_artifact["profile"] == "lemon_bot"
+
+      # Point the backend outside the managed tree: the plan loses the
+      # co-artifact and therefore has a different digest.
+      File.rm!(Path.join(bot_root, "current"))
+      File.ln_s!(tmp_dir, Path.join(bot_root, "current"))
+
+      assert {:ok, without_bot} = Remote.plan(opts)
+      assert without_bot.bot_artifact == nil
+      refute with_bot.digest == without_bot.digest
+
+      assert {:error, :confirmation_mismatch} =
+               Remote.apply(Keyword.put(opts, :confirm, with_bot.digest))
+    end
+
+    test "rollback restores both pointers", %{tmp_dir: tmp_dir} do
+      {opts, state, _bot_root} = bot_fixture(tmp_dir)
+      assert {:ok, %{receipt: receipt}} = apply_confirmed(opts)
+
+      assert {:ok, %{active: "2020.01.0"}} = Remote.rollback(rollback_opts(opts, state, receipt))
+
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+
+      assert {:ok, "versions/2026.10.0-stable-test-platform"} =
+               File.read_link(Path.join([state, "lemon_bot", "current"]))
+
+      assert {:ok, [rolled, _applied]} = Remote.history(Keyword.put(opts, :limit, 2))
+      assert rolled["from_bot_version"] == "2099.01.0-stable-test-platform"
+      assert rolled["to_bot_version"] == "2026.10.0-stable-test-platform"
+    end
+
+    test "rollback refuses a backend pointer that moved on", %{tmp_dir: tmp_dir} do
+      {opts, state, bot_root} = bot_fixture(tmp_dir)
+      assert {:ok, %{receipt: receipt}} = apply_confirmed(opts)
+
+      install_bot_version!(bot_root, "2100.01.0-stable-test-platform")
+      File.rm!(Path.join(bot_root, "current"))
+      File.ln_s!("versions/2100.01.0-stable-test-platform", Path.join(bot_root, "current"))
+
+      assert {:error, :stale_current_bot_version} =
+               Remote.rollback(rollback_opts(opts, state, receipt))
+
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+    end
+
+    test "a failure after the runtime flip restores both previous pointers", %{tmp_dir: tmp_dir} do
+      {opts, state, _bot_root} = bot_fixture(tmp_dir)
+
+      opts =
+        Keyword.put(opts, :active_bot_verify_fun, fn _key ->
+          {:error, :injected_bot_failure}
+        end)
+
+      assert {:ok, plan} = Remote.plan(opts)
+
+      assert {:error, :injected_bot_failure} =
+               Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+
+      assert {:ok, "versions/2026.10.0-stable-test-platform"} =
+               File.read_link(Path.join([state, "lemon_bot", "current"]))
+
+      assert {:ok, [failed]} = Remote.history(Keyword.put(opts, :limit, 1))
+      assert failed["status"] == "failed_injected_bot_failure"
+    end
+
+    test "a backend archive that escapes its prefix is refused before any pointer moves", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, _bot_root} = bot_fixture(tmp_dir, escaping_bot: true)
+
+      assert {:error, :archive_path_escape} = apply_confirmed(opts)
+
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+
+      assert {:ok, "versions/2026.10.0-stable-test-platform"} =
+               File.read_link(Path.join([state, "lemon_bot", "current"]))
+
+      refute File.dir?(Path.join([state, "versions", "2099.01.0"]))
+    end
+
+    test "a backend reporting the wrong version is refused before any pointer moves", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, _bot_root} = bot_fixture(tmp_dir, bot_version: "2000.01.0")
+
+      assert {:error, :staged_bot_version_mismatch} = apply_confirmed(opts)
+
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+
+      assert {:ok, "versions/2026.10.0-stable-test-platform"} =
+               File.read_link(Path.join([state, "lemon_bot", "current"]))
+    end
+
+    test "an installation with no managed backend is updated exactly as before", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, bot_root} = bot_fixture(tmp_dir)
+      File.rm_rf!(bot_root)
+
+      assert {:ok, %{staged: "2099.01.0", receipt: receipt}} = apply_confirmed(opts)
+
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      refute Map.has_key?(receipt, "from_bot_version")
+      refute Map.has_key?(receipt, "to_bot_version")
+      refute File.exists?(Path.join(state, "lemon_bot"))
+    end
+
+    test "a release without a backend artifact refuses to move the runtime alone", %{
+      tmp_dir: tmp_dir
+    } do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+
+      router =
+        artifact_router(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          bytes
+        )
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+      bot_root = Path.join(state, "lemon_bot")
+      install_bot_version!(bot_root, "2026.10.0-stable-test-platform")
+      File.ln_s!("versions/2026.10.0-stable-test-platform", Path.join(bot_root, "current"))
+
+      opts = remote_opts(base_url, home, release_root)
+
+      assert {:error, :missing_bot_artifact} = Remote.plan(opts)
+      assert {:error, :missing_bot_artifact} = Remote.apply(opts)
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      refute File.dir?(Path.join([state, "versions", "2099.01.0"]))
+    end
+
+    test "a backend pointer moved between plan and apply makes the digest stale", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, bot_root} = bot_fixture(tmp_dir)
+      assert {:ok, plan} = Remote.plan(opts)
+
+      install_bot_version!(bot_root, "2026.11.0-stable-test-platform")
+      File.rm!(Path.join(bot_root, "current"))
+      File.ln_s!("versions/2026.11.0-stable-test-platform", Path.join(bot_root, "current"))
+
+      assert {:error, :confirmation_mismatch} =
+               Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+    end
+
+    test "pruning keeps the backend the apply receipt can roll back to", %{tmp_dir: tmp_dir} do
+      {opts, state, bot_root} = bot_fixture(tmp_dir)
+
+      # These sort above the backend in use, so a prune that protected only the
+      # post-flip pointer would drop the receipt's rollback target.
+      for version <- ["2023.01.0", "2027.01.0", "2028.01.0"] do
+        install_bot_version!(bot_root, "#{version}-stable-test-platform")
+      end
+
+      assert {:ok, %{receipt: receipt}} = apply_confirmed(opts)
+
+      versions = Path.join(bot_root, "versions")
+      assert File.dir?(Path.join(versions, "2099.01.0-stable-test-platform"))
+      assert receipt["from_bot_version"] == "2026.10.0-stable-test-platform"
+      assert File.dir?(Path.join(versions, receipt["from_bot_version"]))
+      refute File.dir?(Path.join(versions, "2023.01.0-stable-test-platform"))
+
+      assert {:ok, %{active: "2020.01.0"}} = Remote.rollback(rollback_opts(opts, state, receipt))
+
+      assert {:ok, "versions/2026.10.0-stable-test-platform"} =
+               File.read_link(Path.join(bot_root, "current"))
+    end
+  end
+
+  describe "install_bot/1" do
+    test "installs the running version backend and atomic launcher without changing runtime", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, bot_root, launcher} = bot_install_fixture(tmp_dir)
+      opts = Keyword.put(opts, :version, "2100.01.0")
+
+      assert {:ok,
+              %{
+                key: "2020.01.0-stable-test-platform",
+                version: "2020.01.0",
+                launcher: ^launcher,
+                installed: true
+              }} = Remote.install_bot(opts)
+
+      assert {:ok, "versions/2020.01.0-stable-test-platform"} =
+               File.read_link(Path.join(bot_root, "current"))
+
+      assert File.regular?(
+               Path.join([
+                 bot_root,
+                 "versions",
+                 "2020.01.0-stable-test-platform",
+                 "bot/bin/lemon-bot"
+               ])
+             )
+
+      assert {:ok, target} = File.read_link(launcher)
+      assert target == Path.join(bot_root, "current/bot/bin/lemon-bot")
+      assert Path.type(target) == :absolute
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "reuses an active backend without another download and repairs the launcher", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, bot_root, launcher} = bot_install_fixture(tmp_dir)
+      assert {:ok, %{installed: true}} = Remote.install_bot(opts)
+      assert_receive {:bot_download, "/releases/download/v2020.01.0/bot.tar.gz"}
+      File.rm!(launcher)
+      File.ln_s!("/old/backend", launcher)
+
+      assert {:ok, %{installed: false, launcher: ^launcher}} = Remote.install_bot(opts)
+      refute_receive {:bot_download, _path}
+      assert {:ok, target} = File.read_link(launcher)
+      assert target == Path.join(bot_root, "current/bot/bin/lemon-bot")
+
+      File.rm!(launcher)
+      assert {:ok, %{installed: false}} = Remote.install_bot(opts)
+      assert {:ok, ^target} = File.read_link(launcher)
+      refute_receive {:bot_download, _path}
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "checksum mismatch leaves no pointer or launcher and cleans staging", %{tmp_dir: tmp_dir} do
+      {opts, state, bot_root, launcher} =
+        bot_install_fixture(tmp_dir, artifact_fields: %{"sha256" => String.duplicate("0", 64)})
+
+      assert {:error, {:checksum_mismatch, _details}} = Remote.install_bot(opts)
+      assert {:error, :enoent} = File.read_link(Path.join(bot_root, "current"))
+      assert {:error, :enoent} = File.lstat(launcher)
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "requires the platform's lemon_bot artifact", %{tmp_dir: tmp_dir} do
+      {opts, _state, _bot_root, _launcher} =
+        bot_install_fixture(tmp_dir, artifact_fields: %{"platform" => "other-platform"})
+
+      assert {:error, :missing_bot_artifact} = Remote.install_bot(opts)
+      refute_receive {:bot_download, _path}
+    end
+
+    test "rejects a manifest version different from the running version", %{tmp_dir: tmp_dir} do
+      {opts, _state, _bot_root, _launcher} =
+        bot_install_fixture(tmp_dir, manifest_version: "2099.01.0")
+
+      assert {:error, :manifest_version_mismatch} = Remote.install_bot(opts)
+      refute_receive {:bot_download, _path}
+    end
+
+    test "does not overwrite a non-symlink launcher", %{tmp_dir: tmp_dir} do
+      {opts, _state, bot_root, launcher} = bot_install_fixture(tmp_dir)
+      File.mkdir_p!(Path.dirname(launcher))
+      File.write!(launcher, "keep my launcher")
+
+      assert {:error, {:bot_launcher_conflict, ^launcher}} = Remote.install_bot(opts)
+      assert File.read!(launcher) == "keep my launcher"
+      assert {:error, :enoent} = File.read_link(Path.join(bot_root, "current"))
+      refute_receive {:bot_download, _path}
+    end
+
+    test "rejects source and unsupported release layouts before fetching", %{tmp_dir: tmp_dir} do
+      {opts, _state, _bot_root, _launcher} = bot_install_fixture(tmp_dir)
+
+      for root <- [tmp_dir, Path.join(tmp_dir, "manual-release")] do
+        assert {:error, :unsupported_layout} =
+                 Remote.install_bot(Keyword.put(opts, :release_root, root))
+      end
+
+      refute_receive {:bot_manifest, _path}
+    end
+
+    test "validates artifact fields before downloading", %{tmp_dir: tmp_dir} do
+      for {fields, error} <- [
+            {%{"file" => "../escape.tar.gz"}, :invalid_artifact_file},
+            {%{"sha256" => "bad"}, :invalid_artifact_checksum},
+            {%{"size" => 0}, :invalid_artifact_size}
+          ] do
+        fixture_dir = Path.join(tmp_dir, Atom.to_string(error))
+        File.mkdir_p!(fixture_dir)
+
+        {opts, _state, _bot_root, _launcher} =
+          bot_install_fixture(fixture_dir, artifact_fields: fields)
+
+        assert {:error, ^error} = Remote.install_bot(opts)
+        refute_receive {:bot_download, _path}
+      end
+    end
+
+    test "refuses an escaping backend archive and cleans staging", %{tmp_dir: tmp_dir} do
+      {opts, state, bot_root, launcher} = bot_install_fixture(tmp_dir, escaping_bot: true)
+
+      assert {:error, :archive_path_escape} = Remote.install_bot(opts)
+      assert {:error, :enoent} = File.read_link(Path.join(bot_root, "current"))
+      assert {:error, :enoent} = File.lstat(launcher)
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "refuses a backend reporting the wrong version and cleans staging", %{tmp_dir: tmp_dir} do
+      {opts, state, bot_root, launcher} =
+        bot_install_fixture(tmp_dir, bot_version: "2000.01.0")
+
+      assert {:error, :staged_bot_version_mismatch} = Remote.install_bot(opts)
+      assert {:error, :enoent} = File.read_link(Path.join(bot_root, "current"))
+      assert {:error, :enoent} = File.lstat(launcher)
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "restores the previous backend pointer when active verification fails", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state, bot_root, launcher} = bot_install_fixture(tmp_dir)
+      previous = "2019.01.0-stable-test-platform"
+      install_bot_version!(bot_root, previous)
+      File.ln_s!("versions/#{previous}", Path.join(bot_root, "current"))
+
+      opts =
+        Keyword.put(opts, :active_bot_verify_fun, fn _key -> {:error, :injected_bot_failure} end)
+
+      assert {:error, :injected_bot_failure} = Remote.install_bot(opts)
+      assert {:ok, "versions/#{previous}"} == File.read_link(Path.join(bot_root, "current"))
+      assert {:error, :enoent} = File.lstat(launcher)
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "removes a fresh backend pointer when active verification fails", %{tmp_dir: tmp_dir} do
+      {opts, state, bot_root, launcher} = bot_install_fixture(tmp_dir)
+
+      opts =
+        Keyword.put(opts, :active_bot_verify_fun, fn _key -> {:error, :injected_bot_failure} end)
+
+      assert {:error, :injected_bot_failure} = Remote.install_bot(opts)
+      assert {:error, :enoent} = File.read_link(Path.join(bot_root, "current"))
+      assert {:error, :enoent} = File.lstat(launcher)
+      assert_bot_install_clean(state, bot_root)
+    end
+
+    test "pruning protects both the new backend and the previous backend", %{tmp_dir: tmp_dir} do
+      {opts, _state, bot_root, _launcher} = bot_install_fixture(tmp_dir)
+      previous = "2019.01.0-stable-test-platform"
+
+      for version <- [
+            previous,
+            "2021.01.0-stable-test-platform",
+            "2022.01.0-stable-test-platform",
+            "2023.01.0-stable-test-platform"
+          ] do
+        install_bot_version!(bot_root, version)
+      end
+
+      File.ln_s!("versions/#{previous}", Path.join(bot_root, "current"))
+      assert {:ok, %{installed: true, key: key}} = Remote.install_bot(opts)
+      assert File.dir?(Path.join([bot_root, "versions", key]))
+      assert File.dir?(Path.join([bot_root, "versions", previous]))
+      refute File.dir?(Path.join([bot_root, "versions", "2021.01.0-stable-test-platform"]))
+    end
+  end
+
+  defp bot_install_fixture(tmp_dir, fixture_opts \\ []) do
+    {bytes, sha256, size} =
+      build_fixture_bot_tarball(
+        tmp_dir,
+        Keyword.get(fixture_opts, :bot_version, "2020.01.0"),
+        Keyword.get(fixture_opts, :escaping_bot, false)
+      )
+
+    bot_artifact =
+      artifact("bot.tar.gz", "lemon_bot", "test-platform", sha256, size)
+      |> Map.merge(Keyword.get(fixture_opts, :artifact_fields, %{}))
+
+    body = manifest(Keyword.get(fixture_opts, :manifest_version, "2020.01.0"), [bot_artifact])
+    test_pid = self()
+
+    base_url =
+      start_server(fn
+        "/releases/download/v2020.01.0/manifest.json" = path ->
+          send(test_pid, {:bot_manifest, path})
+          {200, "application/json", body}
+
+        "/releases/download/v2020.01.0/bot.tar.gz" = path ->
+          send(test_pid, {:bot_download, path})
+          {200, "application/gzip", bytes}
+
+        _path ->
+          {404, "text/plain", "not found"}
+      end)
+
+    {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+    launcher = Path.join([home, ".local", "bin", "lemon-bot"])
+    {remote_opts(base_url, home, release_root), state, Path.join(state, "lemon_bot"), launcher}
+  end
+
+  defp assert_bot_install_clean(state, bot_root) do
+    refute File.exists?(Path.join([state, "tmp", "bot.tar.gz"]))
+    assert Path.wildcard(Path.join([bot_root, "versions", "*.partial"])) == []
+  end
+
+  defp bot_fixture(tmp_dir, fixture_opts \\ []) do
+    {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+
+    {bot_bytes, bot_sha, bot_size} =
+      build_fixture_bot_tarball(
+        tmp_dir,
+        Keyword.get(fixture_opts, :bot_version, "2099.01.0"),
+        Keyword.get(fixture_opts, :escaping_bot, false)
+      )
+
+    artifacts = [
+      artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size),
+      artifact("bot.tar.gz", "lemon_bot", "test-platform", bot_sha, bot_size)
+    ]
+
+    router =
+      downloads_router(manifest("2099.01.0", artifacts), %{
+        "/releases/download/v2099.01.0/pkg.tar.gz" => bytes,
+        "/releases/download/v2099.01.0/bot.tar.gz" => bot_bytes
+      })
+
+    base_url = start_server(router)
+    {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+    bot_root = Path.join(state, "lemon_bot")
+    install_bot_version!(bot_root, "2026.10.0-stable-test-platform")
+    File.ln_s!("versions/2026.10.0-stable-test-platform", Path.join(bot_root, "current"))
+
+    {remote_opts(base_url, home, release_root), state, bot_root}
+  end
+
+  defp install_bot_version!(bot_root, key) do
+    dir = Path.join([bot_root, "versions", key])
+    File.mkdir_p!(Path.join(dir, "bot/bin"))
+    File.mkdir_p!(Path.join(dir, "bot/web"))
+    File.write!(Path.join(dir, "bot/web/index.html"), "<html>")
+    write_executable!(Path.join(dir, "bot/bin/lemon-bot"), "#!/bin/sh\nprintf 'lemon-bot x\\n'\n")
+    dir
+  end
+
+  # The backend artifact carries a single top-level bot/ directory, the same
+  # shape install.sh accepts.
+  defp build_fixture_bot_tarball(tmp_dir, version, escaping?) do
+    src = Path.join(tmp_dir, "bot-src")
+    File.rm_rf!(src)
+    File.mkdir_p!(Path.join(src, "bot/bin"))
+    File.mkdir_p!(Path.join(src, "bot/web"))
+    File.write!(Path.join(src, "bot/web/index.html"), "<html>")
+
+    write_executable!(
+      Path.join(src, "bot/bin/lemon-bot"),
+      "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nprintf 'lemon-bot #{version}\\n'\n"
+    )
+
+    if escaping?, do: File.ln_s!("../../../../etc/passwd", Path.join(src, "bot/escape"))
+
+    tarball = Path.join(tmp_dir, "bot-artifact.tar.gz")
+
+    {_output, 0} =
+      System.cmd("tar", ["-czf", tarball, "-C", src, "."], env: [{"COPYFILE_DISABLE", "1"}])
+
+    digest(tarball)
+  end
+
+  describe "outbound guard" do
+    test "a manifest redirect to a host other than the configured one is refused" do
+      body = manifest("2099.01.0", [])
+
+      other =
+        start_server(fn
+          "/m.json" -> {200, "application/json", body}
+          _ -> {404, "text/plain", "not found"}
+        end)
+
+      other_port = URI.parse(other).port
+
+      base_url =
+        start_server(fn
+          "/releases/latest/download/manifest.json" ->
+            {:redirect, "http://localhost:#{other_port}/m.json"}
+
+          _ ->
+            {404, "text/plain", "not found"}
+        end)
+
+      assert {:error, {:manifest_request_failed, :destination_not_public}} =
+               Remote.check(base_url: base_url, channel: "stable")
+    end
+
+    test "an artifact larger than its declared size is cut off while streaming",
+         %{tmp_dir: tmp_dir} do
+      {_bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+      total = 64 * 1024 * 1024
+
+      base_url =
+        start_streaming_server(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          total
+        )
+
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      assert {:error, {:download_failed, {:body_too_large, 65_536}}} =
+               apply_confirmed(remote_opts(base_url, home, release_root))
+
+      assert_receive {:streamed, sent}, 30_000
+      assert sent < div(total, 4)
+      refute File.exists?(Path.join([state, "tmp", "pkg.tar.gz"]))
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+    end
+
+    test "an https to http hop is refused before it is connected, even mid-chain" do
+      test = self()
+      body = manifest("2099.01.0", [])
+
+      send_fun = fn request ->
+        send(test, {:hop, request.scheme, request.host, request.path})
+
+        case {request.host, request.path} do
+          {"updates.example", "/releases/latest/download/manifest.json"} ->
+            {:ok, %{status: 302, headers: [{"location", "http://mid.example/b"}], body: ""}}
+
+          {"mid.example", "/b"} ->
+            {:ok, %{status: 302, headers: [{"location", "https://cdn.example/m.json"}], body: ""}}
+
+          {"cdn.example", "/m.json"} ->
+            {:ok, %{status: 200, headers: [], body: body}}
+        end
+      end
+
+      assert {:error, {:manifest_request_failed, {:redirect_refused, :insecure_redirect}}} =
+               Remote.check(
+                 base_url: "https://updates.example",
+                 channel: "stable",
+                 net_opts: [resolver: fn _ -> {:ok, [{93, 184, 216, 34}]} end, send: send_fun]
+               )
+
+      assert_receive {:hop, "https", "updates.example", _}
+      refute_receive {:hop, "http", _, _}, 100
+      refute_received {:hop, _, "cdn.example", _}
+    end
+
+    test "private destinations need the operator's explicit private_mirror grant" do
+      base_url = start_server(manifest_router(manifest("2099.01.0", [])))
+
+      grant_private_mirror!([], "[update]\nprivate_mirror = false\n")
+
+      assert {:error, {:manifest_request_failed, :destination_not_public}} =
+               Remote.check(base_url: base_url, channel: "stable")
+
+      grant_private_mirror!([])
+      assert {:ok, %{latest: "2099.01.0"}} = Remote.check(base_url: base_url, channel: "stable")
+
+      # The grant never covers the default upstream, whatever its DNS says.
+      for upstream <- ["https://github.com/z80dev/lemon", "https://GitHub.com:443/z80dev/lemon/"] do
+        assert {:error, {:manifest_request_failed, :destination_not_public}} =
+                 Remote.check(
+                   base_url: upstream,
+                   channel: "stable",
+                   net_opts: [
+                     resolver: fn _ -> {:ok, [{127, 0, 0, 1}]} end,
+                     send: fn _ -> flunk("connected to a private default upstream") end
+                   ]
+                 )
+      end
+    end
+
+    test "the private mirror grant is bound to its exact origin" do
+      test = self()
+
+      other =
+        start_server(fn path ->
+          send(test, {:other_port, path})
+          {200, "application/json", manifest("2099.01.0", [])}
+        end)
+
+      other_port = URI.parse(other).port
+
+      base_url =
+        start_server(fn
+          "/releases/latest/download/manifest.json" ->
+            {:redirect, "http://127.0.0.1:#{other_port}/m.json"}
+
+          _ ->
+            {404, "text/plain", "not found"}
+        end)
+
+      assert {:error, {:manifest_request_failed, :destination_not_public}} =
+               Remote.check(base_url: base_url, channel: "stable")
+
+      refute_receive {:other_port, _}, 200
+    end
+  end
+
+  # Serves the manifest normally and streams `total` bytes for the artifact,
+  # reporting how many bytes the client accepted before closing.
+  defp start_streaming_server(manifest_body, artifact_path, total) do
+    {:ok, listen} =
+      :gen_tcp.listen(0, [
+        :binary,
+        ip: {127, 0, 0, 1},
+        packet: :line,
+        active: false,
+        reuseaddr: true
+      ])
+
+    {:ok, port} = :inet.port(listen)
+    test = self()
+    pid = spawn_link(fn -> streaming_loop(listen, test, manifest_body, artifact_path, total) end)
+
+    on_exit(fn ->
+      Process.exit(pid, :kill)
+      :gen_tcp.close(listen)
+    end)
+
+    "http://127.0.0.1:#{port}"
+  end
+
+  defp streaming_loop(listen, test, manifest_body, artifact_path, total) do
+    {:ok, socket} = :gen_tcp.accept(listen)
+    {:ok, line} = :gen_tcp.recv(socket, 0, 5_000)
+    [_method, path | _] = String.split(line, " ")
+    :ok = drain_request_headers(socket)
+    :ok = :inet.setopts(socket, packet: :raw)
+
+    cond do
+      path == artifact_path ->
+        head = "HTTP/1.1 200 OK\r\ncontent-length: #{total}\r\nconnection: close\r\n\r\n"
+        :ok = :gen_tcp.send(socket, head)
+        send(test, {:streamed, stream_zeros(socket, total, 0)})
+
+      String.ends_with?(path, "manifest.json") ->
+        :gen_tcp.send(socket, [
+          "HTTP/1.1 200 OK\r\ncontent-length: #{byte_size(manifest_body)}\r\n",
+          "connection: close\r\n\r\n",
+          manifest_body
+        ])
+
+      true ->
+        :gen_tcp.send(socket, "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+    end
+
+    :gen_tcp.close(socket)
+    streaming_loop(listen, test, manifest_body, artifact_path, total)
+  end
+
+  defp drain_request_headers(socket) do
+    case :gen_tcp.recv(socket, 0, 5_000) do
+      {:ok, "\r\n"} -> :ok
+      {:ok, _header} -> drain_request_headers(socket)
+      {:error, _} -> :ok
+    end
+  end
+
+  defp stream_zeros(_socket, total, sent) when sent >= total, do: sent
+
+  defp stream_zeros(socket, total, sent) do
+    case :gen_tcp.send(socket, :binary.copy(<<0>>, 65_536)) do
+      :ok -> stream_zeros(socket, total, sent + 65_536)
+      {:error, _} -> sent
+    end
+  end
+end

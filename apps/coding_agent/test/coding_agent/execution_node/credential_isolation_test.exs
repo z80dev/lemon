@@ -455,7 +455,7 @@ defmodule CodingAgent.ExecutionNode.CredentialIsolationTest do
       File.ln!(ctx.cookie, Path.join(ctx.cwd, "hard-cookie"))
 
       assert {:error, {:protected_credential, _path}} =
-               LemonCore.Checkpoint.create_filesystem("isolation-session", [ctx.cwd],
+               LemonAgent.Checkpoint.create_filesystem("isolation-session", [ctx.cwd],
                  cwd: ctx.cwd
                )
     end

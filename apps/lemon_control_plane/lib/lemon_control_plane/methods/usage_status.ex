@@ -7,7 +7,7 @@ defmodule LemonControlPlane.Methods.UsageStatus do
 
   @behaviour LemonControlPlane.Method
 
-  alias LemonCore.UsageDiagnostics
+  alias LemonAgent.UsageDiagnostics
 
   @impl true
   def name, do: "usage.status"

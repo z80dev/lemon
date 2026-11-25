@@ -17,7 +17,8 @@ defmodule CodingAgent.ExecutorTest do
   alias CodingAgent.{ParentQuestions, RunGraph, Session, TaskStore, TaskStoreServer}
   alias CodingAgent.Tools.AskParent
   alias LemonAgent.Types.AgentToolResult
-  alias LemonCore.{ExecutionContext, NodeRegistry, ResumeToken, ToolPolicy}
+  alias LemonAgent.NodeRegistry
+  alias LemonCore.{ExecutionContext, ResumeToken, ToolPolicy}
   alias LemonCore.ExecutionCommand
 
   defmodule QuestionDeliveryBarrier do

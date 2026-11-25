@@ -13,7 +13,7 @@ defmodule CodingAgent.Tools.Nodes do
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias LemonCore.NodeRegistry
+  alias LemonAgent.NodeRegistry
 
   @info_timeout_ms 5_000
 

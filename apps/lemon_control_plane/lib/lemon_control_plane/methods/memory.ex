@@ -3,7 +3,8 @@ defmodule LemonControlPlane.Methods.MemorySupport do
 
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Protocol.Errors
-  alias LemonCore.{JSONPayload, NodeRegistry, ProfileStore}
+  alias LemonCore.{JSONPayload, ProfileStore}
+  alias LemonAgent.NodeRegistry
   alias LemonMemory.{ContextScope, Lifecycle, Safety}
 
   @timeout_ms 30_000

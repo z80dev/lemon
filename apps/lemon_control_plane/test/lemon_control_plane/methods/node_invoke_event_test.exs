@@ -4,7 +4,7 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
   alias LemonControlPlane.Auth.{Authorize, TokenStore}
   alias LemonControlPlane.Methods.{NodeInvokeEvent, Registry}
   alias LemonControlPlane.Protocol.Schemas
-  alias LemonCore.NodeRegistry
+  alias LemonAgent.NodeRegistry
 
   setup do
     node_id = unique("event-node")

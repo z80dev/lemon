@@ -17,7 +17,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonCore.Checkpoint
+  alias LemonAgent.Checkpoint
   alias CodingAgent.ExtensionLifecycle
   alias CodingAgent.MutationLock
   alias CodingAgent.Session

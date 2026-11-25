@@ -32,13 +32,13 @@ defmodule LemonCore.Config.Validator do
   implementations produce messages in the same shape.
   """
 
-  alias LemonCore.Config.{Automation, Features, LegacyAgentMigration, Memory, Modular, Providers}
+  alias LemonCore.Config.{Automation, Features, LegacyAgentMigration, Memory, Providers}
   alias LemonCore.Config.Gateway.Channel
   alias LemonCore.Config.Tools.Bash
 
   @valid_log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
   @doc """
-  Validates a complete modular configuration.
+  Validates resolved sections from the modular configuration or its facade.
 
   Returns `:ok` if valid, or `{:error, errors}` with a list of validation errors.
 
@@ -53,8 +53,8 @@ defmodule LemonCore.Config.Validator do
         "gateway.web_port: must be between 1 and 65535"
       ]}
   """
-  @spec validate(Modular.t() | LemonCore.Config.t()) :: :ok | {:error, [String.t()]}
-  def validate(%Modular{} = config) do
+  @spec validate(struct()) :: :ok | {:error, [String.t()]}
+  def validate(%{__struct__: _, tools: _} = config) do
     errors = []
     errors = model_role_errors(config.model_roles) ++ errors
     errors = budget_errors(config.budgets) ++ errors
@@ -88,7 +88,7 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  def validate(%LemonCore.Config{} = config) do
+  def validate(%{__struct__: _, agent: _, gateway: _} = config) do
     errors = []
     errors = model_role_errors(config.model_roles) ++ errors
     errors = budget_errors(config.budgets) ++ errors
@@ -933,7 +933,7 @@ defmodule LemonCore.Config.Validator do
     |> validate_tool_approval_mode(Map.get(tools, :approval_mode))
     |> validate_edit(Map.get(tools, :edit))
     |> Bash.validate(Map.get(tools, :bash))
-    |> validate_browser(Map.get(tools, :browser))
+    |> validate_tool_sections(tools)
     |> validate_lsp(Map.get(tools, :lsp))
     |> validate_positive_integer(
       get_in(tools, [Access.key(:web, %{}), :fetch, :max_body_bytes]),
@@ -947,22 +947,18 @@ defmodule LemonCore.Config.Validator do
     |> validate_computer_use(Map.get(tools, :computer_use))
   end
 
-  defp validate_browser(errors, nil), do: errors
+  # Registered owners validate their own `[runtime.tools.<id>]` tables; see
+  # `LemonCore.Config.Tools.Section`. Both the modular struct (`sections`) and
+  # the flat legacy map (`tools[id]`) shapes are accepted.
+  defp validate_tool_sections(errors, tools) do
+    sections = Map.get(tools, :sections)
 
-  defp validate_browser(errors, %{} = browser) do
-    errors = validate_boolean(errors, browser[:tern], "runtime.tools.browser.tern")
-
-    if browser[:provider] in LemonCore.BrowserProvider.providers() do
-      errors
-    else
-      [
-        "runtime.tools.browser.provider: must be one of #{Enum.join(LemonCore.BrowserProvider.providers(), ", ")}"
-        | errors
-      ]
-    end
+    Enum.reduce(LemonCore.Config.Tools.Section.registered(), errors, fn module, acc ->
+      id = module.id()
+      value = if is_map(sections), do: Map.get(sections, id), else: Map.get(tools, id)
+      if is_nil(value), do: acc, else: module.validate(value, acc)
+    end)
   end
-
-  defp validate_browser(errors, _), do: ["runtime.tools.browser: must be a table" | errors]
 
   defp validate_edit(errors, nil), do: errors
 
@@ -1397,8 +1393,7 @@ defmodule LemonCore.Config.Validator do
     errors
     |> validate_provider_secret_refs(name, config, "providers")
     |> validate_provider_auth_source(name, config, "providers")
-    |> validate_provider_omp_path(name, config, "providers")
-    |> validate_provider_omp_broker(name, config, "providers")
+    |> validate_provider_auth_extension(name, config, "providers")
     |> validate_custom_provider(name, config, "providers")
   end
 
@@ -1586,16 +1581,21 @@ defmodule LemonCore.Config.Validator do
     choices =
       case provider do
         "openai-codex" ->
-          ["oauth", "api_key", "omp_broker"]
+          ["oauth", "api_key"]
 
         "anthropic" ->
-          ["oauth", "api_key", "omp_broker"]
+          ["oauth", "api_key"]
 
         kimi when kimi in ["kimi_coding", "kimi-coding", "kimi-for-coding"] ->
-          ["oauth", "api_key", "omp", "omp_broker"]
+          ["oauth", "api_key"]
 
         _ ->
           nil
+      end
+
+    choices =
+      if choices do
+        choices ++ LemonCore.Config.Providers.AuthExtension.call(:sources, [provider], [])
       end
 
     case Map.get(config, :auth_source, Map.get(config, "auth_source")) do
@@ -1612,9 +1612,6 @@ defmodule LemonCore.Config.Validator do
           is_list(choices) and normalized not in choices ->
             ["#{path}: invalid value (expected #{Enum.join(choices, " | ")})" | errors]
 
-          is_nil(choices) and normalized == "omp" ->
-            ["#{path}: omp is only supported for kimi_coding" | errors]
-
           true ->
             errors
         end
@@ -1627,59 +1624,20 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  # `omp_provider` / `omp_account` select the broker credential and mean nothing
-  # under another credential source.
-  defp validate_provider_omp_broker(errors, name, config, path_prefix) do
-    broker? =
-      LemonCore.Config.Providers.normalize_auth_source(
-        Map.get(config, :auth_source, Map.get(config, "auth_source"))
-      ) == "omp_broker"
-
-    Enum.reduce([:omp_provider, :omp_account], errors, fn field, acc ->
-      path = "#{path_prefix}.#{name}.#{field}"
-
-      case Map.get(config, field, Map.get(config, Atom.to_string(field))) do
-        nil ->
-          acc
-
-        value when is_binary(value) ->
-          cond do
-            String.trim(value) == "" -> ["#{path}: cannot be empty" | acc]
-            not broker? -> [~s(#{path}: requires auth_source = "omp_broker") | acc]
-            true -> acc
-          end
-
-        other ->
-          ["#{path}: must be a string (got #{describe_type(other)})" | acc]
-      end
-    end)
-  end
-
-  defp validate_provider_omp_path(errors, name, config, path_prefix) do
-    path = "#{path_prefix}.#{name}.omp_path"
-
-    case Map.get(config, :omp_path, Map.get(config, "omp_path")) do
-      nil ->
+  defp validate_provider_auth_extension(errors, name, config, prefix),
+    do:
+      LemonCore.Config.Providers.AuthExtension.call(
+        :validate,
+        [errors, name, config, prefix],
         errors
+      )
 
-      value when is_binary(value) ->
-        if String.valid?(value) and not String.contains?(value, <<0>>) and
-             Path.type(value) == :absolute and not String.ends_with?(value, "/") do
-          errors
-        else
-          ["#{path}: must be an absolute executable path" | errors]
-        end
-
-      other ->
-        ["#{path}: must be a string (got #{describe_type(other)})" | errors]
-    end
-  end
-
-  defp describe_type(value) when is_binary(value), do: "string"
-  defp describe_type(value) when is_boolean(value), do: "boolean"
-  defp describe_type(value) when is_integer(value), do: "integer"
-  defp describe_type(value) when is_float(value), do: "float"
-  defp describe_type(value) when is_map(value), do: "table"
-  defp describe_type(value) when is_list(value), do: "array"
-  defp describe_type(_value), do: "unsupported type"
+  @doc false
+  def describe_type(value) when is_binary(value), do: "string"
+  def describe_type(value) when is_boolean(value), do: "boolean"
+  def describe_type(value) when is_integer(value), do: "integer"
+  def describe_type(value) when is_float(value), do: "float"
+  def describe_type(value) when is_map(value), do: "table"
+  def describe_type(value) when is_list(value), do: "array"
+  def describe_type(_value), do: "unsupported type"
 end

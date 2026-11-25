@@ -100,7 +100,7 @@ defmodule LemonControlPlane.Methods.ProviderManagementSupport do
   defp dispatch("device.complete", %{"commit" => true} = params, ctx, true) do
     node_id = params["nodeId"]
 
-    with {:ok, node} <- LemonCore.NodeRegistry.resolve_id(node_id),
+    with {:ok, node} <- LemonAgent.NodeRegistry.resolve_id(node_id),
          {:ok, authority} <-
            LemonControlPlane.Auth.TokenStore.provider_completion_authority(
              node_id,

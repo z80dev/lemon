@@ -8,7 +8,7 @@ defmodule LemonCli.Setup.Omp do
 
     1. finds the broker (`OMP_AUTH_BROKER_URL`, default `http://127.0.0.1:8765`);
        when the default one is not running it installs the `omp-broker`
-       background service (`LemonCore.Service`), which runs
+       background service (`LemonCli.Service`), which runs
        `omp auth-broker serve` against omp's own credential store;
     2. lists the providers omp holds credentials for and maps each to its Lemon
        provider (`OmpBroker.omp_provider/2`);
@@ -23,7 +23,7 @@ defmodule LemonCli.Setup.Omp do
   identities, broker URLs or token paths.
 
   Test seams (keyword options, never CLI flags): `:omp_bin`, `:service_install`
-  and `:service_status` (functions with `LemonCore.Service.install/2` and
+  and `:service_status` (functions with `LemonCli.Service.install/2` and
   `status/2` shapes), `:verifier`.
   """
 
@@ -31,7 +31,7 @@ defmodule LemonCli.Setup.Omp do
   alias LemonCli.Onboarding.{PromptUI, Providers, Runner}
   alias LemonCli.Setup.{Provider, ProviderManagement}
   alias LemonCore.Config.TomlPatch
-  alias LemonCore.Service.Role
+  alias LemonCli.Service.Role
 
   @connect_switches [
     config_path: :string,
@@ -194,7 +194,7 @@ defmodule LemonCli.Setup.Omp do
     end
 
     io.info.("Starting the omp-broker service…")
-    install = Keyword.get(opts, :service_install, &LemonCore.Service.install/2)
+    install = Keyword.get(opts, :service_install, &LemonCli.Service.install/2)
 
     case install.(["omp-broker"], omp_bin: omp, port: port, wait: @service_wait_seconds) do
       {:ok, %{units: [%{state: "ready"}]}} ->
@@ -596,7 +596,7 @@ defmodule LemonCli.Setup.Omp do
   end
 
   defp service_state(opts) do
-    status = Keyword.get(opts, :service_status, &LemonCore.Service.status/2)
+    status = Keyword.get(opts, :service_status, &LemonCli.Service.status/2)
 
     case status.(["omp-broker"], []) do
       {:ok, %{units: [%{state: state} | _]}} -> state

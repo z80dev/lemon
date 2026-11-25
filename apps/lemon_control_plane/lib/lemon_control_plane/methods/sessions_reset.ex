@@ -3,7 +3,7 @@ defmodule LemonControlPlane.Methods.SessionsReset do
   Handler for the sessions.reset method.
 
   Preview-first, confirmation-bound conversation reset through
-  `LemonCore.SessionLifecycle.reset/2`.
+  `LemonControlPlane.SessionLifecycle.reset/2`.
 
   Without `confirmToken` (or with `dryRun: true`) this mutates nothing and
   returns a redacted preview digest plus a single-use server-side
@@ -16,7 +16,7 @@ defmodule LemonControlPlane.Methods.SessionsReset do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Methods.SessionLifecycleFence
-  alias LemonCore.SessionLifecycle
+  alias LemonControlPlane.SessionLifecycle
 
   @impl true
   def name, do: "sessions.reset"

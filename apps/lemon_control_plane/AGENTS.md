@@ -54,7 +54,7 @@ another session store, scheduler or agent runtime. See [README](README.md).
 - `:outcome_unknown` is duplicate-risk, not a retryable rejection. Profile chat
   retains the caller-generated run ID and returns a bounded uncertain receipt
   with `retrySafe: false`. Never inspect raw failure terms into wire responses.
-- Sessions use `LemonCore.SessionLifecycle`: bounded/redacted reads, exact-key
+- Sessions use `LemonControlPlane.SessionLifecycle`: bounded/redacted reads, exact-key
   delete confirmation, reset previews bound to a single-use token and the
   session's live state digest, and prune previews bound to the exact candidate
   set and millisecond cutoff. Do not manipulate raw run/index tables in handlers.
@@ -66,7 +66,7 @@ another session store, scheduler or agent runtime. See [README](README.md).
   only after verified deletion.
 - Node methods are reachable only through their own scoped RPCs. Do not add a
   generic operator RPC that forwards an arbitrary method or arguments to a node.
-  `LemonCore.NodeRegistry` invocations are live-only; the only durable trace is
+  `LemonAgent.NodeRegistry` invocations are live-only; the only durable trace is
   `LemonCore.SessionActivity` unresolved presence for a remote
   `coding_agent.run` whose stop is unproven, cleared only by that invocation's
   terminal result or the node's later `node.invoke.active` report omitting it.
@@ -82,8 +82,9 @@ another session store, scheduler or agent runtime. See [README](README.md).
 ## A2A
 
 - A2A peers are independent principals, not operator sockets or execution nodes.
-  Core owns protocol/client/persistence helpers; this app owns authentication,
-  cards, JSON-RPC/SSE framing, rate limits and supervised task attachment.
+  Skills owns the shared protocol/client/persistence helpers; this app owns
+  authentication, cards, JSON-RPC/SSE framing, rate limits and supervised task
+  attachment.
 - Scope all task reads/mutations to authenticated peer identity. An inbound
   `messageId` durably replays the original task for the same peer, and conflicts
   across peers; never submit a second run for a replay.

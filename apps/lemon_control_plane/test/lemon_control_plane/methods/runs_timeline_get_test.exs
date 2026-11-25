@@ -2,7 +2,8 @@ defmodule LemonControlPlane.Methods.RunsTimelineGetTest do
   use ExUnit.Case, async: false
 
   alias LemonControlPlane.Methods.{Registry, RunsTimelineGet}
-  alias LemonCore.{IntrospectionStore, Store, UsageLedger, UsageStore}
+  alias LemonCore.{IntrospectionStore, Store}
+  alias LemonAgent.{UsageLedger, UsageStore}
   alias LemonCore.Store.EtsBackend
 
   defmodule Tasks do

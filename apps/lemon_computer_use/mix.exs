@@ -37,6 +37,11 @@ defmodule LemonComputerUse.MixProject do
       # `LemonAgent.ContextRegistry`; nothing in the coding product names this app.
       {:lemon_agent, in_umbrella: true},
       {:lemon_ai, in_umbrella: true},
+      # LCU Chrome is a browser provider selected by the browser driver; this
+      # app publishes its explicit boot decision there.
+      {:lemon_browser, in_umbrella: true},
+      # Only reads installed backend units to refuse control of the approvals UI.
+      {:lemon_cli, in_umbrella: true, runtime: false},
       {:jason, "~> 1.4"}
     ]
   end

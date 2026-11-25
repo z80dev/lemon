@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.NodeInvokeControlResult do
   @moduledoc """
   Accepts an authenticated destination acknowledgement for a live invocation control.
 
-  Control ownership is held by the per-invocation `LemonCore.NodeInvocation`.
+  Control ownership is held by the per-invocation `LemonAgent.NodeInvocation`.
   A result is accepted only from the same node connection and credential generation that received
   the original invocation and only while that invocation remains active.
   """
@@ -98,7 +98,7 @@ defmodule LemonControlPlane.Methods.NodeInvokeControlResult do
          accepted,
          reason
        ) do
-    case LemonCore.NodeRegistry.complete_control_session(
+    case LemonAgent.NodeRegistry.complete_control_session(
            node_id,
            connection_pid,
            generation,

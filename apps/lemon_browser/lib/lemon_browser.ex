@@ -50,7 +50,7 @@ defmodule LemonBrowser do
   def status(opts \\ []) do
     resolution =
       Keyword.get_lazy(opts, :provider_resolution, fn ->
-        LemonCore.BrowserProvider.resolve(opts)
+        LemonBrowser.Provider.resolve(opts)
       end)
 
     status =
@@ -81,7 +81,7 @@ defmodule LemonBrowser do
       nil ->
         resolution =
           Keyword.get_lazy(opts, :provider_resolution, fn ->
-            LemonCore.BrowserProvider.resolve(opts)
+            LemonBrowser.Provider.resolve(opts)
           end)
 
         case resolution.provider do
@@ -150,7 +150,7 @@ defmodule LemonBrowser do
       |> Keyword.drop([:provider_resolution, :backend])
       |> Keyword.put(:provider, "auto")
       |> Keyword.put(:exclude, ["tern", "lcu"])
-      |> LemonCore.BrowserProvider.resolve()
+      |> LemonBrowser.Provider.resolve()
 
     if resolution.provider do
       with :ok <- LemonBrowser.TernSession.put_fallback(opts, resolution) do

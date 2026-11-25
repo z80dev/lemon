@@ -50,7 +50,7 @@ defmodule LemonControlPlane.Methods.NodeShellEvent do
     with true <- auth[:role] == :node and is_pid(ctx[:conn_pid]),
          true <- valid_frame?(payload),
          :ok <-
-           LemonCore.NodeRegistry.shell_event_session(
+           LemonAgent.NodeRegistry.shell_event_session(
              auth[:client_id],
              ctx[:conn_pid],
              generation,

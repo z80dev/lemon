@@ -263,7 +263,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert_receive {:execution_node_worker, ^worker, {:status, :online, ^node_id}}, 3_000
 
     assert {:ok, %{id: ^node_id, name: ^node_name, pid: connection_pid}} =
-             LemonCore.NodeRegistry.resolve(node_name)
+             LemonAgent.NodeRegistry.resolve(node_name)
 
     assert is_pid(connection_pid)
     assert connection_pid != worker
@@ -284,7 +284,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     }
 
     assert {:ok, invoke_id} =
-             LemonCore.NodeRegistry.invoke(node_name, "coding_agent.run", invoke_args,
+             LemonAgent.NodeRegistry.invoke(node_name, "coding_agent.run", invoke_args,
                recipient: self(),
                timeout_ms: 3_000
              )
@@ -305,7 +305,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
            }
 
     assert {:ok, control_id} =
-             LemonCore.NodeRegistry.control(invoke_id, :steer, "stay on the wire",
+             LemonAgent.NodeRegistry.control(invoke_id, :steer, "stay on the wire",
                recipient: self(),
                timeout_ms: 3_000
              )
@@ -315,7 +315,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert_receive {:lemon_node_control_result, ^control_id, ^invoke_id, :ok}, 3_000
 
     assert {:ok, redirect_id} =
-             LemonCore.NodeRegistry.control(invoke_id, :redirect, "take the safer route",
+             LemonAgent.NodeRegistry.control(invoke_id, :redirect, "take the safer route",
                recipient: self(),
                timeout_ms: 3_000
              )
@@ -352,7 +352,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert get_in(result, ["completed", "usage", "input_tokens"]) == 3
 
     assert {:error, :terminal} =
-             LemonCore.NodeRegistry.control(invoke_id, :steer, "too late")
+             LemonAgent.NodeRegistry.control(invoke_id, :steer, "too late")
 
     send(context.runner_pid, :stop)
 
@@ -499,7 +499,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert {:ok, encoded_cancel_context} = ExecutionContext.encode(cancel_context_wire)
 
     assert {:ok, cancel_id} =
-             LemonCore.NodeRegistry.invoke(
+             LemonAgent.NodeRegistry.invoke(
                node_name,
                "coding_agent.run",
                invoke_args
@@ -513,7 +513,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
                     cancel_context},
                    3_000
 
-    assert :ok = LemonCore.NodeRegistry.cancel(cancel_id, :test_cancelled)
+    assert :ok = LemonAgent.NodeRegistry.cancel(cancel_id, :test_cancelled)
     assert_receive {:fake_executor_cancelled, ^cancel_context}, 3_000
     assert_receive {:lemon_node_result, ^cancel_id, {:error, :test_cancelled}}, 3_000
 
@@ -537,10 +537,10 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert {:error, :invalid_token} = TokenStore.validate(token)
     assert_receive {:DOWN, ^connection_ref, :process, ^connection_pid, close_reason}, 3_000
     assert close_reason in [:normal, {:shutdown, :peer_closed}, {:shutdown, :local_closed}]
-    refute LemonCore.NodeRegistry.online?(node_name)
+    refute LemonAgent.NodeRegistry.online?(node_name)
 
     _ = stop_supervised(worker_id)
-    assert_eventually(fn -> not LemonCore.NodeRegistry.online?(node_name) end)
+    assert_eventually(fn -> not LemonAgent.NodeRegistry.online?(node_name) end)
   end
 
   @tag :tmp_dir
@@ -739,7 +739,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert touched_info.expires_at_ms >= now + 6 * 24 * 60 * 60 * 1000
 
     _ = stop_supervised(worker_id)
-    assert_eventually(fn -> not LemonCore.NodeRegistry.online?(node_name) end)
+    assert_eventually(fn -> not LemonAgent.NodeRegistry.online?(node_name) end)
 
     LemonCore.Store.put(:session_tokens, token, %{
       touched_info
@@ -825,7 +825,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
 
     assert_receive {:execution_node_worker, ^worker, {:status, :online, ^node_id}}, 3_000
 
-    assert {:ok, %{pid: conn_pid}} = LemonCore.NodeRegistry.resolve(node_name)
+    assert {:ok, %{pid: conn_pid}} = LemonAgent.NodeRegistry.resolve(node_name)
     conn_ref = Process.monitor(conn_pid)
 
     operator_ctx = %{
@@ -842,7 +842,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
              )
 
     assert_receive {:DOWN, ^conn_ref, :process, ^conn_pid, _}, 3_000
-    refute LemonCore.NodeRegistry.online?(node_name)
+    refute LemonAgent.NodeRegistry.online?(node_name)
 
     _ = stop_supervised(worker_id)
 
@@ -956,7 +956,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
                | expires_at_ms: System.system_time(:millisecond) - 1_000
              })
 
-    assert {:ok, %{pid: connection_pid}} = LemonCore.NodeRegistry.resolve(node_name)
+    assert {:ok, %{pid: connection_pid}} = LemonAgent.NodeRegistry.resolve(node_name)
     Process.exit(connection_pid, :kill)
 
     assert_receive {:execution_node_worker, ^worker,
@@ -968,7 +968,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert GenServer.call(worker, :get_link_state) ==
              {:parked, :needs_reauthorization, "session_expired"}
 
-    assert_eventually(fn -> not LemonCore.NodeRegistry.online?(node_name) end)
+    assert_eventually(fn -> not LemonAgent.NodeRegistry.online?(node_name) end)
 
     # The owner-authorized repair invite keeps the durable identity and rotates
     # the credential; a second enrollment run saves it to the shared root.
@@ -1006,7 +1006,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
 
     assert_receive {:execution_node_worker, ^repair_worker, {:status, :online, ^node_id}}, 10_000
     assert :ok = stop_supervised(repair_worker_id)
-    assert_eventually(fn -> not LemonCore.NodeRegistry.online?(node_name) end)
+    assert_eventually(fn -> not LemonAgent.NodeRegistry.online?(node_name) end)
 
     assert {:ok, repaired} =
              CodingAgent.ExecutionNode.TokenStore.load(node_name,
@@ -1023,11 +1023,11 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
 
     assert_receive {:execution_node_worker, ^worker, {:status, :starting}}, 5_000
     assert_receive {:execution_node_worker, ^worker, {:status, :online, ^node_id}}, 10_000
-    assert {:ok, %{id: ^node_id, name: ^node_name}} = LemonCore.NodeRegistry.resolve(node_name)
+    assert {:ok, %{id: ^node_id, name: ^node_name}} = LemonAgent.NodeRegistry.resolve(node_name)
     assert TokenStore.node_session_state(node_id) == :active
 
     _ = stop_supervised(worker_id)
-    assert_eventually(fn -> not LemonCore.NodeRegistry.online?(node_name) end)
+    assert_eventually(fn -> not LemonAgent.NodeRegistry.online?(node_name) end)
   end
 
   defp put_node(node_id, name) do

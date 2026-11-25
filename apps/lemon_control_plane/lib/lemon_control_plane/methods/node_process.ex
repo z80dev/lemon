@@ -26,7 +26,7 @@ defmodule LemonControlPlane.Methods.NodeProcessSupport do
   def dispatch_opts(method, params) do
     node_id = params["nodeId"]
 
-    case LemonCore.NodeRegistry.resolve_id(node_id) do
+    case LemonAgent.NodeRegistry.resolve_id(node_id) do
       {:ok, %{id: ^node_id, pid: pid, generation: generation}}
       when is_pid(pid) and is_integer(generation) and generation >= 0 ->
         opts = [expected_pid: pid, expected_generation: generation, required_process_execution: 1]

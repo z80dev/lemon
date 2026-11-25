@@ -3,7 +3,7 @@ defmodule LemonCore.Secrets.KeyProvider.Env do
   Master key provider backed by an environment variable.
 
   Reads `LEMON_SECRETS_MASTER_KEY` by default; the name is configurable with
-  `config :lemon_core, LemonCore.Secrets, env_var: "..."` or the `:env_var`
+  `config :lemon_core, :secrets, env_var: "..."` or the `:env_var`
   option.
   """
 

@@ -178,7 +178,7 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
 
   defp checkpoint_progress(session_key) do
     session_key
-    |> LemonCore.Checkpoint.stats()
+    |> LemonAgent.Checkpoint.stats()
     |> stringify_map_keys()
   rescue
     _ -> :unavailable

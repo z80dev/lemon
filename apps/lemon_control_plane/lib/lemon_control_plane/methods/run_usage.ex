@@ -25,7 +25,7 @@ defmodule LemonControlPlane.Methods.RunUsage do
       |> Enum.filter(&is_integer/1)
 
     with {:ok, page} <-
-           LemonCore.UsageRecords.query(%{
+           LemonControlPlane.UsageRecords.query(%{
              "fromMs" => max(Enum.min(timestamps), 0),
              "toMs" => Enum.max(timestamps) + 1,
              "limit" => 500

@@ -68,8 +68,8 @@ defmodule LemonHoncho.ConfigTest do
     File.mkdir_p!(home)
     saved_env = Map.new(@env_vars, &{&1, System.get_env(&1)})
     saved_app = Map.new(@app_keys, &{&1, Application.fetch_env(:lemon_honcho, &1)})
-    saved_secrets = Application.fetch_env(:lemon_core, LemonCore.Secrets)
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env])
+    saved_secrets = Application.fetch_env(:lemon_core, :secrets)
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env])
 
     Enum.each(@env_vars, &System.delete_env/1)
     Enum.each(@app_keys, &Application.delete_env(:lemon_honcho, &1))
@@ -80,8 +80,8 @@ defmodule LemonHoncho.ConfigTest do
       Enum.each(saved_app, &restore_app_env/1)
 
       case saved_secrets do
-        {:ok, value} -> Application.put_env(:lemon_core, LemonCore.Secrets, value)
-        :error -> Application.delete_env(:lemon_core, LemonCore.Secrets)
+        {:ok, value} -> Application.put_env(:lemon_core, :secrets, value)
+        :error -> Application.delete_env(:lemon_core, :secrets)
       end
 
       File.rm_rf!(home)

@@ -23,7 +23,7 @@ defmodule CodingAgent.Tools.SemanticFind do
   pairs with an enforced output ceiling are accepted. No keyword hits means no call.
 
   The call's provider-reported usage is recorded through
-  `LemonCore.UsageLedger` against the session's run and session key, so it shows
+  `LemonAgent.UsageLedger` against the session's run and session key, so it shows
   up in `usage.cost` and usage records. A response without a known price keeps a
   `nil` cost; it is never estimated. Tests inject `:semantic_find_complete`
   (replaces `LemonAi.complete/3`) and `:semantic_find_usage_record`.
@@ -38,7 +38,7 @@ defmodule CodingAgent.Tools.SemanticFind do
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{AssistantMessage, Context, Model, TextContent, UserMessage}
-  alias LemonCore.UsageLedger
+  alias LemonAgent.UsageLedger
 
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
 

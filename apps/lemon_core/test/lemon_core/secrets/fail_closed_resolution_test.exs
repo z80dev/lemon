@@ -200,7 +200,7 @@ defmodule LemonCore.Secrets.FailClosedResolutionTest do
     # their own limits but not one shared 700ms budget.
     source = op_source(ctx.stub, ctx.marker, timeout_ms: 700, delay: "0.4")
 
-    result = External.test(sources: [source])
+    result = Secrets.test_external(sources: [source])
     assert result.status == :ready
     assert hd(result.results).secret_count == 2
   end
@@ -279,7 +279,12 @@ defmodule LemonCore.Secrets.FailClosedResolutionTest do
       type: :onepassword,
       enabled: true,
       executable: Path.join(Path.dirname(stub), "op-stub-#{delay}"),
-      refs: %{"OP_A" => "op://vault/a/credential", "OP_B" => "op://vault/b/credential"},
+      options: %{
+        refs: %{"OP_A" => "op://vault/a/credential", "OP_B" => "op://vault/b/credential"},
+        auth_secret: nil,
+        auth_env: "OP_SERVICE_ACCOUNT_TOKEN",
+        account: nil
+      },
       timeout_ms: Keyword.fetch!(opts, :timeout_ms),
       max_output_bytes: 1_024
     }

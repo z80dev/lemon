@@ -50,16 +50,16 @@ defmodule LemonCli.Onboarding.RunnerTest do
 
     original_home = System.get_env("HOME")
     original_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
-    original_secrets_config = Application.get_env(:lemon_core, LemonCore.Secrets)
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env, :file])
+    original_secrets_config = Application.get_env(:lemon_core, :secrets)
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env, :file])
 
     System.put_env("HOME", mock_home)
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
 
     on_exit(fn ->
       if original_secrets_config,
-        do: Application.put_env(:lemon_core, LemonCore.Secrets, original_secrets_config),
-        else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+        do: Application.put_env(:lemon_core, :secrets, original_secrets_config),
+        else: Application.delete_env(:lemon_core, :secrets)
 
       if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
 

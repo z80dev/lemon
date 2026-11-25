@@ -18,9 +18,9 @@ defmodule LemonCli.HermesMigrationTest do
     home = Path.join(root, "home")
     File.mkdir_p!(home)
     saved_env = Map.new(~w(HOME LEMON_SECRETS_MASTER_KEY), &{&1, System.get_env(&1)})
-    saved_secrets_config = Application.fetch_env(:lemon_core, LemonCore.Secrets)
+    saved_secrets_config = Application.fetch_env(:lemon_core, :secrets)
     saved_secret_rows = honcho_secret_rows()
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env])
     System.put_env("HOME", home)
     System.delete_env("LEMON_SECRETS_MASTER_KEY")
     # Tests import under different master keys; the store's key verifier and
@@ -35,8 +35,8 @@ defmodule LemonCli.HermesMigrationTest do
       end)
 
       case saved_secrets_config do
-        {:ok, value} -> Application.put_env(:lemon_core, LemonCore.Secrets, value)
-        :error -> Application.delete_env(:lemon_core, LemonCore.Secrets)
+        {:ok, value} -> Application.put_env(:lemon_core, :secrets, value)
+        :error -> Application.delete_env(:lemon_core, :secrets)
       end
 
       Enum.each(honcho_secret_rows(), fn {key, _} ->

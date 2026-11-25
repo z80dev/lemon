@@ -3,7 +3,7 @@ defmodule CodingAgent.Extensions.ToolHooksSessionTest do
 
   alias CodingAgent.{Session, SessionManager, SettingsManager}
   alias LemonAgent.Test.Mocks
-  alias LemonCore.Checkpoint
+  alias LemonAgent.Checkpoint
 
   @moduletag :tmp_dir
 

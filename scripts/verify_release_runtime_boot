@@ -317,7 +317,7 @@ assert_bundled_browser_driver() {
 
 # darwin runtime profiles bundle a pinned standalone CPython so a Mac without
 # Apple's Command Line Tools still runs the worker's file/process/PTY helpers.
-# The tree must contain no symlinks (LemonCore.Update.Archive rejects links),
+# The tree must contain no symlinks (LemonCli.Update.Archive rejects links),
 # and the interpreter must import the helper modules with a bare system PATH.
 assert_bundled_python() {
   local profile="$1"

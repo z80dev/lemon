@@ -18,7 +18,7 @@ defmodule LemonControlPlane.Methods.NodesSupport do
   def field(_map, _key), do: nil
 
   def live_nodes do
-    LemonCore.NodeRegistry.list()
+    LemonAgent.NodeRegistry.list()
     |> Map.new(fn node -> {node.id, node} end)
   catch
     :exit, _ -> :unavailable
@@ -278,7 +278,7 @@ defmodule LemonControlPlane.Methods.NodesRevoke do
   defp do_revoke(node_id) do
     with {:ok, count} <- TokenStore.revoke_identity("node", node_id),
          generation when is_integer(generation) <- TokenStore.current_node_generation(node_id),
-         :ok <- LemonCore.NodeRegistry.revoke_session(node_id, generation) do
+         :ok <- LemonAgent.NodeRegistry.revoke_session(node_id, generation) do
       {:ok,
        %{
          "nodeId" => node_id,

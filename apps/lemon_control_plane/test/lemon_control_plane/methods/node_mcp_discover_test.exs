@@ -8,8 +8,8 @@ defmodule LemonControlPlane.Methods.NodeMcpDiscoverTest do
   setup do
     if Process.whereis(Registry) == nil, do: start_supervised!(Registry)
 
-    if Process.whereis(LemonCore.NodeRegistry) == nil,
-      do: start_supervised!(LemonCore.NodeRegistry)
+    if Process.whereis(LemonAgent.NodeRegistry) == nil,
+      do: start_supervised!(LemonAgent.NodeRegistry)
 
     :ok
   end
@@ -120,7 +120,7 @@ defmodule LemonControlPlane.Methods.NodeMcpDiscoverTest do
     refute_receive {:shadow, {:node_event, "node.invoke.request", _}}, 50
 
     assert :ok =
-             LemonCore.NodeRegistry.complete_session(
+             LemonAgent.NodeRegistry.complete_session(
                target_id,
                target,
                0,
@@ -131,7 +131,7 @@ defmodule LemonControlPlane.Methods.NodeMcpDiscoverTest do
 
     assert Task.await(request) == {:ok, discovery()}
 
-    LemonCore.NodeRegistry.unregister(target_id, target)
+    LemonAgent.NodeRegistry.unregister(target_id, target)
 
     assert {:error, {:unavailable, _, %{"preDispatch" => true, "retrySafe" => false}}} =
              NodeMcpDiscover.handle(%{"nodeId" => target_id, "server" => server()}, ctx(parent))
@@ -187,7 +187,7 @@ defmodule LemonControlPlane.Methods.NodeMcpDiscoverTest do
     assert_receive {:target, {:node_event, "node.invoke.request", payload}}
 
     assert :ok =
-             LemonCore.NodeRegistry.complete_session(
+             LemonAgent.NodeRegistry.complete_session(
                node_id,
                node,
                0,
@@ -215,10 +215,10 @@ defmodule LemonControlPlane.Methods.NodeMcpDiscoverTest do
                status: :offline
              })
 
-    assert :ok = LemonCore.NodeRegistry.register(id, name, pid)
+    assert :ok = LemonAgent.NodeRegistry.register(id, name, pid)
 
     on_exit(fn ->
-      LemonCore.NodeRegistry.unregister(id, pid)
+      LemonAgent.NodeRegistry.unregister(id, pid)
       LemonCore.Store.delete(:nodes_registry, id)
       LemonCore.Store.delete(:nodes_by_name, name)
       if Process.alive?(pid), do: Process.exit(pid, :kill)

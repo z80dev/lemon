@@ -1218,7 +1218,7 @@ defmodule LemonCore.ExecApprovals do
 
   # Introspection is best-effort observability: a rejected payload must not
   # fail the approval transition that already happened (same posture as
-  # `LemonCore.Checkpoint`), so the record outcome is deliberately dropped.
+  # the native filesystem checkpoint), so the record outcome is deliberately dropped.
   defp record_approval_event(event_type, pending, payload) do
     _ =
       LemonCore.Introspection.record(event_type, payload,

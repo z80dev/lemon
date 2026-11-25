@@ -7,8 +7,8 @@ defmodule LemonControlPlane.Methods.NodeProfilePathsTest do
   setup do
     if Process.whereis(Registry) == nil, do: start_supervised!(Registry)
 
-    if Process.whereis(LemonCore.NodeRegistry) == nil,
-      do: start_supervised!(LemonCore.NodeRegistry)
+    if Process.whereis(LemonAgent.NodeRegistry) == nil,
+      do: start_supervised!(LemonAgent.NodeRegistry)
 
     :ok
   end
@@ -37,6 +37,7 @@ defmodule LemonControlPlane.Methods.NodeProfilePathsTest do
 
   test "lookup binds durable target and returns only acknowledged destination paths" do
     owner = self()
+
     {id, target} =
       register_node(
         owner,
@@ -60,7 +61,7 @@ defmodule LemonControlPlane.Methods.NodeProfilePathsTest do
     }
 
     assert :ok =
-             LemonCore.NodeRegistry.complete_session(
+             LemonAgent.NodeRegistry.complete_session(
                id,
                target,
                0,
@@ -70,7 +71,7 @@ defmodule LemonControlPlane.Methods.NodeProfilePathsTest do
              )
 
     assert Task.await(request) == {:ok, Map.put(result, "nodeId", id)}
-    LemonCore.NodeRegistry.unregister(id, target)
+    LemonAgent.NodeRegistry.unregister(id, target)
     assert {:error, {:unavailable, _}} = NodeProfilePaths.handle(params, ctx(owner))
     refute_receive {:shadow, {:node_event, "node.invoke.request", _}}, 50
   end
@@ -104,7 +105,7 @@ defmodule LemonControlPlane.Methods.NodeProfilePathsTest do
       assert_receive {:target, {:node_event, "node.invoke.request", payload}}
 
       assert :ok =
-               LemonCore.NodeRegistry.complete_session(
+               LemonAgent.NodeRegistry.complete_session(
                  id,
                  target,
                  0,
@@ -131,10 +132,10 @@ defmodule LemonControlPlane.Methods.NodeProfilePathsTest do
                status: :offline
              })
 
-    assert :ok = LemonCore.NodeRegistry.register(id, name, pid)
+    assert :ok = LemonAgent.NodeRegistry.register(id, name, pid)
 
     on_exit(fn ->
-      LemonCore.NodeRegistry.unregister(id, pid)
+      LemonAgent.NodeRegistry.unregister(id, pid)
       LemonCore.Store.delete(:nodes_registry, id)
       LemonCore.Store.delete(:nodes_by_name, name)
       if Process.alive?(pid), do: Process.exit(pid, :kill)

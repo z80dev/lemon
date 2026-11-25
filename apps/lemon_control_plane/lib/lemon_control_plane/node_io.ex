@@ -26,7 +26,7 @@ defmodule LemonControlPlane.NodeIO do
              })}
 
           node when is_map(node) ->
-            case LemonCore.NodeRegistry.invoke_node(node_id, method, args,
+            case LemonAgent.NodeRegistry.invoke_node(node_id, method, args,
                    recipient: self(),
                    timeout_ms: timeout_ms,
                    max_payload_bytes: LemonControlPlane.max_payload(),
@@ -222,11 +222,11 @@ defmodule LemonControlPlane.NodeIO do
         {:error, unresolved(method, "Destination operation failed")}
 
       {:DOWN, ^ref, :process, ^owner, _} ->
-        LemonCore.NodeRegistry.cancel(invoke_id, :connection_closed)
+        LemonAgent.NodeRegistry.cancel(invoke_id, :connection_closed)
         {:error, unresolved(method, "Opening connection closed")}
     after
       wait_ms ->
-        LemonCore.NodeRegistry.cancel(invoke_id, :timeout)
+        LemonAgent.NodeRegistry.cancel(invoke_id, :timeout)
         {:error, unresolved(method, "Destination operation timed out")}
     end
   end

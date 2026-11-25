@@ -64,25 +64,25 @@ defmodule LemonControlPlane.Methods.ConnectUsageMethodsTest do
     end
 
     test "uses shared usage diagnostics without leaking stored sensitive fields" do
-      previous_summary = LemonCore.UsageStore.get_summary(:current)
+      previous_summary = LemonAgent.UsageStore.get_summary(:current)
       today_key = Date.to_iso8601(Date.utc_today())
-      previous_today = LemonCore.UsageStore.get_record(today_key)
+      previous_today = LemonAgent.UsageStore.get_record(today_key)
 
       on_exit(fn ->
         if previous_summary do
-          LemonCore.UsageStore.put_summary(:current, previous_summary)
+          LemonAgent.UsageStore.put_summary(:current, previous_summary)
         else
           LemonCore.Store.delete(:usage_data, :current)
         end
 
         if previous_today do
-          LemonCore.UsageStore.put_record(today_key, previous_today)
+          LemonAgent.UsageStore.put_record(today_key, previous_today)
         else
           LemonCore.Store.delete(:usage_records, today_key)
         end
       end)
 
-      LemonCore.UsageStore.put_summary(:current, %{
+      LemonAgent.UsageStore.put_summary(:current, %{
         total_cost: 0.42,
         total_requests: 3,
         total_tokens: %{input: 1_000, output: 500},
@@ -94,7 +94,7 @@ defmodule LemonControlPlane.Methods.ConnectUsageMethodsTest do
         api_key: "usage-status-secret-key"
       })
 
-      LemonCore.UsageStore.put_record(today_key, %{
+      LemonAgent.UsageStore.put_record(today_key, %{
         date: today_key,
         total_cost: 0.42,
         requests: %{"openai" => 3},
@@ -139,15 +139,15 @@ defmodule LemonControlPlane.Methods.ConnectUsageMethodsTest do
     provider = usage[:provider] || usage["provider"]
 
     entry =
-      LemonCore.UsageLedger.entry(run_id, "agent:test:usage", %{
+      LemonAgent.UsageLedger.entry(run_id, "agent:test:usage", %{
         completed: %{usage: usage},
         completed_at_ms: System.system_time(:millisecond),
         meta: %{provider: provider, model: "test"}
       })
 
-    record = LemonCore.UsageLedger.occurrence_record(entry)
+    record = LemonAgent.UsageLedger.occurrence_record(entry)
     on_exit(fn -> LemonCore.Store.delete(:usage_occurrences, record.id) end)
-    LemonCore.UsageLedger.record(entry)
+    LemonAgent.UsageLedger.record(entry)
   end
 
   describe "UsageCost" do

@@ -395,8 +395,8 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
-| `LEMON_BROWSER_PROVIDER` | string | `auto` |  | `lemon_core` | Browser provider id; auto prefers connected LCU, then relay, then local. |
-| `LEMON_BROWSER_TERN` | boolean | `true` |  | `lemon_core` | Enable native Tern browser integration for locally bound panes. |
+| `LEMON_BROWSER_PROVIDER` | string | `auto` |  | `lemon_browser` | Browser provider id; auto prefers connected LCU, then relay, then local. |
+| `LEMON_BROWSER_TERN` | boolean | `true` |  | `lemon_browser` | Enable native Tern browser integration for locally bound panes. |
 
 ### Tools disclosure
 

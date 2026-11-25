@@ -36,7 +36,10 @@ defmodule LemonCli.MixProject do
       {:exqlite, "~> 0.43.0"},
       {:yaml_elixir, "~> 2.9"},
       {:lemon_core, in_umbrella: true},
+      # Library only: passive browser selection and the local pane client.
+      {:lemon_browser, in_umbrella: true, runtime: false},
       {:lemon_agent, in_umbrella: true},
+      {:lemon_control_plane, in_umbrella: true, only: :test, runtime: false},
       {:lemon_memory, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:lemon_ai, in_umbrella: true}

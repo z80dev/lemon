@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.SessionsDelete do
   @moduledoc """
   Handler for the sessions.delete method.
 
-  Deletes a session and its history through `LemonCore.SessionLifecycle.delete/1`
+  Deletes a session and its history through `LemonControlPlane.SessionLifecycle.delete/1`
   under the session's run-admission fence
   (`LemonControlPlane.Methods.SessionLifecycleFence`). Success is reported only
   after the deletion is verified.
@@ -11,7 +11,7 @@ defmodule LemonControlPlane.Methods.SessionsDelete do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Methods.SessionLifecycleFence
-  alias LemonCore.SessionLifecycle
+  alias LemonControlPlane.SessionLifecycle
 
   @impl true
   def name, do: "sessions.delete"

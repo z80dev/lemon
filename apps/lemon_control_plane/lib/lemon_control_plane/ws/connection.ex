@@ -173,7 +173,7 @@ defmodule LemonControlPlane.WS.Connection do
 
   @impl WebSock
   def handle_info({:node_registry_owner, _, _, _, _} = message, state) do
-    :ok = LemonCore.NodeRegistry.handle_owner_message(message)
+    :ok = LemonAgent.NodeRegistry.handle_owner_message(message)
     {:ok, state}
   end
 
@@ -602,7 +602,7 @@ defmodule LemonControlPlane.WS.Connection do
           :ok
 
         {:error, reason} ->
-          LemonCore.NodeRegistry.unregister(node_id, self())
+          LemonAgent.NodeRegistry.unregister(node_id, self())
           Logger.error("Failed to persist node connection: #{inspect(reason)}")
           {:error, Errors.internal_error("Failed to persist node connection")}
       end
@@ -628,7 +628,7 @@ defmodule LemonControlPlane.WS.Connection do
   defp register_live_node(node_id, name, node, auth, params) do
     generation = get_field(auth.identity || %{}, :sessionGeneration) || 0
 
-    LemonCore.NodeRegistry.register_session(node_id, name, self(), generation, %{
+    LemonAgent.NodeRegistry.register_session(node_id, name, self(), generation, %{
       type: get_field(node, :type),
       capabilities: live_capabilities(node, params)
     })
@@ -667,9 +667,9 @@ defmodule LemonControlPlane.WS.Connection do
 
   defp unregister_node_connection(%{auth: %{role: :node, client_id: node_id}})
        when is_binary(node_id) do
-    LemonCore.NodeRegistry.unregister(node_id, self())
+    LemonAgent.NodeRegistry.unregister(node_id, self())
 
-    unless LemonCore.NodeRegistry.online?(node_id) do
+    unless LemonAgent.NodeRegistry.online?(node_id) do
       case NodeStore.get_node(node_id) do
         node when is_map(node) -> mark_node_status(node_id, node, :offline)
         _ -> :ok

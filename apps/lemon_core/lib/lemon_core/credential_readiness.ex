@@ -12,7 +12,7 @@ defmodule LemonCore.CredentialReadiness do
 
   The module exports `credential_readiness(provider, providers, opts)`, called
   here in its side-effect-free presence mode: it never decrypts a value,
-  refreshes an OAuth login, runs an external secret source or omp, or makes a
+  refreshes an OAuth login, runs an external credential command, or makes a
   network request. Without a registered implementation every provider is
   `:unavailable` (not ready).
   """

@@ -1066,7 +1066,7 @@ defmodule CodingAgent.Session.PlanningTest do
              CodingAgent.ControlPlaneProvider.session_plan(key, root, :enter, [])
 
     assert File.read!(planned.file_path) == bytes
-    assert LemonCore.SessionLifecycle.get(key).run_count == 0
+    assert LemonControlPlane.SessionLifecycle.get(key).run_count == 0
 
     # Profile workspace files are bootstrap inputs, not project model-role config.
     workspace = Path.join(root, "profile-workspace")
@@ -1230,7 +1230,7 @@ defmodule CodingAgent.Session.PlanningTest do
              CodingAgent.ControlPlaneProvider.session_plan(fresh, root, :enter, [])
 
     assert LemonCore.ChatStateStore.get(fresh) == nil
-    assert LemonCore.SessionLifecycle.get(fresh) == nil
+    assert LemonControlPlane.SessionLifecycle.get(fresh) == nil
     assert Path.wildcard(Path.join(SessionManager.get_session_dir(root), "*.jsonl")) == files
   end
 
@@ -1392,7 +1392,7 @@ defmodule CodingAgent.Session.PlanningTest do
     assert {:ok, %{"mode" => "code"}} =
              CodingAgent.ControlPlaneProvider.session_plan(key, root, :exit, [])
 
-    assert LemonCore.SessionLifecycle.get(key).run_count == 0
+    assert LemonControlPlane.SessionLifecycle.get(key).run_count == 0
   end
 
   test "explicit creation is idempotent, nameable and contains no fabricated plan or messages", %{
@@ -1402,7 +1402,7 @@ defmodule CodingAgent.Session.PlanningTest do
     on_exit(fn -> CodingAgent.TestSupport.SessionCleanup.delete(key) end)
 
     assert {:error, :not_found} =
-             LemonCore.SessionLifecycle.patch(key, %{title: "Before first turn"})
+             LemonControlPlane.SessionLifecycle.patch(key, %{title: "Before first turn"})
 
     results =
       1..4
@@ -1418,14 +1418,17 @@ defmodule CodingAgent.Session.PlanningTest do
 
     assert SessionManager.entries(native) == []
     assert Planning.status(native)["mode"] == "code"
-    assert {:ok, named} = LemonCore.SessionLifecycle.patch(key, %{title: "Before first turn"})
+
+    assert {:ok, named} =
+             LemonControlPlane.SessionLifecycle.patch(key, %{title: "Before first turn"})
+
     assert named.title == "Before first turn"
     assert named.run_count == 0
 
     assert {:ok, %{"created" => false, "sessionId" => ^id}} =
              CodingAgent.ControlPlaneProvider.session_create(key, root)
 
-    assert LemonCore.SessionLifecycle.get(key).title == "Before first turn"
+    assert LemonControlPlane.SessionLifecycle.get(key).title == "Before first turn"
     assert {:error, _} = CodingAgent.ControlPlaneProvider.session_create(key, root <> "-wrong")
     assert LemonCore.ChatStateStore.get(key).last_resume_token == id
   end

@@ -41,7 +41,7 @@ defmodule LemonControlPlane.NodeShells do
         shell_id = LemonCore.Id.uuid()
         args = params |> Map.delete("nodeId") |> Map.put("shellId", shell_id)
 
-        case LemonCore.NodeRegistry.invoke_node(node_id, "node.shell.open", args,
+        case LemonAgent.NodeRegistry.invoke_node(node_id, "node.shell.open", args,
                recipient: self(),
                timeout_ms: 3_600_000
              ) do
@@ -105,7 +105,7 @@ defmodule LemonControlPlane.NodeShells do
                 {:noreply, put_in(state.shells[id].seq, seq)}
 
               _ ->
-                LemonCore.NodeRegistry.cancel(shell.invoke_id, :slow_consumer)
+                LemonAgent.NodeRegistry.cancel(shell.invoke_id, :slow_consumer)
                 {:noreply, remove(state, id)}
             end
 
@@ -133,7 +133,7 @@ defmodule LemonControlPlane.NodeShells do
     state =
       Enum.reduce(state.shells, state, fn {id, shell}, acc ->
         if shell.ref == ref do
-          LemonCore.NodeRegistry.cancel(shell.invoke_id, :connection_closed)
+          LemonAgent.NodeRegistry.cancel(shell.invoke_id, :connection_closed)
           remove(acc, id)
         else
           acc
@@ -144,14 +144,16 @@ defmodule LemonControlPlane.NodeShells do
   end
 
   def handle_info({:open_timeout, id}, state) do
-    if shell = state.shells[id], do: LemonCore.NodeRegistry.cancel(shell.invoke_id, :open_timeout)
+    if shell = state.shells[id],
+      do: LemonAgent.NodeRegistry.cancel(shell.invoke_id, :open_timeout)
+
     {:noreply, remove(state, id)}
   end
 
   @impl true
   def terminate(_reason, state) do
     Enum.each(state.shells, fn {_, shell} ->
-      LemonCore.NodeRegistry.cancel(shell.invoke_id, :shell_service_stopped)
+      LemonAgent.NodeRegistry.cancel(shell.invoke_id, :shell_service_stopped)
     end)
 
     :ok

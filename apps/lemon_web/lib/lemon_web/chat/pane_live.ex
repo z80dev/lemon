@@ -38,7 +38,8 @@ defmodule LemonWeb.Chat.PaneLive do
   require Logger
 
   alias LemonControlPlane.EventBridge
-  alias LemonCore.{Bus, NodeRegistry, SessionKey}
+  alias LemonCore.{Bus, SessionKey}
+  alias LemonAgent.NodeRegistry
   alias LemonCore.Bus.Delivery
 
   alias LemonWeb.Chat.{

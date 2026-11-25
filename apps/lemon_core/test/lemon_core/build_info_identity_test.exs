@@ -21,7 +21,7 @@ defmodule LemonCore.BuildInfoIdentityTest do
     test "source reports the umbrella CalVer instead of the OTP application version" do
       System.delete_env("RELEASE_VSN")
       System.delete_env("LEMON_PATH")
-      assert LemonCore.Update.Version.valid?(BuildInfo.version())
+      assert LemonCore.ReleaseVersion.valid?(BuildInfo.version())
       assert %{mode: "source", channel: "source"} = BuildInfo.identity()
     end
   end

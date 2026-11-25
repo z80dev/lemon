@@ -7,7 +7,7 @@ defmodule LemonCli.UninstallCommand do
   SHA-256 confirmation digest output during preview.
   """
 
-  alias LemonCore.Uninstall
+  alias LemonCli.Uninstall
 
   @exit_ok 0
   @exit_error 1

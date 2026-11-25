@@ -32,7 +32,8 @@ defmodule CodingAgent.NodeTools do
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{ImageContent, TextContent}
-  alias LemonCore.{ExecutionContext, NodeRegistry}
+  alias LemonCore.ExecutionContext
+  alias LemonAgent.NodeRegistry
 
   @method "coding_agent.tool"
   @version 1

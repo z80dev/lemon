@@ -136,7 +136,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
          )}
       )
 
-    assert {:ok, nil} = LemonCore.SessionLifecycle.fetch(c.key)
+    assert {:ok, nil} = LemonControlPlane.SessionLifecycle.fetch(c.key)
     assert {:ok, result} = SessionsSnapshot.handle(params(c), ctx())
     assert result["status"] == "ok"
     assert result["identity"]["sessionKey"] == c.key

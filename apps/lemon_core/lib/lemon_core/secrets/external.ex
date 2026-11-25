@@ -16,17 +16,12 @@ defmodule LemonCore.Secrets.External do
   # Headroom over the summed per-run helper timeouts for bootstrap reads and
   # task start-up; each helper run is still cut off at its own timeout.
   @fetch_grace_ms 1_000
-  @source_modules %{
-    onepassword: LemonCore.Secrets.Source.OnePassword,
-    bitwarden: LemonCore.Secrets.Source.Bitwarden,
-    command: LemonCore.Secrets.Source.Command
-  }
 
   @type provenance :: String.t()
 
-  @spec resolve(String.t(), keyword()) ::
+  @spec resolve(String.t(), keyword(), LemonCore.Secrets.Source.bootstrap()) ::
           {:ok, String.t(), provenance()} | {:error, LemonCore.Secrets.Source.error_kind()}
-  def resolve(name, opts \\ []) when is_binary(name) do
+  def resolve(name, opts, bootstrap) when is_binary(name) do
     config = source_config(opts)
     enabled = enabled_sources(config)
 
@@ -40,7 +35,7 @@ defmodule LemonCore.Secrets.External do
         {:error, :not_found}
 
       true ->
-        resolve_from_sources(name, enabled, opts)
+        resolve_from_sources(name, enabled, opts, bootstrap)
     end
   end
 
@@ -60,11 +55,11 @@ defmodule LemonCore.Secrets.External do
   end
 
   @doc "Returns redacted readiness metadata without invoking a source."
-  @spec status(keyword()) :: map()
-  def status(opts \\ []) do
+  @spec status(keyword(), LemonCore.Secrets.Source.bootstrap()) :: map()
+  def status(opts, bootstrap) do
     config = source_config(opts)
     enabled = enabled_sources(config)
-    statuses = Enum.map(config.sources, &source_status(&1, opts))
+    statuses = Enum.map(config.sources, &source_status(&1, bootstrap))
 
     %{
       status: overall_status(config, enabled, statuses),
@@ -78,8 +73,8 @@ defmodule LemonCore.Secrets.External do
   end
 
   @doc "Executes enabled sources and returns counts/provenance only."
-  @spec test(keyword()) :: map()
-  def test(opts \\ []) do
+  @spec test(keyword(), LemonCore.Secrets.Source.bootstrap()) :: map()
+  def test(opts, bootstrap) do
     config = source_config(opts)
     requested_id = Keyword.get(opts, :source_id)
 
@@ -97,7 +92,8 @@ defmodule LemonCore.Secrets.External do
           []
 
         true ->
-          Enum.map(sources, &test_source(&1, Keyword.put(opts, :force, true)))
+          opts = Keyword.put(opts, :force, true)
+          Enum.map(sources, &test_source(&1, opts, bootstrap))
       end
 
     status =
@@ -164,55 +160,70 @@ defmodule LemonCore.Secrets.External do
     Enum.filter(sources, &(&1.enabled === true))
   end
 
-  defp resolve_from_sources(name, sources, opts) do
-    sources
-    |> Enum.flat_map(&scope_to_name(&1, name))
-    |> Enum.reduce_while({:error, :not_found}, fn source, _acc ->
-      case fetch_source(source, opts) do
-        {:ok, %{values: values}} ->
-          case Map.fetch(values, name) do
-            {:ok, value} when is_binary(value) and value != "" ->
-              {:halt, {:ok, value, provenance(source)}}
+  defp resolve_from_sources(name, sources, opts, bootstrap) do
+    Enum.reduce_while(sources, {:error, :not_found}, fn source, miss ->
+      module = source_module(source)
 
-            _ ->
-              {:cont, {:error, :not_found}}
+      cond do
+        is_nil(module) ->
+          {:halt, {:error, :invalid_config}}
+
+        scoped = scope_to_name(module, source, name) ->
+          case fetch_source(module, scoped, opts, bootstrap) do
+            {:ok, %{values: values}} ->
+              case Map.fetch(values, name) do
+                {:ok, value} when is_binary(value) and value != "" ->
+                  {:halt, {:ok, value, provenance(source)}}
+
+                _ ->
+                  {:cont, miss}
+              end
+
+            {:error, reason} ->
+              {:halt, {:error, reason}}
           end
 
-        {:error, reason} ->
-          {:halt, {:error, reason}}
+        true ->
+          {:cont, miss}
       end
     end)
   end
 
-  # A 1Password source maps each name to its own ref: it cannot answer any
-  # other name, and answering one needs only that ref's `op read`.
-  defp scope_to_name(%SourceConfig{type: :onepassword, refs: refs} = source, name) do
-    case Map.fetch(refs, name) do
-      {:ok, ref} -> [%{source | refs: %{name => ref}}]
-      :error -> []
-    end
+  defp scope_to_name(module, source, name) do
+    if function_exported?(module, :scope, 2), do: module.scope(source, name), else: source
   end
 
-  defp scope_to_name(source, _name), do: [source]
+  defp source_module(%SourceConfig{type: :command}) do
+    module = LemonCore.Secrets.Source.Command
+    if Code.ensure_loaded?(module), do: module
+  end
 
-  defp fetch_source(%SourceConfig{} = source, opts) do
-    module = Map.fetch!(@source_modules, source.type)
-    cache_key = cache_key(source)
+  defp source_module(%SourceConfig{type: type}) do
+    with module when is_atom(module) and not is_nil(module) <- SecretsConfig.adapter(type),
+         true <- Code.ensure_loaded?(module),
+         do: module,
+         else: (_ -> nil)
+  end
+
+  defp fetch_source(nil, _source, _opts, _bootstrap), do: {:error, :invalid_config}
+
+  defp fetch_source(module, source, opts, bootstrap) do
+    cache_key = if source.cache_ttl_ms > 0, do: cache_key(source)
 
     case cache_get(source, cache_key, opts) do
       {:ok, result} ->
         {:ok, result}
 
       :miss ->
-        result = supervised_fetch(module, source, opts)
+        result = supervised_fetch(module, source, bootstrap)
         maybe_cache(result, source, cache_key)
         result
     end
   end
 
-  defp supervised_fetch(module, source, opts) do
+  defp supervised_fetch(module, source, bootstrap) do
     case LemonCore.TaskSupervisor.async_nolink(@task_supervisor, fn ->
-           module.fetch(source, opts)
+           module.fetch(source, bootstrap)
          end) do
       {:error, :task_supervisor_unavailable} ->
         {:error, :source_supervisor_unavailable}
@@ -221,7 +232,7 @@ defmodule LemonCore.Secrets.External do
         {:error, :spawn_failed}
 
       {:ok, task} ->
-        case Task.yield(task, fetch_budget_ms(source)) do
+        case Task.yield(task, fetch_budget_ms(module, source)) do
           {:ok, {:ok, %{values: values, byte_count: byte_count}} = result}
           when is_map(values) and is_integer(byte_count) and byte_count >= 0 ->
             result
@@ -242,13 +253,10 @@ defmodule LemonCore.Secrets.External do
     end
   end
 
-  # The supervising task waits for every helper run the source makes: one per
-  # 1Password ref, one for any other source type.
-  defp fetch_budget_ms(%SourceConfig{type: :onepassword, refs: refs, timeout_ms: timeout_ms}),
-    do: timeout_ms * max(map_size(refs), 1) + @fetch_grace_ms
-
-  defp fetch_budget_ms(%SourceConfig{timeout_ms: timeout_ms}),
-    do: timeout_ms + @fetch_grace_ms
+  defp fetch_budget_ms(module, source) do
+    runs = if function_exported?(module, :runs, 1), do: module.runs(source), else: 1
+    source.timeout_ms * runs + @fetch_grace_ms
+  end
 
   defp cache_get(source, key, opts) when is_list(opts) do
     if Keyword.get(opts, :force, false) do
@@ -273,15 +281,22 @@ defmodule LemonCore.Secrets.External do
     {:external_secret_source, source.id, digest}
   end
 
-  defp source_status(%SourceConfig{} = source, opts) do
-    module = Map.get(@source_modules, source.type)
+  defp source_status(%SourceConfig{} = source, bootstrap) do
+    module = source_module(source)
     configured? = not is_nil(module) and module.configured?(source)
-    binary_available? = executable_available?(source)
+
+    binary_available? =
+      with true <- not is_nil(module),
+           executable when is_binary(executable) <- module.executable(source) do
+        SourceRunner.executable_available?(executable)
+      else
+        _ -> false
+      end
 
     bootstrap_ready? =
       not is_nil(module) and
         (not function_exported?(module, :bootstrap_ready?, 2) or
-           module.bootstrap_ready?(source, opts))
+           module.bootstrap_ready?(source, bootstrap))
 
     status =
       cond do
@@ -310,21 +325,10 @@ defmodule LemonCore.Secrets.External do
     }
   end
 
-  defp executable_available?(%SourceConfig{type: :onepassword} = source),
-    do: SourceRunner.executable_available?(source.executable || "op")
-
-  defp executable_available?(%SourceConfig{type: :bitwarden} = source),
-    do: SourceRunner.executable_available?(source.executable || "bws")
-
-  defp executable_available?(%SourceConfig{type: :command, argv: [program | _]}),
-    do: SourceRunner.executable_available?(program)
-
-  defp executable_available?(_source), do: false
-
-  defp test_source(source, opts) do
+  defp test_source(source, opts, bootstrap) do
     started_at = System.monotonic_time(:millisecond)
 
-    result = fetch_source(source, opts)
+    result = fetch_source(source_module(source), source, opts, bootstrap)
     duration_ms = max(System.monotonic_time(:millisecond) - started_at, 0)
 
     case result do

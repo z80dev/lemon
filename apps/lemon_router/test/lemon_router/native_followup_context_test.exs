@@ -226,7 +226,7 @@ defmodule LemonRouter.NativeFollowupContextTest do
   defp configure_fixture_environment(root, profile_id, suffix) do
     keys = [
       {:lemon_core, :paths},
-      {:lemon_core, Secrets},
+      {:lemon_core, :secrets},
       {:lemon_router, :native_followup_allowed_origins},
       {:lemon_router, :session_coordinator},
       {:lemon_router, :native_context_consumer}
@@ -263,7 +263,7 @@ defmodule LemonRouter.NativeFollowupContextTest do
       global_config: Path.join(root, "config.toml")
     )
 
-    Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: secret_env)
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env], env_var: secret_env)
     # A fresh master key per fixture: the store's key verifier and records from
     # earlier tests belong to other keys and correctly refuse writes.
     for {ref, _} <- Store.list(Secrets.table()), do: Store.delete(Secrets.table(), ref)
@@ -558,13 +558,13 @@ defmodule LemonRouter.NativeFollowupContextTest do
       })
 
     assert_receive {:execution_node_worker, ^worker, {:status, :online, ^node_id}}, 3000
-    assert {:ok, destination} = LemonCore.NodeRegistry.resolve_id(node_id)
+    assert {:ok, destination} = LemonAgent.NodeRegistry.resolve_id(node_id)
     assert destination.generation == credential.identity["sessionGeneration"]
     refute destination.pid == worker
 
     if placement == :human_name do
       # The controller registered the worker's durable name; it maps to the durable ID.
-      assert {:ok, %{id: ^node_id}} = LemonCore.NodeRegistry.resolve(node_name)
+      assert {:ok, %{id: ^node_id}} = LemonAgent.NodeRegistry.resolve(node_name)
     end
 
     assert {:ok, _} = ProfileStore.update(ctx.profile, %{"node" => selector})
@@ -635,7 +635,7 @@ defmodule LemonRouter.NativeFollowupContextTest do
     :ok = CodingAgent.Executor.cancel(remote)
 
     on_exit(fn ->
-      LemonCore.NodeRegistry.unregister(node_id, destination.pid)
+      LemonAgent.NodeRegistry.unregister(node_id, destination.pid)
       LemonCore.Store.delete(:session_tokens, token)
       LemonCore.Store.delete(:session_token_heads, {"node", node_id})
       LemonControlPlane.NodeStore.release_node_name(node_name, node_id)

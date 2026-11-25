@@ -1,25 +1,11 @@
 defmodule LemonCore.AutomaticGitSafetyTest do
-  # Context `@git-diff` references and support-bundle build info read a
-  # project repository; its configuration must not make those reads run
-  # programs.
+  # The support bundle reads a project repository's build info. Its
+  # configuration must not make those reads run programs.
   use ExUnit.Case, async: false
 
-  alias LemonCore.{BuildInfo, Context}
+  alias LemonCore.BuildInfo
 
   @moduletag :tmp_dir
-
-  test "@git-diff runs no textconv or fsmonitor program", %{tmp_dir: tmp} do
-    repo = repo!(Path.join(tmp, "repo"))
-    marker = Path.join(tmp, "program-ran")
-    git!(repo, ["config", "diff.evil.textconv", program!(tmp, "textconv", marker, ~s(cat "$1"))])
-    git!(repo, ["config", "core.fsmonitor", program!(tmp, "fsmonitor", marker, "exit 1")])
-    File.write!(Path.join(repo, ".git/info/attributes"), "* diff=evil\n")
-    File.write!(Path.join(repo, "tracked.txt"), "two\n")
-
-    assert {:ok, result} = Context.resolve("@git-diff", root: repo)
-    assert result.selected_text =~ "+two"
-    refute File.exists?(marker), "@git-diff ran a program named by repository config"
-  end
 
   test "support-bundle build info runs no fsmonitor program or clean filter", %{tmp_dir: tmp} do
     repo = repo!(Path.join(tmp, "repo"))

@@ -170,9 +170,9 @@ config :lemon_computer_use,
   # Never run a developer's installed LCU from unit tests.
   lcu_root: Path.join(System.tmp_dir!(), "lemon_lcu_test_no_such_dir")
 
-# Browser auto-selection probes LCU (LemonCore.BrowserProvider.LCUProbe) on
+# Browser auto-selection probes LCU (LemonBrowser.Provider.LCUProbe) on
 # every tool registry build; keep that probe away from installed LCU too.
-config :lemon_core,
+config :lemon_browser,
   lcu_default_roots: [Path.join(System.tmp_dir!(), "lemon_lcu_test_no_such_dir")]
 
 Enum.each(

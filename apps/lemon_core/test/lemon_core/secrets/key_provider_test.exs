@@ -5,6 +5,7 @@ defmodule LemonCore.Secrets.KeyProviderTest do
   import ExUnit.CaptureLog
 
   alias LemonCore.Secrets.KeyProvider
+  alias LemonCore.Secrets.KeySources
   alias LemonCore.Secrets.MasterKey
 
   defmodule KeychainDouble do
@@ -14,13 +15,13 @@ defmodule LemonCore.Secrets.KeyProviderTest do
   end
 
   setup do
-    original = Application.get_env(:lemon_core, LemonCore.Secrets)
+    original = Application.get_env(:lemon_core, :secrets)
 
     on_exit(fn ->
       if original do
-        Application.put_env(:lemon_core, LemonCore.Secrets, original)
+        Application.put_env(:lemon_core, :secrets, original)
       else
-        Application.delete_env(:lemon_core, LemonCore.Secrets)
+        Application.delete_env(:lemon_core, :secrets)
       end
     end)
 
@@ -32,11 +33,11 @@ defmodule LemonCore.Secrets.KeyProviderTest do
   end
 
   defp put_settings(original, extra) do
-    Application.put_env(:lemon_core, LemonCore.Secrets, Keyword.merge(original || [], extra))
+    Application.put_env(:lemon_core, :secrets, Keyword.merge(original || [], extra))
   end
 
   test "defaults preserve the historical provider order" do
-    assert KeyProvider.default_order() == [:keychain, :env, :file]
+    assert KeySources.default_order() == [:keychain, :env, :file]
   end
 
   test "app env can reorder providers", %{dir: dir, original: original} do
@@ -61,7 +62,7 @@ defmodule LemonCore.Secrets.KeyProviderTest do
       _ -> nil
     end
 
-    assert [KeyProvider.Env] == KeyProvider.order([])
+    assert [KeyProvider.Env] == KeySources.order([])
 
     assert {:ok, _key, :env} =
              MasterKey.resolve(keychain_module: KeychainDouble, env_getter: env_getter)

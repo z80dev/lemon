@@ -15,7 +15,8 @@ defmodule LemonCore.Secrets.Usage do
 
   use GenServer
 
-  alias LemonCore.{Clock, MapHelpers, Secrets, Store}
+  alias LemonCore.{Clock, MapHelpers, Store}
+  alias LemonCore.Secrets.Record
 
   @flush_interval 100
 
@@ -82,7 +83,7 @@ defmodule LemonCore.Secrets.Usage do
         |> put_field(:usage_count, (MapHelpers.get_key(entry, :usage_count) || 0) + count)
         |> put_field(:last_used_at, used_at)
 
-      _ = Store.compare_and_swap(store, Secrets.table(), key, entry, updated)
+      _ = Store.compare_and_swap(store, Record.table(), key, entry, updated)
     end)
 
     %{state | pending: %{}, timer: nil}

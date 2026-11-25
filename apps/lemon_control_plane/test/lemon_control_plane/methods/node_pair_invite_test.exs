@@ -871,7 +871,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
       })
 
     assert_receive {:execution_node_worker, ^worker, {:status, :online, node_id}}, 5_000
-    assert {:ok, %{id: ^node_id}} = LemonCore.NodeRegistry.resolve(name)
+    assert {:ok, %{id: ^node_id}} = LemonAgent.NodeRegistry.resolve(name)
     assert NodeStore.get_node(node_id).purpose == "lemon_bot"
 
     assert_receive {:execution_node_socket, ^operator, {:event, "node.pair.resolved", event}},
@@ -919,7 +919,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
       })
 
     assert_receive {:execution_node_worker, ^repaired_worker, {:status, :online, ^node_id}}, 5_000
-    assert {:ok, %{id: ^node_id}} = LemonCore.NodeRegistry.resolve_id(node_id)
+    assert {:ok, %{id: ^node_id}} = LemonAgent.NodeRegistry.resolve_id(node_id)
 
     assert {:ok, repaired_saved} =
              CodingAgent.ExecutionNode.TokenStore.load_node(node_id,
@@ -994,7 +994,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
                     {:response, :revoke_again, {:error, %{"code" => "NOT_FOUND"}}}},
                    3_000
 
-    assert {:ok, %{id: ^node_id}} = LemonCore.NodeRegistry.resolve_id(node_id)
+    assert {:ok, %{id: ^node_id}} = LemonAgent.NodeRegistry.resolve_id(node_id)
     Socket.stop(socket)
     Socket.stop(operator)
   end

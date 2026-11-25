@@ -138,9 +138,9 @@ defmodule LemonCore.PathsTest do
     test "Checkpoint and its diagnostics resolve to the same directory" do
       put_paths(checkpoint_dir: "/var/lib/lemon/checkpoints")
 
-      assert LemonCore.Checkpoint.checkpoint_dir() == "/var/lib/lemon/checkpoints"
+      assert LemonAgent.Checkpoint.checkpoint_dir() == "/var/lib/lemon/checkpoints"
 
-      assert LemonCore.Doctor.CheckpointDiagnostics.summary(:operator, limit: 1).store ==
+      assert LemonAgent.Doctor.CheckpointDiagnostics.summary(:operator, limit: 1).store ==
                LemonCore.Doctor.Redaction.path_ref("/var/lib/lemon/checkpoints")
     end
 
@@ -148,7 +148,7 @@ defmodule LemonCore.PathsTest do
       put_paths(checkpoint_dir: "/var/lib/lemon/checkpoints")
 
       summary =
-        LemonCore.Doctor.CheckpointDiagnostics.summary(:operator,
+        LemonAgent.Doctor.CheckpointDiagnostics.summary(:operator,
           checkpoint_dir: "/tmp/elsewhere"
         )
 

@@ -58,7 +58,9 @@ defmodule LemonCore.Store.ReadCache do
   # Domains the Store caches for its own run lifecycle API. Generic tables are
   # added on top of these per instance (see `init/2`).
   @intrinsic_domains [:runs]
-  @default_store LemonCore.Store
+  # The default store's registered name, used only as a cache-scope identity:
+  # the cache never calls the store, so it is not a module reference.
+  @default_store :"Elixir.LemonCore.Store"
 
   @type store :: atom()
   @type tables :: %{optional(atom()) => :ets.table()}

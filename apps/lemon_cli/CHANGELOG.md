@@ -66,6 +66,9 @@ All notable changes to `lemon_cli` are documented here.
   overrides remain untouched. Referenced shared secrets fail closed rather than
   silently breaking another consumer, including references from the destination
   project's providers and credential pools. Default selection is a separate operation.
+- The CLI owns managed updates, configuration migration, service lifecycle,
+  master-key rotation, and the local policy and usage command adapters.
+  Existing command names, flags and output contracts are unchanged (#727).
 
 - `lemon policy` manages `LemonCore.PolicyStore` chat rows; `--peer` without
   `--account` names the `default` account and `--thread` requires `--peer`

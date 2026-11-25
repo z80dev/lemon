@@ -14,7 +14,8 @@ defmodule LemonCore.Config.AssistantHomeLayerTest do
     System.put_env("HOME", Path.join(base, "home"))
     System.put_env("LEMON_AGENT_DIR", Path.join(base, "agent"))
 
-    if !ConfigCache.available?(), do: {:ok, _pid} = ConfigCache.start_link([])
+    if !ConfigCache.available?(),
+      do: {:ok, _pid} = ConfigCache.start_link(load_base: &LemonCore.Config.load_base_from_disk/1)
 
     on_exit(fn ->
       Enum.each(previous, fn
@@ -49,7 +50,7 @@ defmodule LemonCore.Config.AssistantHomeLayerTest do
     test "the #{home} assistant home and its descendants never read a project layer" do
       home_dir =
         case unquote(home) do
-          :default -> LemonCore.Cwd.assistant_home()
+          :default -> LemonCore.Paths.assistant_home()
           :profile -> LemonCore.Paths.home_path(["profiles", "p1", "workspace"])
         end
 
@@ -68,7 +69,7 @@ defmodule LemonCore.Config.AssistantHomeLayerTest do
   end
 
   test "malformed home-local TOML is never parsed and keeps the global config" do
-    home_dir = LemonCore.Cwd.assistant_home()
+    home_dir = LemonCore.Paths.assistant_home()
     write!(Path.join(home_dir, ".lemon/config.toml"), "value = \n[[[broken")
 
     assert model(home_dir) == "global-model"

@@ -1,9 +1,10 @@
 defmodule LemonRouter.NativeLineageTest do
   use ExUnit.Case, async: false
 
+  alias LemonAgent.NodeRegistry
+
   alias LemonCore.{
     InvocationProof,
-    NodeRegistry,
     ProfileStore,
     RunRequest,
     RunStore,
@@ -107,7 +108,7 @@ defmodule LemonRouter.NativeLineageTest do
 
     env_keys = [
       {:lemon_core, :paths},
-      {:lemon_core, Secrets},
+      {:lemon_core, :secrets},
       {:lemon_router, :native_followup_allowed_origins},
       {:lemon_router, :session_coordinator},
       {:lemon_router, :native_lineage_test_pid},
@@ -127,7 +128,7 @@ defmodule LemonRouter.NativeLineageTest do
       global_config: Path.join(root, "config.toml")
     )
 
-    Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: key_env)
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env], env_var: key_env)
     Application.put_env(:lemon_router, :session_coordinator, Coordinator)
     Application.put_env(:lemon_router, :native_lineage_test_pid, self())
     Application.put_env(:lemon_router, :native_lineage_test_dispatch, :ok)

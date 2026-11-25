@@ -9,18 +9,18 @@ defmodule LemonControlPlane.Methods.SecretsMethodsTest do
   @name "CONTROL_PLANE_SECRET_TEST"
 
   setup do
-    previous_secrets = Application.fetch_env(:lemon_core, LemonCore.Secrets)
+    previous_secrets = Application.fetch_env(:lemon_core, :secrets)
     previous_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
 
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env])
     System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
 
     on_exit(fn ->
       _ = Secrets.delete(@name)
 
       case previous_secrets do
-        {:ok, value} -> Application.put_env(:lemon_core, LemonCore.Secrets, value)
-        :error -> Application.delete_env(:lemon_core, LemonCore.Secrets)
+        {:ok, value} -> Application.put_env(:lemon_core, :secrets, value)
+        :error -> Application.delete_env(:lemon_core, :secrets)
       end
 
       if previous_key,

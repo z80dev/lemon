@@ -12,7 +12,8 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     SessionsTree
   }
 
-  alias LemonCore.{RunStore, SessionKey, SessionLifecycle, SessionMetadataStore}
+  alias LemonCore.{RunStore, SessionKey, SessionMetadataStore}
+  alias LemonControlPlane.SessionLifecycle
 
   # A deliberately partial runtime: the callbacks it omits exercise the
   # never-reached path, so it does not declare the full provider behaviour.

@@ -44,11 +44,11 @@ defmodule LemonControlPlane.WS.NodeInvokeRemovalTest do
         status: :online
       })
 
-    :ok = LemonCore.NodeRegistry.register(node_id, node_id, node_pid)
+    :ok = LemonAgent.NodeRegistry.register(node_id, node_id, node_pid)
     clear_invocations()
 
     on_exit(fn ->
-      LemonCore.NodeRegistry.unregister(node_id, node_pid)
+      LemonAgent.NodeRegistry.unregister(node_id, node_pid)
       Process.exit(node_pid, :kill)
       LemonCore.Store.delete(:nodes_registry, node_id)
       clear_invocations()

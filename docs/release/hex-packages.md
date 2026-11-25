@@ -42,7 +42,7 @@ must stay on its siblings' minor: `PlatformPackagingContractTest` and
 `scripts/verify_packages` (against the built `hex_metadata.config`) fail when a
 requirement admits another minor or refuses a sibling's in-repo version.
 
-### API migration for the 0.3 line (#559, #571, #592)
+### API migration for the 0.3 line (#559, #571, #592, #727)
 
 These changes join the current unreleased package cycle; they do not imply that
 new versions have been published. `lemon_core` stays on its already-unreleased
@@ -72,6 +72,11 @@ new versions have been published. `lemon_core` stays on its already-unreleased
   `LemonChannels.Outbox.RateLimiter`, `LemonControlPlane.A2A.RateLimiter` and
   `LemonWeb.LoginThrottle` implementations to `LemonCore.RateLimiter`; their
   application-owned registered process/table identities remain unchanged.
+- **`lemon_core` 0.3.0 (breaking):** product runtime modules move out of the
+  foundation. Source and packaged Lemon commands keep their names; foundation
+  consumers must migrate imports and registrations listed in the
+  [core changelog](../../apps/lemon_core/CHANGELOG.md#unreleased). CLI,
+  browser and control-plane implementations ship with the product, not on Hex.
 - **`lemon_agent` 0.3.0 (breaking):** `{:message_update, event}` carries only
   the delta-only provider event, not a growing partial `AssistantMessage` (#571).
   Queue transport lives in `AgentLoopConfig.hooks` (`queue_owner`, `queue_ref`,
@@ -161,9 +166,10 @@ build ("Dependencies excluded from the package"). `scripts/verify_packages` and
 `scripts/release_package` set it for you.
 
 `lemon_core`'s package `exclude_patterns` leave this repository's tooling
-out of the tarball: `LemonCore.Quality.*`, `LemonCore.Update.*`, and the
-`lemon.quality`, `lemon.architecture.docs`, `lemon.check_duplicate_tests`,
-`lemon.bench` and `lemon.help` tasks. `mix lemon.update` lives in `lemon_skills`.
+out of the tarball: `LemonCore.Quality.*` and the `lemon.quality`,
+`lemon.architecture.docs`, `lemon.check_duplicate_tests`, `lemon.bench`
+and `lemon.help` tasks. The managed updater and `mix lemon.update` source task
+live in `lemon_cli`.
 The build identity the doctor reports (`LemonCore.BuildInfo.version/0`,
 `identity/0`, `describe/0`) ships; the Lemon application's Elixir floor is a
 `lemon doctor` check in `lemon_cli` (`LemonCli.Doctor.Toolchain`), so the packaged

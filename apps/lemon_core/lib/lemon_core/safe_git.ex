@@ -2,7 +2,7 @@ defmodule LemonCore.SafeGit do
   @moduledoc """
   The one runner for Git commands Lemon starts on its own (session-start and
   per-turn environment context, ignore filtering, origin lookup, `@git-diff`
-  references, `sessions.changes`, omp worktree inventory and cleanup checks,
+  references, `sessions.changes`, worktree inventory and cleanup checks,
   build and source metadata) rather than at a model's or user's explicit
   request. A repository Lemon reads this way may be an unpacked archive, a
   shared checkout or a tree an agent wrote into, so neither its configuration,

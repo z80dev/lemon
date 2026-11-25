@@ -3,7 +3,7 @@ defmodule LemonControlPlane.Methods.SessionsGet do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Methods.{NativeSessions, SessionsList}
-  alias LemonCore.SessionLifecycle
+  alias LemonControlPlane.SessionLifecycle
 
   @impl true
   def name, do: "sessions.get"

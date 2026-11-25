@@ -23,7 +23,7 @@ defmodule LemonCli.Setup.Wizard do
   alias LemonCore.Runtime.{Env, Health, Profile}
   alias LemonCore.Secrets.MasterKey
   alias LemonCore.Setup.Readiness
-  alias LemonCore.Update.{ConfigMigrator, ManagedInstall, Remote}
+  alias LemonCli.Update.{ConfigMigrator, ManagedInstall, Remote}
 
   @type io_callbacks :: %{
           required(:info) => (String.t() -> any()),

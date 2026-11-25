@@ -1034,6 +1034,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `LemonCore.RunPhase`, `LemonCore.RunPhaseGraph`, the router's per-submission phase
   broadcasts and the gateway's phase tracking. Nothing subscribed to the event, so the
   control-plane `EventBridge` no longer logs an unmapped-type warning for it (#710).
+- **Breaking (lemon_core):** the next Hex minor no longer ships product
+  operations and provider adapters. Browser and terminal drivers, system
+  service/update/backup/uninstall commands, session management, native node
+  invocation, usage reporting, checkpoints, A2A and named credential adapters
+  now live with their owners. Product commands and operator TOML retain their
+  contracts; see the [core changelog](apps/lemon_core/CHANGELOG.md) for module
+  and application-environment migrations (#727).
 - **Breaking:** the disabled-by-default WASM tool stack and the `tool_auth` tool
   are retired (#707). Decision: epic #543 kept comparable surfaces opt-in
   (#598, #600, #604); this one is retired instead because it had no consumer.

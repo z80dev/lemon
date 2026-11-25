@@ -1007,7 +1007,7 @@ defmodule LemonRouter.RunProcessExecutionTest do
     assert :ok = RunCompletion.abandon(command.run_id, summary)
 
     # Model a notification delivered before this owner can observe it.
-    assert :ok = LemonCore.TerminalOutbox.ack(command.run_id, :notification)
+    assert :ok = LemonCore.Store.update_terminal_effect(command.run_id, :notification, :done)
 
     summary
   end

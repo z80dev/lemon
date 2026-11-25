@@ -2,7 +2,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
   @moduledoc """
   Bridges one native execution to a live named node.
 
-  The run owner handles lifecycle signaling while `LemonCore.NodeRegistry`
+  The run owner handles lifecycle signaling while `LemonAgent.NodeRegistry`
   owns targeting, timeout, disconnect, and cancellation of the remote
   invocation. Live events traverse the normal executor sink (and therefore the
   run/session Bus topics); terminal results remain a separate final outcome.
@@ -22,8 +22,8 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
   import CodingAgent.Executor, only: [get_opt: 2]
 
   alias CodingAgent.Executor.{RemoteEventCodec, RemoteRequestCodec}
-  alias LemonCore.NodeRegistry
   alias CodingAgent.Executor.Event
+  alias LemonAgent.NodeRegistry
 
   @engine "lemon"
   @method "coding_agent.run"

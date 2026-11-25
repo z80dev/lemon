@@ -161,7 +161,7 @@ defmodule CodingAgent.ToolRegistry do
          not browser_tools_requested?(tool_filters(opts)) do
       opts
     else
-      Keyword.put(opts, :browser_provider_resolution, LemonCore.BrowserProvider.resolve(opts))
+      Keyword.put(opts, :browser_provider_resolution, LemonBrowser.Provider.resolve(opts))
     end
   end
 
@@ -763,7 +763,7 @@ defmodule CodingAgent.ToolRegistry do
   # The provider is resolved at most once per build, and only when a browser
   # tool can survive the build's filters.
   defp builtin_tool_tuples(cwd, opts, browser?, resolution) do
-    resolution = if browser?, do: resolution || LemonCore.BrowserProvider.resolve(opts)
+    resolution = if browser?, do: resolution || LemonBrowser.Provider.resolve(opts)
     # Media artifacts (media tools and browser_analyze's nested media call)
     # must not land in operator state; LemonSkills cannot call coding_agent,
     # so the guard travels as an option.

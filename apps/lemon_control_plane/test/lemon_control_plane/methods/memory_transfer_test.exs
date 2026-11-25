@@ -3,7 +3,8 @@ defmodule LemonControlPlane.Methods.MemoryTransferTest do
 
   alias LemonControlPlane.Methods.{MemoryTransfer, MemoryTransferStatus, Registry}
   alias LemonControlPlane.Protocol.Schemas
-  alias LemonCore.{NodeRegistry, ProfileStore, Store}
+  alias LemonCore.{ProfileStore, Store}
+  alias LemonAgent.NodeRegistry
 
   @moduletag :tmp_dir
 

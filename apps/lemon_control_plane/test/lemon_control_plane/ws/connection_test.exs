@@ -164,7 +164,7 @@ defmodule LemonControlPlane.WS.ConnectionTest do
     node_pid = self()
 
     on_exit(fn ->
-      LemonCore.NodeRegistry.unregister(node_id, node_pid)
+      LemonAgent.NodeRegistry.unregister(node_id, node_pid)
       LemonCore.Store.delete(:session_tokens, token)
       LemonCore.Store.delete(:session_token_heads, {"node", node_id})
       LemonControlPlane.NodeStore.release_node_name(name, node_id)
@@ -190,7 +190,7 @@ defmodule LemonControlPlane.WS.ConnectionTest do
              Connection.handle_in({frame, [opcode: :text]}, state)
 
     assert Jason.decode!(hello)["type"] == "hello-ok"
-    assert {:ok, live} = LemonCore.NodeRegistry.resolve_id(node_id)
+    assert {:ok, live} = LemonAgent.NodeRegistry.resolve_id(node_id)
     refute get_in(live.metadata, [:capabilities, "coding_agent.run", "nativePrivacyContext"])
     refute get_in(live.metadata, [:capabilities, "memory.search", "contextVersion"])
     refute get_in(live.metadata, [:capabilities, "memory.transfer.import", "contextVersion"])
@@ -204,7 +204,7 @@ defmodule LemonControlPlane.WS.ConnectionTest do
            ]) == 1
 
     assert {:error, {:native_privacy_context_unsupported, ^node_id}} =
-             LemonCore.NodeRegistry.invoke_node(
+             LemonAgent.NodeRegistry.invoke_node(
                node_id,
                "coding_agent.run",
                %{
@@ -238,7 +238,7 @@ defmodule LemonControlPlane.WS.ConnectionTest do
              Connection.handle_in({frame, [opcode: :text]}, reconnect_state)
 
     assert Jason.decode!(fresh_hello)["type"] == "hello-ok"
-    assert {:ok, fresh} = LemonCore.NodeRegistry.resolve_id(node_id)
+    assert {:ok, fresh} = LemonAgent.NodeRegistry.resolve_id(node_id)
 
     assert get_in(fresh.metadata, [
              :capabilities,
@@ -767,7 +767,7 @@ defmodule LemonControlPlane.WS.ConnectionTest do
       node_pid = self()
 
       on_exit(fn ->
-        LemonCore.NodeRegistry.unregister(node_id, node_pid)
+        LemonAgent.NodeRegistry.unregister(node_id, node_pid)
         LemonCore.Store.delete(:session_tokens, token)
         LemonCore.Store.delete(:session_token_heads, {"node", node_id})
         LemonControlPlane.NodeStore.release_node_name(name, node_id)

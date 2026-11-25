@@ -8,7 +8,8 @@ defmodule LemonChannels.PortableCommand do
   """
 
   alias LemonChannels.CommandCatalog
-  alias LemonCore.{RouterBridge, RunHistoryStore, UsageDiagnostics}
+  alias LemonCore.{RouterBridge, RunHistoryStore}
+  alias LemonAgent.UsageDiagnostics
 
   @default_limit 10
   @public_statuses ~w(

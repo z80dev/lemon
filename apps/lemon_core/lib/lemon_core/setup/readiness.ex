@@ -6,12 +6,12 @@ defmodule LemonCore.Setup.Readiness do
   default provider/model without starting a runtime or making a model request.
   Credential readiness is the runtime's single presence-mode predicate
   (`LemonCore.CredentialReadiness`), shared with doctor, provider status and the
-  CLI: it never decrypts a value, refreshes a login or runs omp.
+  CLI: it never decrypts a value, refreshes a login or runs external commands.
 
   This module reports three stable steps:
 
     * `:config` - the global config file exists
-    * `:secrets` - a secrets master key is configured, or omp needs no local secret
+    * `:secrets` - a master key is configured, or external auth needs no local secret
     * `:provider` - a matching default provider/model has a usable credential
 
   Provider live verification remains the responsibility of `lemon setup` and
@@ -20,6 +20,7 @@ defmodule LemonCore.Setup.Readiness do
 
   alias LemonCore.Config.{LegacyAgentMigration, Modular, Providers}
   alias LemonCore.CredentialReadiness
+  alias LemonCore.Config.Providers.AuthExtension
   alias LemonCore.Secrets
 
   @type step :: :config | :secrets | :provider
@@ -60,13 +61,13 @@ defmodule LemonCore.Setup.Readiness do
     settings = expanded |> read_settings() |> LegacyAgentMigration.migrate_settings()
     secrets_status = Secrets.status()
     provider = derive_provider(settings)
-    omp? = omp_default?(settings)
+    external? = external_default?(settings)
 
     %{
       config: %{complete: File.exists?(expanded), path: expanded},
       secrets: %{
-        complete: omp? or secrets_status.configured == true,
-        source: if(omp?, do: :not_required, else: secrets_status.source)
+        complete: external? or secrets_status.configured == true,
+        source: if(external?, do: :not_required, else: secrets_status.source)
       },
       provider: provider
     }
@@ -152,28 +153,15 @@ defmodule LemonCore.Setup.Readiness do
        else: {false, :credential_not_usable}
   end
 
-  defp omp_default?(settings) do
+  defp external_default?(settings) do
     provider = get_in(settings, ["defaults", "provider"])
 
     settings
     |> Map.get("providers", %{})
     |> Enum.any?(fn {name, cfg} ->
       normalize_provider_name(name) == normalize_provider_name(provider || "") and
-        omp_provider?(name, cfg)
+        AuthExtension.call(:external?, [name, cfg], false)
     end)
-  end
-
-  defp omp_provider?(provider, cfg) do
-    auth_source =
-      LemonCore.Config.Providers.normalize_auth_source(
-        Map.get(cfg, :auth_source) || Map.get(cfg, "auth_source")
-      )
-
-    name = normalize_provider_name(provider)
-
-    auth_source == "omp_broker" or
-      (name in ["kimi-coding", "kimi-for-coding"] and auth_source == "omp") or
-      name in ["omp-gateway", "omp-auth-gateway"]
   end
 
   # Core has no provider catalog: local readiness recognizes configured provider

@@ -178,46 +178,55 @@ defmodule LemonCore.RunStore do
   defp new_session_incarnation,
     do: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
 
+  @private_execution_keys [
+    :mcp_servers,
+    "mcp_servers",
+    :mcpServers,
+    "mcpServers",
+    :mcp_servers_json,
+    "mcp_servers_json",
+    :native_lineage_handle,
+    "native_lineage_handle",
+    :nativeLineageHandle,
+    "nativeLineageHandle",
+    :native_destination_pid,
+    "native_destination_pid",
+    :nativeDestinationPid,
+    "nativeDestinationPid",
+    :native_destination_generation,
+    "native_destination_generation",
+    :nativeDestinationGeneration,
+    "nativeDestinationGeneration"
+  ]
+
   @doc "Remove invocation-only configuration before persistence or management projection."
   @spec execution_projection(term()) :: term()
-  def execution_projection(%_{} = value) do
-    Map.merge(value, execution_projection(Map.from_struct(value)))
+  def execution_projection(value) do
+    keys =
+      case Application.get_env(:lemon_core, :private_execution_keys, []) do
+        [] -> @private_execution_keys
+        registered -> registered ++ @private_execution_keys
+      end
+
+    project_execution(value, keys)
   end
 
-  def execution_projection(value) when is_map(value) do
+  defp project_execution(%_{} = value, keys),
+    do: Map.merge(value, project_execution(Map.from_struct(value), keys))
+
+  defp project_execution(value, keys) when is_map(value) do
     value
-    |> Map.drop([
-      :tern_pane,
-      "tern_pane",
-      :mcp_servers,
-      "mcp_servers",
-      :mcpServers,
-      "mcpServers",
-      :mcp_servers_json,
-      "mcp_servers_json",
-      :native_lineage_handle,
-      "native_lineage_handle",
-      :nativeLineageHandle,
-      "nativeLineageHandle",
-      :native_destination_pid,
-      "native_destination_pid",
-      :nativeDestinationPid,
-      "nativeDestinationPid",
-      :native_destination_generation,
-      "native_destination_generation",
-      :nativeDestinationGeneration,
-      "nativeDestinationGeneration"
-    ])
-    |> Map.new(fn {key, entry} -> {key, execution_projection(entry)} end)
+    |> Map.drop(keys)
+    |> Map.new(fn {key, entry} -> {key, project_execution(entry, keys)} end)
   end
 
-  def execution_projection(value) when is_list(value),
-    do: Enum.map(value, &execution_projection/1)
+  defp project_execution(value, keys) when is_list(value),
+    do: Enum.map(value, &project_execution(&1, keys))
 
-  def execution_projection(value) when is_tuple(value),
-    do: value |> Tuple.to_list() |> Enum.map(&execution_projection/1) |> List.to_tuple()
+  defp project_execution(value, keys) when is_tuple(value),
+    do: value |> Tuple.to_list() |> Enum.map(&project_execution(&1, keys)) |> List.to_tuple()
 
-  def execution_projection(value), do: value
+  defp project_execution(value, _keys), do: value
 
   # `:__recent_run_ids__` is the store's bounded finalization-idempotency
   # marker; the other two are the unbounded marker it replaced, still present on

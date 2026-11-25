@@ -7,7 +7,8 @@ defmodule LemonCli.ProfileCommand do
   application while still working in the assembled Lemon runtime release.
   """
 
-  alias LemonCore.{Id, NodeRegistry, ProfileStore, RouterBridge}
+  alias LemonCore.{Id, ProfileStore, RouterBridge}
+  alias LemonAgent.NodeRegistry
 
   @exit_ok 0
   @exit_error 1

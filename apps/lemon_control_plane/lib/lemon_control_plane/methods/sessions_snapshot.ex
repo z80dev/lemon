@@ -30,7 +30,8 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
 
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.{ChatHistory, ExecApprovalsGet, NativeSessions}
-  alias LemonCore.{AgentRuntime, ExecApprovalStore, RunHistoryStore, RunStore, SessionLifecycle}
+  alias LemonCore.{AgentRuntime, ExecApprovalStore, RunHistoryStore, RunStore}
+  alias LemonControlPlane.SessionLifecycle
 
   @max_bytes 131_072
   @identity_fields ~w(sessionKey sessionId branchId revision runId attempt)

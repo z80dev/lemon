@@ -214,7 +214,7 @@ defmodule LemonCore.ExecApprovalExpiryTest do
 
     holder =
       spawn(fn ->
-        LemonCore.Service.Lock.with_lock_path(
+        LemonCore.FileLock.with_lock_path(
           LemonCore.RuntimeOwner.lock_path(database),
           [],
           fn ->

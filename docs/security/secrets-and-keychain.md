@@ -68,7 +68,7 @@ Credential-pool/default policy and provider/model header precedence are unchange
 The chain itself is configurable — providers implement `LemonCore.Secrets.KeyProvider`:
 
 ```elixir
-config :lemon_core, LemonCore.Secrets,
+config :lemon_core, :secrets,
   key_providers: [:keychain, :env, :file],
   key_file: "~/.lemon/secrets_master_key",
   env_var: "LEMON_SECRETS_MASTER_KEY"
@@ -222,7 +222,7 @@ master key, re-encrypts every secret in the encrypted store under it, and
 writes it to the provider that supplied the current key: the Keychain entry is
 updated in place, the key file is replaced by an atomic rename (`0600`)
 followed by a synchronous directory flush. Implementation:
-`LemonCore.Secrets.KeyRotation`.
+`LemonCli.Secrets.KeyRotation`.
 
 A key file is only rotated where that flush is real: GNU coreutils
 `sync DIR`, verified at run time. macOS has none (its `sync` ignores

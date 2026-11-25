@@ -1,7 +1,7 @@
 defmodule LemonControlPlane.NodeIOTest do
   use ExUnit.Case, async: false
   alias LemonControlPlane.{NodeIO, NodeStore}
-  alias LemonCore.NodeRegistry
+  alias LemonAgent.NodeRegistry
 
   @read %{
     "preDispatch" => false,

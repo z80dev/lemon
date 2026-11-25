@@ -18,9 +18,10 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     RunHistoryStore,
     RunRequest,
     RunStore,
-    SessionLifecycle,
     Store
   }
+
+  alias LemonControlPlane.SessionLifecycle
 
   alias LemonRouter.RunCompletion
 
@@ -506,7 +507,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
       assert_busy(key)
 
       # The worker's terminal result for this invocation is the stop evidence.
-      assert :ok = LemonCore.NodeRegistry.complete(remote.node_id, invoke_id, nil, "cancelled")
+      assert :ok = LemonAgent.NodeRegistry.complete(remote.node_id, invoke_id, nil, "cancelled")
       assert_idle_then_reset(key)
     end
 
@@ -517,7 +518,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
       settle_router_run(command, remote)
 
       assert_busy(key)
-      assert :ok = LemonCore.NodeRegistry.complete(remote.node_id, invoke_id, nil, "cancelled")
+      assert :ok = LemonAgent.NodeRegistry.complete(remote.node_id, invoke_id, nil, "cancelled")
       assert_idle_then_reset(key)
     end
 
@@ -533,13 +534,13 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
       assert_busy(key)
 
       # A reconnect alone proves nothing about the earlier execution.
-      LemonCore.NodeRegistry.unregister(remote.node_id, remote.node_pid)
+      LemonAgent.NodeRegistry.unregister(remote.node_id, remote.node_pid)
       test = self()
       reconnected = spawn(fn -> forward_node_events(test) end)
       on_exit(fn -> Process.exit(reconnected, :kill) end)
 
       :ok =
-        LemonCore.NodeRegistry.register(
+        LemonAgent.NodeRegistry.register(
           remote.node_id,
           remote.node_name,
           reconnected,
@@ -550,15 +551,15 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
 
       # Nor does a report from a connection that is not the node's live one.
       assert {:error, :stale_session} =
-               LemonCore.NodeRegistry.report_active(remote.node_id, remote.node_pid, 0, [])
+               LemonAgent.NodeRegistry.report_active(remote.node_id, remote.node_pid, 0, [])
 
       # The worker still stopping the invocation reports it as active.
       assert :ok =
-               LemonCore.NodeRegistry.report_active(remote.node_id, reconnected, 0, [invoke_id])
+               LemonAgent.NodeRegistry.report_active(remote.node_id, reconnected, 0, [invoke_id])
 
       assert_busy(key)
 
-      assert :ok = LemonCore.NodeRegistry.report_active(remote.node_id, reconnected, 0, [])
+      assert :ok = LemonAgent.NodeRegistry.report_active(remote.node_id, reconnected, 0, [])
       assert_idle_then_reset(key)
     end
 
@@ -577,10 +578,10 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
 
       # Another node's result is not evidence for this invocation.
       assert {:error, :wrong_node} =
-               LemonCore.NodeRegistry.complete("other-node", invoke_id, nil, "cancelled")
+               LemonAgent.NodeRegistry.complete("other-node", invoke_id, nil, "cancelled")
 
       assert_busy(key)
-      assert :ok = LemonCore.NodeRegistry.complete(remote.node_id, invoke_id, nil, "cancelled")
+      assert :ok = LemonAgent.NodeRegistry.complete(remote.node_id, invoke_id, nil, "cancelled")
       assert_idle_then_reset(key)
     end
   end
@@ -619,17 +620,17 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
 
     # A terminal result for one invocation clears only that one.
     [first, second] = ids
-    assert :ok = LemonCore.NodeRegistry.complete(node_id, first, nil, "cancelled")
+    assert :ok = LemonAgent.NodeRegistry.complete(node_id, first, nil, "cancelled")
     assert_busy(key)
 
     # The node's later connection reports the other one stopped.
     connection = spawn(fn -> Process.sleep(:infinity) end)
     on_exit(fn -> Process.exit(connection, :kill) end)
-    :ok = LemonCore.NodeRegistry.register(node_id, node_id, connection)
-    on_exit(fn -> LemonCore.NodeRegistry.unregister(node_id, connection) end)
-    assert :ok = LemonCore.NodeRegistry.report_active(node_id, connection, 0, [second])
+    :ok = LemonAgent.NodeRegistry.register(node_id, node_id, connection)
+    on_exit(fn -> LemonAgent.NodeRegistry.unregister(node_id, connection) end)
+    assert :ok = LemonAgent.NodeRegistry.report_active(node_id, connection, 0, [second])
     assert_busy(key)
-    assert :ok = LemonCore.NodeRegistry.report_active(node_id, connection, 0, [])
+    assert :ok = LemonAgent.NodeRegistry.report_active(node_id, connection, 0, [])
     assert_idle_then_reset(key)
   end
 
@@ -726,7 +727,12 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
       {:ok, _row} = PolicyStore.update_session(key, &Map.put(&1, :thinking_level, "high"))
       assert SessionModel.overrides(key) == %{model: "discord-model", thinking_level: "high"}
 
-      assert {:ok, _result} = unquote(method).handle(%{"sessionKey" => key}, %{})
+      params =
+        if unquote(method) == SessionsReset,
+          do: confirm_reset_params(key),
+          else: %{"sessionKey" => key}
+
+      assert {:ok, %{"summary" => %{"verified" => true}}} = unquote(method).handle(params, %{})
 
       assert policy(key) == nil
       assert SessionModel.overrides(key) == %{model: nil, thinking_level: nil}
@@ -926,10 +932,10 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     node_pid = spawn(fn -> forward_node_events(test) end)
 
     :ok =
-      LemonCore.NodeRegistry.register(node_id, node_name, node_pid, privacy_capabilities())
+      LemonAgent.NodeRegistry.register(node_id, node_name, node_pid, privacy_capabilities())
 
     on_exit(fn ->
-      LemonCore.NodeRegistry.unregister(node_id, node_pid)
+      LemonAgent.NodeRegistry.unregister(node_id, node_pid)
       Process.exit(node_pid, :kill)
     end)
 

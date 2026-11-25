@@ -13,7 +13,8 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
   }
 
   alias LemonControlPlane.Protocol.Schemas
-  alias LemonCore.{RunStore, SessionLifecycle, SessionMetadataStore, Store}
+  alias LemonCore.{RunStore, SessionMetadataStore, Store}
+  alias LemonControlPlane.SessionLifecycle
 
   setup do
     clear_metadata()

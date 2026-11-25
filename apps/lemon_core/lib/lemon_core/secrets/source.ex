@@ -27,11 +27,26 @@ defmodule LemonCore.Secrets.Source do
           required(:byte_count) => non_neg_integer()
         }
 
-  @callback fetch(SourceConfig.t(), keyword()) ::
+  @type bootstrap :: (String.t() -> {:ok, String.t(), :store | :env} | {:error, term()})
+
+  @callback fetch(SourceConfig.t(), bootstrap()) ::
               {:ok, fetch_result()} | {:error, error_kind()}
 
   @callback configured?(SourceConfig.t()) :: boolean()
-  @callback bootstrap_ready?(SourceConfig.t(), keyword()) :: boolean()
+  @callback executable(SourceConfig.t()) :: String.t() | nil
+  @callback bootstrap_ready?(SourceConfig.t(), bootstrap()) :: boolean()
+  @callback scope(SourceConfig.t(), String.t()) :: SourceConfig.t() | nil
+  @callback runs(SourceConfig.t()) :: pos_integer()
 
-  @optional_callbacks bootstrap_ready?: 2
+  # These three callbacks define the operator TOML of registered adapters.
+  @callback config_keys() :: [String.t()]
+  @callback options(map()) :: map()
+  @callback validate([String.t()], map(), map(), String.t()) :: [String.t()]
+
+  @optional_callbacks bootstrap_ready?: 2,
+                      scope: 2,
+                      runs: 1,
+                      config_keys: 0,
+                      options: 1,
+                      validate: 4
 end

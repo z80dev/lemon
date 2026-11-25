@@ -311,8 +311,8 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     bundle_path = Path.join(tmp_dir, "support.zip")
     report = Report.from_checks([Check.pass("runtime.boot", "ok")])
     today_key = Date.to_iso8601(Date.utc_today())
-    previous_usage_summary = LemonCore.UsageStore.get_summary(:current)
-    previous_today_usage = LemonCore.UsageStore.get_record(today_key)
+    previous_usage_summary = LemonAgent.UsageStore.get_summary(:current)
+    previous_today_usage = LemonAgent.UsageStore.get_record(today_key)
     cron_token = System.unique_integer([:positive, :monotonic])
     cron_job_id = "cron_support_job_#{cron_token}"
     cron_run_id = "cron_support_run_#{cron_token}"
@@ -327,13 +327,13 @@ defmodule LemonCore.Doctor.SupportBundleTest do
       LemonCore.Store.delete(:cron_runs, cron_run_id)
 
       if previous_usage_summary do
-        LemonCore.UsageStore.put_summary(:current, previous_usage_summary)
+        LemonAgent.UsageStore.put_summary(:current, previous_usage_summary)
       else
         LemonCore.Store.delete(:usage_data, :current)
       end
 
       if previous_today_usage do
-        LemonCore.UsageStore.put_record(today_key, previous_today_usage)
+        LemonAgent.UsageStore.put_record(today_key, previous_today_usage)
       else
         LemonCore.Store.delete(:usage_records, today_key)
       end
@@ -373,7 +373,7 @@ defmodule LemonCore.Doctor.SupportBundleTest do
       meta: %{agent_id: "support-cron-agent-#{cron_token}", session_key: cron_session_key}
     })
 
-    LemonCore.UsageStore.put_summary(:current, %{
+    LemonAgent.UsageStore.put_summary(:current, %{
       total_cost: 0.42,
       total_requests: 3,
       total_tokens: %{input: 1_000, output: 500},
@@ -385,7 +385,7 @@ defmodule LemonCore.Doctor.SupportBundleTest do
       api_key: "usage-secret-key"
     })
 
-    LemonCore.UsageStore.put_record(today_key, %{
+    LemonAgent.UsageStore.put_record(today_key, %{
       date: today_key,
       total_cost: 0.42,
       requests: %{"openai" => 3},

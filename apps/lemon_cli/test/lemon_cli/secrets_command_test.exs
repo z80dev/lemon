@@ -45,10 +45,10 @@ defmodule LemonCli.SecretsCommandTest do
         &{&1, System.get_env(&1)}
       )
 
-    secrets_config = Application.fetch_env(:lemon_core, LemonCore.Secrets)
+    secrets_config = Application.fetch_env(:lemon_core, :secrets)
 
     # Never the developer's Keychain: env, then a key file under the test HOME.
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env, :file])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env, :file])
     System.put_env("HOME", home)
     System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
     System.delete_env("LEMON_SECRETS_KEYCHAIN_PRELOAD")
@@ -59,8 +59,8 @@ defmodule LemonCli.SecretsCommandTest do
       Enum.each(env, fn {name, value} -> restore_env(name, value) end)
 
       case secrets_config do
-        {:ok, config} -> Application.put_env(:lemon_core, LemonCore.Secrets, config)
-        :error -> Application.delete_env(:lemon_core, LemonCore.Secrets)
+        {:ok, config} -> Application.put_env(:lemon_core, :secrets, config)
+        :error -> Application.delete_env(:lemon_core, :secrets)
       end
     end)
 
@@ -117,7 +117,7 @@ defmodule LemonCli.SecretsCommandTest do
     end
 
     test "names a keychain failure with recovery guidance instead of a raw term" do
-      Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [FailingKeychain, :env])
+      Application.put_env(:lemon_core, :secrets, key_providers: [FailingKeychain, :env])
 
       assert {0, out, ""} = run(["secrets", "status"])
       assert out =~ "source: env\nkeychain_available: true\n"
@@ -132,7 +132,7 @@ defmodule LemonCli.SecretsCommandTest do
   describe "init" do
     setup do
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
-      Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:file])
+      Application.put_env(:lemon_core, :secrets, key_providers: [:file])
     end
 
     test "writes a 0600 key file and refuses to replace it without --force", %{home: home} do
@@ -209,7 +209,7 @@ defmodule LemonCli.SecretsCommandTest do
 
     test "a keychain failure writes nothing and says not to re-initialize" do
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
-      Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [FailingKeychain, :env])
+      Application.put_env(:lemon_core, :secrets, key_providers: [FailingKeychain, :env])
 
       assert {1, "", err} = run(["secrets", "set", "KEYCHAIN_KEY", "value"])
 
@@ -297,7 +297,7 @@ defmodule LemonCli.SecretsCommandTest do
 
       holder =
         spawn(fn ->
-          LemonCore.Service.Lock.with_lock_path(lock, [], fn ->
+          LemonCore.FileLock.with_lock_path(lock, [], fn ->
             send(test, :runtime_lock_held)
             receive do: (:release -> :ok)
           end)

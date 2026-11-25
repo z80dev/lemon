@@ -65,7 +65,7 @@ is stopped before a switch and started again with the new selection.
 EOF
 }
 
-# Same rule as LemonCore.Update.Plan.safe_version?/1: a single path component.
+# Same rule as LemonCli.Update.Plan.safe_version?/1: a single path component.
 valid_version() { [[ "$1" =~ ^[0-9A-Za-z][0-9A-Za-z._~-]{0,63}$ ]] && [ "$1" != current ]; }
 
 # A source checkout is a Lemon umbrella with an executable source launcher.

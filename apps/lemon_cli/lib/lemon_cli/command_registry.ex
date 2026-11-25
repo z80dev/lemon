@@ -962,7 +962,7 @@ defmodule LemonCli.CommandRegistry do
     ),
     runtime(
       "policy",
-      LemonCore.PolicyStore.CLI,
+      LemonCli.PolicyCommand,
       "Manage chat model and thinking defaults",
       "lemon policy <list|set|get|clear> [channel] [options]",
       [
@@ -998,7 +998,7 @@ defmodule LemonCli.CommandRegistry do
     ),
     runtime(
       "usage",
-      LemonCore.Usage.CLI,
+      LemonCli.Usage.CLI,
       "Inspect usage diagnostics",
       "lemon usage [--days N | --since YYYY-MM-DD --until YYYY-MM-DD] [--by day|provider|model|session] [--json]",
       [

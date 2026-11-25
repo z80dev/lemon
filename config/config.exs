@@ -75,6 +75,9 @@ config :lemon_core, :doctor_runtime,
   browser_server: LemonBrowser.LocalServer,
   lsp_server_manager: LemonLsp.ServerManager,
   channel_diagnostics: LemonChannels.Doctor.Diagnostics,
+  terminal_backends: CodingAgent.TerminalBackends,
+  usage_diagnostics: LemonAgent.UsageDiagnostics,
+  checkpoint_diagnostics: LemonAgent.Doctor.CheckpointDiagnostics,
   # `builtin?/1` decides which provider names doctor output may show verbatim.
   provider_names: LemonAgent.ModelRuntime.CustomProviders,
   # `allowed_origins/0`: the callback allowlists the Bot admission check validates.
@@ -87,6 +90,8 @@ config :lemon_core, :doctor_runtime,
 # Diagnostics owned by apps that depend on lemon_core register themselves here.
 # Modules missing from a given build are skipped (see LemonCore.Doctor).
 config :lemon_core, :doctor_checks, [
+  LemonAgent.Doctor.Checks.Usage,
+  LemonBrowser.Doctor.Checks.Browser,
   LemonCli.Doctor.Providers,
   LemonCli.Doctor.BotAdmission,
   LemonCli.Doctor.Toolchain,
@@ -114,8 +119,20 @@ config :lemon_core, :gateway_channels, [
 # compile-time dependency on the language-server driver.
 config :lemon_core, :lsp_catalog, LemonLsp.Servers
 
-# Passive browser availability is supplied by the optional browser driver.
-config :lemon_core, :browser_provider_probe, LemonBrowser.ProviderProbe
+# Tables of optional drivers under `[runtime.tools.<id>]`. Each owner resolves
+# and validates its own table and environment overrides, so LemonCore.Config
+# never names a driver. See LemonCore.Config.Tools.Section.
+config :lemon_core, :tool_sections, [LemonBrowser.Config]
+
+config :lemon_core, :private_execution_keys, [:tern_pane, "tern_pane"]
+
+# Operator-only external secret source adapters. The encrypted store and
+# custom argv-only sources continue to work without a product registration.
+config :lemon_core, :secret_source_types,
+  onepassword: LemonAgent.Secrets.Source.OnePassword,
+  bitwarden: LemonAgent.Secrets.Source.Bitwarden
+
+config :lemon_core, :provider_auth_extension, LemonAgent.ModelRuntime.OmpAuthConfig
 
 # Environment-variable declarations live with the app that reads them; the
 # framework in LemonCore.Env aggregates whatever is loaded. Apps missing from a
@@ -173,7 +190,7 @@ config :lemon_core, LemonCore.CodeReload, session_refresher: CodingAgent.CodeRel
 
 # Master key providers for encrypted secrets, tried in order. `:keychain` is
 # macOS-only and skips itself elsewhere; see LemonCore.Secrets.KeyProvider.
-config :lemon_core, LemonCore.Secrets,
+config :lemon_core, :secrets,
   key_providers: [:keychain, :env, :file],
   key_file: "~/.lemon/secrets_master_key",
   env_var: "LEMON_SECRETS_MASTER_KEY"
@@ -191,9 +208,15 @@ config :lemon_core, LemonCore.Store,
   finalize_run_hooks: [
     {LemonCore.RunHistoryStore, :handle_finalize_run},
     {LemonMemory.Ingest, :handle_finalize_run},
-    {LemonCore.UsageLedger, :handle_finalize_run},
+    {LemonAgent.UsageLedger, :handle_finalize_run},
     {LemonCore.ExecApprovalExpiry, :handle_finalize_run}
   ]
+
+# The owner lock is already held when these start; finalize hooks can run as
+# soon as the Store resumes terminal outbox replay.
+config :lemon_core, :runtime_control_children, [LemonAgent.NodeRegistry, LemonAgent.UsageLedger]
+
+config :lemon_core, :context_session_exporter, LemonControlPlane.SessionLifecycle
 
 config :lemon_core,
        :terminal_presentation_replayer,

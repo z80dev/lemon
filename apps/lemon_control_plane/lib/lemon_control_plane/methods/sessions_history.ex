@@ -10,7 +10,7 @@ defmodule LemonControlPlane.Methods.SessionsHistory do
 
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.NativeSessions
-  alias LemonCore.SessionLifecycle
+  alias LemonControlPlane.SessionLifecycle
 
   @metadata_fields [:run_id, :started_at_ms, :engine, :ok, :duration_ms, :event_count]
 

@@ -54,7 +54,7 @@ defmodule LemonCore.Doctor.Redaction do
   @id_key ~r/(?:chat|guild|channel|thread|peer|user|session)ids?\z/
   @numeric_id ~r/\A-?\d{5,}\z/
   @label_keys ~w(
-    owner owners column columns account accounts omp_account name names
+    owner owners column columns account accounts name names
     filename file_name artifact_name email emails sender senders allowed_senders
     phone phone_number inbox_number twilio_phone_number host hostname title
   )
@@ -210,7 +210,10 @@ defmodule LemonCore.Doctor.Redaction do
   defp structured?(value) when is_list(value), do: Enum.any?(value, &is_map/1)
   defp structured?(_value), do: false
 
-  defp label_key?(name), do: String.downcase(name) in @label_keys
+  defp label_key?(name) do
+    name = String.downcase(name)
+    name in @label_keys or String.ends_with?(name, "_account")
+  end
 
   defp id_key?(name) do
     normalized = name |> String.downcase() |> String.replace(["_", "-"], "")

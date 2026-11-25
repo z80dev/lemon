@@ -45,24 +45,10 @@ defmodule LemonCore.Config.Providers do
   stores its OAuth payload in `api_key_secret` because the runtime provider
   expects a JSON `{"token","projectId"}` value.
 
-  ## omp auth broker
-
-  Any provider (built-in or custom) can read its credential from omp's auth
-  broker instead of Lemon's secret store:
-
-      [providers.anthropic]
-      auth_source = "omp_broker"
-      omp_account = "email:me@example.com"   # optional OAuth identityKey
-      # omp_provider = "anthropic"           # defaults from the provider name
-
-  The broker endpoint comes from `OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN`
-  and omp's `auth-broker.token` (see `LemonAgent.ModelRuntime.OmpBroker`).
-
   ## Custom providers
 
   A provider id that is not a built-in provider defines a custom endpoint
-  (omp `models.yml` parity). Values stay binaries; no atoms are created from
-  config input:
+  without creating atoms from config input:
 
       [providers.my-gateway]
       api = "openai_completions"      # openai_completions | openai_responses |
@@ -83,6 +69,7 @@ defmodule LemonCore.Config.Providers do
   """
 
   alias LemonCore.Config.Helpers
+  alias LemonCore.Config.Providers.AuthExtension
 
   defstruct [
     :providers
@@ -93,9 +80,6 @@ defmodule LemonCore.Config.Providers do
           base_url: String.t() | nil,
           api_key_secret: String.t() | nil,
           auth_source: String.t() | nil,
-          omp_path: String.t() | nil,
-          omp_provider: String.t() | nil,
-          omp_account: String.t() | nil,
           oauth_secret: String.t() | nil,
           project: String.t() | nil,
           project_id: String.t() | nil,
@@ -133,10 +117,8 @@ defmodule LemonCore.Config.Providers do
   }
 
   @custom_apis ~w(openai_completions openai_responses anthropic_messages google_generative_ai)
-  # Base-URL environment variables for local OpenAI-compatible servers (omp
-  # names). Unlike the mappings above, an explicit `[providers.<id>].base_url`
-  # wins (under any alias spelling such as `lm-studio` or `llama.cpp`); values
-  # are normalized to the OpenAI-compatible `/v1` root. First set variable wins.
+  # An explicit base URL wins under any supported provider alias. Normalize
+  # discovered values to the OpenAI-compatible `/v1` root; first env var wins.
   @local_base_url_env [
     {"ollama", ["OLLAMA_BASE_URL", "OLLAMA_HOST"]},
     {"lm_studio", ["LM_STUDIO_BASE_URL"]},
@@ -190,9 +172,6 @@ defmodule LemonCore.Config.Providers do
       base_url: config["base_url"],
       api_key_secret: normalize_optional_string(config["api_key_secret"]),
       auth_source: normalize_enum(config["auth_source"], &normalize_auth_source/1),
-      omp_path: normalize_optional_string(config["omp_path"]),
-      omp_provider: normalize_optional_string(config["omp_provider"]),
-      omp_account: normalize_optional_string(config["omp_account"]),
       oauth_secret: normalize_optional_string(config["oauth_secret"]),
       project: normalize_optional_string(config["project"]),
       project_id: normalize_optional_string(config["project_id"] || config["projectId"]),
@@ -224,12 +203,15 @@ defmodule LemonCore.Config.Providers do
       models: normalize_models(config["models"])
     }
 
-    reject_nil_values(base)
+    case AuthExtension.call(:settings, [config], nil) do
+      nil -> reject_nil_values(base)
+      fields -> base |> Map.merge(fields) |> reject_nil_values()
+    end
   end
 
   @doc """
   Canonical custom-provider wire API for a config value, or `nil` when the value
-  is not in the allowlist. omp's dashed spellings (`openai-completions`) are
+  is not in the allowlist. Dashed spellings (`openai-completions`) are
   accepted.
   """
   @spec canonical_api(term()) :: String.t() | nil
@@ -253,7 +235,7 @@ defmodule LemonCore.Config.Providers do
 
   @doc """
   Canonical discovery kind (`openai` | `ollama`), or `nil` when unrecognized.
-  omp's `openai-models-list`, `lm-studio` and `llama.cpp` list `{base_url}/models`.
+  `openai-models-list`, `lm-studio` and `llama.cpp` list `{base_url}/models`.
   """
   @spec canonical_discovery(term()) :: String.t() | nil
   def canonical_discovery(value) when is_binary(value) do
@@ -404,7 +386,7 @@ defmodule LemonCore.Config.Providers do
 
   defp local_base_url(var), do: var |> env_var_value() |> ensure_v1()
 
-  # OLLAMA_HOST is a bind address ("0.0.0.0", ":11434", "host:port"); omp turns
+  # OLLAMA_HOST is a bind address ("0.0.0.0", ":11434", "host:port"); normalize
   # it into a client URL, defaulting the scheme to http and the port to 11434.
   defp ollama_host_url(value) do
     trimmed = String.trim(value)
@@ -462,65 +444,6 @@ defmodule LemonCore.Config.Providers do
   @spec get_provider(t(), String.t()) :: provider_config()
   def get_provider(%__MODULE__{providers: providers}, name) do
     Map.get(providers, name, %{})
-  end
-
-  @doc """
-  Gets the API key for a specific provider.
-
-  Checks both `api_key` and falls back to resolving `api_key_secret`
-  if the secret store is available.
-
-  ## Examples
-
-      iex> providers = Config.Providers.resolve(%{"providers" => %{"anthropic" => %{"api_key" => "sk-..."}}})
-      iex> Config.Providers.get_api_key(providers, "anthropic")
-      "sk-..."
-
-      iex> Config.Providers.get_api_key(providers, "unknown")
-      nil
-  """
-  @spec get_api_key(t(), String.t()) :: String.t() | nil
-  def get_api_key(%__MODULE__{providers: providers}, name) do
-    case Map.get(providers, name) do
-      nil ->
-        nil
-
-      provider ->
-        # First check direct api_key
-        if provider[:api_key] do
-          provider[:api_key]
-        else
-          # Fall back to api_key_secret if available
-          resolve_api_key_secret(provider[:api_key_secret])
-        end
-    end
-  end
-
-  # Resolves api_key_secret reference using LemonCore.Secrets if available
-  defp resolve_api_key_secret(nil), do: nil
-
-  defp resolve_api_key_secret(secret_name) when is_binary(secret_name) do
-    # Check if Secrets module is available and configured
-    if secrets_available?() do
-      try do
-        case LemonCore.Secrets.resolve(secret_name, env_fallback: true) do
-          {:ok, value, _source} -> value
-          {:error, _reason} -> nil
-        end
-      rescue
-        _ -> nil
-      catch
-        :exit, _ -> nil
-      end
-    else
-      # Fallback to direct environment variable lookup
-      System.get_env(secret_name)
-    end
-  end
-
-  defp secrets_available? do
-    Code.ensure_loaded?(LemonCore.Secrets) and
-      function_exported?(LemonCore.Secrets, :resolve, 2)
   end
 
   @doc """

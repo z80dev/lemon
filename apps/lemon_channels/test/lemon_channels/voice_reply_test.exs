@@ -99,7 +99,7 @@ defmodule LemonChannels.VoiceReplyTest do
     assert entry.occurrence == "voice_reply:delivery-1"
     assert entry.cost == nil
     refute entry.price_known
-    record = LemonCore.UsageLedger.occurrence_record(entry)
+    record = LemonAgent.UsageLedger.occurrence_record(entry)
     assert record.cost_usd == nil
     assert record.input_characters == 5
     refute record.price_known
@@ -185,7 +185,7 @@ defmodule LemonChannels.VoiceReplyTest do
     assert entry.price_known
     assert entry.input == 0
     assert entry.output == 0
-    record = LemonCore.UsageLedger.occurrence_record(entry)
+    record = LemonAgent.UsageLedger.occurrence_record(entry)
     assert record.input_characters == 8
     assert record.cost_usd == entry.cost
   end

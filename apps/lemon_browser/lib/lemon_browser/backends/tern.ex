@@ -3,7 +3,7 @@ defmodule LemonBrowser.Backends.Tern do
   @behaviour LemonBrowser.Backend
 
   alias LemonBrowser.TernSession
-  alias LemonCore.Tern
+  alias LemonBrowser.Tern
 
   @impl true
   def id, do: :tern

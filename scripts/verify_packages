@@ -259,7 +259,7 @@ echo "==> consumer: boot and inspect"
 (cd "$CONSUMER" && consumer env MIX_ENV=test mix run -e '
   {:ok, _} = Application.ensure_all_started(:lemon_agent)
 
-  for module <- [LemonAi, LemonCore.Store, LemonAgent, LemonMemory.Store, LemonPlatformTest.BackendCase] do
+  for module <- [LemonAi, LemonCore.Store, LemonCore.ReleaseVersion, LemonAgent, LemonMemory.Store, LemonPlatformTest.BackendCase] do
     Code.ensure_loaded?(module) || raise "#{inspect(module)} is missing from the packages"
   end
 
@@ -293,7 +293,9 @@ echo "==> consumer: boot and inspect"
   started = for {id, _pid, _type, _modules} <- Supervisor.which_children(LemonCore.Supervisor), do: id
   LemonCore.Store in started || raise "lemon_core did not start its :core services"
 
-  for runtime_control <- [LemonCore.Drain, LemonCore.NodeRegistry, LemonCore.SessionActivity, LemonCore.ExecApprovalExpiry, LemonCore.RunHistoryStore] do
+  for runtime_control <- [LemonCore.Drain, LemonAgent.NodeRegistry, LemonAgent.UsageLedger,
+                          LemonCore.SessionActivity, LemonCore.TerminalOutbox,
+                          LemonCore.ExecApprovalExpiry, LemonCore.RunHistoryStore] do
     runtime_control in started && raise "a [:core] consumer started #{inspect(runtime_control)}"
   end
 

@@ -54,7 +54,7 @@ CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns 
 
 `CodingAgent.Executor` keeps normal requests local. When request metadata names
 an execution node, it starts `Executor.RemoteSessionRunner`, which asks
-`LemonCore.NodeRegistry` to deliver a versioned `coding_agent.run` request to
+`LemonAgent.NodeRegistry` to deliver a versioned `coding_agent.run` request to
 the authenticated destination WebSocket. The destination starts the same native
 executor/session path and returns one JSON-safe terminal result; no vendor CLI
 or subprocess agent runner is involved.
@@ -421,7 +421,7 @@ never the raw provider message.
 `write`, `edit`, and `patch` create filesystem checkpoints automatically when
 the tool context includes a session id. The `fs_checkpoint` tool lists checkpoint
 history, previews filesystem diffs, restores all or selected paths, and deletes
-old checkpoints through `LemonCore.Checkpoint`. Checkpoint create, restore, and
+old checkpoints through `LemonAgent.Checkpoint`. Checkpoint create, restore, and
 delete operations emit redacted introspection and run/session events for audit
 and live status surfaces. `CodingAgent.Checkpoint` remains the compatibility
 wrapper that adds todo and requirement state for coding-agent resume flows.
@@ -556,7 +556,7 @@ transition/debounced persistence cadence are unchanged.
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background processes started by `bash` with `run_in_background`, read with `bash_output`, stopped with `kill_process` |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` / `ProcessStoreServer` | ETS store for background process state |
-| `LemonCore.TerminalBackend` / `TerminalBackends` | Shared backend contract and registry for supervised terminal/process execution |
+| `CodingAgent.TerminalBackend` / `TerminalBackends` | Backend contract and registry for supervised terminal/process execution |
 | `CodingAgent.TaskStore` / `TaskStoreServer` | ETS+DETS async-task store with direct reads and serialized event, suppression, and monotonic lifecycle writes |
 | `CodingAgent.ParentQuestions` / `ParentQuestionStoreServer` | ETS+DETS store for child-to-parent clarification requests |
 
@@ -804,7 +804,7 @@ into the same observable `ProcessManager` boundary. Poll/list metadata also
 includes bounded-log counts, max-log settings, started/completed timestamps,
 and manual restart lineage when a finished process is restarted through the
 `process` tool. Backend launch also passes
-through `LemonCore.TerminalBackendPolicy`, which supports backend allow/deny
+through `CodingAgent.TerminalBackendPolicy`, which supports backend allow/deny
 lists plus optional Docker image and SSH target allowlists while keeping raw SSH
 targets out of support metadata. `LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL`
 can require backend-specific `exec` approval; approval actions include backend,
@@ -814,7 +814,7 @@ values and keys matching normal environment variable names before any backend is
 started.
 `exec.checkpoint_paths` is validated as a list of non-empty strings and is used
 only with filesystem checkpoints enabled. Risky shell checkpoints snapshot the
-configured file paths through `LemonCore.Checkpoint` before backend launch and
+configured file paths through `LemonAgent.Checkpoint` before backend launch and
 return `checkpoint_id`, `checkpoint_kind`, and `checkpoint_trigger` in result
 details.
 
@@ -849,7 +849,7 @@ The first definition for an ID wins, searching project `.lemon/agents/`, project
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.Checkpoint` | Compatibility wrapper over `LemonCore.Checkpoint` with coding-agent todo resume state |
+| `CodingAgent.Checkpoint` | Compatibility wrapper over `LemonAgent.Checkpoint` with coding-agent todo resume state |
 | `LemonEvals.Harness` | Evaluation harness for automated agent testing; includes deterministic tool contracts, read/edit workflow checks, remember/recall contracts, and relevant-skill prompt progressive-disclosure checks |
 
 The eval harness is intentionally lightweight and deterministic. It should catch harness-contract drift before behavioral/LLM evals run: default tool registry coverage, stable builtin tool ordering, basic file workflow viability, memory recall scope, and skill prompt guidance that points agents to `read_skill` and `skill_manage` without inlining full skill bodies.

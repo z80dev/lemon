@@ -16,18 +16,18 @@ defmodule LemonCli.Setup.OmpAuthTest do
     previous =
       Map.new(~w(HOME PATH LEMON_SECRETS_MASTER_KEY KIMI_API_KEY), &{&1, System.get_env(&1)})
 
-    secrets_config = Application.get_env(:lemon_core, Secrets)
+    secrets_config = Application.get_env(:lemon_core, :secrets)
     System.put_env("HOME", home)
     System.put_env("PATH", bin <> ":" <> (previous["PATH"] || "/usr/bin:/bin"))
     System.delete_env("KIMI_API_KEY")
     master_key = Base.encode64(:crypto.strong_rand_bytes(32))
     System.put_env("LEMON_SECRETS_MASTER_KEY", master_key)
-    Application.put_env(:lemon_core, Secrets, key_providers: [:env])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env])
     clear_secrets()
     {:ok, _} = Secrets.set("untouched_kimi_login", "synthetic-existing-login")
     stored = LemonCore.Store.list(Secrets.table())
     System.delete_env("LEMON_SECRETS_MASTER_KEY")
-    Application.put_env(:lemon_core, Secrets, key_providers: [])
+    Application.put_env(:lemon_core, :secrets, key_providers: [])
 
     token =
       Base.url_encode64(Jason.encode!(%{"alg" => "HS256", "typ" => "JWT"}), padding: false) <>
@@ -58,8 +58,8 @@ defmodule LemonCli.Setup.OmpAuthTest do
       end)
 
       if secrets_config,
-        do: Application.put_env(:lemon_core, Secrets, secrets_config),
-        else: Application.delete_env(:lemon_core, Secrets)
+        do: Application.put_env(:lemon_core, :secrets, secrets_config),
+        else: Application.delete_env(:lemon_core, :secrets)
 
       clear_secrets()
       File.rm_rf!(dir)
@@ -249,7 +249,7 @@ defmodule LemonCli.Setup.OmpAuthTest do
     # The store already holds a record under the setup key; a different key is
     # refused for writes (`:master_key_mismatch`).
     System.put_env("LEMON_SECRETS_MASTER_KEY", ctx.master_key)
-    Application.put_env(:lemon_core, Secrets, key_providers: [:env])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env])
     secret_name = "MixedCase_KimiOAuth"
 
     login =

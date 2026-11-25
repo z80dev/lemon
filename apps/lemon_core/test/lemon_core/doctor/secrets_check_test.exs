@@ -5,15 +5,15 @@ defmodule LemonCore.Doctor.SecretsCheckTest do
   alias LemonCore.Secrets
 
   setup do
-    previous_config = Application.fetch_env(:lemon_core, Secrets)
+    previous_config = Application.fetch_env(:lemon_core, :secrets)
     previous_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
-    Application.put_env(:lemon_core, Secrets, key_providers: [:env])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env])
     System.delete_env("LEMON_SECRETS_MASTER_KEY")
 
     on_exit(fn ->
       case previous_config do
-        {:ok, config} -> Application.put_env(:lemon_core, Secrets, config)
-        :error -> Application.delete_env(:lemon_core, Secrets)
+        {:ok, config} -> Application.put_env(:lemon_core, :secrets, config)
+        :error -> Application.delete_env(:lemon_core, :secrets)
       end
 
       if previous_key,
@@ -49,7 +49,7 @@ defmodule LemonCore.Doctor.SecretsCheckTest do
     path = Path.join(directory, "master_key")
     File.write!(path, "short")
     on_exit(fn -> File.rm_rf!(directory) end)
-    Application.put_env(:lemon_core, Secrets, key_providers: [:file], key_file: path)
+    Application.put_env(:lemon_core, :secrets, key_providers: [:file], key_file: path)
 
     assert [check] = SecretsCheck.run()
     assert check.status == :warn

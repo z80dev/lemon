@@ -3,7 +3,7 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
 
   alias CodingAgent.Executor
   alias CodingAgent.Executor.RemoteSessionRunner
-  alias LemonCore.NodeRegistry
+  alias LemonAgent.NodeRegistry
   alias LemonCore.ExecutionCommand
 
   setup do

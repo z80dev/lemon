@@ -6,8 +6,9 @@ defmodule LemonControlPlane.A2A.RunnerTest do
 
   alias LemonControlPlane.A2A.{Handler, Router, Runner}
   alias LemonCore.RateLimiter
-  alias LemonCore.{A2AStore, RunStore, Store}
-  alias LemonCore.A2A.Protocol
+  alias LemonCore.{RunStore, Store}
+  alias LemonSkills.A2AStore
+  alias LemonSkills.A2A.Protocol
 
   defmodule BlockingSubmitter do
     use LemonCore.RouterBridge.RunOrchestrator

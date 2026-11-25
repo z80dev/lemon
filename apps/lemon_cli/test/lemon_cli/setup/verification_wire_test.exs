@@ -27,11 +27,11 @@ defmodule LemonCli.Setup.VerificationWireTest do
       )
 
     paths = Application.fetch_env(:lemon_core, :paths)
-    secrets_config = Application.fetch_env(:lemon_core, Secrets)
+    secrets_config = Application.fetch_env(:lemon_core, :secrets)
     System.put_env("HOME", root)
     System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
     Application.put_env(:lemon_core, :paths, home_dir: root)
-    Application.put_env(:lemon_core, Secrets, key_providers: [:env])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env])
     clear_secrets()
 
     on_exit(fn ->

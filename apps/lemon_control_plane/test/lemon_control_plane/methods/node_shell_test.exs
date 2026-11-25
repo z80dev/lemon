@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.NodeShellTest do
   use ExUnit.Case, async: false
   alias LemonControlPlane.{NodeShells, NodeStore}
   alias LemonControlPlane.Methods.{NodeShellEvent, NodeShellInput, Registry}
-  alias LemonCore.NodeRegistry
+  alias LemonAgent.NodeRegistry
 
   setup do
     if is_nil(Process.whereis(NodeShells)), do: start_supervised!(NodeShells)

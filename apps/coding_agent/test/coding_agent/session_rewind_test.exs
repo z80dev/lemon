@@ -6,7 +6,7 @@ defmodule CodingAgent.SessionRewindTest do
   alias CodingAgent.Tools.FsCheckpoint, as: CheckpointTool
   alias CodingAgent.Tools.Edit
   alias CodingAgent.Tools.Lsp.Text
-  alias LemonCore.Checkpoint
+  alias LemonAgent.Checkpoint
 
   setup do
     dir = Path.join(System.tmp_dir!(), "session-rewind-#{System.unique_integer([:positive])}")

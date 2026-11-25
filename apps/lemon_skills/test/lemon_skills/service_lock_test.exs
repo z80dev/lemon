@@ -1,7 +1,7 @@
 defmodule LemonSkills.ServiceLockTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.Service.Lock
+  alias LemonCore.FileLock, as: Lock
   alias LemonSkills.Audit.State
   alias LemonSkills.{Lockfile, Usage}
 

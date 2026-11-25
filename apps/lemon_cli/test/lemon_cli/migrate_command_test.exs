@@ -127,7 +127,7 @@ defmodule LemonCli.MigrateCommandTest do
     [_, bundle] = Regex.run(~r/Pre-migration backup: (\S+)/, output)
 
     assert {:ok, %{verified: true, includes_credentials: false}} =
-             LemonCore.Backup.verify(bundle, target: target)
+             LemonCli.Backup.verify(bundle, target: target)
 
     assert File.read!(Path.join([bundle, "data", "agent", "workspace", "MEMORY.md"])) ==
              "existing memory\n"

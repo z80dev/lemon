@@ -217,7 +217,7 @@ defmodule Lemon.MixProject do
     end
 
     # `bin/python3` ships as a symlink; releases must contain no links at all
-    # (LemonCore.Update.Archive rejects them), so it becomes a real copy.
+    # (LemonCli.Update.Archive rejects them), so it becomes a real copy.
     versioned = Path.join([target, "bin", series])
     python3 = Path.join([target, "bin", "python3"])
 

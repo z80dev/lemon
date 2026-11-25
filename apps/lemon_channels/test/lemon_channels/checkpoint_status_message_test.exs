@@ -3,7 +3,7 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
 
   alias LemonChannels.Adapters.Telegram.Transport.Commands
   alias LemonChannels.CheckpointStatusMessage
-  alias LemonCore.Checkpoint
+  alias LemonAgent.Checkpoint
 
   @session_key "agent:test:telegram:default:group:-1001"
 

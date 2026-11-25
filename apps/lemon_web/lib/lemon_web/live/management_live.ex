@@ -17,7 +17,8 @@ defmodule LemonWeb.ManagementLive do
 
   use LemonWeb, :live_view
 
-  alias LemonCore.{SessionKey, SessionLifecycle}
+  alias LemonCore.SessionKey
+  alias LemonControlPlane.SessionLifecycle
   alias LemonWeb.{ManagementText, Rpc, SessionCwd}
 
   import LemonWeb.Rpc, only: [put_present: 3]

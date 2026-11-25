@@ -8,7 +8,7 @@ defmodule LemonControlPlane.Methods.SessionsPrune do
   """
 
   alias LemonControlPlane.Methods.SessionLifecycleFence
-  alias LemonCore.SessionLifecycle
+  alias LemonControlPlane.SessionLifecycle
 
   @behaviour LemonControlPlane.Method
 

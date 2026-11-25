@@ -4,7 +4,8 @@ defmodule LemonCli.SessionsCommandTest do
   import ExUnit.CaptureIO
 
   alias LemonCli.CLI
-  alias LemonCore.{RunStore, SessionLifecycle, Store}
+  alias LemonCore.{RunStore, Store}
+  alias LemonControlPlane.SessionLifecycle
 
   setup do
     suffix = System.unique_integer([:positive, :monotonic])

@@ -2,7 +2,7 @@ defmodule LemonWeb.UsageLive do
   @moduledoc """
   `/usage`: token and cost totals for today, 7 or 30 days.
 
-  Reads `usage.cost` (per-day records written by `LemonCore.UsageLedger` when a
+  Reads `usage.cost` (per-day records written by `LemonAgent.UsageLedger` when a
   run finalizes: providers, models, top sessions, daily series) and
   `usage.status` (today's totals and configured quotas). Only identifiers and
   numbers are projected; charts are plain CSS bars. Refreshes every 30 seconds

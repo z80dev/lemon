@@ -24,7 +24,8 @@ defmodule CodingAgent.Session.Rewind do
 
   alias CodingAgent.Session.MessageSerialization
   alias CodingAgent.SessionManager
-  alias LemonCore.{Checkpoint, Store}
+  alias LemonCore.Store
+  alias LemonAgent.Checkpoint
 
   @confirmation_table :session_rewinds
   @confirmation_ttl_ms 5 * 60 * 1000

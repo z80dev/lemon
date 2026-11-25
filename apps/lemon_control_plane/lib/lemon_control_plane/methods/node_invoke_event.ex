@@ -13,7 +13,7 @@ defmodule LemonControlPlane.Methods.NodeInvokeEvent do
     only: [session_generation: 1, current_session?: 2, get_field: 2]
 
   alias LemonControlPlane.Protocol.Errors
-  alias LemonCore.NodeRegistry
+  alias LemonAgent.NodeRegistry
 
   @impl true
   def name, do: "node.invoke.event"

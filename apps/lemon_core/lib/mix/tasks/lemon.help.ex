@@ -41,7 +41,7 @@ defmodule Mix.Tasks.Lemon.Help do
   @fallback %{
     "lemon.new" => "Scaffold a new Lemon agent project (installer archive)",
     "lemon.policy" => "Manage chat model and thinking defaults (channel/account/peer/thread)",
-    "lemon.channels" => "Show redacted Telegram/Discord configuration status",
+    "lemon.channels" => "Show redacted chat-channel configuration status",
     "lemon.config" => "Validate and inspect Lemon configuration",
     "lemon.usage" => "Show redacted usage, cost, token, and quota diagnostics",
     "lemon.media" => "Show redacted generated-media job diagnostics",

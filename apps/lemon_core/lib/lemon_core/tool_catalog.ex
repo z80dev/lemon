@@ -20,7 +20,7 @@ defmodule LemonCore.ToolCatalog do
   Restricted profiles are allow lists derived from this table, so they fail
   closed: a name it does not list is unclassified and denied by every restricted
   profile. That covers satellite registrations through `LemonAgent.ToolRegistry`
-  (omp, computer use, Honcho), MCP, extension and hand-assembled tools.
+  as well as MCP, extension and hand-assembled tools.
   Full-access, orchestrator and custom policies may still grant them by name.
 
   | Profile | Grants catalogued tools |
@@ -133,10 +133,7 @@ defmodule LemonCore.ToolCatalog do
     {"sms_get_inbox_number", :exec, [:external], [registry: true]},
     {"sms_wait_for_code", :exec, [:external], [registry: true]},
     {"sms_list_messages", :exec, [:external], [registry: true]},
-    {"sms_claim_message", :exec, [:dangerous, :external], [registry: true]},
-    # Executor extra tools for channel sessions.
-    {"telegram_send_image", :exec, [:dangerous, :external], []},
-    {"discord_send_file", :exec, [:dangerous, :external], []}
+    {"sms_claim_message", :exec, [:dangerous, :external], [registry: true]}
   ]
 
   # `read_only` profile: workspace exploration without external reach.

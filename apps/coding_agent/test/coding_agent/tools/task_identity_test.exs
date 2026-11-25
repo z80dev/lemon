@@ -11,7 +11,8 @@ defmodule CodingAgent.Tools.TaskIdentityTest do
   alias CodingAgent.Session.State
   alias CodingAgent.Tools.Task
   alias CodingAgent.Tools.Task.Params
-  alias LemonCore.{A2AStore, RunRequest}
+  alias LemonCore.{RunRequest}
+  alias LemonSkills.A2AStore
 
   @parent_key "agent:main:main"
   @decoy_key "agent:victim:main"

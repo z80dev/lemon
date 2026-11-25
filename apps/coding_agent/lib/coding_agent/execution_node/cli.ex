@@ -73,7 +73,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
           cond do
             opts[:expected_version] &&
                 (byte_size(opts[:expected_version]) > 64 or
-                   not LemonCore.Update.Version.valid?(opts[:expected_version])) ->
+                   not LemonCore.ReleaseVersion.valid?(opts[:expected_version])) ->
               {:error, "--expected-version must be an exact Lemon CalVer"}
 
             opts[:expected_version] && opts[:expected_version] != snapshot["lemonVersion"] ->

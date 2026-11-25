@@ -26,10 +26,8 @@ defmodule LemonCore.Config.Tools do
       max_chars = 50000
       readability = true
 
-      # Browser selection is passive; explicit providers never fall back.
-      [runtime.tools.browser]
-      provider = "auto"
-      tern = true
+      # Tables of optional drivers, such as [runtime.tools.browser], belong to
+      # the app registered under `:tool_sections`; see `LemonCore.Config.Tools.Section`.
 
       # Native app control through LCU (optional lemon_computer_use app).
       # LEMON_COMPUTER_USE_* environment variables take precedence.
@@ -52,7 +50,7 @@ defmodule LemonCore.Config.Tools do
   Environment variables override file configuration:
   - `LEMON_WEB_SEARCH_ENABLED`, `LEMON_WEB_SEARCH_PROVIDER`
   - `LEMON_WEB_FETCH_ENABLED`, `LEMON_WEB_FETCH_MAX_CHARS`
-  - `LEMON_BROWSER_PROVIDER`, `LEMON_BROWSER_TERN`
+  - registered `:tool_sections` owners document their own variables
   - `LEMON_TOOL_DISCLOSURE_ENABLED`, `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS`,
     `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS`, `LEMON_TOOL_DISCLOSURE_PROFILE`
 
@@ -65,6 +63,7 @@ defmodule LemonCore.Config.Tools do
   """
 
   alias LemonCore.Config.Tools.Bash
+  alias LemonCore.Config.Tools.Section
   alias LemonCore.Env
 
   @lsp_defaults %{"servers" => %{}, "idle_timeout_ms" => 30_000}
@@ -82,7 +81,7 @@ defmodule LemonCore.Config.Tools do
     :disclosure,
     :checkpoint,
     :semantic_find,
-    :browser,
+    :sections,
     :computer_use
   ]
 
@@ -165,7 +164,7 @@ defmodule LemonCore.Config.Tools do
             model: String.t() | nil,
             max_tokens: pos_integer()
           },
-          browser: map(),
+          sections: %{optional(atom()) => term()},
           computer_use: map()
         }
 
@@ -190,31 +189,24 @@ defmodule LemonCore.Config.Tools do
       disclosure: resolve_disclosure(tools_settings),
       checkpoint: resolve_checkpoint(tools_settings),
       semantic_find: resolve_semantic_find(tools_settings),
-      browser: resolve_browser(tools_settings),
+      sections: resolve_sections(tools_settings),
       computer_use: resolve_computer_use(tools_settings)
     }
   end
 
-  defp resolve_browser(settings) do
-    case Map.get(settings, "browser", %{}) do
-      section when is_map(section) ->
-        provider =
-          Env.get(:lemon_browser_provider,
-            default: Map.get(section, "provider", legacy_browser_backend() || "auto")
-          )
+  @doc """
+  Returns the resolved `[runtime.tools.<id>]` table of a registered
+  `LemonCore.Config.Tools.Section`, or `nil` when no owner is registered.
+  """
+  @spec section(t() | map(), atom()) :: term()
+  def section(%{sections: sections}, id) when is_map(sections), do: Map.get(sections, id)
+  def section(_tools, _id), do: nil
 
-        section
-        |> Map.drop(["provider", "tern"])
-        |> Map.put(:provider, provider)
-        |> Map.put(:tern, Env.get(:lemon_browser_tern, default: Map.get(section, "tern", true)))
-
-      invalid ->
-        invalid
-    end
+  defp resolve_sections(settings) do
+    Map.new(Section.registered(), fn module ->
+      {module.id(), module.resolve(Map.get(settings, Atom.to_string(module.id()), %{}))}
+    end)
   end
-
-  # An explicit legacy backend environment selection still names a provider.
-  defp legacy_browser_backend, do: Env.string("LEMON_BROWSER_BACKEND")
 
   # `[runtime.tools.computer_use]` is read by the optional lemon_computer_use
   # app, which applies its own environment overrides first. Values stay as
@@ -495,6 +487,12 @@ defmodule LemonCore.Config.Tools do
   """
   @spec defaults() :: map()
   def defaults do
+    Section.registered()
+    |> Map.new(&{Atom.to_string(&1.id()), &1.defaults()})
+    |> Map.merge(core_defaults())
+  end
+
+  defp core_defaults do
     %{
       "auto_resize_images" => true,
       "checkpoint" => %{"enabled" => false},
@@ -506,7 +504,6 @@ defmodule LemonCore.Config.Tools do
       },
       "bash" => Bash.defaults(),
       "lsp" => @lsp_defaults,
-      "browser" => %{"provider" => "auto", "tern" => true},
       "web" => %{
         "search" => %{
           "enabled" => true,

@@ -8,8 +8,8 @@ defmodule LemonCore.Cwd do
       cron, background work): configured `gateway.default_cwd`, then the
       user's home directory, then the process cwd.
     * `channel_default_cwd/0` — for runs that originate from a messaging
-      channel (Telegram, Discord, …): configured `gateway.default_cwd`, then
-      the assistant home (`assistant_home/0`). Remote chats never default to
+      channel: configured `gateway.default_cwd`, then
+      the assistant home (`LemonCore.Paths.assistant_home/0`). Remote chats never default to
       the user's `$HOME`.
   """
 
@@ -37,24 +37,8 @@ defmodule LemonCore.Cwd do
     end
   end
 
-  @doc """
-  The assistant home directory: `<agent_dir>/workspace`.
-
-  `agent_dir` follows the agent's own resolution order:
-  `LemonCore.Paths.agent_dir_override/0`, then `~/.lemon/agent`.
-  """
-  @spec assistant_home() :: String.t()
-  def assistant_home do
-    agent_dir =
-      non_blank(LemonCore.Paths.agent_dir_override()) || LemonCore.Paths.home_path("agent")
-
-    agent_dir
-    |> Path.join("workspace")
-    |> Path.expand()
-  end
-
   defp ensure_assistant_home do
-    home = assistant_home()
+    home = LemonCore.Paths.assistant_home()
 
     case File.mkdir_p(home) do
       :ok ->
@@ -95,10 +79,4 @@ defmodule LemonCore.Cwd do
   end
 
   defp normalize_existing_dir(_), do: nil
-
-  defp non_blank(value) when is_binary(value) do
-    if String.trim(value) == "", do: nil, else: value
-  end
-
-  defp non_blank(_), do: nil
 end

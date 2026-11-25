@@ -50,7 +50,7 @@ defmodule LemonControlPlane.Methods.NodeInvokeActive do
         {:error, Errors.forbidden("Node session has been superseded")}
 
       true ->
-        case LemonCore.NodeRegistry.report_active(
+        case LemonAgent.NodeRegistry.report_active(
                node_id,
                connection_pid,
                generation,

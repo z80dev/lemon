@@ -137,15 +137,15 @@ defmodule LemonCore.Doctor.ProviderNamesRedactionTest do
   test "doctor output and bundle entries never carry the custom name", ctx do
     routed_config(ctx)
     today_key = Date.to_iso8601(Date.utc_today())
-    previous = LemonCore.UsageStore.get_summary(:current)
+    previous = LemonAgent.UsageStore.get_summary(:current)
 
     on_exit(fn ->
       if previous,
-        do: LemonCore.UsageStore.put_summary(:current, previous),
+        do: LemonAgent.UsageStore.put_summary(:current, previous),
         else: LemonCore.Store.delete(:usage_data, :current)
     end)
 
-    LemonCore.UsageStore.put_summary(:current, %{
+    LemonAgent.UsageStore.put_summary(:current, %{
       date: today_key,
       total_cost: 0.1,
       total_requests: 1,

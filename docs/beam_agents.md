@@ -156,7 +156,7 @@ acquisition is not permission to repeat a side effect.
 
 `CodingAgent.MutationLock` owns reentrant multi-key in-VM mutations; callers use
 its bounded acquisition and sorted key ordering rather than composing ad-hoc
-nested locks. Cross-process file mutations use `LemonCore.Service.Lock`;
+nested locks. Cross-process file mutations use `LemonCore.FileLock`;
 `LemonCore.Secrets.Lock` retains the secret-store transaction boundary.
 The source rule is checked structurally, including macro-generated calls, by
 `apps/lemon_core/test/lemon_core/quality/global_trans_contract_test.exs`.

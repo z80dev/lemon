@@ -188,7 +188,7 @@ provider chain — `LemonCore.Secrets.KeyProvider`, walked in order by
 `LemonCore.Secrets.MasterKey`:
 
 ```elixir
-config :lemon_core, LemonCore.Secrets,
+config :lemon_core, :secrets,
   key_providers: [:keychain, :env, :file],
   key_file: "~/.lemon/secrets_master_key",
   env_var: "LEMON_SECRETS_MASTER_KEY"

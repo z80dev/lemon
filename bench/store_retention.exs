@@ -35,7 +35,7 @@ end
 
 {indexed_page_us, {:ok, %{records: []}}} =
   :timer.tc(fn ->
-    LemonCore.UsageRecords.query(%{"fromMs" => 0, "toMs" => 1}, store: :bench_retention)
+    LemonControlPlane.UsageRecords.query(%{"fromMs" => 0, "toMs" => 1}, store: :bench_retention)
   end)
 
 IO.puts(

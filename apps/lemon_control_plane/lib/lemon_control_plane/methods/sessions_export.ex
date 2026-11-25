@@ -27,7 +27,7 @@ defmodule LemonControlPlane.Methods.SessionsExport do
         {:error, {:invalid_request, "sessionKey is required", nil}}
 
       true ->
-        case LemonCore.SessionLifecycle.export(session_key, format: format) do
+        case LemonControlPlane.SessionLifecycle.export(session_key, format: format) do
           {:ok, export} ->
             {:ok, format_export(session_key, export, Authorize.content?(ctx))}
 

@@ -7,7 +7,8 @@ defmodule LemonWeb.ShellLiveTest do
   import Phoenix.LiveViewTest
   import LemonWeb.Test.OperatorAuth
 
-  alias LemonCore.{Bus, Event, Events, RunStore, SessionLifecycle}
+  alias LemonCore.{Bus, Event, Events, RunStore}
+  alias LemonControlPlane.SessionLifecycle
   alias LemonWeb.ShellLive
   alias LemonWeb.ShellLive.Palette
 

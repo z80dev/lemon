@@ -3,7 +3,7 @@ defmodule LemonWeb.SessionExportController do
 
   use LemonWeb, :controller
 
-  alias LemonCore.SessionLifecycle
+  alias LemonControlPlane.SessionLifecycle
 
   def show(conn, %{"session_key" => session_key, "format" => format})
       when format in ["json", "markdown"] do

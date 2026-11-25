@@ -278,7 +278,7 @@ defmodule CodingAgent.TrustedRootLoadersTest do
     end
 
     test "the assistant home and its subdirectories load no project resources", %{base: base} do
-      home_dir = LemonCore.Cwd.assistant_home()
+      home_dir = LemonCore.Paths.assistant_home()
       plant_home!(home_dir)
 
       for cwd <- [home_dir, Path.join(home_dir, "sub")] do
@@ -309,7 +309,7 @@ defmodule CodingAgent.TrustedRootLoadersTest do
 
     test "a repository containing the home cannot link to or import its files", %{base: base} do
       repo!(base)
-      home_dir = LemonCore.Cwd.assistant_home()
+      home_dir = LemonCore.Paths.assistant_home()
       plant_home!(home_dir)
       memory = Path.join(home_dir, "MEMORY.md")
       File.ln_s!(memory, Path.join(base, ".cursorrules"))

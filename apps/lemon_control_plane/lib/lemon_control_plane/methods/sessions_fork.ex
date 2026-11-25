@@ -4,7 +4,8 @@ defmodule LemonControlPlane.Methods.SessionsFork do
 
   alias LemonCore.AgentRuntime
   alias LemonControlPlane.Methods.NativeSessions
-  alias LemonCore.{SessionKey, SessionLifecycle}
+  alias LemonCore.SessionKey
+  alias LemonControlPlane.SessionLifecycle
 
   @impl true
   def name, do: "sessions.fork"

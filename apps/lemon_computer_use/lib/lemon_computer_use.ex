@@ -19,10 +19,10 @@ defmodule LemonComputerUse do
   Whether computer use is enabled for this runtime: the decision
   `LemonComputerUse.Application` resolved once at boot from the explicit
   switch (shared with the browser provider through
-  `LemonCore.BrowserProvider.computer_use_enabled?/0`). `false` before boot.
+  `LemonBrowser.Provider.computer_use_enabled?/0`). `false` before boot.
   """
   @spec enabled?() :: boolean()
-  defdelegate enabled?, to: LemonCore.BrowserProvider, as: :computer_use_enabled?
+  defdelegate enabled?, to: LemonBrowser.Provider, as: :computer_use_enabled?
 
   @doc "Bounded, redaction-safe status."
   @spec status() :: map()

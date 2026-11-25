@@ -32,7 +32,7 @@ defmodule LemonCore.Secrets.KeyCheck do
 
   ## Rotation
 
-  `LemonCore.Secrets.KeyRotation` checks the verifier in its plan, records
+  the rotation command checks the verifier in its plan, records
   `next` durably before switching keys (`begin_rotation/2`), and commits the
   new key once the switch is verified, or the previous one when the provider
   provably never attempted the write (`commit/1`). Any other outcome leaves
@@ -40,27 +40,21 @@ defmodule LemonCore.Secrets.KeyCheck do
   `:key_rotation_unresolved` because the earlier write may still land.
   """
 
-  alias LemonCore.Secrets
-  alias LemonCore.Secrets.KeyRotation
+  alias LemonCore.Secrets.Record
   alias LemonCore.Store
 
-  @row :key_check
+  @row Record.verifier_key()
+  @table Record.table()
   @label "lemon-secrets-key-check-v1"
 
   @type verifier :: %{version: 1, mac: binary(), next: binary() | nil}
-
-  @doc "Whether a secrets-table key is the verifier row rather than a secret."
-  @spec reserved?(term()) :: boolean()
-  def reserved?(key), do: key == @row
-
-  defp table, do: Secrets.table()
 
   @spec mac(binary()) :: binary()
   def mac(key), do: :crypto.mac(:hmac, :sha256, key, @label)
 
   @spec fetch(Store.server()) :: {:ok, verifier() | nil} | {:error, :secret_store_failed}
   def fetch(server \\ Store) do
-    case Store.fetch(server, table(), @row) do
+    case Store.fetch(server, @table, @row) do
       {:ok, %{mac: mac} = verifier} when is_binary(mac) -> {:ok, verifier}
       {:ok, nil} -> {:ok, nil}
       _ -> {:error, :secret_store_failed}
@@ -139,7 +133,7 @@ defmodule LemonCore.Secrets.KeyCheck do
   def commit(key), do: put(%{version: 1, mac: mac(key), next: nil})
 
   defp put(verifier) do
-    case Store.put(Store, table(), @row, verifier, durable: true) do
+    case Store.put(Store, @table, @row, verifier, durable: true) do
       :ok -> :ok
       {:error, reason} -> {:error, {:store_failed, reason}}
     end
@@ -149,14 +143,14 @@ defmodule LemonCore.Secrets.KeyCheck do
     values =
       for {_ref, entry} <- rows,
           is_map(entry),
-          Secrets.value_entry?(entry),
-          not Secrets.expired_entry?(entry),
+          Record.value?(entry),
+          not Record.expired?(entry),
           do: entry
 
-    if Enum.all?(values, &match?({:ok, _}, KeyRotation.decrypt(&1, key))) do
+    if Enum.all?(values, &match?({:ok, _}, Record.decrypt(&1, key))) do
       # Same durability as the secret write it precedes (`Secrets` persists
       # records with ordinary writes, which every backend supports).
-      case Store.put(server, table(), @row, %{version: 1, mac: mac(key), next: nil}) do
+      case Store.put(server, @table, @row, %{version: 1, mac: mac(key), next: nil}) do
         :ok -> :ok
         {:error, _} -> {:error, :secret_store_failed}
       end

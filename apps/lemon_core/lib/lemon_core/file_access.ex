@@ -1,6 +1,6 @@
 defmodule LemonCore.FileAccess do
   @moduledoc """
-  Shared file containment for chat `/file` transfers (Telegram, Discord) and
+  Shared file containment for chat-channel `/file` transfers and
   the channel-keyed `send_file` tool (`CodingAgent.Tools.SendFile`).
 
   The active root is the operator-configured project (or the channel default

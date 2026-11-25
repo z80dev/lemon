@@ -26,7 +26,7 @@ defmodule LemonControlPlane.Methods.SessionsStats do
          :ok <- SessionsList.content_query(query, content?),
          {:ok, group_limit} <- group_limit(params["groupLimit"]),
          {:ok, report} <-
-           LemonCore.SessionLifecycle.stats(
+           LemonControlPlane.SessionLifecycle.stats(
              query: query,
              agent_id: params["agentId"],
              pinned: boolean_filter(params["pinned"]),

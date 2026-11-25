@@ -91,25 +91,25 @@ defmodule LemonControlPlane.Methods.StatusTest do
   end
 
   test "browser subsystem projects only the shared resolver's redacted selection" do
-    keys = [:browser_provider_probe, :browser_provider_lcu_probe]
-    previous = Map.new(keys, &{&1, Application.fetch_env(:lemon_core, &1)})
+    keys = [:provider_probe, :lcu_probe]
+    previous = Map.new(keys, &{&1, Application.fetch_env(:lemon_browser, &1)})
 
-    Application.put_env(:lemon_core, :browser_provider_lcu_probe, fn ->
+    Application.put_env(:lemon_browser, :lcu_probe, fn ->
       {:error, "token=private /private/host"}
     end)
 
-    Application.put_env(:lemon_core, :browser_provider_probe, fn _ ->
+    Application.put_env(:lemon_browser, :provider_probe, fn _ ->
       {:error, "token=private /private/host"}
     end)
 
     on_exit(fn ->
       Enum.each(previous, fn
-        {key, {:ok, value}} -> Application.put_env(:lemon_core, key, value)
-        {key, :error} -> Application.delete_env(:lemon_core, key)
+        {key, {:ok, value}} -> Application.put_env(:lemon_browser, key, value)
+        {key, :error} -> Application.delete_env(:lemon_browser, key)
       end)
     end)
 
-    expected = LemonCore.BrowserProvider.resolve()
+    expected = LemonBrowser.Provider.resolve()
     assert {:ok, result} = Status.handle(%{}, %{})
     browser = result["subsystems"]["browser"]
 

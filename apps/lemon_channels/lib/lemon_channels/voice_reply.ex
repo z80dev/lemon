@@ -6,7 +6,7 @@ defmodule LemonChannels.VoiceReply do
   independently. Configuration is the channel's resolved `voice_replies` map.
   Context carries `run_id`, `session_key`, `agent_id` and optional `delivery_id`.
   `provider_module`, `http_client` and `usage_recorder` are injectable test seams;
-  the recorder accepts one `LemonCore.UsageLedger` entry. When provider cost is
+  the recorder accepts one `LemonAgent.UsageLedger` entry. When provider cost is
   absent, configured model pricing estimates cost from input characters.
   Unknown speech pricing is recorded as nil, never zero.
 
@@ -110,7 +110,7 @@ defmodule LemonChannels.VoiceReply do
       price_known: not is_nil(cost)
     }
 
-    recorder = Map.get(context, :usage_recorder, &LemonCore.UsageLedger.record/1)
+    recorder = Map.get(context, :usage_recorder, &LemonAgent.UsageLedger.record/1)
 
     case recorder.(entry) do
       :ok -> :ok

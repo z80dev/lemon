@@ -11,7 +11,7 @@ defmodule LemonCore.Secrets.MasterKey do
 
   Both the chain and the locations it looks at are configurable:
 
-      config :lemon_core, LemonCore.Secrets,
+      config :lemon_core, :secrets,
         key_providers: [:env, :file],
         key_file: "/etc/lemon/master_key",
         env_var: "LEMON_SECRETS_MASTER_KEY"
@@ -25,10 +25,10 @@ defmodule LemonCore.Secrets.MasterKey do
   that already encrypted secrets under such a value can keep working by opting
   in explicitly:
 
-      config :lemon_core, LemonCore.Secrets, allow_legacy_raw_keys: true
+      config :lemon_core, :secrets, allow_legacy_raw_keys: true
 
   which logs a deprecation warning on first use. Re-encrypting under a proper
-  key is the real fix: `lemon secrets rotate-key` (`LemonCore.Secrets.KeyRotation`).
+  key is the real fix: `lemon secrets rotate-key`.
 
   Secret reads use `resolve_cached/1`, a single slot in the supervised
   `LemonCore.RuntimeCache` ETS table, keyed by caller options and provider
@@ -58,7 +58,7 @@ defmodule LemonCore.Secrets.MasterKey do
   require Logger
 
   alias LemonCore.RuntimeCache
-  alias LemonCore.Secrets.{KeyLock, KeyProvider}
+  alias LemonCore.Secrets.{KeyLock, KeyProvider, KeySources}
 
   @master_key_bytes 32
   @cache_key {__MODULE__, :resolved_key}
@@ -90,7 +90,7 @@ defmodule LemonCore.Secrets.MasterKey do
   @spec resolve(keyword()) :: {:ok, binary(), source()} | {:error, atom() | tuple()}
   def resolve(opts \\ []) do
     opts
-    |> KeyProvider.order()
+    |> KeySources.order()
     |> resolve_chain(opts, %{invalid: nil, failure: nil})
   end
 
@@ -103,7 +103,7 @@ defmodule LemonCore.Secrets.MasterKey do
   """
   @spec resolve_cached(keyword()) :: {:ok, binary(), source()} | {:error, atom() | tuple()}
   def resolve_cached(opts \\ []) do
-    context = {opts, Application.get_env(:lemon_core, LemonCore.Secrets, [])}
+    context = {opts, Application.get_env(:lemon_core, :secrets, [])}
 
     case RuntimeCache.get(@cache_key) do
       {^context, result} ->
@@ -208,7 +208,7 @@ defmodule LemonCore.Secrets.MasterKey do
   because an entry already exists (keychain item, key file present even if
   unreadable) also yields `:master_key_exists`. Only `force: true` skips the
   check and replaces the key — every secret already encrypted under the old
-  key becomes unreadable; `LemonCore.Secrets.KeyRotation` changes a key in use
+  key becomes unreadable; the rotation command changes a key in use
   without losing secrets.
   """
   @spec init(keyword()) :: {:ok, map()} | {:error, atom() | tuple()}
@@ -237,7 +237,7 @@ defmodule LemonCore.Secrets.MasterKey do
       :ok
     else
       opts
-      |> KeyProvider.order()
+      |> KeySources.order()
       |> Enum.reduce_while(:ok, fn provider, :ok ->
         case fetch_uncached(provider, opts) do
           {:ok, _key} ->
@@ -258,7 +258,7 @@ defmodule LemonCore.Secrets.MasterKey do
 
   @spec status(keyword()) :: map()
   def status(opts \\ []) do
-    providers = KeyProvider.order(opts)
+    providers = KeySources.order(opts)
     keychain = find_provider(providers, :keychain)
 
     keychain_result = keychain && fetch_from(keychain, opts)
@@ -400,14 +400,14 @@ defmodule LemonCore.Secrets.MasterKey do
   """
   @spec other_sources(source(), keyword()) :: [source()]
   def other_sources(source, opts) do
-    for provider <- KeyProvider.order(opts),
+    for provider <- KeySources.order(opts),
         KeyProvider.name(provider) != source,
         match?({:ok, _}, fetch_from(provider, opts)),
         do: KeyProvider.name(provider)
   end
 
   defp init_targets(opts) do
-    providers = opts |> KeyProvider.order() |> Enum.filter(&KeyProvider.supports_put?/1)
+    providers = opts |> KeySources.order() |> Enum.filter(&KeyProvider.supports_put?/1)
 
     case Keyword.get(opts, :target) do
       nil -> providers
@@ -526,7 +526,7 @@ defmodule LemonCore.Secrets.MasterKey do
       Lemon secrets master key is not base64-encoded 32-byte key material and \
       was rejected. Generate one with `lemon secrets init` (or \
       `openssl rand -base64 32`). To keep using an existing raw-string key, \
-      set `config :lemon_core, LemonCore.Secrets, allow_legacy_raw_keys: true`.\
+      set `config :lemon_core, :secrets, allow_legacy_raw_keys: true`.\
       """)
 
       {:error, :weak_master_key}

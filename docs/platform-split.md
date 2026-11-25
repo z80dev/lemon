@@ -121,37 +121,26 @@ tarballs so this class of break fails CI.
 - **`--channel` is checkout-only.** It depends on `lemon_channels`, which is not
   published; so does `PluginCase`. `--hex --channel` is refused with that
   explanation instead of generating a project that cannot resolve.
-- **`lemon_core` is still broader than a core.** The plan's store moves were
-  re-measured against real consumers; a module moves only when every non-test
-  consumer is the target app or already depends on it, with no new mix edge or
-  bridge. The former progress index was removed with the gateway execution
-  runtime. The memory doctor check moved to `LemonMemory.Doctor.Checks.Memory`
-  and the skills doctor check to
-  `LemonSkills.Doctor.Checks.Skills` (both via `:doctor_checks`). Staying, with
-  the consumer that blocks each move:
-  - Router targets: `RunStore` (core `SessionLifecycle`/`SessionMetadataStore`,
-    channels Telegram transport,
-    `coding_agent` `SideQuery`/`ControlPlaneProvider`); `RunHistoryStore` (core
-    `RunStore.history/2` and its supervision child); `ChatState`/`ChatStateStore`
-    (core `SessionLifecycle`, channels Discord/Telegram transports,
-    `coding_agent` `ControlPlaneProvider`).
-  - Channels targets: `Binding`, `BindingResolver` and `GatewayConfig`
-    (`lemon_gateway`, which does not depend on channels); `Cwd` (`coding_agent`
-    `BackgroundRun`/`SideQuery`); `ProjectBindingStore` (core `BindingResolver`).
-  - Former "runtime platform repo" targets (gone under D18): `ConfigReloader`
-    (core-only, reloads core config; no other owner); `UsageStore` (read by
-    core `UsageDiagnostics`, which channels `PortableCommand` uses);
-    `PolicyStore` (`coding_agent` `SideQuery`, core `SessionLifecycle`; it is
-    also the canonical policy plane); `ExecApprovalStore` (core `ExecApprovals`
-    and `Events.ApprovalPending`).
-  - Doctor: the framework, the core-domain checks (config, secrets, runtime,
-    providers, usage, node tools) and the diagnostics core's `SupportBundle`
-    reads: `LspDiagnostics` (also `coding_agent` `Tools.LspDiagnostics`),
-    `CheckpointDiagnostics` (also channels), `CronDiagnostics`,
-    `ExtensionDiagnostics` and `CredentialReadiness` (the registered runtime predicate).
+- **Foundation ownership.** Core retains shared persistence, routing and
+  execution contracts, configuration, encrypted secret records, process
+  identity and filesystem locks. It does not depend on any umbrella app.
+  In particular:
+  - `lemon_cli` owns backup, uninstall, managed update, service management,
+    key rotation and local policy/usage command adapters.
+  - `lemon_control_plane` owns operator session lifecycle and usage records
+    queries. Session erase participants and storage-level queries stay in core.
+  - `lemon_agent` owns shared native usage, checkpoints, execution-node runtime,
+    and vendor-specific credential integration. Product configuration wires
+    node and usage workers into the runtime control group before terminal replay.
+  - `lemon_skills` owns workspace context and the A2A protocol, client and
+    persistent store it shares with the control-plane A2A server.
+  - `lemon_browser` owns browser selection and its driver configuration;
+    `coding_agent` owns terminal backend policy and execution.
 
-  Only the repo tooling (`quality/`, `update/`, repo-only `mix lemon.*` tasks)
-  is kept out of the tarball.
+  The [core changelog](../apps/lemon_core/CHANGELOG.md) lists the next minor's
+  API migrations. Release profiles and umbrella configuration retain the
+  product services and register their validation/diagnostics without adding
+  foundation dependencies.
 - **Elixir floor.** The packages declare `~> 1.17` (exqlite 0.43 requires it); the
   packaging workflow requires both Elixir 1.20.5 / OTP 29.1.2 and the floor,
   1.17.3 / OTP 26.2, to pass `scripts/verify_packages`.

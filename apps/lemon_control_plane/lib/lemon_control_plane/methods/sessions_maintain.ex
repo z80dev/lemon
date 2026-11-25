@@ -14,7 +14,7 @@ defmodule LemonControlPlane.Methods.SessionsMaintain do
     params = params || %{}
 
     with :ok <- validate(params) do
-      LemonCore.SessionLifecycle.maintenance(
+      LemonControlPlane.SessionLifecycle.maintenance(
         older_than_ms: params["olderThanMs"],
         dry_run: Map.get(params, "dryRun", true),
         confirm_token: params["confirmToken"]

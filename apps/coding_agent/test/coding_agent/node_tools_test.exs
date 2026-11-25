@@ -5,7 +5,8 @@ defmodule CodingAgent.NodeToolsTest do
   alias CodingAgent.{NodeTools, ToolRegistry}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
-  alias LemonCore.{ExecutionContext, NodeRegistry}
+  alias LemonCore.ExecutionContext
+  alias LemonAgent.NodeRegistry
 
   @moduletag :tmp_dir
 

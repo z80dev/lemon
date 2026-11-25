@@ -8,7 +8,7 @@ defmodule LemonCore.LoopbackListener do
   identifies the peer, not a replacement listener on the same port. Linux uses
   the kernel socket uid in `/proc/net/tcp{,6}`; macOS/BSD use uid-filtered `lsof`
   records with exact endpoints. The current process uid comes from
-  `LemonCore.Service.Identity.current_uid/0`, captured once per OS process.
+  `LemonCore.ProcessIdentity.current_uid/0`, captured once per OS process.
   """
 
   @type ownership :: :owned | :foreign | :absent | :unverifiable
@@ -107,7 +107,7 @@ defmodule LemonCore.LoopbackListener do
     case Keyword.fetch(opts, :uid) do
       {:ok, uid} when is_integer(uid) and uid >= 0 -> {:ok, uid}
       {:ok, _} -> {:error, :invalid_uid}
-      :error -> LemonCore.Service.Identity.current_uid()
+      :error -> LemonCore.ProcessIdentity.current_uid()
     end
   end
 

@@ -51,7 +51,7 @@ defmodule LemonControlPlane.Methods.SessionsList do
     archived = boolean_filter(get_param(params, "archived"))
 
     result =
-      LemonCore.SessionLifecycle.list(
+      LemonControlPlane.SessionLifecycle.list(
         limit: limit,
         offset: offset,
         agent_id: agent_id,

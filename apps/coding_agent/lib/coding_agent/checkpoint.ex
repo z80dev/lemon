@@ -1,6 +1,6 @@
 defmodule CodingAgent.Checkpoint do
   @moduledoc """
-  Coding-agent filesystem checkpoint operations backed by `LemonCore.Checkpoint`.
+  Coding-agent filesystem checkpoint operations backed by `LemonAgent.Checkpoint`.
 
   Checkpoint ownership is the trusted session id (`session.header.id`) that the
   session places in tool options as `:session_id`. `owner/1` is the single
@@ -13,7 +13,7 @@ defmodule CodingAgent.Checkpoint do
   """
 
   alias CodingAgent.Tools.OperatorState
-  alias LemonCore.Checkpoint, as: CoreCheckpoint
+  alias LemonAgent.Checkpoint, as: CoreCheckpoint
 
   @type checkpoint :: CoreCheckpoint.checkpoint()
   @type filesystem_snapshot :: CoreCheckpoint.filesystem_snapshot()
@@ -44,7 +44,7 @@ defmodule CodingAgent.Checkpoint do
   Checkpoint files live outside Lemon's control (the system temp directory by
   default), so their recorded roots are untrusted: each selected root goes
   through `CodingAgent.Tools.OperatorState.check_mutation/2` first, and only
-  the checked roots are handed to `LemonCore.Checkpoint.restore_filesystem/3`.
+  the checked roots are handed to `LemonAgent.Checkpoint.restore_filesystem/3`.
   """
   @spec restore_filesystem(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def restore_filesystem(checkpoint_id, owner, opts \\ []) when is_binary(checkpoint_id) do

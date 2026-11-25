@@ -5,6 +5,7 @@ defmodule LemonWeb.SessionParticipantsTest do
 
   alias CodingAgent.{SessionManager, TaskStore}
   alias LemonAgent.ModelRuntime.SessionPins
+  alias LemonControlPlane.SessionLifecycle
 
   alias LemonCore.{
     ChatStateStore,
@@ -12,7 +13,6 @@ defmodule LemonWeb.SessionParticipantsTest do
     NativeSessionOwner,
     ResumeToken,
     RunStore,
-    SessionLifecycle,
     Store,
     TerminalOutbox
   }

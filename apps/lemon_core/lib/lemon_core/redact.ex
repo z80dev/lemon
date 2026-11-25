@@ -86,7 +86,8 @@ defmodule LemonCore.Redact do
   @authorization ~r/\bbearer\s+[A-Za-z0-9._~+\/=:-]+/i
   @assignment ~r/((?<![\w.-])["']?[A-Za-z0-9_.-]*(?:#{@key_pattern}|session|private)[A-Za-z0-9_.-]*["']?[ \t]*[:=][ \t]*)(basic[ \t]+[A-Za-z0-9._~+\/=:-]+|""".*?(?:"""|\z)|'''.*?(?:'''|\z)|"(?:\\.|[^"\\])*(?:"|\z)|'(?:\\.|[^'\\])*(?:'|\z)|\[REDACTED\]|[^\s,;&"'{}\[\]]+|&)/is
   @config_assignment ~r/^([^#\n=\[]*?=[ \t]*)([^\n]+)$/m
-  @pairing_code ~r/((?:pairing code:\s*|lemon pairing (?:approve|deny) (?:telegram|discord)\s+))[A-HJ-NP-Z2-9]{8}\b/i
+  # Any registered channel id may follow `lemon pairing approve|deny`.
+  @pairing_code ~r/((?:pairing code:\s*|lemon pairing (?:approve|deny) [a-z][a-z0-9_-]*\s+))[A-HJ-NP-Z2-9]{8}\b/i
   @hex_key ~r/0x[a-fA-F0-9]{64}/
 
   @doc "Redact credentials in a string, leaving non-string values unchanged."

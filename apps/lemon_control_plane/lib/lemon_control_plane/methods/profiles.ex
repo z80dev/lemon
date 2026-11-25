@@ -4,7 +4,8 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
   require Logger
 
   alias LemonControlPlane.Protocol.Errors
-  alias LemonCore.{NodeRegistry, ProfileStore}
+  alias LemonCore.ProfileStore
+  alias LemonAgent.NodeRegistry
 
   def profile_attrs(params) do
     %{

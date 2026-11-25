@@ -41,7 +41,7 @@ defmodule CodingAgent.Executor.UsageTest do
     assert [%{usage: %{cost: %{total: 0.5}, price_known: true}}] = fields.usage.occurrences
 
     assert [entry] =
-             LemonCore.UsageLedger.entries("local-run", "agent:bot:main", %{
+             LemonAgent.UsageLedger.entries("local-run", "agent:bot:main", %{
                completed: fields,
                meta: %{agent_id: "bot"}
              })
@@ -97,7 +97,7 @@ defmodule CodingAgent.Executor.UsageTest do
     assert {:ok, completed} = RemoteRequestCodec.decode_result(payload)
 
     assert [entry] =
-             LemonCore.UsageLedger.entries("native-run", "agent:bot:main", %{
+             LemonAgent.UsageLedger.entries("native-run", "agent:bot:main", %{
                completed: completed,
                meta: %{agent_id: "bot"}
              })
@@ -238,7 +238,7 @@ defmodule CodingAgent.Executor.UsageTest do
     assert length(completed.usage.occurrences) == 4
 
     entries =
-      LemonCore.UsageLedger.entries("parent-run", "agent:bot:main", %{completed: completed})
+      LemonAgent.UsageLedger.entries("parent-run", "agent:bot:main", %{completed: completed})
 
     assert length(entries) == 4
     assert Enum.all?(entries, &(&1.run_id == "parent-run"))

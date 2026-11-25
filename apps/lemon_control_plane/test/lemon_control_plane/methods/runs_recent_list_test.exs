@@ -2,7 +2,8 @@ defmodule LemonControlPlane.Methods.RunsRecentListTest do
   use ExUnit.Case, async: false
 
   alias LemonControlPlane.Methods.RunsRecentList
-  alias LemonCore.{IntrospectionStore, Store, UsageLedger, UsageStore}
+  alias LemonCore.{IntrospectionStore, Store}
+  alias LemonAgent.{UsageLedger, UsageStore}
   alias LemonCore.Store.EtsBackend
 
   defmodule ListFailureBackend do

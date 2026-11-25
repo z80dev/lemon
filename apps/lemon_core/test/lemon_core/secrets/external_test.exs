@@ -5,7 +5,7 @@ defmodule LemonCore.Secrets.ExternalTest do
 
   alias LemonCore.Config.Secrets.Source
   alias LemonCore.Secrets
-  alias LemonCore.Secrets.{External, SourceCache}
+  alias LemonCore.Secrets.SourceCache
 
   @resolved_secret "stub-secret-value-never-print"
   @bootstrap_secret "stub-bootstrap-never-print"
@@ -148,8 +148,12 @@ defmodule LemonCore.Secrets.ExternalTest do
       type: :onepassword,
       enabled: true,
       executable: stub,
-      refs: %{"STUB_SECRET" => "op://Private/Test/credential"},
-      auth_secret: "op_bootstrap",
+      options: %{
+        refs: %{"STUB_SECRET" => "op://Private/Test/credential"},
+        auth_secret: "op_bootstrap",
+        auth_env: "OP_SERVICE_ACCOUNT_TOKEN",
+        account: nil
+      },
       timeout_ms: 5_000,
       max_output_bytes: 1_024
     }
@@ -166,9 +170,12 @@ defmodule LemonCore.Secrets.ExternalTest do
       type: :bitwarden,
       enabled: true,
       executable: stub,
-      project_id: "project_123",
-      access_token_secret: "bws_bootstrap",
-      access_token_env: "BWS_ACCESS_TOKEN",
+      options: %{
+        project_id: "project_123",
+        access_token_secret: "bws_bootstrap",
+        access_token_env: "BWS_ACCESS_TOKEN",
+        server_url: nil
+      },
       timeout_ms: 5_000,
       max_output_bytes: 4_096
     }
@@ -180,8 +187,8 @@ defmodule LemonCore.Secrets.ExternalTest do
   test "status and live test contain readiness and provenance but no values", %{stub: stub} do
     source = command_source(stub, ["success"])
 
-    status = External.status(sources: [source])
-    result = External.test(sources: [source])
+    status = Secrets.external_status(sources: [source])
+    result = Secrets.test_external(sources: [source])
 
     assert status.status == :ready
     assert result.status == :ready

@@ -632,13 +632,13 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
 
     test "a failed authoritative read preserves its error instead of reporting absence" do
       alias LemonAgent.ModelRuntime.Credentials
-      previous = Application.get_env(:lemon_core, Secrets)
-      Application.put_env(:lemon_core, Secrets, key_providers: [:env])
+      previous = Application.get_env(:lemon_core, :secrets)
+      Application.put_env(:lemon_core, :secrets, key_providers: [:env])
 
       on_exit(fn ->
         if is_nil(previous),
-          do: Application.delete_env(:lemon_core, Secrets),
-          else: Application.put_env(:lemon_core, Secrets, previous)
+          do: Application.delete_env(:lemon_core, :secrets),
+          else: Application.put_env(:lemon_core, :secrets, previous)
       end)
 
       assert {:ok, _} = Secrets.set("unreadable_login", anthropic_login(3_600_000))
@@ -1194,7 +1194,7 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
     assert {:ok, _} = Secrets.set(secret_name, stored)
 
     previous_req = Req.default_options()
-    previous_secrets_config = Application.get_env(:lemon_core, LemonCore.Secrets)
+    previous_secrets_config = Application.get_env(:lemon_core, :secrets)
     Req.default_options(plug: {Req.Test, __MODULE__})
     Req.Test.set_req_test_to_shared(%{})
 
@@ -1216,7 +1216,7 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
 
     Application.put_env(
       :lemon_core,
-      LemonCore.Secrets,
+      :secrets,
       Keyword.put(previous_secrets_config || [], :write_lock_wait_ms, 50)
     )
 
@@ -1243,8 +1243,8 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
       Req.Test.set_req_test_to_private(%{})
 
       if previous_secrets_config,
-        do: Application.put_env(:lemon_core, LemonCore.Secrets, previous_secrets_config),
-        else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+        do: Application.put_env(:lemon_core, :secrets, previous_secrets_config),
+        else: Application.delete_env(:lemon_core, :secrets)
     end
   end
 

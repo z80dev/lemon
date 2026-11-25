@@ -119,8 +119,14 @@ defmodule LemonCore.Config.ProjectTrustTest do
     secret_env = { HELPER = "llm_anthropic_api_key" }
     """)
 
-    assert {:error, :not_found} = External.resolve("STUB_SECRET", project_dir: ctx.project)
-    assert External.status(project_dir: ctx.project).configured_count == 0
+    assert {:error, :not_found} =
+             External.resolve(
+               "STUB_SECRET",
+               [project_dir: ctx.project],
+               &LemonCore.Secrets.resolve_local/1
+             )
+
+    assert LemonCore.Secrets.external_status(project_dir: ctx.project).configured_count == 0
     refute File.exists?(marker)
   end
 

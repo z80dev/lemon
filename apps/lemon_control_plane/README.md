@@ -27,7 +27,7 @@ token (or explicit tokenless loopback compatibility) with the read, write,
 approvals and content scopes. There is no OpenAI-compatible `/v1` API and no
 single-shot `POST /acp` endpoint.
 RPC image arrays are validated directly by `LemonAi.ImageInputs`; usage records
-and summaries are owned by `LemonCore.UsageStore`.
+and summaries are owned by `LemonAgent.UsageStore`.
 
 Expose **4044**, not 4040, for remote execution nodes. This gateway serves only
 `/ws` (node/enrollment credentials; never operators or tokenless access) and

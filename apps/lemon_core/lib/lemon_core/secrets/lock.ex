@@ -4,7 +4,7 @@ defmodule LemonCore.Secrets.Lock do
 
   `LemonCore.Secrets.set/3` and `set_if_revision/4` hold it from resolving the
   master key until persistence; deletion and expiry cleanup hold it around
-  conditional removal. `LemonCore.Secrets.KeyRotation.rotate/2` holds it for the
+  conditional removal. The key rotation command holds it for the
   whole rotation, so no write uses a retiring key and mutations never interleave.
 
   The lease is a record in the `:secrets_lock` Store table created with
@@ -29,7 +29,7 @@ defmodule LemonCore.Secrets.Lock do
 
   A live holder is waited for, then `{:error, :secrets_locked}` is returned.
   Secret writes wait up to 30 seconds
-  (`config :lemon_core, LemonCore.Secrets, write_lock_wait_ms: ...`), a
+  (`config :lemon_core, :secrets, write_lock_wait_ms: ...`), a
   rotation 5 seconds. A lease held from another host, or one that cannot be
   read, is never reclaimed automatically: the caller gets
   `{:error, {:secrets_lock_held, host}}` and an operator must confirm that
@@ -53,7 +53,7 @@ defmodule LemonCore.Secrets.Lock do
   @spec with_write_lock((-> result), Store.server()) :: result | error() when result: term()
   def with_write_lock(fun, server \\ Store) do
     :lemon_core
-    |> Application.get_env(LemonCore.Secrets, [])
+    |> Application.get_env(:secrets, [])
     |> Keyword.get(:write_lock_wait_ms, @write_wait_ms)
     |> with_lock(fun, server)
   end

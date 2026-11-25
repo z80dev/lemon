@@ -5,8 +5,9 @@ defmodule LemonControlPlane.A2A.Runner do
 
   alias LemonAgent.Security.ExternalContent
   alias LemonControlPlane.A2A.Config
-  alias LemonCore.{A2AStore, Bus, Id, RouterBridge, RunRequest, RunStore, SessionKey}
-  alias LemonCore.A2A.Protocol
+  alias LemonCore.{Bus, Id, RouterBridge, RunRequest, RunStore, SessionKey}
+  alias LemonSkills.A2AStore
+  alias LemonSkills.A2A.Protocol
 
   @submission_reconciling "Run submission outcome is being reconciled"
   @runner_lease_ms 60_000

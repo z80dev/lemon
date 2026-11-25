@@ -57,7 +57,7 @@ defmodule LemonCore.ConfigCache do
           failed_at: integer()
         }
 
-  def start_link(opts \\ []) do
+  def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
@@ -78,7 +78,7 @@ defmodule LemonCore.ConfigCache do
   Cache keys are based on the resolved config file paths (global + project). This is
   important for tests, where `HOME` may change between cases.
   """
-  @spec get(String.t() | nil, keyword()) :: LemonCore.Config.t()
+  @spec get(String.t() | nil, keyword()) :: map()
   def get(cwd \\ nil, opts \\ []) do
     ensure_available!()
     paths = config_paths(cwd)
@@ -141,7 +141,7 @@ defmodule LemonCore.ConfigCache do
 
       LemonCore.ConfigCache.reload()
   """
-  @spec reload(String.t() | nil, keyword()) :: LemonCore.Config.t()
+  @spec reload(String.t() | nil, keyword()) :: map()
   def reload(cwd \\ nil, opts \\ []) do
     ensure_available!()
 
@@ -189,11 +189,11 @@ defmodule LemonCore.ConfigCache do
   end
 
   @impl true
-  def init(opts) do
+  def init(start_opts) do
     opts =
       :lemon_core
       |> Application.get_env(__MODULE__, [])
-      |> Keyword.merge(Keyword.take(opts, [:mtime_check_interval_ms, :call_timeout_ms]))
+      |> Keyword.merge(Keyword.take(start_opts, [:mtime_check_interval_ms, :call_timeout_ms]))
 
     _ = new_table!()
 
@@ -205,7 +205,7 @@ defmodule LemonCore.ConfigCache do
 
     :persistent_term.put({__MODULE__, :defaults}, defaults)
 
-    {:ok, %{table: @table}}
+    {:ok, %{table: @table, load_base: Keyword.fetch!(start_opts, :load_base)}}
   end
 
   # A live table under our name belongs to someone else — two caches sharing one
@@ -241,7 +241,7 @@ defmodule LemonCore.ConfigCache do
         {:reply, base, state}
 
       [] ->
-        case safe_load_base(cwd, paths) do
+        case safe_load_base(state.load_base, cwd, paths) do
           {:ok, base, fp} ->
             _ = :ets.insert(state.table, {key, base, fp, now, now, nil})
             {:reply, base, state}
@@ -262,7 +262,7 @@ defmodule LemonCore.ConfigCache do
     key = cache_key(paths)
     now = now_ms()
 
-    case safe_load_base(cwd, paths) do
+    case safe_load_base(state.load_base, cwd, paths) do
       {:ok, base, fp} ->
         _ = :ets.insert(state.table, {key, base, fp, now, now, nil})
 
@@ -284,7 +284,7 @@ defmodule LemonCore.ConfigCache do
       # The entry was dropped (invalidate/clear) meanwhile: no last good config
       # to serve, so this is a first load and a failure raises in the caller.
       [] ->
-        case safe_load_base(cwd, paths) do
+        case safe_load_base(state.load_base, cwd, paths) do
           {:ok, base, fp} ->
             _ = :ets.insert(state.table, {key, base, fp, now, now, nil})
             {:reply, base, state}
@@ -306,7 +306,7 @@ defmodule LemonCore.ConfigCache do
   end
 
   defp refresh_entry(state, cwd, paths, key, last_good, now) do
-    case safe_load_base(cwd, paths) do
+    case safe_load_base(state.load_base, cwd, paths) do
       {:ok, base, fp} ->
         _ = :ets.insert(state.table, {key, base, fp, now, now, nil})
         base
@@ -340,18 +340,18 @@ defmodule LemonCore.ConfigCache do
   defp failed_fingerprint?(%{fingerprint: fp}, fp), do: true
   defp failed_fingerprint?(_failure, _fp), do: false
 
-  defp load_base(cwd, paths) do
+  defp load_base(loader, cwd, paths) do
     # Stat before parsing: a file written during the load then fails the next
     # fingerprint check and is re-read, instead of its new fingerprint being
     # cached beside content parsed from the previous (or a partial) file.
     fp = fingerprint(paths)
     :telemetry.execute([:lemon, :config_cache, :load], %{count: 1}, %{})
-    base = LemonCore.Config.load_base_from_disk(cwd)
+    base = loader.(cwd)
     {base, fp}
   end
 
-  defp safe_load_base(cwd, paths) do
-    {base, fp} = load_base(cwd, paths)
+  defp safe_load_base(loader, cwd, paths) do
+    {base, fp} = load_base(loader, cwd, paths)
     {:ok, base, fp}
   rescue
     exception ->
@@ -362,7 +362,7 @@ defmodule LemonCore.ConfigCache do
   defp reply_or_raise(reply), do: reply
 
   defp config_paths(cwd) do
-    global = LemonCore.Config.global_path() |> Path.expand()
+    global = LemonCore.Paths.global_config() |> Path.expand()
 
     # Same project-layer selection as `Config.Modular`: none for an assistant home.
     project =

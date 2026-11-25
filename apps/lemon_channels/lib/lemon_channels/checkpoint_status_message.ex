@@ -15,8 +15,9 @@ defmodule LemonChannels.CheckpointStatusMessage do
   """
 
   alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
-  alias LemonCore.{Checkpoint, NativeSessionOwner, ResumeToken}
-  alias LemonCore.Doctor.CheckpointDiagnostics
+  alias LemonCore.{NativeSessionOwner, ResumeToken}
+  alias LemonAgent.Checkpoint
+  alias LemonAgent.Doctor.CheckpointDiagnostics
   alias LemonCore.Introspection
 
   @checkpoint_events [:checkpoint_created, :checkpoint_restored, :checkpoint_deleted]

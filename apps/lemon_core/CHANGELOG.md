@@ -6,6 +6,14 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Added
+
+- `LemonCore.Config.Tools.Section` and `config :lemon_core, :tool_sections`:
+  the application that owns a `[runtime.tools.<id>]` table registers its
+  defaults, environment overrides, resolution and validation. Resolved tables
+  are read with `LemonCore.Config.Tools.section/2` (`Tools` replaces the
+  `browser` field with `sections`); the facade keeps `agent.tools[id]` (#727).
+
 ### Changed
 
 - Writable client stores (`defer_to_runtime: true`) write only while the
@@ -19,8 +27,62 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Removed
 
-- `mix lemon.update` moved to lemon_skills, which owns the bundled-skill sync
-  it runs (#725).
+- **Breaking:** product runtime moved out of the package (#727). Migrations:
+  `LemonCore.BrowserProvider` (and `.Command`, `.LCUProbe`) →
+  `LemonBrowser.Provider`; `LemonCore.Tern` → `LemonBrowser.Tern`;
+  `LemonCore.Doctor.Checks.Browser` → `LemonBrowser.Doctor.Checks.Browser`
+  (registered under `:doctor_checks`); the `[runtime.tools.browser]` table,
+  `LEMON_BROWSER_PROVIDER` and `LEMON_BROWSER_TERN` → `LemonBrowser.Config` /
+  `LemonBrowser.Env`; the `:browser_provider_probe` and
+  `:browser_provider_lcu_probe` settings → `:lemon_browser, :provider_probe` /
+  `:lcu_probe`; `LemonCore.Backup` → `LemonCli.Backup`; `LemonCore.Uninstall`
+  → `LemonCli.Uninstall`. Core config validation no longer calls the browser
+  driver, so the browser modules left the Config/Secrets xref cycle.
+
+- **Breaking:** `LemonCore.UsageStore`, `UsageLedger`, `UsageDiagnostics`, and
+  `UsageReport` moved to `LemonAgent`; use `LemonControlPlane.UsageRecords.query/2`
+  instead of `LemonCore.UsageStore.records/2` (#727).
+- **Breaking:** `LemonCore.Config.Providers.get_api_key/2` is removed.
+  `get_provider/2` returns configuration, not credentials. Use the
+  `LemonAgent.ModelRuntime` path for provider credentials, or
+  `LemonCore.Secrets.resolve/2` to resolve an explicit secret reference (#727).
+- **Breaking:** `LemonCore.TerminalBackend`, `TerminalBackendPolicy` and
+  `TerminalBackends` (including its Local, LocalPty, Docker and Ssh modules)
+  moved into `CodingAgent`, which owns terminal execution. The product
+  registers terminal diagnostics for support bundles (#727).
+- **Breaking (umbrella):** managed updates and source configuration migration
+  move from `LemonCore.Update` to `LemonCli.Update`; the shared CalVer parser
+  moves from `LemonCore.Update.Version` to `LemonCore.ReleaseVersion`. The
+  `lemon update` and `mix lemon.update` commands keep their contracts (#727).
+- **Breaking:** system service installation, inspection and repair are
+  `LemonCli.Service`; use `LemonCore.ProcessIdentity` for same-user process
+  identity and `LemonCore.FileLock.with_lock_path/3` for generic filesystem
+  exclusion. `LemonCli.PolicyCommand` and `LemonCli.Usage.CLI` own the CLI
+  commands; those command names and flags are unchanged (#727).
+- **Breaking:** `SessionLifecycle` and `SessionMaintenance` moved to
+  `LemonControlPlane`; the participant behaviour and its table helpers
+  remain under `LemonCore.SessionLifecycle`. Use `RunStore.fetch_session_index/1`
+  for a strict storage-level existence check, not an operator projection (#727).
+- **Breaking:** `NodeRegistry`, `NodeInvocation`, `Checkpoint`, and
+  `Doctor.CheckpointDiagnostics` moved to `LemonAgent`, while the A2A wire
+  helpers and `A2AStore` moved to `LemonSkills`. Store keys, named-node
+  protocol and runtime command names are unchanged (#727).
+- **Breaking:** register the external source implementations from
+  `LemonAgent.Secrets.Source` under `:secret_source_types`. Adapter-specific
+  fields are in `Config.Secrets.Source.options`; source status and live testing
+  go through `Secrets.external_status/1` and `Secrets.test_external/1`.
+  The product registers its `Config.Providers.AuthExtension`; it continues to
+  accept the same credential-source settings (#727).
+- **Breaking:** `LemonCore.Secrets.KeyRotation` → `LemonCli.Secrets.KeyRotation`;
+  `KeyProvider.order/1` and `default_order/0` → `LemonCore.Secrets.KeySources`.
+  Use `config :lemon_core, :secrets` in place of the `LemonCore.Secrets` application
+  env key for master-key provider settings. No operator TOML changes (#727).
+- **Breaking:** `Cwd.assistant_home/0` → `Paths.assistant_home/0`. Set the
+  application-env override at `config :lemon_core, :agent_dir` instead of
+  `:coding_agent`. `LEMON_AGENT_DIR` still takes precedence. Explicit
+  `ConfigCache.start_link/1` calls provide `load_base: &Config.load_base_from_disk/1`
+  (the application does so automatically) (#727).
+
 - **Breaking:** removed `LemonCore.EngineRuntime`. The router calls the native
   executor directly; integrations submit through `LemonCore.RouterBridge`
   (#728).
@@ -77,6 +139,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `:lemon_computer_use` env (`:lcu_default_roots` isolates tests), browser
   provider selection ignores `:lemon_browser, :backend`, and the control-plane
   port is applied through `config :lemon_core, :runtime_port_settings` (#725).
+- Vendor config validation, master-key resolution, config caching and
+  terminal-effect persistence no longer depend back on their callers.
+  Registered product control children start after Store ownership and before
+  terminal replay. The terminal effect receipt writer is
+  `Store.update_terminal_effect/4` (#727).
+- `LemonCore.Redact` redacts a pairing code after `lemon pairing approve|deny`
+  for any channel id, not only two named platforms (#727).
 - Dialyzer-clean (#734): `Lemon.Reload` no longer reports a successful
   code change as an error; extension manifests that are valid JSON but not an
   object are rejected as such instead of as oversized; several public typespecs

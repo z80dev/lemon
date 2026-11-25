@@ -10,11 +10,11 @@ defmodule LemonCore.ServiceCompositionTest do
   @runtime_control [
     LemonCore.Drain,
     LemonCore.ACPClientBridge,
-    LemonCore.NodeRegistry,
+    LemonAgent.NodeRegistry,
     LemonCore.RuntimeOwner,
     LemonCore.TerminalOutbox,
     LemonCore.SessionActivity,
-    LemonCore.UsageLedger,
+    LemonAgent.UsageLedger,
     LemonCore.ExecApprovalExpiry,
     LemonCore.ConfigReloader,
     LemonCore.ConfigReloader.Watcher

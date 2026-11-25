@@ -144,7 +144,7 @@ defmodule LemonRouter do
   dispatch and direct gateway submissions for the session are refused with
   `:session_lifecycle_in_progress`. The fence survives orchestrator restarts.
   A remote run stays present after its router run is terminal until the node
-  proves it stopped (`LemonCore.NodeInvocation`).
+  proves it stopped (`LemonAgent.NodeInvocation`).
 
   The fence owner is a process scoped to this one operation, never the
   caller: it acquires, runs `fun`, marks the row finished and releases. An

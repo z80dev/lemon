@@ -25,7 +25,7 @@ defmodule LemonControlPlane.Methods.NativeFollowupAdmissionTest do
     state = Path.join(root, "state")
     File.mkdir_p!(state)
     previous_paths = Application.fetch_env(:lemon_core, :paths)
-    previous_secrets = Application.fetch_env(:lemon_core, Secrets)
+    previous_secrets = Application.fetch_env(:lemon_core, :secrets)
     previous_origins = Application.fetch_env(:lemon_router, :native_followup_allowed_origins)
     previous_origin_env = System.get_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS")
     key_env = "NATIVE_CP_ISSUER_KEY_" <> suffix
@@ -40,7 +40,7 @@ defmodule LemonControlPlane.Methods.NativeFollowupAdmissionTest do
 
       Store.delete(:native_followup_admission_configs, id)
       restore_env(:lemon_core, :paths, previous_paths)
-      restore_env(:lemon_core, Secrets, previous_secrets)
+      restore_env(:lemon_core, :secrets, previous_secrets)
       restore_env(:lemon_router, :native_followup_allowed_origins, previous_origins)
 
       if is_nil(previous_origin_env),
@@ -59,7 +59,7 @@ defmodule LemonControlPlane.Methods.NativeFollowupAdmissionTest do
       global_config: Path.join(state, "config.toml")
     )
 
-    Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: key_env)
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env], env_var: key_env)
     Application.put_env(:lemon_router, :native_followup_allowed_origins, [@origin])
 
     # A fresh master key per test: the store's key verifier and records from

@@ -1,7 +1,7 @@
 defmodule LemonControlPlane.Methods.UsageRecordsTest do
   use ExUnit.Case, async: false
   alias LemonControlPlane.Methods.UsageRecords
-  alias LemonCore.{UsageLedger, UsageStore}
+  alias LemonAgent.{UsageLedger, UsageStore}
 
   defp record(cost, known) do
     run = "usage-rpc-#{LemonCore.Id.uuid()}"

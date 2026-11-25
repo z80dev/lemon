@@ -1,7 +1,7 @@
 defmodule LemonControlPlane.NodeStore do
   @moduledoc """
   Typed wrapper for node pairing, durable metadata, name reservations and
-  challenges. Invocation state is live-only (`LemonCore.NodeRegistry`).
+  challenges. Invocation state is live-only (`LemonAgent.NodeRegistry`).
   """
 
   alias LemonCore.Store

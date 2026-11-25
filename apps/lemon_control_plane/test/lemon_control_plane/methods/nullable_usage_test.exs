@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.NullableUsageTest do
   use ExUnit.Case, async: false
 
   alias LemonControlPlane.Methods.UsageStatus
-  alias LemonCore.UsageStore
+  alias LemonAgent.UsageStore
 
   test "quota projections preserve unknown spend and counters without arithmetic errors" do
     previous_summary = UsageStore.get_summary(:current)

@@ -8,7 +8,7 @@ defmodule LemonWeb.UsageLiveTest do
   import LemonWeb.Test.OperatorAuth
 
   alias LemonControlPlane.Methods.Registry
-  alias LemonCore.{UsageLedger, UsageStore}
+  alias LemonAgent.{UsageLedger, UsageStore}
 
   defmodule UnknownRunsStatus do
     @behaviour LemonControlPlane.Method

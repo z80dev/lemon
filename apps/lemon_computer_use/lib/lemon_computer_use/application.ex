@@ -18,7 +18,7 @@ defmodule LemonComputerUse.Application do
     # section and `LemonComputerUse.enabled?/0` all read this one value. Only
     # the explicit switch enables computer use; the browser provider never does.
     enabled? = Config.enabled?()
-    LemonCore.BrowserProvider.put_computer_use_enabled(enabled?)
+    LemonBrowser.Provider.put_computer_use_enabled(enabled?)
 
     children =
       if enabled?, do: [{LemonComputerUse.Server, connect: true}], else: []
@@ -36,7 +36,7 @@ defmodule LemonComputerUse.Application do
   # A stopped app contributes nothing: the next boot decides afresh.
   @impl true
   def stop(_state) do
-    LemonCore.BrowserProvider.put_computer_use_enabled(false)
+    LemonBrowser.Provider.put_computer_use_enabled(false)
 
     if Code.ensure_loaded?(LemonAgent.ToolRegistry),
       do: Enum.each(@tools, fn {name, _} -> LemonAgent.ToolRegistry.unregister(name) end)

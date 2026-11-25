@@ -33,7 +33,8 @@ defmodule LemonCore.ApplicationBootModeTest do
           ],
           do: refute(absent in ids, "#{inspect(mode)} starts #{inspect(absent)}")
 
-      assert opts(children, LemonCore.ExecApprovalExpiry) == [recover: false]
+      assert opts(children, LemonCore.ExecApprovalExpiry) ==
+               [recover: false, approvals: LemonCore.ExecApprovals]
       assert Keyword.get(opts(children, Store), :sweep) == false
     end
 
@@ -57,7 +58,8 @@ defmodule LemonCore.ApplicationBootModeTest do
         ],
         do: assert(present in ids)
 
-    assert opts(children, LemonCore.ExecApprovalExpiry) == [recover: true]
+    assert opts(children, LemonCore.ExecApprovalExpiry) ==
+             [recover: true, approvals: LemonCore.ExecApprovals]
     assert opts(children, Store) == []
   end
 

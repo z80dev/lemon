@@ -8,6 +8,7 @@ defmodule LemonCore.Doctor.Checks.Providers do
   login or makes a request.
   """
 
+  alias LemonCore.Config.Providers.AuthExtension
   alias LemonCore.Config.Modular
   alias LemonCore.CredentialReadiness
   alias LemonCore.Doctor.Check
@@ -98,51 +99,13 @@ defmodule LemonCore.Doctor.Checks.Providers do
         if normalize_provider(name) == normalize_provider(provider), do: settings
       end)
 
-    auth_source =
-      LemonCore.Config.Providers.normalize_auth_source(
-        Map.get(provider_config, :auth_source) || Map.get(provider_config, "auth_source")
-      )
-
     ready = ready?.(provider)
 
+    extension_check = AuthExtension.call(:credential_check, [provider, provider_config, ready], nil)
+
     cond do
-      auth_source == "omp_broker" and ready ->
-        Check.pass(
-          "providers.credentials",
-          "omp_broker (reads omp's auth broker): broker credential configured (offline check)."
-        )
-
-      auth_source == "omp_broker" ->
-        Check.fail(
-          "providers.credentials",
-          "omp's auth broker is not configured on this host.",
-          "Check `omp auth-broker status`, OMP_AUTH_BROKER_URL/OMP_AUTH_BROKER_TOKEN, " <>
-            "omp_provider/omp_account, and `omp auth-broker login <provider>`."
-        )
-
-      normalize_provider(provider) in ["omp_gateway", "omp_auth_gateway"] and ready ->
-        Check.pass("providers.credentials", "omp auth gateway bearer is available.")
-
-      normalize_provider(provider) in ["omp_gateway", "omp_auth_gateway"] ->
-        Check.fail(
-          "providers.credentials",
-          "No omp auth gateway bearer is available.",
-          "Set OMP_AUTH_GATEWAY_TOKEN or providers.omp_gateway.api_key_secret, or run " <>
-            "`omp auth-gateway token` on this host."
-        )
-
-      auth_source == "omp" and ready ->
-        Check.pass(
-          "providers.credentials",
-          "omp (reuses omp's Kimi Code login): omp is installed (offline check)."
-        )
-
-      auth_source == "omp" ->
-        Check.fail(
-          "providers.credentials",
-          "omp could not be found for the Kimi Code login.",
-          "Check providers.kimi_coding.omp_path; run `omp` and `/login kimi-code`."
-        )
+      extension_check ->
+        extension_check
 
       ready ->
         Check.pass(

@@ -599,7 +599,7 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
   end
 
   defp tree_fingerprint(path) do
-    case LemonCore.Checkpoint.filesystem_fingerprint(path) do
+    case LemonAgent.Checkpoint.filesystem_fingerprint(path) do
       {:ok, fingerprint} -> fingerprint
       {:error, _} -> :unknown
     end

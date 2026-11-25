@@ -65,14 +65,14 @@ defmodule LemonCore.ApplicationTest do
         if(LemonCore.Bus.pubsub?(), do: Phoenix.PubSub.Supervisor, else: LemonCore.Bus.Registry),
         LemonCore.Drain,
         LemonCore.ACPClientBridge,
-        LemonCore.NodeRegistry,
+        LemonAgent.NodeRegistry,
         LemonCore.ConfigCache,
         LemonCore.Store,
         LemonCore.RuntimeOwner,
         LemonCore.TerminalOutbox,
         LemonCore.SessionActivity,
         LemonCore.Secrets.Usage,
-        LemonCore.UsageLedger,
+        LemonAgent.UsageLedger,
         LemonCore.ExecApprovalExpiry,
         LemonCore.Secrets.SourceTaskSupervisor,
         LemonCore.Secrets.SourceCache,
@@ -102,10 +102,10 @@ defmodule LemonCore.ApplicationTest do
       assert :ets.info(LemonCore.Drain, :owner) == Process.whereis(LemonCore.Drain)
       assert :ets.info(:lemon_core_config_cache, :owner) == Process.whereis(LemonCore.ConfigCache)
 
-      generations = LemonCore.NodeRegistry.Generations
+      generations = LemonAgent.NodeRegistry.Generations
       assert :ets.info(generations, :owner) == Process.whereis(generations)
 
-      assert Enum.any?(Supervisor.which_children(LemonCore.NodeRegistry), fn
+      assert Enum.any?(Supervisor.which_children(LemonAgent.NodeRegistry), fn
                {^generations, pid, :worker, _} -> pid == Process.whereis(generations)
                _ -> false
              end)

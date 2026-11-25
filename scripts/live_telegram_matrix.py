@@ -880,7 +880,7 @@ def create_local_checkpoint(workdir, nonce):
         """
         path = System.fetch_env!("LEMON_LIVE_CHECKPOINT_PATH")
         session = System.fetch_env!("LEMON_LIVE_CHECKPOINT_SESSION")
-        {:ok, checkpoint} = LemonCore.Checkpoint.create_filesystem(session, [path], cwd: File.cwd!(), tool: "live-telegram-matrix")
+        {:ok, checkpoint} = LemonAgent.Checkpoint.create_filesystem(session, [path], cwd: File.cwd!(), tool: "live-telegram-matrix")
         IO.write(checkpoint.id)
         """,
     ]
@@ -919,7 +919,7 @@ def delete_local_checkpoint(checkpoint_id):
         "--no-start",
         "--no-compile",
         "-e",
-        f'LemonCore.Checkpoint.delete("{checkpoint_id}")',
+        f'LemonAgent.Checkpoint.delete("{checkpoint_id}")',
     ]
 
     subprocess.run(

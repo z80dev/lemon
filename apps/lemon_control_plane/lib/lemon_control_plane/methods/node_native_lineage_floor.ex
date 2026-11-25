@@ -4,7 +4,8 @@ defmodule LemonControlPlane.Methods.NodeNativeLineageFloor do
 
   alias LemonControlPlane.Auth.TokenStore
   alias LemonControlPlane.Protocol.Errors
-  alias LemonCore.{NodeRegistry, RunRequest}
+  alias LemonCore.RunRequest
+  alias LemonAgent.NodeRegistry
 
   @impl true
   def name, do: "node.native.lineage.floor"

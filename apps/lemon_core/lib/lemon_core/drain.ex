@@ -159,11 +159,15 @@ defmodule LemonCore.Drain do
             :gen_event.swap_handler(
               :erl_signal_server,
               {:erl_signal_handler, :swap},
-              {LemonCore.Drain.SignalHandler, []}
+              {LemonCore.Drain.SignalHandler, &sigterm/0}
             )
 
           true ->
-            :gen_event.add_handler(:erl_signal_server, LemonCore.Drain.SignalHandler, [])
+            :gen_event.add_handler(
+              :erl_signal_server,
+              LemonCore.Drain.SignalHandler,
+              &sigterm/0
+            )
         end
 
       if result != :ok,
@@ -172,6 +176,8 @@ defmodule LemonCore.Drain do
 
     :ok
   end
+
+  defp sigterm, do: request_stop(reason: :sigterm)
 
   @doc false
   def last_report, do: safe_call(:last_report)

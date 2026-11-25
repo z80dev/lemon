@@ -56,9 +56,9 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
   # share a mechanism (docs/architecture_boundaries.md).
   @foundations [:lemon_ai, :lemon_core]
 
-  # Satellites implement platform contracts and register on the way up, and
-  # product entrypoints sit on top of the graph; nothing may depend on them.
-  @satellites [:lemon_cli, :lemon_computer_use, :lemon_evals, :lemon_gateway, :lemon_honcho, :lemon_web]
+  # Satellites implement platform contracts and register on the way up. The CLI
+  # also provides the service-unit reader used by computer use, so it is not a leaf.
+  @satellites [:lemon_computer_use, :lemon_evals, :lemon_gateway, :lemon_honcho, :lemon_web]
 
   # Contract-test kits back test suites only; a lib edge would ship test code.
   @test_kits [:lemon_platform_test]

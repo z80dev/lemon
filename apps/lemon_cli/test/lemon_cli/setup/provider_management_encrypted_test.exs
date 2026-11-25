@@ -57,7 +57,7 @@ defmodule LemonCli.Setup.ProviderManagementEncryptedTest do
     System.put_env("HOME", home)
     Application.put_env(:lemon_core, :paths, home_dir: home)
 
-    Application.put_env(:lemon_core, Secrets,
+    Application.put_env(:lemon_core, :secrets,
       key_providers: [:file],
       key_file: key_path,
       write_lock_wait_ms: 100

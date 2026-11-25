@@ -718,10 +718,10 @@ jobs:
             exit 1
           fi
           docker exec -u lemon lemon-smoke /app/bin/lemon_runtime_full eval '
-            :ok = LemonCore.Service.Identity.boot_check()
+            :ok = LemonCore.ProcessIdentity.boot_check()
             dir = Path.join(System.tmp_dir!(), "lemon-lock-smoke")
             File.mkdir_p!(dir)
-            :held = LemonCore.Service.Lock.with_lock_path(Path.join(dir, "smoke.lock"), [], fn -> :held end)
+            :held = LemonCore.FileLock.with_lock_path(Path.join(dir, "smoke.lock"), [], fn -> :held end)
             IO.puts("lock smoke ok")' | grep -q "lock smoke ok"
 
           # Survives SIGTERM and comes back on the same volume.

@@ -482,10 +482,10 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
   end
 
   defp prepare_secret_store do
-    previous_config = Application.get_env(:lemon_core, LemonCore.Secrets)
+    previous_config = Application.get_env(:lemon_core, :secrets)
     previous_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
     name = "profile-mcp-secret-#{System.unique_integer([:positive])}"
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env])
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
     # A fresh master key: the store's key verifier and records from earlier
     # tests belong to other keys and correctly refuse writes.
@@ -494,7 +494,7 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
 
     on_exit(fn ->
       LemonCore.Secrets.delete(name)
-      restore_env(:lemon_core, LemonCore.Secrets, previous_config)
+      restore_env(:lemon_core, :secrets, previous_config)
 
       if previous_key,
         do: System.put_env("LEMON_SECRETS_MASTER_KEY", previous_key),

@@ -4,12 +4,12 @@ defmodule LemonBrowser.TernSession do
 
   Owned PiPs close on idle expiry, run completion, or explicit close. Blocks
   adopted through targetId are released, never closed. Socket discovery belongs
-  exclusively to LemonCore.Tern; invocation options cannot supply a socket path.
+  exclusively to `LemonBrowser.Tern`; invocation options cannot supply a socket path.
   """
   use GenServer
 
   alias LemonBrowser.RoutePolicy
-  alias LemonCore.Tern
+  alias LemonBrowser.Tern
 
   @registry LemonBrowser.TernSessionRegistry
   @supervisor LemonBrowser.TernSessionSupervisor

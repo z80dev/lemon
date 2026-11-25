@@ -27,6 +27,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- The shared native usage ledger, checkpoint store and live execution node
+  services moved from `lemon_core` into `LemonAgent`, with their persistence
+  keys and protocols unchanged. This package also owns the product's named
+  external secret adapters and provider-auth configuration extension (#727).
 - `LemonAgent.AbortSignal.t()` (an `:atomics` reference); abort-signal,
   loop-input and callback typespecs now use it, and the package is
   Dialyzer-clean (#734). No runtime change.

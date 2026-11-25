@@ -1,0 +1,1710 @@
+defmodule LemonCli.Backup do
+  @moduledoc """
+  Atomic, checksum-verified backups for Lemon's per-user data directory.
+
+  A backup is a private directory bundle containing `manifest.json`, a
+  checksum for that manifest, and byte-exact files below `data/`. The final
+  bundle appears with one directory rename, so an interrupted create never
+  leaves a path that can be mistaken for a complete backup.
+
+  SQLite databases (recognised by their file header, regardless of name) are
+  never raw-copied: each is snapshotted with `VACUUM INTO`, which reads one
+  consistent transaction snapshot and is safe while a WAL-mode writer is
+  active. The snapshot contains the WAL's committed content, so the live
+  `-wal`, `-shm`, and `-journal` sidecars are excluded from the bundle. The
+  `exqlite` dependency exposes no `sqlite3_backup` binding, which is why
+  `VACUUM INTO` is the online-backup primitive. Every other file is copied
+  byte-for-byte and must not change during the copy.
+
+  Restore verifies the complete bundle before touching the destination and
+  refuses without changing state while a launcher-managed daemon uses it. It is
+  additive by default and refuses conflicting files. An overwrite is accepted
+  only when the caller supplies both `overwrite: true` and a confirmation
+  derived from the verified manifest digest plus the expanded target root;
+  displaced files are kept in a mode-0700 sibling rollback directory. Stale
+  SQLite sidecars beside a database being installed count as
+  conflicts and are displaced the same way, so an old WAL is never replayed
+  into a restored database. Structural conflicts (symlinks, special files, or
+  a file where a parent directory is needed) always fail closed.
+
+  The default contract includes durable configuration, stores, sessions,
+  skills, and workspace files. It excludes installed versions and launchers,
+  runtime pid/socket state, caches, logs, previous backups, restore rollback
+  directories, support bundles, migration reports and archives (`migration/`,
+  even with `include_credentials: true`), and symlinks. Local credential material
+  (`cookie`, `env`, `secrets_master_key`, and execution-node credentials) is
+  excluded unless `include_credentials: true` is explicit. Platform keychain
+  contents and project-local `.lemon` directories are outside this contract.
+
+  Backup files are opaque: Lemon never parses or prints their contents. CLI
+  and list/status results expose only aggregate metadata.
+
+  Launchers publish `run/lemon-<port>.paths` below the user's state directory:
+  the canonical home state directory, logical companion-store directory,
+  physical primary database path, and actual PID-file path (including
+  `LEMON_RUNTIME_PID_FILE` overrides), one per line. Restore checks live PID
+  records, startup locks, and launcher health probes for overlapping state
+  paths, including relocated stores and file-symlinked databases. Older
+  three-line records omit the physical database; two-line records also use the
+  default PID file. PID records without paths own their home state directory.
+  Runtimes started outside the launchers are detectable only through those
+  records or the default-home health probe; operators must stop them manually.
+
+  After verifying the whole bundle, restore publishes
+  `run/restore-<target-hash>.lock` with its owner PID and canonical target in
+  both the invoking and target state directories, then checks daemon ownership
+  again before staging. Launchers publish their paths under their start lock
+  before checking restore locks, so either restore sees a starting runtime or
+  startup sees the restore, including when their HOME values differ.
+  Both restore locks remain held through staging, apply, and rollback.
+  `:runtime_probe` accepts a `(port -> boolean)` probe, and
+  `:after_runtime_check` accepts a zero-arity synchronization hook invoked under
+  the lifecycle lock after the final check, before staging.
+
+  Restore then holds the secrets key lock (`LemonCore.Secrets.KeyLock`) for the
+  target root and for the configured master-key file's directory (resolved
+  like `LemonCore.Secrets.KeyProvider.key_file/1` with the restore's
+  `:home_dir`, plus any `:secrets_opts`), so key initialization and rotation
+  never interleave with installation or rollback. Files are installed, and
+  rolled back, with no-replace hard links: a file that appears concurrently is
+  never overwritten.
+  """
+
+  import Bitwise
+
+  alias Exqlite.Sqlite3
+  alias LemonCore.Paths
+  alias LemonCore.Runtime.Health
+  alias LemonCore.Secrets.KeyLock
+
+  @compile {:no_warn_undefined, Exqlite.Sqlite3}
+
+  @schema 1
+  @contract_version 1
+  @manifest "manifest.json"
+  @manifest_checksum "manifest.sha256"
+  @data_dir "data"
+  @max_manifest_bytes 16 * 1024 * 1024
+  @max_files 100_000
+  @max_path_bytes 1_024
+  @copy_chunk_bytes 1024 * 1024
+  @allowed_restore_modes MapSet.new([0o400, 0o500, 0o600, 0o700])
+  @sqlite_header "SQLite format 3\0"
+  @sqlite_sidecar_suffixes ["-wal", "-shm", "-journal"]
+  @sqlite_busy_timeout_ms 5_000
+  @default_control_plane_port 4040
+
+  @always_excluded_roots MapSet.new([
+                           "backups",
+                           "bin",
+                           "cache",
+                           "logs",
+                           # Migration reports and archives may hold copied third-party credentials.
+                           "migration",
+                           "restore-rollbacks",
+                           "run",
+                           "tmp",
+                           "versions"
+                         ])
+  @credential_files MapSet.new(["cookie", "env", "secrets_master_key"])
+
+  @type result :: {:ok, map()} | {:error, term()}
+
+  @doc "The current on-disk backup contract version."
+  @spec contract_version() :: pos_integer()
+  def contract_version, do: @contract_version
+
+  @doc "Default directory in which backup bundles are created and listed."
+  @spec default_backup_root(keyword()) :: String.t()
+  def default_backup_root(opts \\ []) do
+    opts
+    |> paths_opts()
+    |> then(&Paths.home_path("backups", &1))
+  end
+
+  @doc "Returns the documented exclusion policy without inspecting user data."
+  @spec contract(keyword()) :: map()
+  def contract(opts \\ []) do
+    include_credentials? = Keyword.get(opts, :include_credentials, false) == true
+
+    %{
+      contract_version: @contract_version,
+      scope: "user_state",
+      source: "~/.lemon",
+      includes: [
+        "config.toml",
+        "agent/",
+        "store/",
+        "other durable regular files not excluded below"
+      ],
+      excludes: exclusion_descriptions(include_credentials?),
+      include_credentials: include_credentials?,
+      follows_symlinks: false,
+      includes_project_state: false,
+      includes_platform_keychain: false
+    }
+  end
+
+  @doc "Creates one atomic backup directory bundle."
+  @spec create(keyword()) :: result()
+  def create(opts \\ []) do
+    source = source_root(opts)
+    backup_root = Keyword.get(opts, :backup_root, default_backup_root(opts)) |> Path.expand()
+
+    output =
+      case Keyword.get(opts, :output) do
+        path when is_binary(path) and path != "" -> Path.expand(path)
+        _ -> Path.join(backup_root, default_bundle_name())
+      end
+
+    with :ok <- validate_source(source),
+         :ok <- validate_output(source, output),
+         {:ok, result} <- with_lock(source, fn -> do_create(source, output, opts) end) do
+      {:ok, result}
+    end
+  end
+
+  @doc "Lists backup manifests without reading any backed-up file contents."
+  @spec list(keyword()) :: {:ok, [map()]} | {:error, term()}
+  def list(opts \\ []) do
+    root = Keyword.get(opts, :backup_root, default_backup_root(opts)) |> Path.expand()
+
+    case File.ls(root) do
+      {:ok, entries} ->
+        backups =
+          entries
+          |> Enum.sort(:desc)
+          |> Enum.reduce([], fn entry, acc ->
+            path = Path.join(root, entry)
+
+            case read_manifest(path) do
+              {:ok, manifest} -> [manifest_summary(path, manifest) | acc]
+              {:error, _reason} -> acc
+            end
+          end)
+          |> Enum.sort_by(& &1.created_at, :desc)
+
+        {:ok, backups}
+
+      {:error, :enoent} ->
+        {:ok, []}
+
+      {:error, reason} ->
+        {:error, {:list_failed, reason}}
+    end
+  end
+
+  @doc "Verifies the manifest checksum, file set, sizes, and SHA-256 digests."
+  @spec verify(Path.t(), keyword()) :: result()
+  def verify(bundle, opts \\ []) do
+    bundle = Path.expand(bundle)
+
+    with :ok <- verify_bundle_root(bundle),
+         :ok <- verify_private_bundle_permissions(bundle),
+         {:ok, manifest, manifest_digest} <- read_verified_manifest(bundle),
+         {:ok, entries} <- validate_manifest(manifest),
+         :ok <- verify_exact_file_set(bundle, entries),
+         :ok <- verify_entries(bundle, entries) do
+      target = Keyword.get(opts, :target, source_root(opts)) |> Path.expand()
+
+      {:ok,
+       manifest_summary(bundle, manifest)
+       |> Map.put(:verified, true)
+       |> Map.put(:manifest_sha256, manifest_digest)
+       |> Map.put(:overwrite_confirmation, overwrite_confirmation(manifest_digest, target))}
+    end
+  end
+
+  @doc """
+  Runs `fun` with `target` offline, under the same exclusion restore uses.
+
+  Refuses with `{:error, :daemon_running}` while a launcher-managed runtime
+  uses `target`, then holds the restore lifecycle locks (which block launcher
+  startup and restores) for the whole call and rechecks before running `fun`.
+  A concurrent holder returns `{:error, :backup_restore_locked}`. Accepts the
+  `:paths_opts`, `:runtime_probe` and `:after_runtime_check` options of
+  `restore/2`. `fun` may call `create/1`, which uses a separate lock.
+  """
+  @spec with_offline_target(Path.t(), keyword(), (-> term())) :: term()
+  def with_offline_target(target, opts \\ [], fun) when is_function(fun, 0) do
+    target = Path.expand(target)
+
+    with :ok <- ensure_no_daemon(target, opts) do
+      with_runtime_lock(target, opts, fn ->
+        with :ok <- ensure_no_daemon(target, opts) do
+          after_runtime_check(opts)
+          fun.()
+        end
+      end)
+    end
+  end
+
+  @doc """
+  The physical location of `path`: every symlink in it resolved, following the
+  same resolution restore uses for runtime ownership. Missing trailing
+  components are kept as written.
+  """
+  @spec physical_path(Path.t()) :: String.t()
+  def physical_path(path), do: canonical_path(path)
+
+  @doc "Restores a fully verified bundle with fail-closed conflict handling."
+  @spec restore(Path.t(), keyword()) :: result()
+  def restore(bundle, opts \\ []) do
+    bundle = Path.expand(bundle)
+    target = target_root(opts)
+
+    with :ok <- validate_restore_target(target),
+         {:ok, summary} <- verify(bundle, Keyword.put(opts, :target, target)),
+         {:ok, manifest, manifest_digest} <- read_verified_manifest(bundle),
+         {:ok, entries} <- validate_manifest(manifest),
+         :ok <- ensure_no_daemon(target, opts),
+         {:ok, result} <-
+           with_runtime_lock(target, opts, fn ->
+             with :ok <- ensure_no_daemon(target, opts) do
+               after_runtime_check(opts)
+
+               # Credential files are installed and rolled back under the same
+               # cross-process key lock as key initialization and rotation, for
+               # the target root and the configured key-file directory (which
+               # may be nested inside the target, or elsewhere).
+               KeyLock.with_dirs_lock(key_lock_dirs(target, opts), [], fn ->
+                 with_lock(target, fn ->
+                   do_restore(bundle, target, manifest, manifest_digest, entries, summary, opts)
+                 end)
+               end)
+             end
+           end) do
+      {:ok, result}
+    end
+  end
+
+  defp key_lock_dirs(target, opts) do
+    key_opts =
+      opts
+      |> paths_opts()
+      |> Keyword.take([:home_dir])
+      |> Keyword.merge(Keyword.get(opts, :secrets_opts, []))
+
+    case LemonCore.Secrets.KeyProvider.key_file(key_opts) do
+      nil -> [target]
+      key_file -> [target, Path.dirname(key_file)]
+    end
+  end
+
+  defp do_create(source, output, opts) do
+    partial = output <> ".partial.#{unique_suffix()}"
+    include_credentials? = Keyword.get(opts, :include_credentials, false) == true
+
+    try do
+      with :ok <- ensure_parent(output),
+           :ok <- ensure_absent(output),
+           :ok <- mkdir_p_private(Path.join(partial, @data_dir)),
+           {:ok, source_files, excluded, sqlite} <-
+             collect_source_files(source, include_credentials?),
+           {:ok, manifest_entries} <- copy_source_files(source, partial, source_files, sqlite),
+           manifest <- build_manifest(manifest_entries, excluded, include_credentials?),
+           :ok <- write_manifest(partial, manifest),
+           {:ok, _summary} <- verify(partial),
+           :ok <- File.rename(partial, output),
+           :ok <- sync_dir(Path.dirname(output)) do
+        {:ok, manifest_summary(output, manifest) |> Map.put(:verified, true)}
+      end
+    after
+      remove_partial(partial)
+    end
+  end
+
+  defp do_restore(bundle, target, manifest, manifest_digest, entries, summary, opts) do
+    overwrite? = Keyword.get(opts, :overwrite, false) == true
+    confirmation = Keyword.get(opts, :confirmation)
+
+    with :ok <-
+           validate_restore_confirmation(
+             target,
+             manifest_digest,
+             overwrite?,
+             confirmation,
+             summary.overwrite_confirmation
+           ),
+         {:ok, found_conflicts, identical} <- classify_destination(target, entries),
+         {:ok, sidecars} <- stale_sqlite_sidecars(bundle, target, entries, identical),
+         conflicts = Enum.uniq(found_conflicts ++ sidecars),
+         :ok <- authorize_conflicts(conflicts, overwrite?),
+         {:ok, stage} <- stage_restore(bundle, target, entries, identical),
+         {:ok, result} <-
+           apply_restore(stage, target, manifest, manifest_digest, conflicts, identical) do
+      {:ok, result}
+    end
+  end
+
+  defp collect_source_files(root, include_credentials?) do
+    with {:ok, files, excluded} <- walk_source(root, "", include_credentials?, [], %{}) do
+      sqlite =
+        for {relative, _stat} <- files,
+            sqlite_file?(Path.join(root, relative)),
+            into: MapSet.new(),
+            do: relative
+
+      {kept, excluded} =
+        Enum.reduce(files, {[], excluded}, fn {relative, _stat} = file, {kept, counts} ->
+          if sqlite_sidecar?(relative, sqlite) do
+            {kept, increment_excluded(counts, "sqlite_sidecar")}
+          else
+            {[file | kept], counts}
+          end
+        end)
+
+      {:ok, Enum.reverse(kept), excluded, sqlite}
+    end
+  end
+
+  defp sqlite_file?(path) do
+    case File.open(path, [:read, :binary]) do
+      {:ok, io} ->
+        try do
+          IO.binread(io, byte_size(@sqlite_header)) == @sqlite_header
+        after
+          File.close(io)
+        end
+
+      {:error, _reason} ->
+        false
+    end
+  end
+
+  defp sqlite_sidecar?(relative, sqlite) do
+    Enum.any?(@sqlite_sidecar_suffixes, fn suffix ->
+      String.ends_with?(relative, suffix) and
+        MapSet.member?(sqlite, String.replace_suffix(relative, suffix, ""))
+    end)
+  end
+
+  defp walk_source(root, relative, include_credentials?, files, excluded) do
+    dir = if relative == "", do: root, else: Path.join(root, relative)
+
+    case File.ls(dir) do
+      {:ok, names} ->
+        names
+        |> Enum.sort()
+        |> Enum.reduce_while({:ok, files, excluded}, fn name, {:ok, acc, excluded_acc} ->
+          rel = if relative == "", do: name, else: Path.join(relative, name)
+
+          case exclusion_reason(rel, include_credentials?) do
+            nil ->
+              path = Path.join(root, rel)
+
+              case File.lstat(path, time: :posix) do
+                {:ok, %File.Stat{type: :directory}} ->
+                  case walk_source(root, rel, include_credentials?, acc, excluded_acc) do
+                    {:ok, nested, nested_excluded} ->
+                      {:cont, {:ok, nested, nested_excluded}}
+
+                    {:error, reason} ->
+                      {:halt, {:error, reason}}
+                  end
+
+                {:ok, %File.Stat{type: :regular} = stat} ->
+                  if length(acc) >= @max_files do
+                    {:halt, {:error, :too_many_files}}
+                  else
+                    {:cont, {:ok, [{rel, stat} | acc], excluded_acc}}
+                  end
+
+                {:ok, %File.Stat{type: :symlink}} ->
+                  {:cont, {:ok, acc, increment_excluded(excluded_acc, "symlink")}}
+
+                {:ok, %File.Stat{}} ->
+                  {:cont, {:ok, acc, increment_excluded(excluded_acc, "special_file")}}
+
+                {:error, reason} ->
+                  {:halt, {:error, {:stat_failed, safe_path(rel), reason}}}
+              end
+
+            reason ->
+              {:cont, {:ok, acc, increment_excluded(excluded_acc, reason)}}
+          end
+        end)
+        |> case do
+          {:ok, found, skipped} -> {:ok, Enum.reverse(found), skipped}
+          error -> error
+        end
+
+      {:error, reason} ->
+        {:error, {:list_source_failed, safe_path(relative), reason}}
+    end
+  end
+
+  defp copy_source_files(source, partial, files, sqlite) do
+    Enum.reduce_while(files, {:ok, []}, fn {relative, stat}, {:ok, entries} ->
+      source_path = Path.join(source, relative)
+      destination = Path.join([partial, @data_dir, relative])
+
+      with {:ok, mode} <- source_restore_mode(stat.mode),
+           {:ok, bytes, digest} <-
+             copy_entry(source_path, destination, stat, relative, sqlite) do
+        entry = %{
+          "path" => relative,
+          "bytes" => bytes,
+          "sha256" => digest,
+          "mode" => mode
+        }
+
+        {:cont, {:ok, [entry | entries]}}
+      else
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, entries} -> {:ok, Enum.reverse(entries)}
+      error -> error
+    end
+  end
+
+  defp copy_and_digest(source, destination, before_stat) do
+    with :ok <- mkdir_p_private(Path.dirname(destination)),
+         {:ok, digest} <- stream_copy_and_digest(source, destination),
+         {:ok, after_stat} <- File.stat(source, time: :posix),
+         :ok <- unchanged?(before_stat, after_stat),
+         :ok <- chmod_and_sync(destination, 0o600) do
+      {:ok, digest}
+    else
+      {:error, {:source_changed, _} = reason} -> {:error, reason}
+      {:error, reason} -> {:error, {:copy_failed, reason}}
+    end
+  end
+
+  defp copy_entry(source, destination, stat, relative, sqlite) do
+    if MapSet.member?(sqlite, relative) do
+      snapshot_sqlite(source, destination, relative)
+    else
+      with {:ok, digest} <- copy_and_digest(source, destination, stat) do
+        {:ok, stat.size, digest}
+      end
+    end
+  end
+
+  # A live database is changing by design, so it is not subject to the
+  # unchanged-during-copy check; VACUUM INTO writes one consistent snapshot.
+  defp snapshot_sqlite(source, destination, relative) do
+    with :ok <- ensure_sqlite_available(relative),
+         :ok <- mkdir_p_private(Path.dirname(destination)),
+         :ok <- vacuum_into(source, destination, relative),
+         :ok <- chmod_and_sync(destination, 0o600),
+         {:ok, %{bytes: bytes, sha256: digest}} <- file_digest(destination) do
+      {:ok, bytes, digest}
+    else
+      {:error, {:sqlite_snapshot_failed, _path, _stage}} = error -> error
+      {:error, reason} -> {:error, {:copy_failed, reason}}
+    end
+  end
+
+  defp ensure_sqlite_available(relative) do
+    if Code.ensure_loaded?(Sqlite3),
+      do: :ok,
+      else: {:error, {:sqlite_snapshot_failed, safe_path(relative), :sqlite_unavailable}}
+  end
+
+  defp vacuum_into(source, destination, relative) do
+    failed = fn stage -> {:error, {:sqlite_snapshot_failed, safe_path(relative), stage}} end
+
+    case Sqlite3.open(source) do
+      {:ok, conn} ->
+        try do
+          with :ok <-
+                 map_sqlite(
+                   Sqlite3.execute(conn, "PRAGMA busy_timeout=#{@sqlite_busy_timeout_ms}"),
+                   failed,
+                   :busy_timeout
+                 ) do
+            literal = String.replace(destination, "'", "''")
+            map_sqlite(Sqlite3.execute(conn, "VACUUM INTO '#{literal}'"), failed, :vacuum_into)
+          end
+        after
+          Sqlite3.close(conn)
+        end
+
+      _ ->
+        failed.(:open)
+    end
+  end
+
+  defp map_sqlite(:ok, _failed, _stage), do: :ok
+  defp map_sqlite(_error, failed, stage), do: failed.(stage)
+
+  defp stale_sqlite_sidecars(bundle, target, entries, identical) do
+    identical = MapSet.new(identical)
+    manifest_paths = MapSet.new(entries, & &1["path"])
+
+    entries
+    |> Enum.reject(&MapSet.member?(identical, &1["path"]))
+    |> Enum.filter(&sqlite_file?(Path.join([bundle, @data_dir, &1["path"]])))
+    |> Enum.flat_map(fn entry ->
+      Enum.map(@sqlite_sidecar_suffixes, &(entry["path"] <> &1))
+    end)
+    # A sidecar the manifest lists (pre-patch bundles carried live -wal/-shm
+    # files) is bundle content, not a stale leftover: normal classification
+    # compares and installs it, so committed WAL-only rows survive.
+    |> Enum.reject(&MapSet.member?(manifest_paths, &1))
+    |> Enum.reduce_while({:ok, []}, fn relative, {:ok, found} ->
+      case File.lstat(Path.join(target, relative)) do
+        {:ok, %File.Stat{type: :regular}} -> {:cont, {:ok, [relative | found]}}
+        {:ok, %File.Stat{}} -> {:halt, {:error, :structural_restore_conflict}}
+        {:error, :enoent} -> {:cont, {:ok, found}}
+        {:error, reason} -> {:halt, {:error, {:destination_stat_failed, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, found} -> {:ok, Enum.reverse(found)}
+      error -> error
+    end
+  end
+
+  defp stream_copy_and_digest(source, destination) do
+    with {:ok, input} <- File.open(source, [:read, :binary]),
+         {:ok, output} <- File.open(destination, [:write, :binary]) do
+      try do
+        copy_chunks(input, output, :crypto.hash_init(:sha256))
+      after
+        _ = File.close(input)
+        File.close(output)
+      end
+    end
+  end
+
+  defp copy_chunks(input, output, hash) do
+    case IO.binread(input, @copy_chunk_bytes) do
+      :eof ->
+        :ok = :file.sync(output)
+        {:ok, hash |> :crypto.hash_final() |> Base.encode16(case: :lower)}
+
+      {:error, reason} ->
+        {:error, {:read_failed, reason}}
+
+      bytes when is_binary(bytes) ->
+        # Unlike IO.binwrite/2, :file.write/2 returns device errors for this contract.
+        case :file.write(output, bytes) do
+          :ok -> copy_chunks(input, output, :crypto.hash_update(hash, bytes))
+          {:error, reason} -> {:error, {:write_failed, reason}}
+        end
+    end
+  end
+
+  defp unchanged?(before_stat, after_stat) do
+    if before_stat.size == after_stat.size and before_stat.mtime == after_stat.mtime and
+         before_stat.inode == after_stat.inode do
+      :ok
+    else
+      {:error, {:source_changed, :retry}}
+    end
+  end
+
+  defp build_manifest(entries, excluded, include_credentials?) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+    %{
+      "schema" => @schema,
+      "product" => "lemon",
+      "contract_version" => @contract_version,
+      "id" => "backup-#{unique_suffix()}",
+      "created_at" => now,
+      "source" => "~/.lemon",
+      "include_credentials" => include_credentials?,
+      "file_count" => length(entries),
+      "total_bytes" => Enum.reduce(entries, 0, &(&1["bytes"] + &2)),
+      "files" => entries,
+      "exclusions" => %{
+        "policy" => exclusion_descriptions(include_credentials?),
+        "observed_counts" => Map.new(excluded)
+      },
+      "redaction" => %{
+        "file_contents_returned" => false,
+        "absolute_source_path_returned" => false,
+        "secret_values_returned" => false
+      }
+    }
+  end
+
+  defp write_manifest(bundle, manifest) do
+    bytes = Jason.encode!(manifest, pretty: true) <> "\n"
+    checksum = sha256(bytes)
+
+    with :ok <- write_atomic_synced(Path.join(bundle, @manifest), bytes, 0o600),
+         :ok <-
+           write_atomic_synced(
+             Path.join(bundle, @manifest_checksum),
+             checksum <> "  #{@manifest}\n",
+             0o600
+           ) do
+      :ok
+    end
+  end
+
+  defp write_synced(path, bytes) do
+    with {:ok, io} <- File.open(path, [:write, :binary]) do
+      try do
+        with :ok <- IO.binwrite(io, bytes), do: :file.sync(io)
+      after
+        File.close(io)
+      end
+    end
+  end
+
+  defp read_verified_manifest(bundle) do
+    checksum_path = Path.join(bundle, @manifest_checksum)
+    manifest_path = Path.join(bundle, @manifest)
+
+    with {:ok, expected_line} <- File.read(checksum_path),
+         {:ok, expected} <- parse_manifest_checksum(expected_line),
+         {:ok, bytes} <- bounded_read(manifest_path, @max_manifest_bytes),
+         true <- secure_equal?(expected, sha256(bytes)) || {:error, :manifest_checksum_mismatch},
+         {:ok, manifest} <- Jason.decode(bytes) do
+      {:ok, manifest, expected}
+    else
+      {:error, %Jason.DecodeError{}} -> {:error, :invalid_manifest_json}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp read_manifest(bundle) do
+    with :ok <- verify_bundle_root(bundle),
+         {:ok, manifest, _digest} <- read_verified_manifest(bundle),
+         {:ok, _entries} <- validate_manifest(manifest) do
+      {:ok, manifest}
+    end
+  end
+
+  defp parse_manifest_checksum(line) do
+    case String.split(String.trim(line), ~r/\s+/, parts: 2) do
+      [digest, @manifest] when byte_size(digest) == 64 ->
+        if String.match?(digest, ~r/\A[0-9a-f]{64}\z/),
+          do: {:ok, digest},
+          else: {:error, :invalid_manifest_checksum}
+
+      _ ->
+        {:error, :invalid_manifest_checksum}
+    end
+  end
+
+  defp validate_manifest(%{
+         "schema" => @schema,
+         "product" => "lemon",
+         "contract_version" => @contract_version,
+         "id" => id,
+         "created_at" => created_at,
+         "include_credentials" => include_credentials?,
+         "file_count" => file_count,
+         "total_bytes" => total_bytes,
+         "files" => files
+       })
+       when is_binary(id) and is_binary(created_at) and is_boolean(include_credentials?) and
+              is_integer(file_count) and is_integer(total_bytes) and total_bytes >= 0 and
+              is_list(files) do
+    cond do
+      not String.match?(id, ~r/\Abackup-[A-Za-z0-9_-]{1,128}\z/) ->
+        {:error, :invalid_backup_id}
+
+      not valid_created_at?(created_at) ->
+        {:error, :invalid_created_at}
+
+      length(files) > @max_files ->
+        {:error, :too_many_files}
+
+      file_count != length(files) ->
+        {:error, :invalid_file_count}
+
+      true ->
+        with {:ok, entries} <- validate_manifest_entries(files),
+             true <-
+               total_bytes == Enum.reduce(entries, 0, &(&1["bytes"] + &2)) ||
+                 {:error, :invalid_total_bytes} do
+          {:ok, entries}
+        else
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp validate_manifest(%{"schema" => schema}) when schema != @schema,
+    do: {:error, {:unsupported_backup_schema, schema}}
+
+  defp validate_manifest(_), do: {:error, :invalid_manifest}
+
+  defp valid_created_at?(created_at) when byte_size(created_at) <= 40 do
+    case DateTime.from_iso8601(created_at) do
+      {:ok, _datetime, 0} -> true
+      _ -> false
+    end
+  end
+
+  defp valid_created_at?(_created_at), do: false
+
+  defp validate_manifest_entries(files) do
+    Enum.reduce_while(files, {:ok, [], MapSet.new(), 0}, fn entry, {:ok, entries, seen, total} ->
+      case validate_manifest_entry(entry) do
+        {:ok, normalized} ->
+          path = normalized["path"]
+
+          cond do
+            MapSet.member?(seen, path) ->
+              {:halt, {:error, :duplicate_manifest_path}}
+
+            total + normalized["bytes"] > 1_099_511_627_776 ->
+              {:halt, {:error, :backup_too_large}}
+
+            true ->
+              {:cont,
+               {:ok, [normalized | entries], MapSet.put(seen, path), total + normalized["bytes"]}}
+          end
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, entries, _seen, _total} -> {:ok, Enum.reverse(entries)}
+      error -> error
+    end
+  end
+
+  defp validate_manifest_entry(
+         %{
+           "path" => path,
+           "bytes" => bytes,
+           "sha256" => digest,
+           "mode" => mode
+         } = entry
+       )
+       when is_binary(path) and is_integer(bytes) and bytes >= 0 and is_binary(digest) and
+              is_integer(mode) do
+    cond do
+      not safe_relative_path?(path) -> {:error, :unsafe_manifest_path}
+      byte_size(path) > @max_path_bytes -> {:error, :manifest_path_too_long}
+      not String.match?(digest, ~r/\A[0-9a-f]{64}\z/) -> {:error, :invalid_file_checksum}
+      not MapSet.member?(@allowed_restore_modes, mode) -> {:error, :invalid_file_mode}
+      true -> {:ok, Map.take(entry, ["path", "bytes", "sha256", "mode"])}
+    end
+  end
+
+  defp validate_manifest_entry(_), do: {:error, :invalid_manifest_entry}
+
+  defp verify_exact_file_set(bundle, entries) do
+    expected = entries |> Enum.map(& &1["path"]) |> MapSet.new()
+    data_root = Path.join(bundle, @data_dir)
+
+    with {:ok, actual} <- collect_bundle_files(data_root, "", []),
+         actual_set <- MapSet.new(actual),
+         true <- MapSet.equal?(expected, actual_set) || {:error, :bundle_file_set_mismatch} do
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp collect_bundle_files(root, relative, acc) do
+    dir = if relative == "", do: root, else: Path.join(root, relative)
+
+    case File.ls(dir) do
+      {:ok, names} ->
+        Enum.reduce_while(names, {:ok, acc}, fn name, {:ok, found} ->
+          rel = if relative == "", do: name, else: Path.join(relative, name)
+          path = Path.join(root, rel)
+
+          case File.lstat(path) do
+            {:ok, %File.Stat{type: :directory, mode: mode}} ->
+              if (mode &&& 0o077) == 0 do
+                case collect_bundle_files(root, rel, found) do
+                  {:ok, nested} -> {:cont, {:ok, nested}}
+                  {:error, reason} -> {:halt, {:error, reason}}
+                end
+              else
+                {:halt, {:error, :unsafe_bundle_permissions}}
+              end
+
+            {:ok, %File.Stat{type: :regular, mode: mode}} ->
+              if (mode &&& 0o077) == 0 do
+                {:cont, {:ok, [rel | found]}}
+              else
+                {:halt, {:error, :unsafe_bundle_permissions}}
+              end
+
+            {:ok, %File.Stat{}} ->
+              {:halt, {:error, :unsafe_bundle_entry}}
+
+            {:error, reason} ->
+              {:halt, {:error, {:bundle_stat_failed, reason}}}
+          end
+        end)
+
+      {:error, reason} ->
+        {:error, {:bundle_list_failed, reason}}
+    end
+  end
+
+  defp verify_entries(bundle, entries) do
+    Enum.reduce_while(entries, :ok, fn entry, :ok ->
+      path = Path.join([bundle, @data_dir, entry["path"]])
+
+      case file_digest(path) do
+        {:ok, %{bytes: bytes, sha256: digest}} ->
+          if bytes == entry["bytes"] and digest == entry["sha256"] do
+            {:cont, :ok}
+          else
+            {:halt, {:error, :file_checksum_mismatch}}
+          end
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp classify_destination(target, entries) do
+    Enum.reduce_while(entries, {:ok, [], []}, fn entry, {:ok, conflicts, identical} ->
+      relative = entry["path"]
+      destination = Path.join(target, relative)
+
+      case validate_destination_parents(target, relative) do
+        :ok ->
+          case File.lstat(destination) do
+            {:ok, %File.Stat{type: :regular, mode: mode}} ->
+              case file_digest(destination) do
+                {:ok, %{bytes: bytes, sha256: digest}} ->
+                  if bytes == entry["bytes"] and digest == entry["sha256"] and
+                       (mode &&& 0o777) == entry["mode"] do
+                    {:cont, {:ok, conflicts, [relative | identical]}}
+                  else
+                    {:cont, {:ok, [relative | conflicts], identical}}
+                  end
+
+                {:error, reason} ->
+                  {:halt, {:error, reason}}
+              end
+
+            {:ok, %File.Stat{}} ->
+              {:halt, {:error, :structural_restore_conflict}}
+
+            {:error, :enoent} ->
+              {:cont, {:ok, conflicts, identical}}
+
+            {:error, reason} ->
+              {:halt, {:error, {:destination_stat_failed, reason}}}
+          end
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, conflicts, identical} ->
+        {:ok, Enum.reverse(conflicts), Enum.reverse(identical)}
+
+      error ->
+        error
+    end
+  end
+
+  defp validate_destination_parents(target, relative) do
+    relative
+    |> Path.dirname()
+    |> path_prefixes()
+    |> Enum.reduce_while(:ok, fn prefix, :ok ->
+      path = Path.join(target, prefix)
+
+      case File.lstat(path) do
+        {:ok, %File.Stat{type: :directory}} -> {:cont, :ok}
+        {:error, :enoent} -> {:cont, :ok}
+        {:ok, %File.Stat{}} -> {:halt, {:error, :structural_restore_conflict}}
+        {:error, reason} -> {:halt, {:error, {:destination_stat_failed, reason}}}
+      end
+    end)
+  end
+
+  defp path_prefixes("."), do: []
+
+  defp path_prefixes(path) do
+    path
+    |> Path.split()
+    |> Enum.reduce({[], []}, fn segment, {parts, prefixes} ->
+      next = parts ++ [segment]
+      {next, [Path.join(next) | prefixes]}
+    end)
+    |> elem(1)
+    |> Enum.reverse()
+  end
+
+  defp authorize_conflicts([], _overwrite?), do: :ok
+  defp authorize_conflicts(_conflicts, true), do: :ok
+
+  defp authorize_conflicts(conflicts, false),
+    do: {:error, {:restore_conflicts, length(conflicts)}}
+
+  defp stage_restore(bundle, target, entries, identical) do
+    stage = target <> ".restore.partial.#{unique_suffix()}"
+    identical = MapSet.new(identical)
+
+    result =
+      try do
+        with :ok <- mkdir_p_private(stage),
+             :ok <- copy_restore_entries(bundle, stage, entries, identical) do
+          {:ok, stage}
+        end
+      catch
+        kind, reason -> {:error, {:restore_stage_failed, kind, reason}}
+      end
+
+    case result do
+      {:ok, ^stage} ->
+        result
+
+      {:error, _reason} ->
+        remove_partial(stage)
+        result
+    end
+  end
+
+  defp copy_restore_entries(bundle, stage, entries, identical) do
+    entries
+    |> Enum.reject(&MapSet.member?(identical, &1["path"]))
+    |> Enum.reduce_while(:ok, fn entry, :ok ->
+      source = Path.join([bundle, @data_dir, entry["path"]])
+      destination = Path.join(stage, entry["path"])
+
+      with :ok <- mkdir_p_private(Path.dirname(destination)),
+           {:ok, digest} <- stream_copy_and_digest(source, destination),
+           true <- digest == entry["sha256"] || {:error, :file_checksum_mismatch},
+           :ok <- chmod_and_sync(destination, entry["mode"]) do
+        {:cont, :ok}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp apply_restore(stage, target, manifest, manifest_digest, conflicts, identical) do
+    rollback = target <> ".pre-restore.#{manifest["id"]}"
+    entries = manifest["files"]
+    identical_set = MapSet.new(identical)
+    install_entries = Enum.reject(entries, &MapSet.member?(identical_set, &1["path"]))
+
+    try do
+      with :ok <- ensure_absent(rollback),
+           :ok <- mkdir_p_private(rollback),
+           {:ok, moved} <- move_conflicts_to_rollback(target, rollback, conflicts) do
+        case install_staged_files(stage, target, install_entries) do
+          {:ok, installed} ->
+            receipt = %{
+              "schema" => 1,
+              "backup_id" => manifest["id"],
+              "manifest_sha256" => manifest_digest,
+              "target" => target,
+              "restored_at" =>
+                DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+              "overwritten_count" => length(moved),
+              "restored_count" => length(installed),
+              "identical_count" => length(identical)
+            }
+
+            case write_atomic_synced(
+                   Path.join(rollback, "restore-receipt.json"),
+                   Jason.encode!(receipt, pretty: true) <> "\n",
+                   0o600
+                 ) do
+              :ok ->
+                remove_partial(stage)
+
+                rollback_path = if moved == [], do: nil, else: rollback
+                if moved == [], do: remove_partial(rollback)
+
+                {:ok,
+                 %{
+                   backup_id: manifest["id"],
+                   restored_count: length(installed),
+                   identical_count: length(identical),
+                   overwritten_count: length(moved),
+                   rollback_path: rollback_path,
+                   target: target,
+                   verified: true
+                 }}
+
+              {:error, reason} ->
+                restore_apply_error(reason, target, rollback, moved, installed)
+            end
+
+          {:error, {:install_failed, reason, installed}} ->
+            restore_apply_error(reason, target, rollback, moved, installed)
+        end
+      else
+        {:error, {:apply_failed, reason, moved, installed}} ->
+          restore_apply_error(reason, target, rollback, moved, installed)
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    after
+      remove_partial(stage)
+    end
+  end
+
+  defp move_conflicts_to_rollback(target, rollback, conflicts) do
+    Enum.reduce_while(conflicts, {:ok, []}, fn relative, {:ok, moved} ->
+      source = Path.join(target, relative)
+      destination = Path.join(rollback, relative)
+
+      with :ok <- mkdir_p_private(Path.dirname(destination)),
+           :ok <- File.rename(source, destination) do
+        {:cont, {:ok, [relative | moved]}}
+      else
+        {:error, reason} -> {:halt, {:error, {:apply_failed, reason, moved, []}}}
+      end
+    end)
+  end
+
+  # Every destination is absent here: authorized conflicts were moved to the
+  # rollback directory and identical files are skipped. Installing by hard link
+  # fails with `:eexist` instead of replacing a file that appeared since the
+  # conflict check (for example a master key created by `lemon secrets init`),
+  # which is never authorized for replacement.
+  defp install_staged_files(stage, target, entries) do
+    Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, installed} ->
+      relative = entry["path"]
+      source = Path.join(stage, relative)
+      destination = Path.join(target, relative)
+
+      with :ok <- mkdir_p_private(Path.dirname(destination)),
+           :ok <- File.ln(source, destination),
+           _ <- File.rm(source),
+           :ok <- sync_dir(Path.dirname(destination)) do
+        {:cont, {:ok, [relative | installed]}}
+      else
+        {:error, reason} ->
+          {:halt, {:error, {:install_failed, reason, installed}}}
+      end
+    end)
+  end
+
+  defp rollback_restore(target, rollback, moved, installed) do
+    removal_errors =
+      Enum.reduce(installed, 0, fn relative, errors ->
+        case File.rm(Path.join(target, relative)) do
+          :ok -> errors
+          {:error, :enoent} -> errors
+          {:error, _reason} -> errors + 1
+        end
+      end)
+
+    restore_errors =
+      Enum.reduce(moved, 0, fn relative, errors ->
+        source = Path.join(rollback, relative)
+        destination = Path.join(target, relative)
+
+        # Compensation never replaces a file created since it moved aside
+        # (for example a master key initialized meanwhile).
+        result =
+          with :ok <- mkdir_p_private(Path.dirname(destination)),
+               :ok <- File.ln(source, destination),
+               _ <- File.rm(source),
+               :ok <- sync_dir(Path.dirname(destination)) do
+            :ok
+          end
+
+        case result do
+          :ok -> errors
+          {:error, _reason} -> errors + 1
+        end
+      end)
+
+    case removal_errors + restore_errors do
+      0 ->
+        remove_partial(rollback)
+        :ok
+
+      count ->
+        {:error, {:rollback_incomplete, count, rollback}}
+    end
+  end
+
+  defp restore_apply_error(reason, target, rollback, moved, installed) do
+    case rollback_restore(target, rollback, moved, installed) do
+      :ok -> {:error, reason}
+      {:error, rollback_reason} -> {:error, {:restore_apply_and_rollback_failed, rollback_reason}}
+    end
+  end
+
+  defp validate_restore_confirmation(_target, _digest, false, _confirmation, _expected),
+    do: :ok
+
+  defp validate_restore_confirmation(target, digest, true, confirmation, expected)
+       when is_binary(confirmation) and is_binary(expected) do
+    calculated = overwrite_confirmation(digest, target)
+
+    if secure_equal?(confirmation, calculated) and secure_equal?(expected, calculated) do
+      :ok
+    else
+      {:error, :restore_confirmation_mismatch}
+    end
+  end
+
+  defp validate_restore_confirmation(_target, _digest, true, _confirmation, _expected),
+    do: {:error, :restore_confirmation_required}
+
+  defp validate_source(source) do
+    case File.lstat(source) do
+      {:ok, %File.Stat{type: :directory}} -> :ok
+      {:ok, %File.Stat{}} -> {:error, :source_not_directory}
+      {:error, :enoent} -> {:error, :source_not_found}
+      {:error, reason} -> {:error, {:source_stat_failed, reason}}
+    end
+  end
+
+  defp validate_restore_target(target) do
+    case File.lstat(target) do
+      {:ok, %File.Stat{type: :directory}} -> :ok
+      {:ok, %File.Stat{}} -> {:error, :unsafe_restore_target}
+      {:error, :enoent} -> :ok
+      {:error, reason} -> {:error, {:restore_target_stat_failed, reason}}
+    end
+  end
+
+  defp validate_output(source, output) do
+    cond do
+      output == source -> {:error, :output_is_source}
+      String.starts_with?(source, output <> "/") -> {:error, :output_contains_source}
+      output_inside_unexcluded_source?(source, output) -> {:error, :output_inside_source}
+      true -> :ok
+    end
+  end
+
+  defp output_inside_unexcluded_source?(source, output) do
+    backups_root = Path.join(source, "backups")
+
+    String.starts_with?(output, source <> "/") and output != backups_root and
+      not String.starts_with?(output, backups_root <> "/")
+  end
+
+  defp verify_bundle_root(bundle) do
+    case File.lstat(bundle) do
+      {:ok, %File.Stat{type: :directory}} -> :ok
+      {:ok, %File.Stat{}} -> {:error, :backup_not_directory}
+      {:error, :enoent} -> {:error, :backup_not_found}
+      {:error, reason} -> {:error, {:backup_stat_failed, reason}}
+    end
+  end
+
+  defp ensure_parent(path) do
+    case File.mkdir_p(Path.dirname(path)) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:mkdir_failed, reason}}
+    end
+  end
+
+  defp ensure_absent(path) do
+    case File.lstat(path) do
+      {:error, :enoent} -> :ok
+      {:ok, _stat} -> {:error, :path_exists}
+      {:error, reason} -> {:error, {:stat_failed, reason}}
+    end
+  end
+
+  defp ensure_no_daemon(target, opts) do
+    homes = Enum.uniq([source_root(opts), target])
+    target = canonical_path(target)
+
+    if Enum.any?(homes, &registered_runtime?(&1, target, opts)) or
+         (target == canonical_path(source_root(opts)) and
+            probe_running?(opts, control_plane_port())) do
+      {:error, :daemon_running}
+    else
+      :ok
+    end
+  end
+
+  defp registered_runtime?(home, target, opts) do
+    run = Path.join(home, "run")
+
+    case File.ls(run) do
+      {:ok, names} ->
+        names
+        |> Enum.flat_map(fn name ->
+          case Regex.run(~r/\Alemon-(\d+)\.(?:pid|lock|paths)\z/, name) do
+            [_, port] -> [port]
+            _ -> []
+          end
+        end)
+        |> Enum.uniq()
+        |> Enum.any?(&registered_port_uses?(run, home, &1, target, opts))
+
+      {:error, _reason} ->
+        false
+    end
+  end
+
+  defp registered_port_uses?(run, home, port, target, opts) do
+    prefix = Path.join(run, "lemon-#{port}")
+    {paths, pid_file} = runtime_record(prefix, home)
+
+    Enum.any?(paths, &paths_overlap?(canonical_path(&1), target)) and
+      (live_pid_file?(pid_file) or live_pid_file?(prefix <> ".pid") or
+         live_pid_file?(Path.join(prefix <> ".lock", "owner")) or
+         probe_running?(opts, String.to_integer(port)))
+  end
+
+  defp runtime_record(prefix, home) do
+    case read_regular_file(prefix <> ".paths") do
+      {:ok, contents} ->
+        case String.split(contents, "\n", trim: true) do
+          [state, store, primary, pid_file] ->
+            {[state, store, primary], pid_file}
+
+          [state, store, pid_file] ->
+            {[state, store], pid_file}
+
+          [_ | _] = paths ->
+            {paths, prefix <> ".pid"}
+
+          _ ->
+            {[home], prefix <> ".pid"}
+        end
+
+      _ ->
+        {[home], prefix <> ".pid"}
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :regular}} -> File.read(path)
+      _ -> {:error, :unsafe_runtime_record}
+    end
+  end
+
+  defp live_pid_file?(path), do: LemonCore.PidFile.live?(path)
+
+  defp probe_running?(opts, port) do
+    case Keyword.get(opts, :runtime_probe) do
+      probe when is_function(probe, 1) -> probe.(port) == true
+      _ -> System.get_env("LEMON_LAUNCHER") not in [nil, ""] and Health.running?(port)
+    end
+  end
+
+  defp control_plane_port do
+    case Integer.parse(System.get_env("LEMON_CONTROL_PLANE_PORT") || "") do
+      {port, ""} when port in 1..65_535 -> port
+      _ -> @default_control_plane_port
+    end
+  end
+
+  defp paths_overlap?(left, right), do: path_within?(left, right) or path_within?(right, left)
+
+  defp path_within?(path, root),
+    do: path == root or String.starts_with?(path, String.trim_trailing(root, "/") <> "/")
+
+  defp canonical_path(path), do: resolve_path(Path.split(Path.expand(path)), "", 0)
+
+  defp resolve_path([], acc, _links), do: acc
+  defp resolve_path(["/" | rest], "", links), do: resolve_path(rest, "/", links)
+
+  defp resolve_path([part | rest], acc, links) do
+    candidate = Path.join(acc, part)
+
+    case File.read_link(candidate) do
+      {:ok, link} when links < 40 ->
+        resolve_path(Path.split(Path.expand(link, acc)) ++ rest, "", links + 1)
+
+      _ ->
+        resolve_path(rest, candidate, links)
+    end
+  end
+
+  defp after_runtime_check(opts) do
+    case Keyword.get(opts, :after_runtime_check) do
+      hook when is_function(hook, 0) -> hook.()
+      _ -> :ok
+    end
+  end
+
+  # Publish in both homes so launchers owned by either HOME see the restore.
+  # Hold every lock through staging, apply, and rollback; unwind partial
+  # acquisition and remove directories created solely for coordination.
+  defp with_runtime_lock(target, opts, fun) do
+    runs =
+      [source_root(opts), target]
+      |> Enum.map(&canonical_path/1)
+      |> Enum.uniq()
+      |> Enum.sort()
+      |> Enum.map(&Path.join(&1, "run"))
+
+    with_runtime_locks(runs, canonical_path(target), fun)
+  end
+
+  defp with_runtime_locks([], _target, fun), do: fun.()
+
+  defp with_runtime_locks([run | rest], target, fun) do
+    digest = :crypto.hash(:sha256, target) |> Base.encode16(case: :lower)
+    lock = Path.join(run, "restore-#{digest}.lock")
+    created = missing_ancestors(run)
+
+    try do
+      with :ok <- mkdir_p_private(run),
+           :ok <- acquire_runtime_lock(run, lock, target) do
+        try do
+          with_runtime_locks(rest, target, fun)
+        after
+          File.rm_rf(lock)
+        end
+      end
+    after
+      Enum.each(created, &File.rmdir/1)
+    end
+  end
+
+  defp acquire_runtime_lock(run, lock, target, retry? \\ true) do
+    staging = Path.join(run, ".restore-lock.#{unique_suffix()}")
+
+    try do
+      with :ok <- mkdir_p_private(staging),
+           :ok <- write_synced(Path.join(staging, "owner"), "#{System.pid()}\n"),
+           :ok <- write_synced(Path.join(staging, "target"), target <> "\n") do
+        case File.rename(staging, lock) do
+          :ok ->
+            :ok
+
+          {:error, _reason} ->
+            if retry? and reap_runtime_lock(lock),
+              do: acquire_runtime_lock(run, lock, target, false),
+              else: {:error, :backup_restore_locked}
+        end
+      end
+    after
+      File.rm_rf(staging)
+    end
+  end
+
+  defp reap_runtime_lock(lock) do
+    reaping = Path.join(lock, "reaping")
+
+    case File.mkdir(reaping) do
+      :ok ->
+        try do
+          if not live_pid_file?(Path.join(lock, "owner")) do
+            _ = File.rm(Path.join(lock, "owner"))
+            _ = File.rm(Path.join(lock, "target"))
+            true
+          else
+            false
+          end
+        after
+          _ = File.rmdir(reaping)
+          File.rmdir(lock)
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp missing_ancestors(path) do
+    case File.lstat(path) do
+      {:error, :enoent} -> [path | missing_ancestors(Path.dirname(path))]
+      _ -> []
+    end
+  end
+
+  defp with_lock(root, fun) when is_function(fun, 0) do
+    lock = Path.join(Path.dirname(root), ".#{Path.basename(root)}.backup-restore.lock")
+
+    with :ok <- File.mkdir_p(Path.dirname(lock)),
+         {:ok, io} <- File.open(lock, [:write, :exclusive, :binary]) do
+      try do
+        :ok = IO.binwrite(io, "pid=#{System.pid()}\n")
+        :ok = :file.sync(io)
+        _ = File.chmod(lock, 0o600)
+        fun.()
+      after
+        _ = File.close(io)
+        File.rm(lock)
+      end
+    else
+      {:error, :eexist} -> {:error, :backup_restore_locked}
+      {:error, reason} -> {:error, {:lock_failed, reason}}
+    end
+  end
+
+  defp source_root(opts), do: Paths.home_state_dir(paths_opts(opts)) |> Path.expand()
+
+  defp target_root(opts) do
+    case Keyword.get(opts, :target) do
+      path when is_binary(path) and path != "" -> Path.expand(path)
+      _ -> source_root(opts)
+    end
+  end
+
+  defp paths_opts(opts), do: Keyword.get(opts, :paths_opts, [])
+
+  defp exclusion_reason(relative, include_credentials?) do
+    parts = Path.split(relative)
+    top = List.first(parts)
+    base = Path.basename(relative)
+
+    cond do
+      base in [".lemon-state.lock", "worker-status.json"] ->
+        "runtime_state"
+
+      MapSet.member?(@always_excluded_roots, top) ->
+        "runtime_or_generated"
+
+      relative == ".backup-restore.lock" ->
+        "runtime_lock"
+
+      Enum.any?(parts, &String.starts_with?(&1, KeyLock.lock_name())) ->
+        "runtime_lock"
+
+      # `LemonCore.RuntimeOwner` locks a store while its runtime lives.
+      Enum.any?(parts, &String.ends_with?(&1, ".runtime.lock")) ->
+        "runtime_lock"
+
+      String.starts_with?(base, "support-bundle-") ->
+        "support_bundle"
+
+      String.ends_with?(base, ".pid") or String.ends_with?(base, ".sock") ->
+        "runtime_state"
+
+      not include_credentials? and MapSet.member?(@credential_files, relative) ->
+        "credential_material"
+
+      not include_credentials? and top == "nodes" and Enum.at(parts, 1) == "execution" ->
+        "credential_material"
+
+      true ->
+        nil
+    end
+  end
+
+  defp exclusion_descriptions(include_credentials?) do
+    base = [
+      "installed versions and launcher symlinks",
+      "runtime pid/socket/lock state",
+      "temporary files, caches, logs, support bundles, prior backups, and migration reports",
+      "restore rollback directories",
+      "SQLite -wal/-shm/-journal sidecars (their committed content is in the database snapshot)",
+      "symlinks and special files",
+      "platform keychain contents",
+      "project-local .lemon directories"
+    ]
+
+    if include_credentials? do
+      base
+    else
+      base ++ ["local cookie/env/master-key and execution-node credential files"]
+    end
+  end
+
+  defp increment_excluded(excluded, reason), do: Map.update(excluded, reason, 1, &(&1 + 1))
+
+  defp source_restore_mode(mode) do
+    owner_bits = mode &&& 0o700
+
+    if MapSet.member?(@allowed_restore_modes, owner_bits),
+      do: {:ok, owner_bits},
+      else: {:error, :unsupported_source_file_mode}
+  end
+
+  defp mkdir_p_private(path) do
+    path = Path.expand(path)
+
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :directory}} ->
+        :ok
+
+      {:ok, %File.Stat{}} ->
+        {:error, :unsafe_directory_path}
+
+      {:error, :enoent} ->
+        parent = Path.dirname(path)
+
+        with :ok <- if(parent == path, do: :ok, else: mkdir_p_private(parent)),
+             :ok <- make_private_dir(path) do
+          :ok
+        end
+
+      {:error, reason} ->
+        {:error, {:directory_stat_failed, reason}}
+    end
+  end
+
+  defp make_private_dir(path) do
+    case File.mkdir(path) do
+      :ok ->
+        case File.chmod(path, 0o700) do
+          :ok -> sync_dir(Path.dirname(path))
+          {:error, reason} -> {:error, {:chmod_failed, reason}}
+        end
+
+      {:error, :eexist} ->
+        mkdir_p_private(path)
+
+      {:error, reason} ->
+        {:error, {:mkdir_failed, reason}}
+    end
+  end
+
+  defp bounded_read(path, max_bytes) do
+    with {:ok, %File.Stat{type: :regular, size: size}} <- File.lstat(path),
+         true <- size <= max_bytes || {:error, :manifest_too_large},
+         {:ok, bytes} <- File.read(path) do
+      {:ok, bytes}
+    else
+      {:ok, %File.Stat{}} -> {:error, :unsafe_manifest_file}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp verify_private_bundle_permissions(bundle) do
+    required = [
+      bundle,
+      Path.join(bundle, @data_dir),
+      Path.join(bundle, @manifest),
+      Path.join(bundle, @manifest_checksum)
+    ]
+
+    Enum.reduce_while(required, :ok, fn path, :ok ->
+      if private_path?(path) do
+        {:cont, :ok}
+      else
+        {:halt, {:error, :unsafe_bundle_permissions}}
+      end
+    end)
+  end
+
+  defp private_path?(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{mode: mode}} -> (mode &&& 0o077) == 0
+      _ -> false
+    end
+  end
+
+  defp file_digest(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :regular, size: size}} ->
+        hash =
+          path
+          |> File.stream!(@copy_chunk_bytes)
+          |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
+          |> :crypto.hash_final()
+          |> Base.encode16(case: :lower)
+
+        {:ok, %{bytes: size, sha256: hash}}
+
+      {:ok, %File.Stat{}} ->
+        {:error, :unsafe_bundle_entry}
+
+      {:error, reason} ->
+        {:error, {:digest_failed, reason}}
+    end
+  rescue
+    error -> {:error, {:digest_failed, Exception.message(error)}}
+  end
+
+  defp manifest_summary(path, manifest) do
+    %{
+      id: manifest["id"],
+      path: Path.expand(path),
+      created_at: manifest["created_at"],
+      contract_version: manifest["contract_version"],
+      file_count: manifest["file_count"],
+      total_bytes: manifest["total_bytes"],
+      includes_credentials: manifest["include_credentials"] == true,
+      contents_returned: false,
+      secret_values_returned: false
+    }
+  end
+
+  defp safe_relative_path?(path) do
+    parts = Path.split(path)
+
+    path != "" and Path.type(path) == :relative and byte_size(path) <= @max_path_bytes and
+      not String.contains?(path, ["\\", <<0>>]) and parts != [] and
+      Enum.all?(parts, &(&1 not in ["", ".", ".."])) and Path.join(parts) == path
+  end
+
+  defp sha256(bytes), do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+
+  defp overwrite_confirmation(manifest_digest, target) do
+    sha256("lemon-backup-restore-v1\0" <> manifest_digest <> "\0" <> Path.expand(target))
+  end
+
+  defp secure_equal?(left, right)
+       when is_binary(left) and is_binary(right) and byte_size(left) == byte_size(right) do
+    left
+    |> :binary.bin_to_list()
+    |> Enum.zip(:binary.bin_to_list(right))
+    |> Enum.reduce(0, fn {a, b}, acc -> acc ||| bxor(a, b) end) == 0
+  end
+
+  defp secure_equal?(_, _), do: false
+
+  defp default_bundle_name do
+    timestamp = Calendar.strftime(DateTime.utc_now(), "%Y%m%dT%H%M%SZ")
+    "lemon-backup-#{timestamp}-#{unique_suffix()}.lemonbackup"
+  end
+
+  defp unique_suffix do
+    random = :crypto.strong_rand_bytes(6) |> Base.url_encode64(padding: false)
+    "#{System.system_time(:millisecond)}-#{random}"
+  end
+
+  defp remove_partial(path) do
+    _ =
+      if String.contains?(Path.basename(path), [".partial.", ".pre-restore."]),
+        do: File.rm_rf(path)
+
+    :ok
+  end
+
+  defp write_atomic_synced(path, bytes, mode) do
+    tmp = path <> ".tmp.#{unique_suffix()}"
+
+    try do
+      with :ok <- write_synced(tmp, bytes),
+           :ok <- chmod_and_sync(tmp, mode),
+           :ok <- File.rename(tmp, path),
+           :ok <- sync_dir(Path.dirname(path)) do
+        :ok
+      end
+    after
+      File.rm(tmp)
+    end
+  end
+
+  defp chmod_and_sync(path, mode) do
+    with :ok <- File.chmod(path, mode),
+         {:ok, io} <- File.open(path, [:read, :binary]) do
+      try do
+        :file.sync(io)
+      after
+        File.close(io)
+      end
+    end
+  end
+
+  # Directory fsync is supported on the Unix filesystems Lemon targets. Some
+  # filesystems/OTP builds reject opening a directory; in that case the file
+  # itself is still synced and the atomic rename remains the compatibility
+  # floor.
+  defp sync_dir(path) do
+    case :file.open(String.to_charlist(path), [:read, :raw]) do
+      {:ok, io} ->
+        _ = :file.sync(io)
+        :ok = :file.close(io)
+        :ok
+
+      {:error, _unsupported} ->
+        :ok
+    end
+  end
+
+  # Errors and manifests expose only relative paths; never return the absolute
+  # user-state source path in metadata or error tuples.
+  defp safe_path(""), do: "."
+  defp safe_path(relative), do: relative
+end

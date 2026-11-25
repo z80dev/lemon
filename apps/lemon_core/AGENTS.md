@@ -21,6 +21,9 @@ apps; optional consumers register at runtime. See [README](README.md),
   for runtime overrides; do not add a second app-env policy plane.
 - Platform channel modules resolve/validate their own `[gateway.<id>]` sections
   through the registered config behavior, rather than growing core vendor code.
+  Optional drivers own their `[runtime.tools.<id>]` tables the same way
+  (`Config.Tools.Section`, `:tool_sections`); core never calls a driver to
+  validate configuration.
 - Deprecated config sections fail with migration guidance, not silent fallback.
   Preserve unknown TOML keys/comments when changing a selected profile table.
 - `ProfileStore` is metadata/filesystem service, not a runtime orchestrator.
@@ -86,9 +89,6 @@ apps; optional consumers register at runtime. See [README](README.md),
 - Expired chat state is deleted by compare-and-delete so a concurrent refresh
   survives. Run finalization remains serialized and idempotent with bounded
   recent-run indexing, not a lifetime-growing set.
-- Backup restore verifies the complete bundle before mutation. Credentials are
-  opt-in; overwrite permission binds manifest digest and expanded destination.
-  See [backup contract](../../docs/user-guide/backups.md).
 
 ## Runtime and event boundaries
 

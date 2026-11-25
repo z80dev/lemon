@@ -16,7 +16,8 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.SessionModel
-  alias LemonCore.{SessionKey, SessionLifecycle}
+  alias LemonCore.SessionKey
+  alias LemonControlPlane.SessionLifecycle
 
   @impl true
   def name, do: "session.detail"

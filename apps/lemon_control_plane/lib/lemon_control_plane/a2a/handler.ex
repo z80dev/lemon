@@ -4,8 +4,9 @@ defmodule LemonControlPlane.A2A.Handler do
   require Logger
 
   alias LemonControlPlane.A2A.{Config, Runner, TaskView}
-  alias LemonCore.{A2AStore, Id, RouterBridge}
-  alias LemonCore.A2A.Protocol
+  alias LemonCore.{Id, RouterBridge}
+  alias LemonSkills.A2AStore
+  alias LemonSkills.A2A.Protocol
 
   @aliases %{
     "message/send" => "SendMessage",

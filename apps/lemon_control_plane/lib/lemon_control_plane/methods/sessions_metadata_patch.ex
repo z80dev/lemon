@@ -20,7 +20,7 @@ defmodule LemonControlPlane.Methods.SessionsMetadataPatch do
 
     with {:ok, session_key} <- require_session_key(params),
          {:ok, patch} <- metadata_patch(params),
-         {:ok, session} <- LemonCore.SessionLifecycle.patch(session_key, patch) do
+         {:ok, session} <- LemonControlPlane.SessionLifecycle.patch(session_key, patch) do
       {:ok,
        %{
          "success" => true,

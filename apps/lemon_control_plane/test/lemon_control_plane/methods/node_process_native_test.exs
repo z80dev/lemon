@@ -4,7 +4,8 @@ defmodule LemonControlPlane.Methods.NodeProcessNativeTest do
 
   alias CodingAgent.ExecutionNode.ProcessService
   alias LemonControlPlane.{NodeStore, Methods.Registry}
-  alias LemonCore.{NodeRegistry, Store}
+  alias LemonCore.Store
+  alias LemonAgent.NodeRegistry
 
   @moduletag :tmp_dir
   @store __MODULE__.Store

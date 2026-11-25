@@ -5,7 +5,7 @@ defmodule LemonCore.PolicyStore do
   A session row (`:session_policies`, keyed by session key) holds the
   session's model and thinking overrides and its tool-policy override.
   `sessions.patch` and the channel `/model` commands write it;
-  `LemonCore.SessionLifecycle` deletes it with the session.
+  `LemonControlPlane.SessionLifecycle` deletes it with the session.
 
   A chat row (`:chat_policies`, keyed by a `t:chat_route/0`) holds the
   model and thinking defaults for every session of one channel route: a
@@ -35,8 +35,9 @@ defmodule LemonCore.PolicyStore do
 
   @typedoc """
   `{channel_id, account_id, peer_id, thread_id}`: a channel route. Each field
-  narrows the previous one, so a `nil` is only followed by `nil`s: `{"telegram",
-  nil, nil, nil}` is channel-wide, `{"telegram", "default", "-100", nil}` one chat.
+  narrows the previous one, so a `nil` is only followed by `nil`s:
+  `{"chat", nil, nil, nil}` is channel-wide; `{"chat", "default", "peer-1", nil}`
+  identifies one conversation.
   """
   @type chat_route :: {binary(), binary() | nil, binary() | nil, binary() | nil}
 

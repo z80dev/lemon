@@ -44,7 +44,7 @@ defmodule LemonComputerUse.Config do
   end
 
   @spec chrome?(keyword()) :: boolean()
-  def chrome?(opts \\ []), do: LemonCore.BrowserProvider.resolve(opts).provider == "lcu"
+  def chrome?(opts \\ []), do: LemonBrowser.Provider.resolve(opts).provider == "lcu"
 
   @spec lcu_root() :: String.t()
   def lcu_root do
@@ -150,46 +150,13 @@ defmodule LemonComputerUse.Config do
         _ -> []
       end
 
-    [env("LEMON_BOT_PUBLIC_URL") | installed_bot_urls(opts) ++ listed ++ file ++ configured]
+    [
+      env("LEMON_BOT_PUBLIC_URL")
+      | LemonCli.Service.installed_backend_urls(opts) ++ listed ++ file ++ configured
+    ]
     |> Enum.flat_map(&origin_of/1)
     |> Enum.uniq()
   end
-
-  # The Lemon Bot addresses saved in installed backend service units.
-  defp installed_bot_urls(opts) do
-    alias LemonCore.Service.{Role, Unit}
-
-    managers =
-      case Keyword.get(opts, :os, :os.type()) do
-        {:unix, :darwin} -> ["launchd", "none"]
-        {:unix, :linux} -> ["systemd", "none"]
-        _ -> ["none"]
-      end
-
-    for manager <- managers,
-        {"backend", unit_opts} <- LemonCore.Service.discover(manager, opts),
-        unit_opts = Keyword.merge(opts, unit_opts),
-        port = Role.port("backend", unit_opts),
-        path = Role.unit_path(Role.label("backend", manager, nil, port), manager, unit_opts),
-        {:ok, %{env: unit_env}} <- [Unit.read(path, manager)],
-        url <- [
-          unit_env["LEMON_BOT_PUBLIC_URL"],
-          bot_address(unit_env["LEMON_BOT_HOST"], unit_env["LEMON_BOT_PORT"] || port)
-        ],
-        is_binary(url),
-        do: url
-  rescue
-    _ -> []
-  catch
-    _, _ -> []
-  end
-
-  defp bot_address(host, port) when is_binary(host) and host != "" do
-    host = if String.contains?(host, ":"), do: "[" <> host <> "]", else: host
-    "http://" <> host <> ":" <> to_string(port)
-  end
-
-  defp bot_address(_host, _port), do: nil
 
   @doc false
   @spec origin_of(term()) :: [String.t()]

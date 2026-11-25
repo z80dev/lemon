@@ -61,7 +61,7 @@ defmodule LemonControlPlane.NodeSecretProofs do
   end
 
   defp fresh_destination_opts(node_id) do
-    case LemonCore.NodeRegistry.resolve_id(node_id) do
+    case LemonAgent.NodeRegistry.resolve_id(node_id) do
       {:ok, %{id: ^node_id, pid: pid, generation: generation}}
       when is_pid(pid) and is_integer(generation) and generation >= 0 ->
         {:ok, pinned_opts(pid, generation, :root)}
@@ -110,9 +110,9 @@ defmodule LemonControlPlane.NodeSecretProofs do
   end
 
   defp current_destination?(node_id, pid, generation) do
-    case LemonCore.NodeRegistry.resolve_id(node_id) do
+    case LemonAgent.NodeRegistry.resolve_id(node_id) do
       {:ok, %{id: ^node_id, pid: ^pid, generation: ^generation, metadata: metadata}} ->
-        LemonCore.NodeRegistry.native_privacy_context_supported?(metadata)
+        LemonAgent.NodeRegistry.native_privacy_context_supported?(metadata)
 
       _ ->
         false

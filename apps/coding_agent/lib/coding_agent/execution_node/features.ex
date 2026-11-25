@@ -54,7 +54,7 @@ defmodule CodingAgent.ExecutionNode.Features do
           capabilities["node.enrollment"]["repairInvites"] == true,
       "nativeExecutionPolicy" =>
         native_policy and
-          LemonCore.NodeRegistry.native_privacy_context_supported?(%{capabilities: capabilities})
+          LemonAgent.NodeRegistry.native_privacy_context_supported?(%{capabilities: capabilities})
     }
 
     missing =

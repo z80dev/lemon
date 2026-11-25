@@ -116,12 +116,15 @@ defmodule LemonChannels.Adapters.Discord.TransportCommandAuthorityTest do
       File.write!(foreign_path, "foreign-before\n")
 
       on_exit(fn ->
-        LemonCore.Checkpoint.delete_all(native)
-        LemonCore.Checkpoint.delete_all(foreign)
+        LemonAgent.Checkpoint.delete_all(native)
+        LemonAgent.Checkpoint.delete_all(foreign)
       end)
 
-      {:ok, own} = LemonCore.Checkpoint.create_filesystem(native, [path], cwd: tmp_dir)
-      {:ok, other} = LemonCore.Checkpoint.create_filesystem(foreign, [foreign_path], cwd: tmp_dir)
+      {:ok, own} = LemonAgent.Checkpoint.create_filesystem(native, [path], cwd: tmp_dir)
+
+      {:ok, other} =
+        LemonAgent.Checkpoint.create_filesystem(foreign, [foreign_path], cwd: tmp_dir)
+
       File.write!(path, "after\n")
       File.write!(foreign_path, "foreign-after\n")
 

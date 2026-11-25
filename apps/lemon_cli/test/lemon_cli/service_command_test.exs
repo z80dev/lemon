@@ -2,7 +2,7 @@ defmodule LemonCli.ServiceCommandTest do
   use ExUnit.Case, async: true
   import ExUnit.CaptureIO
   alias LemonCli.{CLI, ServiceCommand}
-  alias LemonCore.Service.{Role, Unit}
+  alias LemonCli.Service.{Role, Unit}
   @moduletag :tmp_dir
 
   setup %{tmp_dir: home} do
@@ -58,7 +58,7 @@ defmodule LemonCli.ServiceCommandTest do
     }
 
     options = Keyword.merge(opts, bot: bot, env: invoking)
-    assert {:ok, first} = LemonCore.Service.install_spec("backend", options)
+    assert {:ok, first} = LemonCli.Service.install_spec("backend", options)
     assert first.env["LEMON_BOT_CONFIG_FILE"] == invoking["LEMON_BOT_CONFIG_FILE"]
     assert first.env["LEMON_CONTROL_PLANE_PORT"] == "5050"
 
@@ -75,7 +75,7 @@ defmodule LemonCli.ServiceCommandTest do
                "launchd"
              )
 
-    assert {:ok, saved} = LemonCore.Service.install_spec("backend", options)
+    assert {:ok, saved} = LemonCli.Service.install_spec("backend", options)
     assert saved.env["LEMON_BOT_CONFIG_FILE"] == Path.join(opts[:home], "saved.json")
     assert saved.env["LEMON_CONTROL_PLANE_PORT"] == "5050"
   end
@@ -113,7 +113,7 @@ defmodule LemonCli.ServiceCommandTest do
             Keyword.put(options, :env, %{"LEMON_BOT_PUBLIC_URL" => "https://ignored.example"})
         end
 
-      assert {:ok, _} = LemonCore.Service.install(["backend"], options)
+      assert {:ok, _} = LemonCli.Service.install(["backend"], options)
       assert {:ok, parsed} = Unit.read(saved.path, "launchd")
       assert parsed.env["LEMON_BOT_PUBLIC_URL"] == expected
       assert parsed.env["LEMON_BOT_CONFIG_FILE"] == env["LEMON_BOT_CONFIG_FILE"]

@@ -5,7 +5,7 @@ defmodule LemonCli.UpdateCommandTest do
 
   alias LemonCli.CLI
 
-  alias LemonCore.Update.{ManagedInstall, ReceiptStore}
+  alias LemonCli.Update.{ManagedInstall, ReceiptStore}
 
   @moduletag :tmp_dir
 

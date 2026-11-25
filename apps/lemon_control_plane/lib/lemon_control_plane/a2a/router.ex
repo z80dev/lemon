@@ -6,8 +6,8 @@ defmodule LemonControlPlane.A2A.Router do
   alias LemonControlPlane.A2A.{Auth, Config, Handler, TaskView}
   alias LemonControlPlane.HTTP.RequestOrigin
   alias LemonCore.RateLimiter
-  alias LemonCore.A2A.Protocol
-  alias LemonCore.A2AStore
+  alias LemonSkills.A2A.Protocol
+  alias LemonSkills.A2AStore
 
   plug(:require_trusted_host)
   plug(Plug.Parsers, parsers: [:json], pass: ["application/json"], json_decoder: Jason)

@@ -1,7 +1,7 @@
 defmodule LemonControlPlane.Methods.NodeDurableRoutingTest do
   use ExUnit.Case, async: false
   alias LemonControlPlane.{NodeIO, NodeShells, NodeStore}
-  alias LemonCore.NodeRegistry
+  alias LemonAgent.NodeRegistry
 
   test "file, secret and PTY RPCs use exact durable identity even when another node claims its name" do
     if is_nil(Process.whereis(NodeShells)), do: start_supervised!(NodeShells)

@@ -15,7 +15,8 @@ defmodule LemonControlPlane.Methods.ContentScopeAgentsTest do
     Registry
   }
 
-  alias LemonCore.{NodeRegistry, ProfileStore, Store}
+  alias LemonCore.{ProfileStore, Store}
+  alias LemonAgent.NodeRegistry
 
   @prose "The merger closes Friday at 41 dollars per share"
   @unlabelled "PROMPT_SECRET_7Q2X9"

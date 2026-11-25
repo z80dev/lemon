@@ -112,7 +112,7 @@ defmodule CodingAgent.Tools.ConflictsTest do
 
   test "conflict writes retain normal filesystem checkpoints", %{cwd: cwd, opts: opts} do
     File.write!(Path.join(cwd, "file"), @block)
-    on_exit(fn -> LemonCore.Checkpoint.delete_all(opts[:session_id]) end)
+    on_exit(fn -> LemonAgent.Checkpoint.delete_all(opts[:session_id]) end)
 
     result =
       resolve(

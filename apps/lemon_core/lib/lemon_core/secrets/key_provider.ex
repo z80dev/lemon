@@ -11,7 +11,7 @@ defmodule LemonCore.Secrets.KeyProvider do
 
   ## Configuration
 
-      config :lemon_core, LemonCore.Secrets,
+      config :lemon_core, :secrets,
         key_providers: [:keychain, :env, :file],
         key_file: "~/.lemon/secrets_master_key",
         env_var: "LEMON_SECRETS_MASTER_KEY"
@@ -32,8 +32,6 @@ defmodule LemonCore.Secrets.KeyProvider do
   exhausted.
   """
 
-  require Logger
-
   @type opts :: keyword()
 
   @doc "Short name for the provider, used as the `source` in resolve results."
@@ -49,7 +47,7 @@ defmodule LemonCore.Secrets.KeyProvider do
   Writes the encoded master key.
 
   Used by `LemonCore.Secrets.MasterKey.init/1` and by key rotation
-  (`LemonCore.Secrets.KeyRotation`), which passes `force: true` to replace the
+  (the rotation command), which passes `force: true` to replace the
   current key. A replacement must be atomic: a half-written key loses every
   secret. Read-only providers (such as the environment variable) omit it.
   """
@@ -67,13 +65,6 @@ defmodule LemonCore.Secrets.KeyProvider do
 
   @optional_callbacks available?: 1, put: 2, on_invalid: 0
 
-  @builtin %{
-    keychain: __MODULE__.Keychain,
-    env: __MODULE__.Env,
-    file: __MODULE__.File
-  }
-
-  @default_order [:keychain, :env, :file]
   @default_env_var "LEMON_SECRETS_MASTER_KEY"
   @default_key_file_segments [".lemon", "secrets_master_key"]
 
@@ -89,24 +80,6 @@ defmodule LemonCore.Secrets.KeyProvider do
 
       defoverridable available?: 1, on_invalid: 0
     end
-  end
-
-  @spec default_order() :: [atom()]
-  def default_order, do: @default_order
-
-  @doc """
-  Returns the provider modules to try, in order.
-
-  Reads `:key_providers` from `opts` first, then from app env, falling back to
-  the historical order (keychain, then env var, then key file).
-  """
-  @spec order(opts()) :: [module()]
-  def order(opts \\ []) do
-    opts
-    |> option(:key_providers, @default_order)
-    |> List.wrap()
-    |> Enum.map(&translate/1)
-    |> Enum.reject(&is_nil/1)
   end
 
   @spec name(module()) :: atom()
@@ -145,7 +118,7 @@ defmodule LemonCore.Secrets.KeyProvider do
   end
 
   @doc """
-  Looks a setting up in `opts`, then in `config :lemon_core, LemonCore.Secrets`.
+  Looks a setting up in `opts`, then in `config :lemon_core, :secrets`.
   """
   @spec option(opts(), atom(), term()) :: term()
   def option(opts, key, default) do
@@ -183,27 +156,7 @@ defmodule LemonCore.Secrets.KeyProvider do
     end
   end
 
-  defp settings, do: Application.get_env(:lemon_core, LemonCore.Secrets, [])
-
-  defp translate(name) when is_atom(name) do
-    case Map.fetch(@builtin, name) do
-      {:ok, module} ->
-        module
-
-      :error ->
-        if Code.ensure_loaded?(name) do
-          name
-        else
-          Logger.warning("Ignoring unknown secrets key provider: #{inspect(name)}")
-          nil
-        end
-    end
-  end
-
-  defp translate(other) do
-    Logger.warning("Ignoring invalid secrets key provider: #{inspect(other)}")
-    nil
-  end
+  defp settings, do: Application.get_env(:lemon_core, :secrets, [])
 
   defp default_key_file(opts) do
     case home_dir(opts) do

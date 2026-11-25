@@ -1,7 +1,8 @@
 defmodule LemonControlPlane.TuiSessionsWireE2ETest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.{RunStore, SessionLifecycle, Store}
+  alias LemonCore.{RunStore, Store}
+  alias LemonControlPlane.SessionLifecycle
 
   @operator_token "tui-session-wire-operator-token"
 

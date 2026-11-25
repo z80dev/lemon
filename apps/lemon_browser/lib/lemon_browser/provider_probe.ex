@@ -2,7 +2,7 @@ defmodule LemonBrowser.ProviderProbe do
   @moduledoc "Read-only availability checks for the unified browser provider."
 
   alias LemonBrowser.{BackendRegistry, LocalServer}
-  alias LemonCore.BrowserProvider.Command
+  alias LemonBrowser.Provider.Command
   alias LemonCore.Env
 
   @timeout_ms 1_500
@@ -38,7 +38,7 @@ defmodule LemonBrowser.ProviderProbe do
        "Lemon MV3 relay could not be checked; check its port, token and connected extension."}
   end
 
-  # Local failures are fixed atoms, never helper output, so BrowserProvider can
+  # Local failures are fixed atoms, never helper output, so Provider can
   # name the missing prerequisite without exposing paths or probe details.
   # Attach-only configuration forbids launching, so `local` is unavailable then.
   def available?("local") do

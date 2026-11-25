@@ -109,9 +109,7 @@ defmodule LemonCore.Config.ReadmeTest do
       anthropic = Config.Providers.get_provider(config, "anthropic")
       assert anthropic[:api_key] == "sk-test"
 
-      # Test get_api_key/2
-      assert Config.Providers.get_api_key(config, "anthropic") == "sk-test"
-      assert Config.Providers.get_api_key(config, "openai") == "sk-openai"
+      assert Config.Providers.get_provider(config, "openai")[:api_key] == "sk-openai"
 
       # Test list_providers/1
       providers = Config.Providers.list_providers(config)

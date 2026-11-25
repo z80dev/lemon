@@ -198,6 +198,30 @@ defmodule LemonBrowser.Env do
       required?: false,
       area: :browser,
       apps: [:lemon_browser]
+    },
+    %{
+      name: :lemon_browser_provider,
+      env_var: "LEMON_BROWSER_PROVIDER",
+      aliases: [],
+      type: :string,
+      default: "auto",
+      doc: "Browser provider id; auto prefers connected LCU, then relay, then local.",
+      secret?: false,
+      required?: false,
+      area: :tools_browser,
+      apps: [:lemon_browser]
+    },
+    %{
+      name: :lemon_browser_tern,
+      env_var: "LEMON_BROWSER_TERN",
+      aliases: [],
+      type: :boolean,
+      default: true,
+      doc: "Enable native Tern browser integration for locally bound panes.",
+      secret?: false,
+      required?: false,
+      area: :tools_browser,
+      apps: [:lemon_browser]
     }
   ]
 end

@@ -35,7 +35,7 @@ defmodule LemonCore.Store do
   state, policies, memory, chat platforms, or any other domain; typed owners
   such as `LemonCore.ChatStateStore` and `LemonCore.PolicyStore` sit on the
   generic table API, as do owners in other apps (gateway's progress index,
-  channels' Telegram indices). Collaborators attach
+  channels' platform indices). Collaborators attach
   to it instead:
 
     * `:finalize_run_hooks` / `register_finalize_run_hook/2` — notified when any
@@ -249,8 +249,8 @@ defmodule LemonCore.Store do
          ) do
       {:finalized, hooks, payload} ->
         case Hooks.invoke_bounded(hooks, payload, op: :finalize_run, store: server) do
-          :ok -> LemonCore.TerminalOutbox.ack(server, run_id, :projections)
-          {:error, _} -> LemonCore.TerminalOutbox.failed(server, run_id, :projections)
+          :ok -> update_terminal_effect(server, run_id, :projections, :done)
+          {:error, _} -> update_terminal_effect(server, run_id, :projections, :failed)
         end
 
         :ok
@@ -261,6 +261,71 @@ defmodule LemonCore.Store do
   end
 
   def finalize_run(_server, _run_id, _summary), do: {:error, :invalid_summary}
+
+  @terminal_effect_retry_limit 8
+  @terminal_pending :run_terminal_pending
+
+  @doc false
+  def terminal_effect_retry_limit, do: @terminal_effect_retry_limit
+
+  @doc false
+  def terminal_pending(server, run_id) do
+    with {:ok, %{digest: digest}} <- fetch(server, @run_terminals, run_id),
+         {:ok, row} <- fetch(server, @terminal_pending, run_id) do
+      case row do
+        %{digest: ^digest} -> {:ok, row}
+        nil -> {:ok, nil}
+        _ -> {:error, :invalid_terminal_payload}
+      end
+    end
+  end
+
+  @doc false
+  def update_terminal_effect(server \\ __MODULE__, run_id, effect, status),
+    do: update_terminal_effect(server, run_id, effect, status, 3)
+
+  defp update_terminal_effect(_server, _run_id, _effect, _status, 0),
+    do: {:error, :concurrent_update}
+
+  defp update_terminal_effect(server, run_id, effect, status, remaining) do
+    with {:ok, row} when is_map(row) <- terminal_pending(server, run_id) do
+      replacement =
+        case {Map.fetch!(row, effect), status} do
+          {:done, _} -> row
+          {_, :failed} -> row |> Map.put(effect, :failed) |> count_terminal_failure(effect)
+          {_, :done} -> Map.put(row, effect, :done)
+        end
+
+      result =
+        cond do
+          Enum.all?([:notification, :projections, :presentation], &(replacement[&1] == :done)) ->
+            compare_and_delete(server, @terminal_pending, run_id, row)
+
+          replacement == row ->
+            :ok
+
+          true ->
+            compare_and_swap(server, @terminal_pending, run_id, row, replacement, durable: true)
+        end
+
+      case result do
+        {:error, :mismatch} ->
+          update_terminal_effect(server, run_id, effect, status, remaining - 1)
+
+        other ->
+          other
+      end
+    else
+      {:ok, nil} -> :ok
+      error -> error
+    end
+  end
+
+  defp count_terminal_failure(row, effect) do
+    counts = Map.get(row, :failures, %{})
+    count = min(Map.get(counts, effect, 0) + 1, @terminal_effect_retry_limit)
+    Map.put(row, :failures, Map.put(counts, effect, count))
+  end
 
   # Generic Table API (for use by other lemon_* apps)
 

@@ -1,8 +1,8 @@
 defmodule LemonControlPlane.A2A.TaskView do
   @moduledoc false
 
-  alias LemonCore.A2A.Protocol
-  alias LemonCore.A2AStore
+  alias LemonSkills.A2A.Protocol
+  alias LemonSkills.A2AStore
 
   @doc """
   Renders a task with its inbound history, or `{:error, :store_unavailable}`

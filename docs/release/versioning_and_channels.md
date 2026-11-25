@@ -333,4 +333,4 @@ pinned_version = "2026.03.0"
 - `docs/install.md` — one-line installer, `~/.lemon` layout, and uninstall
 - `docs/release/deployment_flows.md` — supported runtime/deployment modes
 - `install.sh` / `scripts/verify_install_script` — installer and its fixture-server verifier
-- `apps/lemon_skills/lib/mix/tasks/lemon.update.ex` — stage-1 source-checkout update task
+- `apps/lemon_cli/lib/mix/tasks/lemon.update.ex` — stage-1 source-checkout update task

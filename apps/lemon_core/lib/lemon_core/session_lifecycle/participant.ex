@@ -1,14 +1,14 @@
 defmodule LemonCore.SessionLifecycle.Participant do
   @moduledoc """
-  Contract for session-keyed state that `LemonCore.SessionLifecycle` deletes
+  Contract for session-keyed state that the product lifecycle service deletes
   or resets together with the session.
 
   Every store keyed by a session key (or reachable only through one session)
   belongs to one owning app. The owner implements this behaviour and registers
   it at application start with `register/3`, naming the operations it takes
   part in (`:delete`, `:reset`). Core-owned state that is not one of the
-  canonical lifecycle stores (session-scoped exec-approval grants) is a
-  built-in participant.
+  canonical lifecycle stores (session-scoped exec-approval grants and run
+  diagnostics) is registered when core starts.
 
   `SessionLifecycle.delete/2` and `reset/2` run every participant registered
   for the operation while holding the session's lifecycle fence:
@@ -64,19 +64,6 @@ defmodule LemonCore.SessionLifecycle.Participant do
   @operations [:delete, :reset]
   @registry_key {__MODULE__, :registry}
   @default_order 50
-  @builtin %{
-    exec_approval_grants: %{
-      module: LemonCore.SessionLifecycle.ExecApprovalGrants,
-      operations: [:delete, :reset],
-      order: 10
-    },
-    run_diagnostics: %{
-      module: LemonCore.SessionLifecycle.RunDiagnostics,
-      operations: [:delete],
-      order: 80
-    }
-  }
-
   @type prepared :: {operation(), [{atom(), module(), snapshot()}]}
 
   @doc """
@@ -108,8 +95,7 @@ defmodule LemonCore.SessionLifecycle.Participant do
   @doc "Participants of `operation` as `{name, module}`, in run order."
   @spec registered(operation()) :: [{atom(), module()}]
   def registered(operation) when operation in @operations do
-    @builtin
-    |> Map.merge(:persistent_term.get(@registry_key, %{}))
+    :persistent_term.get(@registry_key, %{})
     |> Enum.filter(fn {_name, entry} -> operation in entry.operations end)
     |> Enum.sort_by(fn {name, entry} -> {entry.order, name} end)
     |> Enum.map(fn {name, entry} -> {name, entry.module} end)

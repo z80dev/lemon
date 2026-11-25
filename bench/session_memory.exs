@@ -15,7 +15,7 @@ defmodule LemonBench.SessionMemory do
     Application.put_env(:tzdata, :autoupdate, :disabled)
     Application.put_env(:lemon_gateway, :health_enabled, false)
     Application.put_env(:lemon_gateway, :gateway_ingress_enabled, false)
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:file])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:file])
     Application.put_env(:coding_agent, :primary_session, nil)
     Application.put_env(:coding_agent, :process_store_path, Path.join(root, "processes.dets"))
     # Reject any accidental provider/HTTP path instead of falling back to a real service.

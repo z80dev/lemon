@@ -14,7 +14,7 @@ defmodule LemonCli.SecretsCommand do
   alias LemonCli.SecretWriter
   alias LemonCore.Secrets
   alias LemonCore.Secrets.EnvCatalog
-  alias LemonCore.Secrets.KeyRotation
+  alias LemonCli.Secrets.KeyRotation
   alias LemonCore.Secrets.MasterKey
 
   @exit_ok 0
@@ -158,7 +158,7 @@ defmodule LemonCli.SecretsCommand do
         fail(
           "Keychain is unavailable on this system and no key file location could be " <>
             "determined. Set #{MasterKey.env_var()}, or configure " <>
-            "`config :lemon_core, LemonCore.Secrets, key_file: ...`."
+            "`config :lemon_core, :secrets, key_file: ...`."
         )
 
       {:error, :master_key_exists} ->

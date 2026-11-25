@@ -211,7 +211,7 @@ defmodule LemonControlPlane.A2A.PeerScopeTest do
     colliding = "outbound-ctx-#{System.unique_integer([:positive])}"
 
     {:ok, _} =
-      LemonCore.A2AStore.append_message(%{
+      LemonSkills.A2AStore.append_message(%{
         direction: :outbound,
         peer_id: "local",
         context_id: colliding,

@@ -42,10 +42,10 @@ defmodule LemonCli.Onboarding.SignInProvidersTest do
     Runner.ensure_required_apps!()
 
     previous_env = Map.new(@env, &{&1, System.get_env(&1)})
-    previous_secrets = Application.get_env(:lemon_core, LemonCore.Secrets)
+    previous_secrets = Application.get_env(:lemon_core, :secrets)
     previous_req = Req.default_options()
 
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env, :file])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env, :file])
     Enum.each(@env, &System.delete_env/1)
     System.put_env("HOME", home)
     System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
@@ -58,8 +58,8 @@ defmodule LemonCli.Onboarding.SignInProvidersTest do
       Req.Test.set_req_test_to_private(%{})
 
       if previous_secrets,
-        do: Application.put_env(:lemon_core, LemonCore.Secrets, previous_secrets),
-        else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+        do: Application.put_env(:lemon_core, :secrets, previous_secrets),
+        else: Application.delete_env(:lemon_core, :secrets)
 
       Enum.each(previous_env, fn
         {name, nil} -> System.delete_env(name)

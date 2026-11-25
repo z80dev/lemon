@@ -13,7 +13,7 @@ defmodule LemonWeb.ProfileManagementLive do
 
   use LemonWeb, :live_view
 
-  alias LemonCore.NodeRegistry
+  alias LemonAgent.NodeRegistry
   alias LemonWeb.Rpc
 
   @id_regex ~r/^[a-z0-9][a-z0-9_-]{0,63}$/

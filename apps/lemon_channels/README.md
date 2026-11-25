@@ -154,7 +154,7 @@ Telegram HTTP long polls run as monitored, unlinked tasks under the adapter's
 Fetched updates are applied to the current state; drain discards an in-flight
 batch without advancing its offset. Startup probes and poller-lock acquisition
 are deferred to `handle_continue`, leaving `init` probe-free. A supervised lock
-holder uses `LemonCore.Service.Lock` with process identity checks and excludes
+holder uses `LemonCore.FileLock` with process identity checks and excludes
 the same bot token across accounts and OS processes. `LEMON_LOCK_DIR` overrides
 the shared service lock directory (default `~/.lemon/run/service`). Lock age
 never permits stealing from a live process; the old poller stale-ms setting is

@@ -227,10 +227,15 @@ defmodule LemonCore.Doctor.SupportBundle do
   end
 
   defp checkpoint_diagnostics(opts) do
-    LemonCore.Doctor.CheckpointDiagnostics.summary(:operator,
-      checkpoint_dir: Keyword.get(opts, :checkpoint_dir),
+    options = [
+      checkpoint_dir: opts[:checkpoint_dir],
       limit: Keyword.get(opts, :checkpoint_limit, 20)
-    )
+    ]
+
+    probe(runtime_module(:checkpoint_diagnostics), :summary, [:operator, options], %{
+      available: false,
+      error: "checkpoint runtime not available"
+    })
   end
 
   defp cron_diagnostics(opts) do
@@ -304,7 +309,10 @@ defmodule LemonCore.Doctor.SupportBundle do
   end
 
   defp terminal_diagnostics do
-    LemonCore.TerminalBackends.diagnostics()
+    probe(runtime_module(:terminal_backends), :diagnostics, [], %{
+      available: false,
+      error: "terminal runtime not available"
+    })
   end
 
   # Provider configuration shape plus the runtime's presence-mode credential
@@ -363,11 +371,12 @@ defmodule LemonCore.Doctor.SupportBundle do
         if provider_key(name) == provider_key(provider) and is_map(cfg), do: cfg
       end)
 
+    source = LemonCore.Config.Providers.normalize_auth_source(map_value(cfg, :auth_source))
+
     auth_source =
-      case LemonCore.Config.Providers.normalize_auth_source(map_value(cfg, :auth_source)) do
-        value when value in ["api_key", "oauth", "omp", "omp_broker"] -> value
-        _ -> nil
-      end
+      if source in ["api_key", "oauth"] or
+           LemonCore.Config.Providers.AuthExtension.call(:source?, [source], false),
+         do: source
 
     %{
       raw: provider_key(provider),
@@ -490,7 +499,8 @@ defmodule LemonCore.Doctor.SupportBundle do
   defp present_string?(value), do: is_binary(value) and String.trim(value) != ""
 
   defp usage_diagnostics do
-    LemonCore.UsageDiagnostics.status()
+    runtime_module(:usage_diagnostics)
+    |> probe(:status, [], %{available: false, error: "usage runtime not available"})
     |> Map.update(:providers, [], fn providers ->
       Enum.map(providers, &Map.update!(&1, :provider, fn p -> public_provider(p) end))
     end)
@@ -507,7 +517,6 @@ defmodule LemonCore.Doctor.SupportBundle do
   # lists counts, and credential-named fields and header/env containers
   # presence plus count. Keys outside the snake_case schema form are hashed.
   @config_enums %{
-    "auth_source" => ~w(api_key oauth omp omp_broker env),
     "strategy" => ~w(priority round_robin),
     "thinking_level" => ~w(off minimal low medium high xhigh),
     "default_thinking_level" => ~w(off minimal low medium high xhigh),
@@ -573,6 +582,13 @@ defmodule LemonCore.Doctor.SupportBundle do
 
   defp project_value(key, value) when is_binary(value) and key in @config_label_refs,
     do: label(value)
+
+  defp project_value("auth_source", value) when is_binary(value) do
+    if value in ["api_key", "oauth", "env"] or
+         LemonCore.Config.Providers.AuthExtension.call(:source?, [value], false),
+       do: value,
+       else: "other"
+  end
 
   defp project_value(key, value) when is_binary(value) and is_map_key(@config_enums, key),
     do: if(value in Map.fetch!(@config_enums, key), do: value, else: "other")

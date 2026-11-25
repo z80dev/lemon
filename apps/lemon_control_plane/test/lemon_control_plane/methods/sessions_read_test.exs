@@ -4,7 +4,8 @@ defmodule LemonControlPlane.Methods.SessionsReadTest do
   @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
 
   alias LemonControlPlane.Methods.{Registry, SessionDetail, SessionsGet, SessionsHistory}
-  alias LemonCore.{RunStore, SessionLifecycle}
+  alias LemonCore.RunStore
+  alias LemonControlPlane.SessionLifecycle
 
   setup do
     key = "agent:lifecycle_read_#{System.unique_integer([:positive])}:main"

@@ -68,7 +68,7 @@ defmodule LemonSkills.MetadataFile do
     path = Path.expand(path)
 
     with :ok <- SkillRoot.ensure_dir(anchor, Path.dirname(path)) do
-      LemonCore.Service.Lock.with_lock_path(path <> ".lock", [timeout: @lock_wait_ms], fun)
+      LemonCore.FileLock.with_lock_path(path <> ".lock", [timeout: @lock_wait_ms], fun)
     end
   end
 

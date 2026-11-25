@@ -62,7 +62,7 @@ defmodule LemonBrowser.ProviderTest do
 
     for requested <- ["local", "auto"] do
       resolution =
-        LemonCore.BrowserProvider.resolve(
+        LemonBrowser.Provider.resolve(
           provider: requested,
           config: %{},
           probe: ProviderProbe,

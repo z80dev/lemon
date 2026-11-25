@@ -4,7 +4,8 @@ defmodule LemonControlPlane.Methods.ProfilesSyncTest do
   alias LemonControlPlane.Methods.{ProfilesSync, ProfilesSyncStatus}
   alias CodingAgent.ExecutionNode.ProfileSync
   alias LemonControlPlane.NodeStore
-  alias LemonCore.{NodeRegistry, ProfileSnapshot, ProfileStore}
+  alias LemonCore.{ProfileSnapshot, ProfileStore}
+  alias LemonAgent.NodeRegistry
 
   setup do
     root =

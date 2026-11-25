@@ -13,8 +13,9 @@ defmodule LemonSkills.Tools.Peer do
   alias LemonAgent.AbortSignal
   alias LemonAgent.Security.ExternalContent
   alias LemonAgent.Types.AgentTool
-  alias LemonCore.A2A.{Client, Protocol}
-  alias LemonCore.{A2AStore, Secrets}
+  alias LemonSkills.A2A.{Client, Protocol}
+  alias LemonCore.{Secrets}
+  alias LemonSkills.A2AStore
 
   @actions ~w(list discover message new history status cancel)
 

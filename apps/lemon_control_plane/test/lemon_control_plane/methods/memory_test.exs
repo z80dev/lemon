@@ -4,7 +4,8 @@ defmodule LemonControlPlane.Methods.MemoryTest do
   alias LemonControlPlane.Methods.{MemoryAdd, MemoryDelete, MemoryGet, MemoryList, MemorySearch}
   alias LemonControlPlane.Methods.Registry
   alias LemonControlPlane.Protocol.Schemas
-  alias LemonCore.{NodeRegistry, ProfileStore}
+  alias LemonCore.ProfileStore
+  alias LemonAgent.NodeRegistry
   alias LemonMemory.Store
 
   @moduletag :tmp_dir

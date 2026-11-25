@@ -1,9 +1,9 @@
 defmodule LemonChannels.Telegram.PollerLock do
   @moduledoc """
-  Token-scoped poller exclusion using the shared service identity lock.
+  Token-scoped poller exclusion using the shared filesystem lock.
 
   A supervised holder monitors the transport, releasing the lock even when the
-  transport is killed. Separate OS processes share the service lock directory.
+  transport is killed. Separate OS processes use the same lock directory.
   """
 
   @supervisor LemonChannels.Adapters.Telegram.AsyncSupervisor
@@ -54,16 +54,20 @@ defmodule LemonChannels.Telegram.PollerLock do
     result =
       LemonCore.TaskSupervisor.start_child(@supervisor, fn ->
         monitor = Process.monitor(owner)
+        dir = lock_dir()
 
         result =
-          LemonCore.Service.Lock.with_lock(label(token), lock_options(), fn ->
-            send(owner, {ref, :ok})
+          with :ok <- File.mkdir_p(dir),
+               :ok <- File.chmod(dir, 0o700) do
+            LemonCore.FileLock.with_lock_path(Path.join(dir, label(token) <> ".lock"), [], fn ->
+              send(owner, {ref, :ok})
 
-            receive do
-              {:release, ^ref} -> :ok
-              {:DOWN, ^monitor, :process, ^owner, _} -> :ok
-            end
-          end)
+              receive do
+                {:release, ^ref} -> :ok
+                {:DOWN, ^monitor, :process, ^owner, _} -> :ok
+              end
+            end)
+          end
 
         if result != :ok, do: send(owner, {ref, {:error, :locked}})
       end)
@@ -93,10 +97,10 @@ defmodule LemonChannels.Telegram.PollerLock do
     :exit, _ -> {:error, :locked}
   end
 
-  defp lock_options do
+  defp lock_dir do
     case System.get_env("LEMON_LOCK_DIR") do
-      dir when is_binary(dir) and dir != "" -> [run_dir: dir]
-      _ -> []
+      dir when is_binary(dir) and dir != "" -> dir
+      _ -> Path.join([System.user_home!(), ".lemon", "run", "service"])
     end
   end
 

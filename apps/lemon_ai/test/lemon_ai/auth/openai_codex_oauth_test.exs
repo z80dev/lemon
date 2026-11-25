@@ -5,13 +5,13 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
   alias LemonCore.{Secrets, Store}
 
   setup do
-    previous_secrets_config = Application.get_env(:lemon_core, LemonCore.Secrets)
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env, :file])
+    previous_secrets_config = Application.get_env(:lemon_core, :secrets)
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env, :file])
 
     on_exit(fn ->
       if previous_secrets_config,
-        do: Application.put_env(:lemon_core, LemonCore.Secrets, previous_secrets_config),
-        else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+        do: Application.put_env(:lemon_core, :secrets, previous_secrets_config),
+        else: Application.delete_env(:lemon_core, :secrets)
     end)
 
     home = Path.join(System.tmp_dir!(), "codex_import_#{System.unique_integer([:positive])}")

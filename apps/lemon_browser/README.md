@@ -91,7 +91,7 @@ Authorization and unavailable-backend refusals happen before that dispatch recor
 
 ### Native Tern browser
 
-The `tern` backend uses `LemonCore.Tern`'s daemon browser channel, not Node,
+The `tern` backend uses `LemonBrowser.Tern`'s daemon browser channel, not Node,
 Playwright, Chrome, CDP, or a subprocess. Requests require an exact `session_id`,
 optional `run_id`, and integer `tern_pane` binding. Availability probes only the
 daemon's browser handshake and respects the Tern configuration/opt-out.

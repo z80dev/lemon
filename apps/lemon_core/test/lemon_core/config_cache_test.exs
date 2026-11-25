@@ -25,7 +25,7 @@ defmodule LemonCore.ConfigCacheTest do
 
     # Ensure the cache is started
     if !ConfigCache.available?() do
-      {:ok, _pid} = ConfigCache.start_link([])
+      {:ok, _pid} = ConfigCache.start_link(load_base: &LemonCore.Config.load_base_from_disk/1)
     end
 
     on_exit(fn ->

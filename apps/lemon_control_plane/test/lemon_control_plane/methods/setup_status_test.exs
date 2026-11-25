@@ -6,12 +6,12 @@ defmodule LemonControlPlane.Methods.SetupStatusTest do
 
   setup do
     previous_fun = Application.fetch_env(:lemon_control_plane, :setup_status_fun)
-    previous_secrets = Application.fetch_env(:lemon_core, LemonCore.Secrets)
+    previous_secrets = Application.fetch_env(:lemon_core, :secrets)
     previous_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
     previous_openai = System.get_env("OPENAI_API_KEY")
     path = Path.join(System.tmp_dir!(), "setup_status_#{System.unique_integer([:positive])}.toml")
 
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env])
     System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
     System.delete_env("OPENAI_API_KEY")
 
@@ -21,7 +21,7 @@ defmodule LemonControlPlane.Methods.SetupStatusTest do
 
     on_exit(fn ->
       restore_env(:lemon_control_plane, :setup_status_fun, previous_fun)
-      restore_env(:lemon_core, LemonCore.Secrets, previous_secrets)
+      restore_env(:lemon_core, :secrets, previous_secrets)
       restore_system_env("LEMON_SECRETS_MASTER_KEY", previous_key)
       restore_system_env("OPENAI_API_KEY", previous_openai)
       File.rm(path)

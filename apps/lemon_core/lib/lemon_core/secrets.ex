@@ -11,14 +11,14 @@ defmodule LemonCore.Secrets do
   system keychain, environment variable, key file, or a provider you supply —
   is configurable; see `LemonCore.Secrets.KeyProvider`.
 
-      config :lemon_core, LemonCore.Secrets,
+      config :lemon_core, :secrets,
         key_providers: [:keychain, :env, :file],
         key_file: "~/.lemon/secrets_master_key",
         env_var: "LEMON_SECRETS_MASTER_KEY"
 
   ## Key rotation
 
-  `LemonCore.Secrets.KeyRotation` replaces the master key and re-encrypts
+  An operator-initiated key rotation replaces the master key and re-encrypts
   every stored secret under it (`lemon secrets rotate-key`). It previews first
   and applies only with the preview's confirmation token, refuses to touch
   anything when a stored secret does not decrypt with the current key, refuses
@@ -40,16 +40,16 @@ defmodule LemonCore.Secrets do
     Crypto,
     External,
     KeyCheck,
-    KeyRotation,
     Lock,
     MasterKey,
     Receipts,
+    Record,
     Usage
   }
 
   alias LemonCore.Store
 
-  @table :secrets_v1
+  @table Record.table()
   @default_owner "default"
   @default_provider "manual"
 
@@ -165,7 +165,7 @@ defmodule LemonCore.Secrets do
         fn ->
           with {:ok, entry} <- Store.fetch(server, @table, {owner, name}),
                true <-
-                 (value_entry?(entry || %{}) and get_field(entry, :incarnation) == incarnation) ||
+                 (Record.value?(entry || %{}) and get_field(entry, :incarnation) == incarnation) ||
                    {:error, :stale_revision},
                {:ok, rows} <- fetch_receipt_rows(server),
                {:ok, _} <- Receipts.find(rows, owner, nil, nil) do
@@ -263,7 +263,7 @@ defmodule LemonCore.Secrets do
       Map.merge(result, %{
         operation_id: opts[:operation_id],
         status: "applied",
-        current_binding_matches: not expired_entry?(record)
+        current_binding_matches: not Record.expired?(record)
       })
     else
       result
@@ -277,17 +277,9 @@ defmodule LemonCore.Secrets do
   end
 
   defp fetch_receipt_rows(server) do
-    case fetch_secret_rows(server) do
+    case Record.fetch_rows(server) do
       {:ok, rows} -> {:ok, rows}
       {:error, _} -> {:error, :secret_store_failed}
-    end
-  end
-
-  @doc false
-  # Every secret row; the store's key verifier row is not a secret.
-  def fetch_secret_rows(server \\ Store) do
-    with {:ok, rows} <- Store.fetch_all(server, @table) do
-      {:ok, Enum.reject(rows, fn {key, _entry} -> KeyCheck.reserved?(key) end)}
     end
   end
 
@@ -377,7 +369,7 @@ defmodule LemonCore.Secrets do
          {:ok, server} <- storage_owner(opts),
          {:ok, entry} <- fetch_active_entry(server, owner, name),
          {:ok, entry, plaintext} <- decrypt_entry(server, owner, name, entry, opts) do
-      if expired_entry?(entry) do
+      if Record.expired?(entry) do
         {:error, :expired}
       else
         revision = entry_revision(server, owner, name, entry)
@@ -405,7 +397,7 @@ defmodule LemonCore.Secrets do
         is_nil(entry) or Receipts.receipt_only?(entry) ->
           {:error, :not_found}
 
-        not value_entry?(entry) ->
+        not Record.value?(entry) ->
           {:error, :invalid_secret_record}
 
         true ->
@@ -505,7 +497,7 @@ defmodule LemonCore.Secrets do
   defp swap_revision(server, owner, name, revision, entry, record) do
     # Key resolution may have blocked since the active-entry read. Recheck
     # immediately before every CAS, including retries after usage touches.
-    if expired_entry?(entry) do
+    if Record.expired?(entry) do
       {:error, :stale_revision}
     else
       case Store.compare_and_swap(server, @table, {owner, name}, entry, record) do
@@ -641,6 +633,12 @@ defmodule LemonCore.Secrets do
       resolve_from_store_local(name, env_fallback, opts)
     end
   end
+
+  @doc "Reports redacted external-source readiness without running a helper."
+  def external_status(opts \\ []), do: External.status(opts, &resolve_local(&1, opts))
+
+  @doc "Runs enabled external sources and returns only redacted metadata."
+  def test_external(opts \\ []), do: External.test(opts, &resolve_local(&1, opts))
 
   @spec exists?(name(), keyword()) :: boolean()
   def exists?(name, opts \\ []) do
@@ -839,7 +837,7 @@ defmodule LemonCore.Secrets do
     with {:ok, owner} <- normalize_owner(opts),
          {:ok, server} <- storage_owner(opts),
          :ok <- Usage.flush(),
-         {:ok, rows} <- fetch_secret_rows(server),
+         {:ok, rows} <- Record.fetch_rows(server),
          {:ok, _} <- Receipts.find(rows, owner, nil, nil) do
       rows
       |> Enum.reduce_while({:ok, []}, fn
@@ -848,10 +846,10 @@ defmodule LemonCore.Secrets do
             Receipts.receipt_only?(entry) ->
               {:cont, {:ok, acc}}
 
-            not value_entry?(entry) ->
+            not Record.value?(entry) ->
               {:halt, {:error, :invalid_secret_record}}
 
-            expired_entry?(entry) ->
+            Record.expired?(entry) ->
               case remove_expired(server, record_owner, name, entry) do
                 :ok -> {:cont, {:ok, acc}}
                 {:error, _reason} = error -> {:halt, error}
@@ -939,7 +937,7 @@ defmodule LemonCore.Secrets do
   defp store_miss?(_reason, _opts), do: false
 
   defp resolve_after_store(name, store_reason, true, env_fallback, opts) do
-    case External.resolve(name, opts) do
+    case External.resolve(name, opts, &resolve_local(&1, opts)) do
       {:ok, value, provenance} -> {:ok, value, provenance}
       {:error, :not_found} -> maybe_resolve_env(name, store_reason, env_fallback, opts)
       {:error, reason} -> {:error, {:external_source, reason}}
@@ -990,12 +988,12 @@ defmodule LemonCore.Secrets do
   end
 
   defp legacy_decrypt_failure(server, master_key) do
-    case fetch_secret_rows(server) do
+    case Record.fetch_rows(server) do
       {:ok, rows} ->
         opens_any? =
           Enum.any?(rows, fn {_ref, entry} ->
-            is_map(entry) and value_entry?(entry) and
-              match?({:ok, _}, KeyRotation.decrypt(entry, master_key))
+            is_map(entry) and Record.value?(entry) and
+              match?({:ok, _}, Record.decrypt(entry, master_key))
           end)
 
         if opens_any?, do: {:error, :decrypt_failed}, else: {:error, :master_key_mismatch}
@@ -1010,7 +1008,7 @@ defmodule LemonCore.Secrets do
   # reuse an old ciphertext with the newly published key or touch a replacement.
   defp decrypt_entry(server, owner, name, entry, opts) do
     with {:ok, master_key, _source} <- MasterKey.resolve_cached(opts),
-         {:ok, plaintext} <- KeyRotation.decrypt(entry, master_key) do
+         {:ok, plaintext} <- Record.decrypt(entry, master_key) do
       {:ok, entry, plaintext}
     else
       {:error, :decrypt_failed} ->
@@ -1021,7 +1019,7 @@ defmodule LemonCore.Secrets do
           {:ok, current} when is_map(current) ->
             cond do
               Receipts.receipt_only?(current) -> {:error, :not_found}
-              not value_entry?(current) -> {:error, :invalid_secret_record}
+              not Record.value?(current) -> {:error, :invalid_secret_record}
               true -> decrypt_entry(server, owner, name, current, opts)
             end
 
@@ -1048,8 +1046,8 @@ defmodule LemonCore.Secrets do
       {:ok, entry} when is_map(entry) ->
         cond do
           Receipts.receipt_only?(entry) -> {:error, :not_found}
-          not value_entry?(entry) -> {:error, :invalid_secret_record}
-          expired_entry?(entry) -> {:error, :expired}
+          not Record.value?(entry) -> {:error, :invalid_secret_record}
+          Record.expired?(entry) -> {:error, :expired}
           true -> {:ok, entry}
         end
 
@@ -1063,19 +1061,10 @@ defmodule LemonCore.Secrets do
 
   defp remove_value(server, owner, name, entry) do
     if Receipts.entries(entry) != [] do
-      Store.compare_and_swap(server, @table, {owner, name}, entry, receipt_only_entry(entry))
+      Store.compare_and_swap(server, @table, {owner, name}, entry, Receipts.tombstone(entry))
     else
       Store.compare_and_delete_many(server, [{@table, {owner, name}, entry}])
     end
-  end
-
-  @doc false
-  def value_entry?(entry) when is_map(entry), do: is_binary(get_field(entry, :ciphertext))
-  def value_entry?(_), do: false
-
-  @doc false
-  def receipt_only_entry(entry) do
-    %{receipts: Receipts.entries(entry)}
   end
 
   defp metadata(owner, name, entry) do
@@ -1090,14 +1079,6 @@ defmodule LemonCore.Secrets do
       updated_at: get_field(entry, :updated_at) || 0,
       version: get_field(entry, :version) || Crypto.version()
     }
-  end
-
-  @doc false
-  @spec expired_entry?(map()) :: boolean()
-  def expired_entry?(entry) do
-    expires_at = get_field(entry, :expires_at)
-
-    is_integer(expires_at) and expires_at > 0 and expires_at <= Clock.now_ms()
   end
 
   defp fetch_env(name, opts) do

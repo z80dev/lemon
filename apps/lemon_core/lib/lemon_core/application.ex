@@ -8,7 +8,6 @@ defmodule LemonCore.Application do
   - The `LemonCore.Bus` backend - Phoenix.PubSub, or a Registry when
     `phoenix_pubsub` is not available
   - `LemonCore.ACPClientBridge` - Registry for direct ACP client request/reply
-  - `LemonCore.NodeRegistry` - Socket-owned Registry and temporary invocation supervisors
   - `LemonCore.RuntimeCache` - Supervised runtime metadata and hook registrations
   - `LemonCore.Dedupe.Supervisor` - Supervises each named deduplication table owner
   - LemonCore.ConfigCache - Configuration caching service
@@ -17,7 +16,6 @@ defmodule LemonCore.Application do
     admission, checked against session lifecycle fences and rebuilt from
     surviving owners when it restarts
   - `LemonCore.Secrets.Usage` - Batched asynchronous secret usage metadata
-  - `LemonCore.UsageLedger` - Serialized per-run usage/cost aggregation (finalize-run hook)
   - `LemonCore.RuntimeOwner` - Holds the cross-VM ownership lock of a
     file-backed store; only its holder reconciles other runtimes' records
   - `LemonCore.TerminalOutbox` - Replays durable run-completion projections
@@ -61,8 +59,9 @@ defmodule LemonCore.Application do
     `ConfigCache`, `Store` and the secrets helpers: what the published
     packages (`lemon_ai`, `lemon_agent`, `lemon_memory`) need.
   - `:runtime_control` - the assistant runtime's control services: `Drain`,
-    `ACPClientBridge`, `NodeRegistry`, `RuntimeOwner`, `SessionActivity`,
-    `TerminalOutbox`, `UsageLedger`, `ExecApprovalExpiry` and the config reloader.
+    `ACPClientBridge`, `RuntimeOwner`, `SessionActivity`,
+    `TerminalOutbox`, `ExecApprovalExpiry`, the config reloader and product
+    runtime children supplied by the composition.
   - `:run_history` - `RunHistoryStore` (needs the optional `:exqlite`).
 
   A library consumer that only uses the agent and store APIs selects
@@ -82,6 +81,8 @@ defmodule LemonCore.Application do
   - `:lemon_core, :services` - The service groups to start (see above)
   - `:lemon_core, :required_capabilities` - Capabilities checked at boot
   - `:lemon_core, LemonCore.ConfigCache` - Options passed to ConfigCache
+  - `:lemon_core, :runtime_control_children` - Additional supervised child
+    specifications provided by the product, after Store ownership is acquired.
   - `:lemon_core, :logging` - File logging configuration (optional)
   - `:lemon_core, :logger` - `:logger` handlers to attach at boot (e.g. the
     Sentry error-reporting handler; see `docs/error-reporting.md`). Empty
@@ -123,7 +124,24 @@ defmodule LemonCore.Application do
     _ = LemonCore.ExecApprovalExpiry.init_runtime_id()
     # Captures this OS process's identity once for every lock acquisition and
     # logs an error when `ps` (needed to verify other holders) is missing.
-    _ = LemonCore.Service.Identity.boot_check()
+    _ = LemonCore.ProcessIdentity.boot_check()
+
+    :ok =
+      LemonCore.SessionLifecycle.Participant.register(
+        :exec_approval_grants,
+        LemonCore.SessionLifecycle.ExecApprovalGrants,
+        operations: [:delete, :reset],
+        order: 10
+      )
+
+    :ok =
+      LemonCore.SessionLifecycle.Participant.register(
+        :run_diagnostics,
+        LemonCore.SessionLifecycle.RunDiagnostics,
+        operations: [:delete],
+        order: 80
+      )
+
     mode = boot_mode()
     groups = service_groups()
 
@@ -208,7 +226,11 @@ defmodule LemonCore.Application do
 
   defp grouped_children(mode, groups) do
     runtime? = mode == :runtime
-    config_cache_opts = Application.get_env(:lemon_core, LemonCore.ConfigCache, [])
+
+    config_cache_opts =
+      :lemon_core
+      |> Application.get_env(LemonCore.ConfigCache, [])
+      |> Keyword.put(:load_base, &LemonCore.Config.load_base_from_disk/1)
 
     store =
       case mode do
@@ -226,17 +248,17 @@ defmodule LemonCore.Application do
       if(runtime?, do: [runtime_control: LemonCore.Drain], else: []) ++
       [
         runtime_control: LemonCore.ACPClientBridge,
-        runtime_control: LemonCore.NodeRegistry,
         core: {LemonCore.ConfigCache, config_cache_opts},
         core: store
       ] ++
       owner_children(mode) ++
+      runtime_control_children(groups) ++
       if(runtime?, do: [runtime_control: LemonCore.TerminalOutbox], else: []) ++
       [
         runtime_control: LemonCore.SessionActivity,
         core: LemonCore.Secrets.Usage,
-        runtime_control: LemonCore.UsageLedger,
-        runtime_control: {LemonCore.ExecApprovalExpiry, recover: runtime?},
+        runtime_control:
+          {LemonCore.ExecApprovalExpiry, recover: runtime?, approvals: LemonCore.ExecApprovals},
         core: LemonCore.TaskSupervisor.child_spec(name: LemonCore.Secrets.SourceTaskSupervisor),
         core: LemonCore.Secrets.SourceCache
       ] ++
@@ -248,6 +270,15 @@ defmodule LemonCore.Application do
         ],
         else: []
       )
+  end
+
+  defp runtime_control_children(groups) do
+    if :runtime_control in groups do
+      for child <- Application.get_env(:lemon_core, :runtime_control_children, []),
+          do: {:runtime_control, child}
+    else
+      []
+    end
   end
 
   # The ownership process starts before every other store writer. A writable

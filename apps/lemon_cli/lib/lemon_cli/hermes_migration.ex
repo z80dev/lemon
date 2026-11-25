@@ -73,7 +73,7 @@ defmodule LemonCli.HermesMigration do
   Refuses while a Lemon runtime uses the target and holds the restore
   lifecycle locks for the whole run, so no runtime, restore or other migration
   can write the target meanwhile. With `backup: true` an existing target is
-  first snapshotted with `LemonCore.Backup.create/1`; the bundle path is
+  first snapshotted with `LemonCli.Backup.create/1`; the bundle path is
   reported as `"backup"`. A refusal returns a report with `"error"` set and
   nothing written.
   """
@@ -81,7 +81,7 @@ defmodule LemonCli.HermesMigration do
     target = target_root(opts)
 
     result =
-      LemonCore.Backup.with_offline_target(target, offline_opts(opts), fn ->
+      LemonCli.Backup.with_offline_target(target, offline_opts(opts), fn ->
         with {:ok, bundle} <- pre_migration_backup(target, opts) do
           {:ok, run(opts |> Keyword.put(:execute, true) |> Keyword.put(:backup_bundle, bundle))}
         end
@@ -99,7 +99,7 @@ defmodule LemonCli.HermesMigration do
 
   defp pre_migration_backup(target, opts) do
     if Keyword.get(opts, :backup, false) and File.dir?(target) do
-      case LemonCore.Backup.create(paths_opts: [home_state_dir: target]) do
+      case LemonCli.Backup.create(paths_opts: [home_state_dir: target]) do
         {:ok, %{path: bundle}} -> {:ok, bundle}
         {:error, reason} -> {:error, {:backup_failed, reason}}
       end
@@ -315,7 +315,7 @@ defmodule LemonCli.HermesMigration do
     with {:ok, body} <- File.read(Path.join(report_dir, "report.json")),
          {:ok, %{"target" => target}} when is_binary(target) <- Jason.decode(body),
          {:ok, report} <-
-           LemonCore.Backup.with_offline_target(target, offline_opts(opts), fn ->
+           LemonCli.Backup.with_offline_target(target, offline_opts(opts), fn ->
              {:ok, do_rollback(report_dir)}
            end) do
       report
@@ -1975,8 +1975,8 @@ defmodule LemonCli.HermesMigration do
         store_identity()
 
       {_backend, db} ->
-        physical = LemonCore.Backup.physical_path(db)
-        target = LemonCore.Backup.physical_path(ctx.target_root)
+        physical = LemonCli.Backup.physical_path(db)
+        target = LemonCli.Backup.physical_path(ctx.target_root)
         relative = Path.relative_to(physical, target)
 
         cond do
@@ -2006,7 +2006,7 @@ defmodule LemonCli.HermesMigration do
   defp store_identity do
     case LemonCore.Store.location() do
       {_backend, nil} -> {:ok, "memory:" <> inspect(Process.whereis(LemonCore.Store))}
-      {_backend, db} -> {:ok, "sqlite:" <> LemonCore.Backup.physical_path(db)}
+      {_backend, db} -> {:ok, "sqlite:" <> LemonCli.Backup.physical_path(db)}
     end
   end
 
@@ -2155,7 +2155,7 @@ defmodule LemonCli.HermesMigration do
     db = Path.join(ctx.store_dir, "memory.sqlite3")
     append_journal!(ctx, %{"op" => "database", "path" => db, "existed" => File.exists?(db)})
 
-    # Migration runs offline (`LemonCore.Backup.with_offline_target/3` refuses
+    # Migration runs offline (`LemonCli.Backup.with_offline_target/3` refuses
     # while a runtime uses the target), so this is the only memory writer. Each
     # document is confirmed; a timed-out write may still land, so it is
     # reported as outcome_unknown rather than migrated or failed.

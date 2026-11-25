@@ -16,12 +16,12 @@ defmodule LemonCore.PersistentTermHygieneTest do
     "apps/lemon_agent/lib/lemon_agent/security/external_content.ex" => [:init_key],
     "apps/lemon_agent/lib/lemon_agent/security/untrusted_tool_boundary.ex" => [:init_key],
     "apps/lemon_agent/lib/lemon_agent/tool_registry.ex" => [:put],
+    "apps/lemon_browser/lib/lemon_browser/provider.ex" => [:put_computer_use_enabled],
     "apps/lemon_browser/lib/lemon_browser/registry.ex" => [:put_runtime],
     "apps/lemon_channels/lib/lemon_channels/registry.ex" => [:init, :publish_plugins],
     "apps/lemon_channels/lib/lemon_channels/inbound_http/routes.ex" => [:init, :handle_call],
     "apps/lemon_gateway/lib/lemon_gateway/transport_registry.ex" => [:init],
     "apps/lemon_core/lib/lemon_core/config_cache.ex" => [:init],
-    "apps/lemon_core/lib/lemon_core/browser_provider.ex" => [:put_computer_use_enabled],
     "apps/lemon_core/lib/lemon_core/bus.ex" => [:child_spec_for_backend],
     "apps/lemon_core/lib/lemon_core/exec_approval_expiry.ex" => [:init_runtime_id],
     # Session lifecycle participants register once at each owning app's start.
@@ -30,7 +30,7 @@ defmodule LemonCore.PersistentTermHygieneTest do
     # trip survives a restart of the latch's own process.
     "apps/lemon_core/lib/lemon_core/runtime_latch.ex" => [:record_trip],
     # This OS process's identity and uid, published once at application boot.
-    "apps/lemon_core/lib/lemon_core/service/identity.ex" => [:boot_check],
+    "apps/lemon_core/lib/lemon_core/process_identity.ex" => [:boot_check],
     "apps/lemon_skills/lib/lemon_skills/curator_references.ex" => [:register],
     "apps/lemon_skills/lib/lemon_skills/skill_root.ex" => [:init_uid]
   }

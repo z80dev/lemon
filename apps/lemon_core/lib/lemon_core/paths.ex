@@ -80,15 +80,26 @@ defmodule LemonCore.Paths do
     Path.join([home_state_dir(opts) | List.wrap(segments)])
   end
 
-  @doc """
-  The operator's agent-directory override shared by every app that resolves
-  `~/.lemon/agent`: `LEMON_AGENT_DIR`, then `config :lemon_core, :agent_dir`.
-  Returns nil when neither is set; callers apply their own default.
-  """
+  @doc "Non-blank agent-directory override: `LEMON_AGENT_DIR`, then `config :lemon_core, :agent_dir`."
   @spec agent_dir_override() :: String.t() | nil
   def agent_dir_override do
-    System.get_env("LEMON_AGENT_DIR") || Application.get_env(:lemon_core, :agent_dir)
+    non_blank_agent_dir(System.get_env("LEMON_AGENT_DIR")) ||
+      non_blank_agent_dir(Application.get_env(:lemon_core, :agent_dir))
   end
+
+  @doc "Assistant home workspace. Project config and repository loaders never enter it."
+  @spec assistant_home() :: String.t()
+  def assistant_home do
+    (agent_dir_override() || home_path("agent"))
+    |> Path.join("workspace")
+    |> Path.expand()
+  end
+
+  defp non_blank_agent_dir(value) when is_binary(value) do
+    if String.trim(value) != "", do: value
+  end
+
+  defp non_blank_agent_dir(_), do: nil
 
   @doc """
   A path inside a project's state directory.

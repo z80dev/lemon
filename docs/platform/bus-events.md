@@ -250,7 +250,7 @@ The busiest topic and the only one whose subscribers span the umbrella.
 | `:run_failed` (typed) | `LemonRouter.RunProcess` (abnormal termination) | `Events.RunFailed` (`run_id`, `session_key`, `reason`) |
 | `:engine_action` (typed) | `LemonRouter.RunProcess`; `CodingAgent.TaskRuntime.Child` and `TaskRuntime.Async` for projected child actions; `LemonCore.Event.engine_reasoning/1` | `Events.EngineAction` wrapping `Events.Action` |
 | `:engine_started`, `:engine_completed`, `:engine_event` | `LemonRouter.RunProcess` (native executor events) | Native executor lifecycle projection; `:engine_event` is unregistered |
-| `:checkpoint_created` / `_restored` / `_deleted` | `LemonCore.Checkpoint`; remote ones relayed by `LemonRouter.RunProcess` | map (checkpoint id/kind, tool, action, path counts) — also on `session:<key>` (not registered) |
+| `:checkpoint_created` / `_restored` / `_deleted` | `LemonAgent.Checkpoint`; remote ones relayed by `LemonRouter.RunProcess` | map (checkpoint id/kind, tool, action, path counts) — also on `session:<key>` (not registered) |
 | `:task_started` / `_completed` / `_error` / `_timeout` / `_aborted` | `CodingAgent.TaskRuntime.Async` | map (`task_id`, `run_id`, `parent_run_id`, `session_key`, `agent_id`, …); published to the child run and the parent run |
 | `:run_graph_changed` | `CodingAgent.RunGraphServer` | map (`run_id`, `parent_run_id`, `session_key`, `status`, …); child and parent run topics |
 | `:parent_question_*` | `CodingAgent.ParentQuestions` | full question record; child and parent run topics (also `parent_question:<id>`, §2.9) |
@@ -305,7 +305,7 @@ run-token messages with one lifecycle subscription after more than 100 starts.
 
 Named-node `coding_agent.run` executions retain the same run/session Bus contract.
 Workers forward sequenced, bounded JSON frames via the node-only
-`node.invoke.event` method. Each temporary `LemonCore.NodeInvocation` authorizes
+`node.invoke.event` method. Each temporary `LemonAgent.NodeInvocation` authorizes
 its live connection/generation, rejects gaps and deduplicates accepted sequences.
 Frames call that invocation process directly rather than a singleton broker.
 The authenticated socket owns its unique node-ID Registry entry, which is
@@ -329,7 +329,7 @@ source file `apps/lemon_control_plane/README.md`, under “Live named-node runs�
 | Event type | Publisher | Payload |
 |---|---|---|
 | everything forwarded from `run:*` | `LemonRouter.RunProcess` | unchanged from source |
-| `:checkpoint_*` | `LemonCore.Checkpoint` | as §2.1 |
+| `:checkpoint_*` | `LemonAgent.Checkpoint` | as §2.1 |
 | `:goal_*` | `LemonAutomation.GoalStore` | `Events.GoalChanged` (also on `goals`) |
 | `:run_completed` (cron summary) | `LemonAutomation.CronManager` | `Events.RunCompleted`, `meta.origin == :cron` |
 | `:stream_resync` | `LemonRouter.CoalescerIngress` after bounded-ingress overflow | `%{reason: :overflow}` (not registered) |

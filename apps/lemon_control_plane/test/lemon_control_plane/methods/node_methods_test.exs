@@ -45,8 +45,8 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
 
     test "delivers a live result to the recipient without persisting it" do
       node_id = "node-result-#{System.unique_integer([:positive])}"
-      :ok = LemonCore.NodeRegistry.register(node_id, node_id, self())
-      on_exit(fn -> LemonCore.NodeRegistry.unregister(node_id, self()) end)
+      :ok = LemonAgent.NodeRegistry.register(node_id, node_id, self())
+      on_exit(fn -> LemonAgent.NodeRegistry.unregister(node_id, self()) end)
       ctx = %{auth: %{role: :node, client_id: node_id}, conn_pid: self()}
 
       for {params, expected} <- [
@@ -54,7 +54,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
             {%{"error" => "Something went wrong"}, {:error, {:remote, "Something went wrong"}}}
           ] do
         assert {:ok, invoke_id} =
-                 LemonCore.NodeRegistry.invoke_node(node_id, "test", %{}, recipient: self())
+                 LemonAgent.NodeRegistry.invoke_node(node_id, "test", %{}, recipient: self())
 
         assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
 

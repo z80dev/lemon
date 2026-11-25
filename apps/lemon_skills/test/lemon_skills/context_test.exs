@@ -2,7 +2,6 @@ defmodule LemonSkills.ContextTest do
   use ExUnit.Case, async: false
 
   alias LemonSkills.Context
-  alias LemonCore.{RunStore, SessionLifecycle}
 
   setup do
     root =
@@ -77,7 +76,7 @@ defmodule LemonSkills.ContextTest do
     assert Enum.any?(result.omissions, &(&1.reason == "symlink"))
   end
 
-  test "resolves git diff without a shell", %{root: root} do
+  test "resolves git diff without a shell, textconv or fsmonitor", %{root: root} do
     System.cmd("git", ["init", "-q", root])
     File.write!(Path.join(root, "tracked.txt"), "one\n")
     System.cmd("git", ["-C", root, "add", "tracked.txt"])
@@ -94,10 +93,17 @@ defmodule LemonSkills.ContextTest do
       "base"
     ])
 
+    marker = Path.join(root, "program-ran")
+    textconv = git_config_program!(root, "textconv", marker, ~s(cat "$1"))
+    fsmonitor = git_config_program!(root, "fsmonitor", marker, "exit 1")
+    {_, 0} = System.cmd("git", ["-C", root, "config", "diff.evil.textconv", textconv])
+    {_, 0} = System.cmd("git", ["-C", root, "config", "core.fsmonitor", fsmonitor])
+    File.write!(Path.join(root, ".git/info/attributes"), "* diff=evil\n")
     File.write!(Path.join(root, "tracked.txt"), "two\n")
 
     assert {:ok, result} = Context.resolve("@git-diff", root: root)
     assert result.selected_text =~ "+two"
+    refute File.exists?(marker), "@git-diff ran a program named by repository config"
 
     assert {:ok, rejected} = Context.resolve("@git-diff:--output=/tmp/owned", root: root)
     assert [%{reason: "invalid_git_ref"}] = rejected.omissions
@@ -132,30 +138,6 @@ defmodule LemonSkills.ContextTest do
     refute inspect(result) =~ "agent:test:main"
   end
 
-  test "session references use the canonical redacted lifecycle export", %{root: root} do
-    suffix = System.unique_integer([:positive])
-    session_key = "agent:context_session_#{suffix}:main"
-    run_id = "context-session-run-#{suffix}"
-    secret = "context-session-secret-#{suffix}"
-    on_exit(fn -> LemonSkills.TestSupport.SessionCleanup.delete(session_key) end)
-
-    :ok =
-      RunStore.finalize(run_id, %{
-        session_key: session_key,
-        agent_id: "context_session_#{suffix}",
-        origin: :cli,
-        prompt: "api_key=#{secret}",
-        completed: %{ok: true, answer: "Bearer #{secret}"}
-      })
-
-    assert eventually(fn -> SessionLifecycle.get(session_key) != nil end)
-
-    assert {:ok, result} = Context.resolve("@session:#{session_key}", root: root)
-    assert result.selected_text =~ "Redacted export: yes"
-    refute result.selected_text =~ secret
-    refute inspect(result) =~ session_key
-  end
-
   test "global output and operation time are hard bounded", %{root: root} do
     File.write!(Path.join(root, "big.txt"), String.duplicate("x", 1_000))
     assert {:ok, result} = Context.resolve("@file:big.txt", root: root, max_output_bytes: 100)
@@ -172,15 +154,10 @@ defmodule LemonSkills.ContextTest do
              )
   end
 
-  defp eventually(fun, attempts \\ 100)
-  defp eventually(fun, 0), do: fun.()
-
-  defp eventually(fun, attempts) do
-    if fun.() do
-      true
-    else
-      Process.sleep(10)
-      eventually(fun, attempts - 1)
-    end
+  defp git_config_program!(root, name, marker, command) do
+    path = Path.join(root, name)
+    File.write!(path, "#!/bin/sh\n: > '#{marker}'\n#{command}\n")
+    File.chmod!(path, 0o755)
+    path
   end
 end

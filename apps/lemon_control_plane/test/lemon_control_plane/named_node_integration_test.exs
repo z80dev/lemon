@@ -39,11 +39,11 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
 
     put_node(target_id, "Target Node")
     put_node(other_id, "Other Node")
-    :ok = LemonCore.NodeRegistry.register(target_id, "Target Node", target_pid)
-    :ok = LemonCore.NodeRegistry.register(other_id, "Other Node", other_pid)
+    :ok = LemonAgent.NodeRegistry.register(target_id, "Target Node", target_pid)
+    :ok = LemonAgent.NodeRegistry.register(other_id, "Other Node", other_pid)
 
     assert {:ok, invoke_id} =
-             LemonCore.NodeRegistry.invoke_node(target_id, "work.run", %{"value" => 7},
+             LemonAgent.NodeRegistry.invoke_node(target_id, "work.run", %{"value" => 7},
                recipient: self()
              )
 
@@ -72,10 +72,10 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
 
   test "live registry accepts a result immediately after dispatch" do
     node_id = unique("fast-result")
-    :ok = LemonCore.NodeRegistry.register(node_id, "Fast Result Node", self())
+    :ok = LemonAgent.NodeRegistry.register(node_id, "Fast Result Node", self())
 
     assert {:ok, invoke_id} =
-             LemonCore.NodeRegistry.invoke(node_id, "work.run", %{}, recipient: self())
+             LemonAgent.NodeRegistry.invoke(node_id, "work.run", %{}, recipient: self())
 
     assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
 
@@ -99,7 +99,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     old_generation = old_token.identity["sessionGeneration"]
 
     assert :ok =
-             LemonCore.NodeRegistry.register_session(
+             LemonAgent.NodeRegistry.register_session(
                node_id,
                "Stale Result Node",
                self(),
@@ -107,7 +107,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
              )
 
     assert {:ok, invoke_id} =
-             LemonCore.NodeRegistry.invoke(node_id, "work.run", %{}, recipient: self())
+             LemonAgent.NodeRegistry.invoke(node_id, "work.run", %{}, recipient: self())
 
     assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
 
@@ -130,7 +130,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
              )
 
     refute_receive {:lemon_node_result, ^invoke_id, {:ok, _result}}
-    assert :ok = LemonCore.NodeRegistry.cancel(invoke_id, :test_cleanup)
+    assert :ok = LemonAgent.NodeRegistry.cancel(invoke_id, :test_cleanup)
   end
 
   test "node.invoke.result rejects malformed JSON boundary values without crashing" do
@@ -146,7 +146,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     node = unique("native-authority")
     connection = spawn_node(parent, :native_authority)
     put_node(node, "Native Authority")
-    :ok = LemonCore.NodeRegistry.register(node, "Native Authority", connection)
+    :ok = LemonAgent.NodeRegistry.register(node, "Native Authority", connection)
     ctx = %{@operator_ctx | conn_pid: self()}
 
     for meta <- [
@@ -195,10 +195,10 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     assert Jason.decode!(hello)["type"] == "hello-ok"
 
     assert {:ok, %{id: ^node_id, name: ^node_name, pid: pid}} =
-             LemonCore.NodeRegistry.resolve(node_name)
+             LemonAgent.NodeRegistry.resolve(node_name)
 
     assert pid == self()
-    assert :ok = LemonCore.NodeRegistry.push(node_name, "node.config", %{"enabled" => true})
+    assert :ok = LemonAgent.NodeRegistry.push(node_name, "node.config", %{"enabled" => true})
     assert_receive {:node_event, "node.config", %{"enabled" => true}} = event
 
     assert {:push, {:text, frame}, pushed_state} = Connection.handle_info(event, connected_state)
@@ -214,7 +214,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
              )
 
     assert :ok = Connection.terminate(:normal, connected_state)
-    refute LemonCore.NodeRegistry.online?(node_id)
+    refute LemonAgent.NodeRegistry.online?(node_id)
     assert node_status(NodeStore.get_node(node_id)) == :offline
   end
 
@@ -303,10 +303,10 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
   test "oversized remote results fail privately and are never persisted raw" do
     node_id = unique("bounded-result")
     put_node(node_id, "Bounded Result Node")
-    :ok = LemonCore.NodeRegistry.register(node_id, "Bounded Result Node", self())
+    :ok = LemonAgent.NodeRegistry.register(node_id, "Bounded Result Node", self())
 
     assert {:ok, invoke_id} =
-             LemonCore.NodeRegistry.invoke(node_id, "work.run", %{},
+             LemonAgent.NodeRegistry.invoke(node_id, "work.run", %{},
                recipient: self(),
                max_payload_bytes: 512
              )
@@ -314,7 +314,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
 
     assert {:error, {:invalid_payload, {:max_bytes, 512}}} =
-             LemonCore.NodeRegistry.complete(
+             LemonAgent.NodeRegistry.complete(
                node_id,
                invoke_id,
                %{"answer" => String.duplicate("x", 1_024)}
@@ -353,12 +353,12 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
   defp unique(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}"
 
   defp clear_live_nodes do
-    Enum.each(LemonCore.NodeRegistry.list(), fn node ->
+    Enum.each(LemonAgent.NodeRegistry.list(), fn node ->
       if Enum.any?(
            ["target-", "other-", "fast-result-", "ws-node-", "rename-live-"],
            &String.starts_with?(node.id, &1)
          ) do
-        LemonCore.NodeRegistry.unregister(node.id, node.pid)
+        LemonAgent.NodeRegistry.unregister(node.id, node.pid)
       end
     end)
   end

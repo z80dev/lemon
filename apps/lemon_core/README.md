@@ -78,11 +78,11 @@ admission reply does not prove that a task's side effects never began.
 | 3 | `Phoenix.PubSub` (name: `LemonCore.PubSub`), or a `Registry` | Backbone for the Bus; see `LemonCore.Bus` for which one is used |
 | 4 | `LemonCore.Drain` | Coordinated shutdown and directly readable phase ETS table |
 | 5 | `LemonCore.ACPClientBridge` | Registry for direct ACP client request/reply |
-| 6 | `LemonCore.NodeRegistry` | Socket-owned unique Registry, retained generation floors and temporary per-invocation processes |
+| 6 | `LemonAgent.NodeRegistry` | Socket-owned unique Registry, retained generation floors and temporary per-invocation processes |
 | 7 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
 | 8 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends and owned read-cache tables |
 | 9 | `LemonCore.RuntimeOwner` | Cross-VM ownership lock of a file-backed store; only its holder reconciles other runtimes' records |
-| 10 | `LemonCore.UsageLedger` | Finished-run usage aggregation |
+| 10 | `LemonAgent.UsageLedger` | Finished-run usage aggregation |
 | 11 | `LemonCore.ExecApprovalExpiry` | Expiry for approvals whose run or session ended |
 | 12 | `LemonCore.Secrets.SourceTaskSupervisor` | Owns bounded external-source tasks |
 | 13 | `LemonCore.Secrets.SourceCache` | Bounded optional process-local source cache |
@@ -113,7 +113,7 @@ A product that cannot run without durability or a group lists it in
 is unavailable. See `LemonCore.Capabilities`.
 
 Named-node sockets register themselves, so Registry removes dead connections
-without node-monitor bookkeeping. Each temporary `LemonCore.NodeInvocation` owns
+without node-monitor bookkeeping. Each temporary `LemonAgent.NodeInvocation` owns
 its timeout, recipient/socket monitors, sequence validation and controls.
 Streamed events and shell frames go directly to it rather than through a shared
 GenServer. Disconnect, replacement, timeout and caller death remain terminal;
@@ -126,8 +126,11 @@ and provider credential-pool rotation to `lemon_agent`
 processes.
 
 Browser, media-job, and LSP drivers live in `lemon_browser`, `lemon_media`,
-and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
-`lemon_core` must not depend on those apps.
+and `lemon_lsp`; `lemon_core` must not depend on those apps. Drivers register
+their config tables (`:tool_sections`, see `LemonCore.Config.Tools.Section`),
+environment variables (`:env_registries`) and doctor checks (`:doctor_checks`),
+so the browser selection check and `[runtime.tools.browser]` belong to
+`lemon_browser`.
 
 ## Module Inventory
 
@@ -158,8 +161,8 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher targeting config.toml and .env paths |
 | `LemonCore.Setup.Readiness` | Read-only first-run readiness shared by setup, TUI, Web, and launchers |
 | `LemonCore.GatewayConfig` | Unified gateway config access merging TOML, app env, and transport overrides |
-| `LemonCore.A2A.Protocol` / `LemonCore.A2A.Client` | Generic A2A v1.0 wire shapes and credential-scrubbing HTTP client |
-| `LemonCore.A2AStore` | Typed persistent A2A contexts, default peer conversations, tasks, and message history |
+| `LemonSkills.A2A.Protocol` / `LemonSkills.A2A.Client` | Generic A2A v1.0 wire shapes and credential-scrubbing HTTP client |
+| `LemonSkills.A2AStore` | Typed persistent A2A contexts, default peer conversations, tasks, and message history |
 | `LemonCore.Dotenv` | `.env` file loader preserving existing env vars |
 | `LemonCore.Logging` | Runtime log-to-file handler from `[logging]` config |
 | `LemonCore.OAuth.LocalCallbackListener` | One-shot localhost OAuth callback capture with monitored listener failure and bounded wait/cleanup |
@@ -171,7 +174,7 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.Doctor.SupportBundle` | Doctor report, build metadata, parsed config and diagnostics ZIP writer; `collect/1` builds the sections in the runtime they describe (the daemon serves them as `doctor.bundle`) |
 | `LemonCore.Doctor.Redaction` | The one redaction pass for everything doctor shares (bundle entries, `doctor --json`, `doctor.run`): paths become a hash and existence flag or `[path]`, chat/guild/channel/user/session id fields are dropped, credential fields and non-JSON terms are masked |
 | `LemonCore.CredentialReadiness` | Doctor/setup entry to the runtime's single presence-mode credential predicate (registered as the `:credential_readiness` doctor runtime module; never decrypts, refreshes or calls out). `LemonCore.ProviderIdentity` holds the built-in provider identity table and `public_name/1` |
-| `LemonCore.Doctor.Checks.Usage` | Usage aggregate and quota-pressure check backed by redacted shared usage diagnostics |
+| `LemonAgent.Doctor.Checks.Usage` | Usage aggregate and quota-pressure check backed by redacted shared usage diagnostics |
 
 `mix lemon.doctor` includes `usage.status`, which reads the same redacted
 aggregate usage diagnostics and warns when configured run, token, or cost
@@ -259,10 +262,10 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore.Capabilities` | Capabilities a product requires at boot (`:durable_store`, `:run_history`, `:runtime_control`); checked before the tree starts |
 | `LemonCore.Idempotency` | At-most-once execution backed by Store; done results expire after 24h, unresolved claims never expire |
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
-| `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events; interactive restores need a random single-use preview token held server-side (`:checkpoint_restore_confirmations`), bound to caller, checkpoint revision, roots and tree fingerprint, with a five-minute TTL |
+| `LemonAgent.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events; interactive restores need a random single-use preview token held server-side (`:checkpoint_restore_confirmations`), bound to caller, checkpoint revision, roots and tree fingerprint, with a five-minute TTL |
 | `LemonCore.Introspection` | Canonical introspection event builder and persistence |
-| `LemonCore.UsageStore` | Shared typed wrapper for usage records, current usage summaries, and quota counters |
-| `LemonCore.UsageDiagnostics` | Redacted aggregate usage diagnostics shared by doctor checks and support bundles |
+| `LemonAgent.UsageStore` | Shared typed wrapper for usage records, current usage summaries, and quota counters |
+| `LemonAgent.UsageDiagnostics` | Redacted aggregate usage diagnostics shared by doctor checks and support bundles |
 | `LemonCore.Dedupe.Ets` | Low-level ETS-backed TTL deduplication |
 
 ### Utilities
@@ -279,7 +282,6 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore.ConfinedFS` | Descriptor-bound file operations below a trusted root (port helper `priv/lemon_confined_fs`, built from `c_src/` during `mix compile`): no-follow directory walks (`openat2` `RESOLVE_BENEATH` on Linux), reads, exclusive creates, private-staging atomic replaces, appends, in-place overwrites, rename, unlink, tree removal and chmod relative to walked handles. Inside the Lemon umbrella (and therefore every release) the helper is required and `mix compile` fails without a C compiler and `make`. As a Hex dependency it is built when they are present; otherwise `ConfinedFS.available?/0` is `false` and every operation returns `{:error, :helper_unavailable}`, so confined callers (FileAccess, Checkpoint filesystem restore) fail closed instead of using path-based I/O |
 | `Lemon.Reload` | Published low-level BEAM/extension reload API; see its moduledoc for retained contracts |
 | `LemonCore.CodeReload` | Soft-loads changed BEAM files and invokes the configured session refresher for source-development reload |
-| `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
 
 ### Quality
 
@@ -411,11 +413,11 @@ Secrets are encrypted at rest with AES-256-GCM. Per-secret encryption keys are d
 3. `~/.lemon/secrets_master_key` file -- local non-keychain fallback
 4. Fail with `:missing_master_key`
 
-The order and the locations are configurable via `config :lemon_core, LemonCore.Secrets, key_providers: [:keychain, :env, :file], key_file: ..., env_var: ...`; see `LemonCore.Secrets.KeyProvider`. The key must be base64-encoded 32 bytes.
+The order and the locations are configurable via `config :lemon_core, :secrets, key_providers: [:keychain, :env, :file], key_file: ..., env_var: ...`; see `LemonCore.Secrets.KeyProvider`. The key must be base64-encoded 32 bytes.
 
 For local Linux/dev usage, treat `~/.lemon/secrets_master_key` as the canonical master key file. Every entry point (`./bin/lemon`, the release, CLI, Mix, runtime) resolves the same provider chain; launchers never export the key file, and a stale `LEMON_SECRETS_MASTER_KEY` holding a different key makes resolution fail with `{:conflicting_master_keys, sources}` instead of silently winning or losing. See [the secrets contract](../../docs/security/secrets-and-keychain.md).
 
-To change the master key without re-entering secrets, run `lemon secrets rotate-key`: it previews, then with the preview's `--confirm` token re-encrypts every stored secret under a new key and writes that key to the Keychain entry or key file that supplied the old one. See `LemonCore.Secrets.KeyRotation` and [the secrets contract](../../docs/security/secrets-and-keychain.md#master-key-rotation).
+To change the master key without re-entering secrets, run `lemon secrets rotate-key`: it previews, then with the preview's `--confirm` token re-encrypts every stored secret under a new key and writes that key to the Keychain entry or key file that supplied the old one. See `LemonCli.Secrets.KeyRotation` and [the secrets contract](../../docs/security/secrets-and-keychain.md#master-key-rotation).
 
 ### API
 
@@ -968,12 +970,11 @@ require no history-provider configuration.
 
 ### What the Hex package leaves out
 
-The Hex tarball ships the library, not this repository's tooling: the
-architecture/docs lint (`LemonCore.Quality.*`, `mix lemon.quality`,
-`mix lemon.architecture.docs`, `mix lemon.check_duplicate_tests`), the
-managed-install self-updater (`LemonCore.Update.*`; `mix lemon.update` lives in lemon_skills), the
-platform benchmark runner (`mix lemon.bench`) and the repo task catalog
-(`mix lemon.help`) exist only in the lemon checkout.
+The Hex tarball ships the library, not this repository's architecture lint,
+benchmark task, task catalog or internal test harness. Product programs such
+as the managed updater and service managers live in `lemon_cli`, rather than
+being compiled in core and then filtered out at packaging. See the changelog
+for the current migration table.
 
 ## Filesystem layout
 
@@ -994,7 +995,7 @@ Renaming `:state_dir` moves everything derived from it: both config files, the
 config reloader's watched paths, the default run-history store directory, and the
 doctor's extension directory. Two locations
 are configured separately because they are not part of that layout: the secrets
-master key (`config :lemon_core, LemonCore.Secrets, key_file: ...`) and the
+master key (`config :lemon_core, :secrets, key_file: ...`) and the
 store backend path (`config :lemon_core, LemonCore.Store, backend_opts: [path: ...]`).
 
 ## Testing
