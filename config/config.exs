@@ -62,11 +62,11 @@ config :lemon_router, :engine_runtime, LemonGateway.Runtime
 config :lemon_router, :native_followup_allowed_origins, ["http://127.0.0.1:4100"]
 config :lemon_automation, :cron_admission_allowed_origins, ["http://127.0.0.1:4100"]
 
-# Support bundles include workspace (goal/kanban) diagnostics when the agent
-# runtime is present. lemon_core must not reference agent_core directly.
+# Support bundles include workspace (goal/kanban) diagnostics when the
+# automation runtime is present. lemon_core must not reference it directly.
 config :lemon_core, :workspace_diagnostics,
-  goal: LemonAgent.Workspace.GoalStore,
-  kanban: LemonAgent.Workspace.KanbanStore
+  goal: LemonAutomation.GoalStore,
+  kanban: LemonAutomation.KanbanStore
 
 # Same idea for every diagnostic whose subject is owned by another app: the
 # doctor framework looks the module up instead of naming it.

@@ -5,7 +5,7 @@ defmodule LemonAutomation.GoalJudgeRouterLiveTest do
   @moduletag :automation_live
 
   alias LemonAutomation.GoalLoop
-  alias LemonAgent.Workspace.GoalStore
+  alias LemonAutomation.GoalStore
 
   test "provider-backed router judge completes a persisted goal" do
     case live_config() do
@@ -25,7 +25,7 @@ defmodule LemonAutomation.GoalJudgeRouterLiveTest do
                    session_key,
                    "This verification goal is already complete. The judge should return done.",
                    agent_id: "default",
-                   authority: LemonAgent.Workspace.GoalAuthority.operator()
+                   authority: LemonAutomation.GoalAuthority.operator()
                  )
 
         assert {:ok, %{run_id: nil, goal: completed, verdict: verdict}} =

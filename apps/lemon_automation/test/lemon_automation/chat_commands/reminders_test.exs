@@ -1,7 +1,7 @@
-defmodule LemonChannels.RemindersTest do
+defmodule LemonAutomation.ChatCommands.RemindersTest do
   use ExUnit.Case, async: true
 
-  alias LemonChannels.Reminders
+  alias LemonAutomation.ChatCommands.Reminders
 
   # Cron manager stand-in. Reminders calls it synchronously from the caller, so
   # the job table lives in the test process dictionary.
@@ -42,6 +42,11 @@ defmodule LemonChannels.RemindersTest do
 
   defmodule RejectingCron do
     def add(_params), do: {:error, {:invalid_schedule, "bad cron"}}
+  end
+
+  # A cron manager that is not running.
+  defmodule StoppedCron do
+    def add(_params), do: exit({:noproc, {GenServer, :call, [__MODULE__, :add]}})
   end
 
   @chat "agent:default:telegram:default:dm:42"
@@ -111,8 +116,8 @@ defmodule LemonChannels.RemindersTest do
       refute_received {:cron_add, _}
     end
 
-    test "a missing scheduler or a rejected job is reported" do
-      assert Reminders.create("in 5m x", opts(@chat, cron_module: NoSuchCronModule)) =~
+    test "a stopped scheduler or a rejected job is reported" do
+      assert Reminders.create("in 5m x", opts(@chat, cron_module: StoppedCron)) =~
                "unavailable"
 
       assert Reminders.create("in 5m x", opts(@chat, cron_module: RejectingCron)) =~

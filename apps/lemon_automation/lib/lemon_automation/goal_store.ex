@@ -1,15 +1,15 @@
-defmodule LemonAgent.Workspace.GoalStore do
+defmodule LemonAutomation.GoalStore do
   @moduledoc """
   Durable user goal state keyed by session.
 
   Every goal records the authority of the caller that set it
-  (`LemonAgent.Workspace.GoalAuthority`); `set/3` requires it and
+  (`LemonAutomation.GoalAuthority`); `set/3` requires it and
   `restrict_authority/2` narrows it for a starter.
   """
 
   require Logger
 
-  alias LemonAgent.Workspace.GoalAuthority
+  alias LemonAutomation.GoalAuthority
   alias LemonCore.{Bus, Event, Introspection, Store}
   alias LemonCore.Events.GoalChanged
 

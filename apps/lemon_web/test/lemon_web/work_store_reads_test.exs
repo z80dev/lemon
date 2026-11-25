@@ -1,7 +1,7 @@
 defmodule LemonWeb.WorkStoreReadsTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Workspace.{GoalStore, KanbanStore}
+  alias LemonAutomation.{GoalStore, KanbanStore}
   alias LemonAutomation.{CronManager, CronStore, GoalLoopManager}
   alias LemonCore.Store
 
@@ -94,7 +94,7 @@ defmodule LemonWeb.WorkStoreReadsTest do
 
     {:ok, _} =
       GoalStore.set(key, "Original private objective",
-        authority: LemonAgent.Workspace.GoalAuthority.operator()
+        authority: LemonAutomation.GoalAuthority.operator()
       )
 
     state = %{loops: %{}}
@@ -104,7 +104,7 @@ defmodule LemonWeb.WorkStoreReadsTest do
 
     {:ok, _} =
       GoalStore.set(key, "Changed private objective",
-        authority: LemonAgent.Workspace.GoalAuthority.operator()
+        authority: LemonAutomation.GoalAuthority.operator()
       )
 
     assert {:reply, {:error, :stale}, ^state} =

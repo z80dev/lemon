@@ -27,7 +27,7 @@ defmodule LemonAutomation.GoalLoopManager do
   `transition_goal/3` uses the same guard to pause/resume only an idle goal.
   Drift returns `{:error, :stale}`; an old confirmation cannot stop a new loop.
 
-  Work starts only under the goal's recorded `LemonAgent.Workspace.GoalAuthority`.
+  Work starts only under the goal's recorded `LemonAutomation.GoalAuthority`.
   A session or chat start passes its trusted `starter:` authority (a
   `GoalAuthority.new/4` record: session, agent, policy, canonical root). It
   must be the goal's own session and agent and contain the goal target; the
@@ -40,7 +40,7 @@ defmodule LemonAutomation.GoalLoopManager do
   use GenServer
 
   alias LemonAutomation.GoalLoop
-  alias LemonAgent.Workspace.{GoalAuthority, GoalStore}
+  alias LemonAutomation.{GoalAuthority, GoalStore}
   alias LemonCore.RunStore
 
   def start_link(opts \\ []) do

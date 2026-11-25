@@ -125,7 +125,7 @@ accepted router run ID and bounded completion result. Chat `/goal continue` and
 and post the verdict and run ID as a follow-up message.
 
 Goal work runs only under the caller authority recorded on the goal
-(`LemonAgent.Workspace.GoalAuthority`): the setting session or chat as
+(`LemonAutomation.GoalAuthority`): the setting session or chat as
 principal, its effective tool policy, and its canonical working directory as
 the root (operator surfaces — control plane `goal.set`, web — record operator
 authority with no root; their target defaults to the daemon's default cwd).
@@ -151,10 +151,10 @@ authority.
 judge tick. `start_loop/2` starts one bounded supervised loop per
 session, waits for each submitted continuation to emit `:run_completed`, and
 stops at `max_ticks`, failure, timeout, or a terminal judge verdict. Passing
-`auto: true` persists opt-in auto-loop intent in `LemonAgent.Workspace.GoalStore`; the
+`auto: true` persists opt-in auto-loop intent in `LemonAutomation.GoalStore`; the
 manager scheduler scans active goals and re-starts only those persisted loops
 when no loop for that session is already running. Loop status and auto state are
-stored in `LemonAgent.Workspace.GoalStore` and emitted as redacted goal events.
+stored in `LemonAutomation.GoalStore` and emitted as redacted goal events.
 The manager synchronously claims the fixed run ID before each judge or
 continuation enters router submission. A hard stop (the default) disables auto
 restart, aborts that owned run once, kills the loop task, and prevents another
@@ -184,7 +184,9 @@ deterministic runtime. Set `LEMON_GOAL_JUDGE_MODEL` to pin the judge run model.
 Judge failures pause the goal by default, with an explicit `:continue_once`
 policy for fail-open one-shot continuation.
 
-The session-scoped `goal` agent tool exposes set/status/start/stop/pause/resume
+The session-scoped `goal` agent tool (`LemonAutomation.Tools.Goal`, registered
+with `kanban` and `cron` through `LemonAgent.ToolRegistry` at boot) exposes
+set/status/start/stop/pause/resume
 and a bounded asynchronous run-once action. Prompt `cron` jobs created by the
 agent tool inherit the current repository cwd and accept an explicit model pin.
 Neither automatically creates a worktree: use a dedicated target directory
@@ -314,8 +316,19 @@ registered chat platform; otherwise the paired owner chat (the first
 nowhere. `RunNotifications` binds router invocations to the exact target before
 submission; `LemonChannels.Supervision` owns bounded completion/failure rendering,
 durable admission and per-kind/job/run/status deduplication. Telegram `/remind`
-(`LemonChannels.Reminders`) and the agent `cron` tool create ordinary jobs through
-`CronManager` and rely on this resolution.
+(`LemonAutomation.ChatCommands.Reminders`) and the agent `cron` tool create
+ordinary jobs through `CronManager` and rely on this resolution.
+
+### Chat commands
+
+Channel transports route `/goal`, `/kanban`, `/remind`, `/reminders` and
+`/unremind` through `LemonCore.AutomationCommands` to
+`LemonAutomation.ChatCommands`, which this app registers at boot. The transport
+supplies only trusted context (session key, agent, bound workspace, channel
+context, operator attestation, background task callbacks); the command modules
+own parsing, authority, durable writes and the reply text. Without this app the
+seam answers a fixed unavailable reply; a command that raises or exits answers
+an outcome-unknown reply and is never retried.
 
 ### Remote supervision
 
@@ -409,11 +422,18 @@ and the harmless disabled example under
 | `LemonAutomation.GoalJudge` | `lib/lemon_automation/goal_judge.ex` | Normalizes preview goal-loop verdicts |
 | `LemonAutomation.GoalLoop` | `lib/lemon_automation/goal_loop.ex` | Applies one judge verdict to submit, complete, or pause a durable goal |
 | `LemonAutomation.GoalLoopManager` | `lib/lemon_automation/goal_loop_manager.ex` | Supervised goal-loop entrypoint with opt-in persisted auto scheduling |
+| `LemonAutomation.GoalStore` | `lib/lemon_automation/goal_store.ex` | Durable per-session goal state (table `:goals`); compare-and-swap rewrites, redacted `GoalChanged` events and support-bundle diagnostics |
+| `LemonAutomation.GoalAuthority` | `lib/lemon_automation/goal_authority.ex` | Goal principal, policy and root recorded by a trusted setter; starter narrowing and per-tick run scope |
+| `LemonAutomation.Tools.Goal` | `lib/lemon_automation/tools/goal.ex` | The agent `goal` tool, registered through `LemonAgent.ToolRegistry` |
+| `LemonAutomation.ChatCommands` | `lib/lemon_automation/chat_commands.ex` | `LemonCore.AutomationCommands` provider for `/goal`, `/kanban`, `/remind`, `/reminders`, `/unremind` (`ChatCommands.Goal`, `.Kanban`, `.Reminders`, `.ReminderParser`) |
 | `LemonAutomation.SkillCurator` | `lib/lemon_automation/skill_curator.ex` | Applies idle/config gates and submits learned-skill curator prompts |
 | `LemonAutomation.SkillCuratorManager` | `lib/lemon_automation/skill_curator_manager.ex` | Periodic idle scheduler for background skill curation |
 | `LemonAutomation.IntervalRunner` | `lib/lemon_automation/interval_runner.ex` | Shared interval scheduler, idle tracking, and supervised single-flight execution for curator and synthesis managers |
 | `LemonAutomation.RunnerConfig` | `lib/lemon_automation/runner_config.ex` | Shared runner config normalization, positive integers, and active-session checks |
 | `LemonAutomation.KanbanDispatcher` | `lib/lemon_automation/kanban_dispatcher.ex` | Supervised durable-board task leasing, execution, completion, and failure marking |
+| `LemonAutomation.KanbanStore` | `lib/lemon_automation/kanban_store.ex` | Durable boards and cards (tables `:kanban_boards`, `:kanban_tasks`); board-locked writes, lease-guarded terminal writers, `kanban` Bus doorbell |
+| `LemonAutomation.KanbanAuthority` | `lib/lemon_automation/kanban_authority.ex` | Board principal, policy, canonical root and operator grants; narrowing and workspace checks |
+| `LemonAutomation.Tools.Kanban` | `lib/lemon_automation/tools/kanban.ex` | The agent `kanban` tool, registered through `LemonAgent.ToolRegistry` |
 | `LemonAutomation.KanbanRunWorker` | `lib/lemon_automation/kanban_run_worker.ex` | Converts leased kanban tasks into router runs with board/task provenance and recursive-kanban blocking |
 | `LemonAutomation.KanbanWorktree` | `lib/lemon_automation/kanban_worktree.ex` | Creates per-task git worktrees under `.worktrees/` for isolated kanban worker execution |
 | `LemonAutomation.RunSubmitter` | `lib/lemon_automation/run_submitter.ex` | Builds run params, pre-subscribes to bus, submits to LemonRouter, appends to CronMemory |

@@ -8,10 +8,10 @@ defmodule LemonAutomation.GoalAuthorityTest do
   use ExUnit.Case, async: false
 
   alias LemonAgent.Types.AgentToolResult
-  alias LemonAgent.Workspace.{GoalAuthority, GoalStore}
+  alias LemonAutomation.{GoalAuthority, GoalStore}
   alias LemonAutomation.GoalLoopManager
   alias LemonCore.ToolPolicy
-  alias LemonSkills.Tools.Goal
+  alias LemonAutomation.Tools.Goal
 
   defmodule Runtime do
     def available?, do: true
@@ -75,8 +75,8 @@ defmodule LemonAutomation.GoalAuthorityTest do
     outside = Path.join(base, "outside")
     File.mkdir_p!(Path.join(root, "work"))
     File.mkdir_p!(outside)
-    {:ok, root} = LemonAgent.Workspace.KanbanAuthority.canonical_directory(root)
-    {:ok, outside} = LemonAgent.Workspace.KanbanAuthority.canonical_directory(outside)
+    {:ok, root} = LemonAutomation.KanbanAuthority.canonical_directory(root)
+    {:ok, outside} = LemonAutomation.KanbanAuthority.canonical_directory(outside)
 
     key = "agent:default:goal-authority-#{System.unique_integer([:positive])}"
 

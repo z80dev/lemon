@@ -215,7 +215,7 @@ startup/config-registration operations (`init`, `reset`, `register`,
 | Search | `grep`, `find`, `ast_grep` (when the real ast-grep CLI is installed) |
 | Execution | `bash`, `bash_output`, `kill_process`, `process_input` (see [shell and background processes](../../docs/tools/shell.md)), `debug` (DAP debugger; see [debugger](../../docs/tools/debug.md)) |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
-| Task / Agent | `task`, `agent`, `parent_question`, [`todo`](../../docs/tools/todo.md), `kanban` |
+| Task / Agent | `task`, `agent`, `parent_question`, [`todo`](../../docs/tools/todo.md) |
 | System | `tool_auth`, `extensions_status`, [`report_issue`](../../docs/tools/report-issue.md) (bounded local tool-misbehavior notes) |
 
 Telegram and Discord channel sessions also get `send_file`
@@ -477,10 +477,13 @@ in support bundles. The BEAM manager can also start/stop sessions, run the
 initialize handshake, send framed JSON-RPC requests, synchronize open/change/
 close document notifications, and capture redacted diagnostic notifications.
 
-`kanban` is implemented in `LemonSkills.Tools` and exposes durable board and task operations backed by
-`LemonAgent.Workspace.KanbanStore`. It is the model-facing surface for multi-agent work
-that should outlive one session. Kanban-dispatched worker runs block the
-`kanban` tool so a leased task cannot recursively manage its own board.
+`kanban`, `goal` and `cron` are contributed by `lemon_automation` through
+`LemonAgent.ToolRegistry` at boot and follow the built-ins in tool order.
+`kanban` (`LemonAutomation.Tools.Kanban`) exposes durable board and task
+operations backed by `LemonAutomation.KanbanStore`. It is the model-facing
+surface for multi-agent work that should outlive one session. Kanban-dispatched
+worker runs block the `kanban` tool so a leased task cannot recursively manage
+its own board.
 
 **Additional tools (not in default set):**
 

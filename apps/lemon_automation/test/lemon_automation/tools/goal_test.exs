@@ -1,7 +1,7 @@
-defmodule LemonSkills.Tools.GoalTest do
+defmodule LemonAutomation.Tools.GoalTest do
   use ExUnit.Case, async: true
 
-  alias LemonSkills.Tools.Goal
+  alias LemonAutomation.Tools.Goal
 
   test "schema exposes bounded session-scoped lifecycle operations" do
     tool = Goal.tool(System.tmp_dir!(), session_key: "agent:default:goal-test")
@@ -75,7 +75,7 @@ defmodule LemonSkills.Tools.GoalTest do
                nil
              )
 
-    assert %{} == LemonAgent.Workspace.GoalStore.get(session)
+    assert %{} == LemonAutomation.GoalStore.get(session)
 
     assert %LemonAgent.Types.AgentToolResult{details: %{goal: goal}} =
              tool.execute.(
@@ -88,7 +88,7 @@ defmodule LemonSkills.Tools.GoalTest do
     assert goal.meta["deliverTo"] == "none"
     assert goal.authority["grantedBy"] == "session"
     assert goal.authority["principal"] == %{"agentId" => "default", "sessionKey" => session}
-    on_exit(fn -> LemonAgent.Workspace.GoalStore.clear(session) end)
+    on_exit(fn -> LemonAutomation.GoalStore.clear(session) end)
   end
 
   test "start rejects unbounded tick counts before dispatch" do

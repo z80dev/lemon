@@ -52,6 +52,9 @@ defmodule LemonAutomation.WorkOwnershipTest do
 
       assert :erlang.phash2({tool.name, tool.label, tool.description, tool.parameters}) ==
                Map.fetch!(@schema_hashes, tool.name)
+
+      # Like the shipped tools, neither carries its own deadline.
+      assert tool.timeout_ms == nil
     end
   end
 

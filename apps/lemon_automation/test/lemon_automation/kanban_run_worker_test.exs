@@ -2,7 +2,7 @@ defmodule LemonAutomation.KanbanRunWorkerTest do
   use ExUnit.Case, async: false
 
   alias LemonAutomation.KanbanRunWorker
-  alias LemonAgent.Workspace.KanbanStore
+  alias LemonAutomation.KanbanStore
 
   defmodule KanbanRouterOk do
     @moduledoc false
@@ -167,7 +167,7 @@ defmodule LemonAutomation.KanbanRunWorkerTest do
       end)
 
     {:ok, authority} =
-      LemonAgent.Workspace.KanbanAuthority.new(
+      LemonAutomation.KanbanAuthority.new(
         %{agent_id: "agent_1", session_key: "agent:agent_1:main"},
         nil,
         workspace
@@ -181,7 +181,7 @@ defmodule LemonAutomation.KanbanRunWorkerTest do
              )
 
     # Non-Git sample workspaces run in place only with the operator grant.
-    digest = LemonAgent.Workspace.KanbanAuthority.workspace_digest(board.workspace)
+    digest = LemonAutomation.KanbanAuthority.workspace_digest(board.workspace)
     assert {:ok, _} = KanbanStore.grant_in_place(board.id, digest)
 
     KanbanStore.create_task(board.id, "Implement worker",

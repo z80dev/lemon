@@ -94,8 +94,8 @@ defmodule LemonCore.ToolCatalog do
     {"tool_auth", :exec, [:dangerous], []},
     {"task", :exec, [:dangerous, :delegation], []},
     {"agent", :exec, [:dangerous, :delegation], []},
-    {"goal", :write, [:dangerous, :delegation], []},
-    {"kanban", :write, [:dangerous, :delegation], []},
+    {"goal", :write, [:dangerous, :delegation], [registry: true]},
+    {"kanban", :write, [:dangerous, :delegation], [registry: true]},
     {"cron", :write, [:dangerous, :delegation], [registry: true]},
     # Bare names and `agent://` reach this family; named targets (`@handle`,
     # `session://`, `bot://`) need delegation authority, checked by the tool.

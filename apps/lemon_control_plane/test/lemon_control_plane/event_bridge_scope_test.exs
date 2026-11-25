@@ -253,14 +253,14 @@ defmodule LemonControlPlane.EventBridgeScopeTest do
 
   describe "goal loop verdicts" do
     test "read-only recipients get the verdict action, never the judge's reason", c do
-      alias LemonAgent.Workspace.GoalStore
+      alias LemonAutomation.GoalStore
 
       read = connect(:read_only, [:read])
       full = connect(:full, @full)
 
       assert {:ok, _} =
                GoalStore.set(c.session_key, "Close the deal: #{@prose}",
-                 authority: LemonAgent.Workspace.GoalAuthority.operator()
+                 authority: LemonAutomation.GoalAuthority.operator()
                )
 
       on_exit(fn -> GoalStore.clear(c.session_key) end)

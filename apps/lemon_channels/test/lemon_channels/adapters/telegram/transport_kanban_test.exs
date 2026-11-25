@@ -1,14 +1,15 @@
 defmodule LemonChannels.Adapters.Telegram.TransportKanbanTest do
   @moduledoc """
   `/kanban` through the real Telegram transport against
-  `LemonChannels.Telegram.FakeAPI`. Mutations need the transport's operator
+  `LemonChannels.Telegram.FakeAPI` and the automation chat commands behind
+  `LemonCore.AutomationCommands`. Mutations need the transport's operator
   attestation; the principal, workspace and tool policy come from the chat's
   trusted context, never from command flags.
   """
 
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Workspace.KanbanStore
+  alias LemonAutomation.KanbanStore
   alias LemonChannels.Adapters.Telegram
   alias LemonChannels.Telegram.FakeAPI
   alias LemonCore.ToolPolicy
@@ -28,6 +29,20 @@ defmodule LemonChannels.Adapters.Telegram.TransportKanbanTest do
       do: {:ok, %{running: true, dispatcher: %{board_id: board_id, status: "running"}}}
   end
 
+  # The automation provider with the dispatcher replaced by `Dispatcher`.
+  defmodule Commands do
+    @behaviour LemonCore.AutomationCommands
+
+    @impl true
+    def handle(command, args, opts),
+      do:
+        LemonAutomation.ChatCommands.handle(
+          command,
+          args,
+          Keyword.put(opts, :dispatcher_module, Dispatcher)
+        )
+  end
+
   @gateway_config_key :"Elixir.LemonGateway.Config"
   @group -100_555_001
   @owner 555_001
@@ -44,10 +59,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportKanbanTest do
     File.mkdir_p!(root)
     {real_root, 0} = System.cmd("pwd", ["-P"], cd: root)
 
+    {:ok, _} = Application.ensure_all_started(:lemon_automation)
     previous_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
-    previous_dispatcher = Application.get_env(:lemon_channels, :kanban_dispatcher_module)
+    previous_commands = LemonCore.AutomationCommands.provider()
     :persistent_term.put({Dispatcher, :pid}, self())
-    Application.put_env(:lemon_channels, :kanban_dispatcher_module, Dispatcher)
+    :ok = LemonCore.AutomationCommands.register(Commands)
 
     Application.put_env(:lemon_gateway, @gateway_config_key, %{
       telegram: %{bot_token: "fake-token", api_mod: FakeAPI},
@@ -63,7 +79,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportKanbanTest do
       FakeAPI.reset()
       :persistent_term.erase({Dispatcher, :pid})
       restore_env(:lemon_gateway, @gateway_config_key, previous_gateway)
-      restore_env(:lemon_channels, :kanban_dispatcher_module, previous_dispatcher)
+      :ok = LemonCore.AutomationCommands.register(previous_commands)
 
       KanbanStore.list_boards(limit: 1_000)
       |> Enum.filter(&String.starts_with?(&1.name, "chat-"))

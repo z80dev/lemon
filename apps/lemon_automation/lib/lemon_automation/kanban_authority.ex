@@ -1,4 +1,4 @@
-defmodule LemonAgent.Workspace.KanbanAuthority do
+defmodule LemonAutomation.KanbanAuthority do
   @moduledoc """
   Durable authority recorded on a kanban board (`meta["kanbanAuthority"]`).
 

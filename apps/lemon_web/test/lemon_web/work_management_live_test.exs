@@ -6,7 +6,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
   import Phoenix.LiveViewTest
   import LemonWeb.Test.OperatorAuth
 
-  alias LemonAgent.Workspace.{GoalStore, KanbanStore}
+  alias LemonAutomation.{GoalStore, KanbanStore}
   alias LemonAutomation.{CronManager, GoalLoopManager, KanbanDispatcher}
   alias LemonWeb.CronText
 
@@ -103,7 +103,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
 
     # A kanban doorbell reloads promptly, again off the LiveView process.
     Agent.update(state, &put_in(&1.card.title, "Doorbell card"))
-    LemonAgent.Workspace.KanbanStore.ring_changed("board_demo")
+    LemonAutomation.KanbanStore.ring_changed("board_demo")
     assert_receive {:service_call, reader, KanbanStore, :list_boards}, 1_000
     refute reader == view.pid
     render_async(view)
@@ -631,7 +631,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
     File.mkdir_p!(workspace)
 
     {:ok, authority} =
-      LemonAgent.Workspace.KanbanAuthority.new(
+      LemonAutomation.KanbanAuthority.new(
         %{agent_id: "default", session_key: "agent:default:main"},
         nil,
         workspace
@@ -713,7 +713,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
     File.mkdir_p!(workspace)
 
     {:ok, authority} =
-      LemonAgent.Workspace.KanbanAuthority.new(
+      LemonAutomation.KanbanAuthority.new(
         %{agent_id: "default", session_key: "agent:default:main"},
         nil,
         workspace
@@ -839,7 +839,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
     publish = %{"mode" => "branch", "remote" => "origin"}
 
     {:ok, authority} =
-      LemonAgent.Workspace.KanbanAuthority.new(
+      LemonAutomation.KanbanAuthority.new(
         %{agent_id: "default", session_key: "agent:default:main"},
         nil,
         workspace,
@@ -914,7 +914,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
     File.mkdir_p!(workspace)
 
     {:ok, authority} =
-      LemonAgent.Workspace.KanbanAuthority.new(
+      LemonAutomation.KanbanAuthority.new(
         %{agent_id: "default", session_key: "agent:default:main"},
         nil,
         workspace
@@ -950,7 +950,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
         apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
     end)
 
-    refute LemonAgent.Workspace.KanbanAuthority.in_place_granted?(
+    refute LemonAutomation.KanbanAuthority.in_place_granted?(
              KanbanStore.get_board(board.id).meta["kanbanAuthority"],
              board.workspace
            )
@@ -958,7 +958,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
     {:ok, view, _} = open(conn, "/automation")
     assert has_element?(view, "#work-boards-#{board.id}-allow-in-place")
     preview(view, "boards", board.id, "allow-in-place")
-    digest = LemonAgent.Workspace.KanbanAuthority.workspace_digest(board.workspace)
+    digest = LemonAutomation.KanbanAuthority.workspace_digest(board.workspace)
     assert has_element?(view, "#work-confirm-dialog", String.slice(digest, 0, 12))
     refute render(view) =~ board.workspace
     render_click(view, "confirm")
@@ -978,7 +978,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
                name: dispatcher,
                expected_revision: status.control_revision,
                workspace_digest:
-                 LemonAgent.Workspace.KanbanAuthority.workspace_digest(System.tmp_dir!())
+                 LemonAutomation.KanbanAuthority.workspace_digest(System.tmp_dir!())
              )
   end
 

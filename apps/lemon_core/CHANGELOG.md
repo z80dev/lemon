@@ -114,6 +114,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonCore.AutomationCommands`: the runtime seam channel transports use for
+  `/goal`, `/kanban`, `/remind`, `/reminders` and `/unremind`. The automation
+  runtime registers its provider at boot; an absent provider answers a fixed
+  unavailable reply and a failing one an outcome-unknown reply, never a retry.
+  `ToolCatalog` marks `goal` and `kanban` as registry-provided platform tools
+  (#721).
 - `LemonCore.Service` supervises an `omp-broker` role: `omp auth-broker serve
   --bind 127.0.0.1:8765` with omp's config-root selectors forwarded and broker
   client settings never forwarded, ready when the broker's health probe answers

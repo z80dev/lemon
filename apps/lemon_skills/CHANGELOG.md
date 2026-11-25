@@ -13,6 +13,10 @@
 
 ### Changed
 
+- **Breaking:** `LemonSkills.Tools.Kanban` and `LemonSkills.Tools.Goal` moved to
+  lemon_automation (`LemonAutomation.Tools.Kanban`/`Goal`), which registers them
+  through `LemonAgent.ToolRegistry`; lemon_skills no longer names any
+  lemon_automation module (#721).
 - **Breaking:** media provider HTTP clients, the Google JWT exchange and the
   artifact writer moved to `lemon_media` (`LemonMedia.Providers`,
   `LemonMedia.GoogleAuth`, `LemonMedia.Artifact`); `MediaCommon.write_artifact/2`,

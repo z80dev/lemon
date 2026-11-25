@@ -1,13 +1,15 @@
-defmodule LemonSkills.Tools.Goal do
+defmodule LemonAutomation.Tools.Goal do
   @moduledoc """
   Session-scoped durable coding goals. `tool/2` requires the canonical router
   `:session_key` and `:agent_id`; `cwd` is the session working directory.
-  Dispatch uses the running automation manager, never a tool-owned scheduler.
+  Dispatch uses the running `LemonAutomation.GoalLoopManager`, never a
+  tool-owned scheduler. `LemonAutomation.Application` contributes the tool
+  through `LemonAgent.ToolRegistry`.
 
   Goal work acts for the calling session, never with more authority: `set`
   records the session as the goal principal, its effective tool policy
   (`:tool_policy` intersected with `:execution_context`) and the canonical
-  session cwd as the root (`LemonAgent.Workspace.GoalAuthority`). The goal
+  session cwd as the root (`LemonAutomation.GoalAuthority`). The goal
   target must be an existing directory inside that root. `start` and
   `run_once` pass the same trusted starter authority (session, agent, policy,
   canonical session cwd): the goal must belong to this session and agent and
@@ -16,11 +18,10 @@ defmodule LemonSkills.Tools.Goal do
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias LemonAgent.Workspace.{GoalAuthority, GoalStore}
+  alias LemonAutomation.{CronDelivery, GoalAuthority, GoalLoopManager, GoalStore}
   alias LemonAi.Types.TextContent
   alias LemonCore.ToolPolicy
 
-  @manager :"Elixir.LemonAutomation.GoalLoopManager"
   @actions ~w(set status start stop pause resume run_once)
 
   @spec tool(String.t(), keyword()) :: AgentTool.t()
@@ -94,22 +95,20 @@ defmodule LemonSkills.Tools.Goal do
          {:ok, target} <- target_directory(authority, params["cwd"]),
          {:ok, delivery} <- validate_delivery(params["deliver_to"]),
          {:ok, goal} <-
-           manager(:set_goal, [
-             session_key,
-             objective,
-             [
+           manager(fn ->
+             GoalLoopManager.set_goal(session_key, objective,
                cwd: target,
                agent_id: opts[:agent_id],
                authority: authority,
                meta: if(delivery, do: %{"deliverTo" => delivery}, else: %{})
-             ]
-           ]) do
+             )
+           end) do
       {:ok, %{goal: goal}}
     end
   end
 
   defp dispatch("status", session_key, _params, _cwd, _opts),
-    do: manager(:status, [session_key])
+    do: manager(fn -> GoalLoopManager.status(session_key) end)
 
   defp dispatch(action, session_key, params, cwd, opts) when action in ["start", "run_once"] do
     max_ticks = if action == "run_once", do: 1, else: Map.get(params, "max_ticks", 3)
@@ -119,10 +118,12 @@ defmodule LemonSkills.Tools.Goal do
          {:ok, starter} <- caller_authority(session_key, cwd, opts),
          {:ok, model_opts} <- model_options(params["model"]),
          {:ok, loop} <-
-           manager(:start_loop, [
-             session_key,
-             [max_ticks: max_ticks, auto: false, starter: starter] ++ model_opts
-           ]) do
+           manager(fn ->
+             GoalLoopManager.start_loop(
+               session_key,
+               [max_ticks: max_ticks, auto: false, starter: starter] ++ model_opts
+             )
+           end) do
       {:ok, %{loop: loop, goal: GoalStore.get(session_key)}}
     else
       false -> {:error, "max_ticks must be 1..20"}
@@ -144,7 +145,7 @@ defmodule LemonSkills.Tools.Goal do
   end
 
   defp dispatch("resume", session_key, _params, _cwd, _opts) do
-    with {:ok, %{running: false}} <- manager(:status, [session_key]),
+    with {:ok, %{running: false}} <- manager(fn -> GoalLoopManager.status(session_key) end),
          {:ok, goal} <- fetch_goal(session_key) do
       if goal.status == "paused" do
         with {:ok, goal} <- GoalStore.resume(session_key), do: {:ok, %{goal: goal}}
@@ -161,7 +162,7 @@ defmodule LemonSkills.Tools.Goal do
     do: {:error, "unsupported or missing goal action"}
 
   defp stop(session_key) do
-    case manager(:stop_loop, [session_key, [mode: :hard]]) do
+    case manager(fn -> GoalLoopManager.stop_loop(session_key, mode: :hard) end) do
       {:error, :not_running} ->
         with {:ok, _goal} <- GoalStore.configure_loop_auto(session_key, false),
              {:ok, goal} <- GoalStore.record_loop_status(session_key, :stopped) do
@@ -175,20 +176,12 @@ defmodule LemonSkills.Tools.Goal do
 
   defp validate_delivery(nil), do: {:ok, nil}
 
-  defp validate_delivery(value) do
-    module = :"Elixir.LemonAutomation.CronDelivery"
+  defp validate_delivery(value), do: CronDelivery.validate(value)
 
-    if Code.ensure_loaded?(module),
-      do: apply(module, :validate, [value]),
-      else: {:error, :goal_runtime_unavailable}
-  end
-
-  defp manager(operation, args) do
-    if Code.ensure_loaded?(@manager) and function_exported?(@manager, operation, length(args)) do
-      apply(@manager, operation, args)
-    else
-      {:error, :goal_runtime_unavailable}
-    end
+  # A manager that is not running never received the call; any other exit may
+  # follow an accepted mutation, so its outcome is unknown and never retried.
+  defp manager(call) do
+    call.()
   catch
     :exit, {:noproc, _} -> {:error, :goal_runtime_unavailable}
     :exit, _ -> {:error, :outcome_unknown}

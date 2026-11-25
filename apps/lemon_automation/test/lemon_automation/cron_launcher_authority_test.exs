@@ -127,7 +127,7 @@ defmodule LemonAutomation.CronLauncherAuthorityTest do
     chat = group_chat()
 
     reply =
-      LemonChannels.Reminders.create("in 30m check disk usage",
+      LemonAutomation.ChatCommands.Reminders.create("in 30m check disk usage",
         session_key: chat.session_key,
         agent_id: "default",
         cron_module: CronManager

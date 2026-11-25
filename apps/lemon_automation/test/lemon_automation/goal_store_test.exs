@@ -1,7 +1,7 @@
-defmodule LemonAgent.Workspace.GoalStoreTest do
+defmodule LemonAutomation.GoalStoreTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Workspace.GoalStore
+  alias LemonAutomation.GoalStore
 
   setup do
     session_key = "goal-store-test-#{System.unique_integer([:positive])}"
@@ -14,7 +14,7 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
   } do
     assert {:ok, _} =
              GoalStore.set(session_key, "Verify the completed change",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, _} = GoalStore.record_continuation(session_key, "prior_continuation")
@@ -41,7 +41,7 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
              GoalStore.set(session_key, "Ship Hermes parity",
                agent_id: "default",
                run_id: "run_goal_test",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert goal.session_key == session_key
@@ -123,7 +123,7 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
   test "diagnostics redacts objectives and raw session ids", %{session_key: session_key} do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "private objective text",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     diagnostics = GoalStore.diagnostics(limit: 10)
@@ -146,7 +146,7 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
     assert {:ok, goal} =
              GoalStore.set(session_key, "Work here",
                cwd: ".",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert goal.cwd == Path.expand(".")
@@ -154,7 +154,7 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
 
     assert {:ok, updated} =
              GoalStore.set(session_key, "Still here",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert updated.cwd == goal.cwd
@@ -164,7 +164,7 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
   test "late completion preserves pause and records bounded result once", %{session_key: key} do
     assert {:ok, _} =
              GoalStore.set(key, "Bound results",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, _} = GoalStore.record_continuation(key, "run_result")
@@ -185,7 +185,7 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
   test "new run clears prior abort intent", %{session_key: key} do
     assert {:ok, _} =
              GoalStore.set(key, "Restart explicitly",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, _} =
@@ -203,19 +203,17 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
 
   test "rejects empty objectives", %{session_key: session_key} do
     assert {:error, :empty_objective} =
-             GoalStore.set(session_key, "  ",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
-             )
+             GoalStore.set(session_key, "  ", authority: LemonAutomation.GoalAuthority.operator())
   end
 
   describe "goal authority" do
-    alias LemonAgent.Workspace.GoalAuthority
+    alias LemonAutomation.GoalAuthority
 
     setup do
       root = Path.join(System.tmp_dir!(), "goal-store-root-#{System.unique_integer([:positive])}")
       File.mkdir_p!(Path.join(root, "inner"))
       on_exit(fn -> File.rm_rf!(root) end)
-      {:ok, root} = LemonAgent.Workspace.KanbanAuthority.canonical_directory(root)
+      {:ok, root} = LemonAutomation.KanbanAuthority.canonical_directory(root)
       %{root: root}
     end
 
@@ -289,7 +287,7 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
       assert {:ok, narrowed} =
                GoalStore.restrict_authority(key, starter(key, root, %{blocked_tools: ["bash"]}))
 
-      {:ok, canonical_root} = LemonAgent.Workspace.KanbanAuthority.canonical_directory(root)
+      {:ok, canonical_root} = LemonAutomation.KanbanAuthority.canonical_directory(root)
       assert narrowed.authority["root"] == canonical_root
       refute narrowed.authority["unrestricted"]
       refute LemonCore.ToolPolicy.allowed?(narrowed.authority["policy"], "bash")
@@ -341,7 +339,7 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
 
   defp starter(key, root, policy) do
     {:ok, starter} =
-      LemonAgent.Workspace.GoalAuthority.new(
+      LemonAutomation.GoalAuthority.new(
         %{agent_id: "default", session_key: key},
         policy,
         root

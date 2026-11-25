@@ -12,7 +12,7 @@ defmodule LemonWeb.WorkProjection do
   bound to the opaque revision the operator previewed and is refused when stale.
   """
 
-  alias LemonAgent.Workspace.{GoalAuthority, GoalStore, KanbanAuthority, KanbanStore}
+  alias LemonAutomation.{GoalAuthority, GoalStore, KanbanAuthority, KanbanStore}
   alias LemonAutomation.{CronManager, CronSchedule, GoalLoopManager, KanbanDispatcher}
   alias LemonMemory.Safety
   alias LemonWeb.CronText

@@ -1,9 +1,8 @@
-defmodule LemonChannels.KanbanStatusMessageTest do
+defmodule LemonAutomation.ChatCommands.KanbanTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Workspace.KanbanStore
-  alias LemonChannels.Adapters.Telegram.Transport.Commands
-  alias LemonChannels.KanbanStatusMessage
+  alias LemonAutomation.KanbanStore
+  alias LemonAutomation.ChatCommands.Kanban
 
   defmodule KanbanDispatcherStub do
     def start_board(board_id, opts) do
@@ -59,7 +58,7 @@ defmodule LemonChannels.KanbanStatusMessageTest do
     private_task = "secret task #{System.unique_integer([:positive])}"
     private_comment = "secret comment #{System.unique_integer([:positive])}"
 
-    board_text = KanbanStatusMessage.handle("create #{private_board}", opts)
+    board_text = Kanban.handle("create #{private_board}", opts)
     assert board_text =~ "Kanban Board Created"
     refute board_text =~ private_board
     assert board_text =~ "Name bytes:"
@@ -69,7 +68,7 @@ defmodule LemonChannels.KanbanStatusMessageTest do
     assert board.meta["kanbanAuthority"]["grantedBy"] == "channel"
 
     task_text =
-      KanbanStatusMessage.handle("task create #{board.id} --priority high #{private_task}", opts)
+      Kanban.handle("task create #{board.id} --priority high #{private_task}", opts)
 
     assert task_text =~ "Kanban Task Created"
     assert task_text =~ "Priority: high"
@@ -79,36 +78,36 @@ defmodule LemonChannels.KanbanStatusMessageTest do
     assert task.assignee == "codex"
     assert is_map(task.meta["dispatchPolicy"])
 
-    comment_text = KanbanStatusMessage.handle("comment #{task.id} #{private_comment}", opts)
+    comment_text = Kanban.handle("comment #{task.id} #{private_comment}", opts)
     assert comment_text =~ "Kanban Task Commented"
     assert comment_text =~ "Comments: 1"
     refute comment_text =~ private_comment
 
-    show_text = KanbanStatusMessage.handle("show #{board.id}", opts)
+    show_text = Kanban.handle("show #{board.id}", opts)
     assert show_text =~ board.id
     assert show_text =~ task.id
     refute show_text =~ private_board
     refute show_text =~ private_task
     refute show_text =~ private_comment
 
-    archive_text = KanbanStatusMessage.handle("archive #{board.id}", opts)
+    archive_text = Kanban.handle("archive #{board.id}", opts)
     assert archive_text =~ "Kanban Board Archived"
     assert archive_text =~ "Status: archived"
     refute archive_text =~ private_board
   end
 
   test "updates task and controls dispatcher through configured module", %{opts: opts} do
-    assert KanbanStatusMessage.handle("create dispatch board", opts) =~ "Kanban Board Created"
+    assert Kanban.handle("create dispatch board", opts) =~ "Kanban Board Created"
     [board] = Enum.filter(KanbanStore.list_boards(limit: 1_000), &(&1.name == "dispatch board"))
-    assert KanbanStatusMessage.handle("task create #{board.id} task title", opts) =~ "Created"
+    assert Kanban.handle("task create #{board.id} task title", opts) =~ "Created"
     [task] = KanbanStore.list_tasks(board.id)
 
-    update_text = KanbanStatusMessage.handle("task update #{task.id} --status doing", opts)
+    update_text = Kanban.handle("task update #{task.id} --status doing", opts)
     assert update_text =~ "Kanban Task Updated"
     assert update_text =~ "Status: doing"
 
     start_text =
-      KanbanStatusMessage.handle("dispatch start #{board.id} --max-concurrency 2", opts)
+      Kanban.handle("dispatch start #{board.id} --max-concurrency 2", opts)
 
     assert start_text =~ "Kanban Dispatcher Started"
     board_id = board.id
@@ -116,37 +115,31 @@ defmodule LemonChannels.KanbanStatusMessageTest do
     assert start_opts[:max_concurrency] == 2
     assert start_opts[:worker_id] == "codex"
 
-    status_text = KanbanStatusMessage.handle("dispatch status #{board.id}", opts)
+    status_text = Kanban.handle("dispatch status #{board.id}", opts)
     assert status_text =~ "Running: true"
 
-    stop_text = KanbanStatusMessage.handle("dispatch stop #{board.id}", opts)
+    stop_text = Kanban.handle("dispatch stop #{board.id}", opts)
     assert stop_text =~ "Kanban Dispatcher Stopped"
   end
 
   test "mutations need operator attestation and the board's principal", %{opts: opts} do
-    assert KanbanStatusMessage.handle("create owned board", opts) =~ "Kanban Board Created"
+    assert Kanban.handle("create owned board", opts) =~ "Kanban Board Created"
     [board] = Enum.filter(KanbanStore.list_boards(limit: 1_000), &(&1.name == "owned board"))
 
     member = Keyword.put(opts, :operator?, false)
-    assert KanbanStatusMessage.handle("dispatch stop #{board.id}", member) =~ "operator"
-    assert KanbanStatusMessage.handle("create another", member) =~ "operator"
+    assert Kanban.handle("dispatch stop #{board.id}", member) =~ "operator"
+    assert Kanban.handle("create another", member) =~ "operator"
 
     other_chat = Keyword.put(opts, :session_key, "agent:codex:telegram:default:dm:43")
-    assert KanbanStatusMessage.handle("dispatch stop #{board.id}", other_chat) =~ "not authorized"
-    assert KanbanStatusMessage.handle("show #{board.id}", other_chat) =~ "not authorized"
-    refute KanbanStatusMessage.handle("boards", other_chat) =~ board.id
+    assert Kanban.handle("dispatch stop #{board.id}", other_chat) =~ "not authorized"
+    assert Kanban.handle("show #{board.id}", other_chat) =~ "not authorized"
+    refute Kanban.handle("boards", other_chat) =~ board.id
 
     for flag <- ~w(--owner --workspace --assignee --worker-id --session-key --run-id) do
-      assert KanbanStatusMessage.handle("create flagged #{flag} x", opts) =~ "not accepted"
+      assert Kanban.handle("create flagged #{flag} x", opts) =~ "not accepted"
     end
 
     no_workspace = Keyword.delete(opts, :workspace)
-    assert KanbanStatusMessage.handle("create nowhere", no_workspace) =~ "bound project"
-  end
-
-  test "recognizes telegram kanban command for bot" do
-    assert Commands.kanban_command?("/kanban", "lemon_bot")
-    assert Commands.kanban_command?("/kanban@lemon_bot", "lemon_bot")
-    refute Commands.kanban_command?("/kanban@other_bot", "lemon_bot")
+    assert Kanban.handle("create nowhere", no_workspace) =~ "bound project"
   end
 end

@@ -316,7 +316,7 @@ defmodule LemonAutomation.KanbanGitSandbox do
     path = LemonCore.Paths.home_path(["kanban", "repos"])
 
     with :ok <- File.mkdir_p(path),
-         {:ok, base} <- LemonAgent.Workspace.KanbanAuthority.canonical_directory(path) do
+         {:ok, base} <- LemonAutomation.KanbanAuthority.canonical_directory(path) do
       {:ok, base}
     else
       _ -> {:error, :controller_repo_unavailable}
@@ -404,7 +404,7 @@ defmodule LemonAutomation.KanbanGitSandbox do
     path = LemonCore.Paths.home_path(["kanban", name])
 
     with :ok <- File.mkdir_p(path),
-         {:ok, dir} <- LemonAgent.Workspace.KanbanAuthority.canonical_directory(path),
+         {:ok, dir} <- LemonAutomation.KanbanAuthority.canonical_directory(path),
          {:ok, []} <- File.ls(dir) do
       {:ok, dir}
     else

@@ -3,7 +3,7 @@ defmodule LemonControlPlane.Methods.GoalSet do
   Handler for `goal.set`.
 
   The control plane is an operator surface: it records operator goal
-  authority (`LemonAgent.Workspace.GoalAuthority.operator/0`), which a later
+  authority (`LemonAutomation.GoalAuthority.operator/0`), which a later
   policy-bound starter can only narrow.
   """
 
@@ -33,7 +33,7 @@ defmodule LemonControlPlane.Methods.GoalSet do
                cwd: param(params, "cwd"),
                run_id: param(params, "runId"),
                budget: budget(params),
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              ) do
           {:ok, goal} ->
             {:ok, format_goal(goal)}

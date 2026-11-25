@@ -593,7 +593,7 @@ expires; hooks are not automatically retried. Successful persistence still
 returns `:ok` even when a hook fails or times out. Explicit finalization retries
 can redeliver hooks, so implementations must be idempotent by run id.
 
-Agent workspace coordination — goals and kanban boards — is built on this Store but lives in `lemon_agent` as `LemonAgent.Workspace.{GoalStore, KanbanStore}`. Heartbeats use automation cron jobs and cron history.
+Goal and kanban coordination is built on this Store but lives in `lemon_automation` as `LemonAutomation.{GoalStore, KanbanStore}`. Heartbeats use automation cron jobs and cron history.
 
 ### ReadCache
 

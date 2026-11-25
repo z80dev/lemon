@@ -1,7 +1,7 @@
-defmodule LemonAgent.Workspace.KanbanStoreTest do
+defmodule LemonAutomation.KanbanStoreTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Workspace.KanbanStore
+  alias LemonAutomation.KanbanStore
 
   setup do
     on_exit(fn ->
@@ -334,7 +334,7 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
     on_exit(fn -> File.rm_rf!(root) end)
 
     {:ok, authority} =
-      LemonAgent.Workspace.KanbanAuthority.new(
+      LemonAutomation.KanbanAuthority.new(
         %{agent_id: "default", session_key: "agent:default:main"},
         nil,
         root

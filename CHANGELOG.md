@@ -107,6 +107,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Goal and kanban state, their agent tools and the `/goal`, `/kanban` and
+  `/remind` chat commands are owned by `lemon_automation`. The `kanban` and
+  `goal` tools register through the runtime tool registry like `cron` (same
+  schemas; they now follow it in tool order and their results are untrusted),
+  and channels reach the chat commands through `LemonCore.AutomationCommands`
+  instead of quoted module names. `config :lemon_core, :workspace_diagnostics`
+  names `LemonAutomation.GoalStore`/`KanbanStore`; the
+  `:goal_loop_module`, `:kanban_dispatcher_module` and `:reminder_cron_module`
+  lemon_channels settings are gone (#721, #729).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle

@@ -1,9 +1,9 @@
-defmodule LemonSkills.Tools.KanbanTest do
+defmodule LemonAutomation.Tools.KanbanTest do
   use ExUnit.Case, async: false
 
   alias LemonAgent.Types.AgentToolResult
-  alias LemonSkills.Tools.Kanban
-  alias LemonAgent.Workspace.KanbanStore
+  alias LemonAutomation.Tools.Kanban
+  alias LemonAutomation.KanbanStore
 
   @session [agent_id: "agent_1", session_key: "agent:agent_1:main"]
 

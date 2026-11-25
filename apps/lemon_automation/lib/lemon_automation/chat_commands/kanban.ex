@@ -1,6 +1,7 @@
-defmodule LemonChannels.KanbanStatusMessage do
+defmodule LemonAutomation.ChatCommands.Kanban do
   @moduledoc """
-  `/kanban` chat commands.
+  `/kanban` chat commands, reached from channel transports through
+  `LemonCore.AutomationCommands`.
 
   The transport supplies trusted context only: the chat principal
   (`:agent_id`, `:session_key`), the bound workspace (`:workspace`), the channel
@@ -12,10 +13,12 @@ defmodule LemonChannels.KanbanStatusMessage do
   dispatch start durably narrows the board with it. Every mutation needs the
   transport's operator attestation, and every command is scoped to boards the
   chat principal is authorized for. Command flags never set the owner,
-  workspace, assignee, author or worker identity.
+  workspace, assignee, author or worker identity. Dispatcher control goes to
+  `LemonAutomation.KanbanDispatcher` (tests pass a stand-in as
+  `:dispatcher_module`).
   """
 
-  alias LemonAgent.Workspace.{KanbanAuthority, KanbanStore}
+  alias LemonAutomation.{KanbanAuthority, KanbanDispatcher, KanbanStore}
 
   @rejected_flags ~w(--owner --workspace --assignee --author --worker-id --worker-profile --session-key --run-id)
 
@@ -126,20 +129,12 @@ defmodule LemonChannels.KanbanStatusMessage do
   # The chat's effective channel-run policy, resolved exactly as the router
   # resolves a run from this chat. Unavailable resolution fails closed.
   defp chat_policy(principal, opts) do
-    module = :"Elixir.LemonRouter.Policy"
-
-    with true <- Code.ensure_loaded?(module),
-         true <- function_exported?(module, :resolve_validated_for_run, 1),
-         {:ok, policy} <-
-           apply(module, :resolve_validated_for_run, [
-             %{
-               agent_id: principal.agent_id,
-               session_key: principal.session_key,
-               channel_context: opts[:channel_context]
-             }
-           ]) do
-      {:ok, policy}
-    else
+    case LemonRouter.Policy.resolve_validated_for_run(%{
+           agent_id: principal.agent_id,
+           session_key: principal.session_key,
+           channel_context: opts[:channel_context]
+         }) do
+      {:ok, policy} -> {:ok, policy}
       _ -> {:error, :policy_unavailable}
     end
   end
@@ -481,22 +476,8 @@ defmodule LemonChannels.KanbanStatusMessage do
     )
   end
 
-  defp call_dispatcher(function, args, opts) do
-    module =
-      opts[:dispatcher_module] ||
-        Application.get_env(
-          :lemon_channels,
-          :kanban_dispatcher_module,
-          :"Elixir.LemonAutomation.KanbanDispatcher"
-        )
-
-    with true <- Code.ensure_loaded?(module),
-         true <- function_exported?(module, function, length(args)) do
-      apply(module, function, args)
-    else
-      _ -> {:error, :not_available}
-    end
-  end
+  defp call_dispatcher(function, args, opts),
+    do: apply(Keyword.get(opts, :dispatcher_module, KanbanDispatcher), function, args)
 
   defp field(map, key) when is_map(map) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key)) || Map.get(map, camelize(key))
