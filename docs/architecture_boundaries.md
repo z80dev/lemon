@@ -10,7 +10,7 @@ reference-only seams that permit runtime dispatch without a Mix dependency.
 <!-- architecture_policy:start -->
 | App | Role | Lib deps from `mix.exs` | `only: :test` deps | Reference-only seams |
 | --- | --- | --- | --- | --- |
-| `coding_agent` | platform | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_lsp`, `lemon_memory`, `lemon_skills` | `lemon_platform_test` | *(none)* |
+| `coding_agent` | platform | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_lsp`, `lemon_memory`, `lemon_skills` | `lemon_platform_test` | *(none)* |
 | `lemon_agent` | platform | `lemon_ai`, `lemon_core` | *(none)* | *(none)* |
 | `lemon_ai` | foundation | *(none)* | *(none)* | *(none)* |
 | `lemon_automation` | platform | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_router`, `lemon_skills` | *(none)* | *(none)* |
@@ -21,14 +21,14 @@ reference-only seams that permit runtime dispatch without a Mix dependency.
 | `lemon_control_plane` | platform | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_memory`, `lemon_omp`, `lemon_router`, `lemon_skills` | *(none)* | *(none)* |
 | `lemon_core` | foundation | *(none)* | *(none)* | *(none)* |
 | `lemon_evals` | satellite | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* | *(none)* |
-| `lemon_gateway` | platform | `lemon_agent`, `lemon_core`, `lemon_media` | *(none)* | `lemon_ai` |
+| `lemon_gateway` | satellite | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_platform_test` | `lemon_ai` |
 | `lemon_honcho` | satellite | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory` | `lemon_platform_test` | *(none)* |
 | `lemon_lsp` | platform | `lemon_core` | *(none)* | *(none)* |
 | `lemon_media` | platform | `lemon_core` | *(none)* | *(none)* |
 | `lemon_memory` | platform | `lemon_core` | *(none)* | *(none)* |
 | `lemon_omp` | platform | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* | *(none)* |
 | `lemon_platform_test` | test kit | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_memory` | *(none)* | *(none)* |
-| `lemon_router` | platform | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_media`, `lemon_memory`, `lemon_skills` | *(none)* | *(none)* |
+| `lemon_router` | platform | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_media`, `lemon_memory`, `lemon_skills` | `lemon_platform_test` | *(none)* |
 | `lemon_skills` | platform | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* | *(none)* |
 | `lemon_web` | satellite | `lemon_agent`, `lemon_automation`, `lemon_control_plane`, `lemon_core`, `lemon_memory`, `lemon_router` | *(none)* | *(none)* |
 <!-- architecture_policy:end -->
