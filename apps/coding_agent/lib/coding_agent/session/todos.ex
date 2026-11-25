@@ -19,19 +19,15 @@ defmodule CodingAgent.Session.Todos do
   A write prepared against another revision is rejected, so a late result from
   an abandoned branch or superseded list cannot overwrite the current one.
 
-  `CodingAgent.Tools.TodoStore` (ETS) holds a projection of the selected
-  branch for out-of-session readers. It is rewritten on every read, write and
-  branch selection and is never consulted here, so losing it loses nothing.
-
   ## Compatibility
 
   * Branches without journal entries (sessions written before the journal)
     use the latest successful todo *write* tool result recorded on that branch
-    (`todowrite`, or `todo` with `action: "write"`), whose result details
-    carried the complete list. Read/progress results are not evidence: the old
-    session-global store could leak another branch's list into them. Without
-    such a result the list is empty. Checkpoints and the cache are never
-    imported, and old files are not rewritten.
+    (the retired `todowrite` tool, or `todo` with `action: "write"`), whose result
+    details carried the complete list. Read/progress results are not evidence:
+    the old session-global store could leak another branch's list into them.
+    Without such a result the list is empty. Checkpoints are never imported,
+    and old files are not rewritten.
   * An entry with an unsupported version (or an unreadable version 1 entry)
     governs its branch but cannot be read: reads fail instead of falling back
     to older state, and a complete write replaces it non-destructively.
@@ -42,7 +38,7 @@ defmodule CodingAgent.Session.Todos do
   alias CodingAgent.SessionManager
   alias CodingAgent.Session.Notifier
   alias CodingAgent.SessionManager.SessionEntry
-  alias CodingAgent.Tools.TodoStore
+  alias CodingAgent.Tools.Todo
 
   @entry_type "lemon.todo"
   @version 1
@@ -51,11 +47,10 @@ defmodule CodingAgent.Session.Todos do
   @type read_result ::
           {:ok, [map()], revision()} | {:error, {:unsupported_todo_entry, term()}, revision()}
 
-  @doc "Materialize the selected branch's list and refresh its cache projection."
+  @doc "Materialize the selected branch's list with the revision a write must match."
   @spec read(map()) :: read_result()
   def read(state) do
     {result, head} = materialize(state.session_manager)
-    project(state, result)
 
     case result do
       {:ok, todos} -> {:ok, todos, revision(state, head)}
@@ -68,7 +63,7 @@ defmodule CodingAgent.Session.Todos do
 
   Fails with `:stale_revision` when `expected` no longer matches the selected
   branch, or `:journal_write_failed` when the entry could not be persisted;
-  in both cases neither the journal nor the cache changes.
+  in both cases the journal does not change.
   """
   @spec write(map(), [map()], revision()) ::
           {:ok, [map()], revision(), map()} | {:error, :stale_revision | :journal_write_failed}
@@ -76,7 +71,7 @@ defmodule CodingAgent.Session.Todos do
     {_result, head} = materialize(state.session_manager)
 
     if expected == revision(state, head) do
-      todos = TodoStore.normalize(todos)
+      todos = Todo.normalize(todos)
       entry = SessionEntry.custom(@entry_type, %{"version" => @version, "todos" => todos})
 
       try do
@@ -86,7 +81,6 @@ defmodule CodingAgent.Session.Todos do
       else
         manager ->
           state = %{state | session_manager: manager}
-          project(state, {:ok, todos})
           state = notify_change(state, {:ok, todos})
           {:ok, todos, revision(state, manager.leaf_id), state}
       end
@@ -95,11 +89,10 @@ defmodule CodingAgent.Session.Todos do
     end
   end
 
-  @doc "Refresh the cache projection after the selected branch changed."
+  @doc "Notify subscribers when the selected branch's list changed."
   @spec sync(map()) :: map()
   def sync(state) do
     {result, _head} = materialize(state.session_manager)
-    project(state, result)
     notify_change(state, result)
   end
 
@@ -160,9 +153,6 @@ defmodule CodingAgent.Session.Todos do
   end
 
   defp revision(state, head), do: {state.branch_generation || 0, head}
-
-  defp project(state, {:ok, todos}), do: TodoStore.put(state.session_manager.header.id, todos)
-  defp project(state, {:error, _}), do: TodoStore.delete(state.session_manager.header.id)
 
   # ── Legacy evidence ──────────────────────────────────────────────────────
 

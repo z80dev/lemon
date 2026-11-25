@@ -1,1101 +1,335 @@
-defmodule LemonAi.EventStreamOverflowTest do
-  @moduledoc """
-  Comprehensive tests for EventStream overflow scenarios and edge cases.
-
-  This module tests:
-  - Queue overflow with all three drop strategies (:drop_oldest, :drop_newest, :error)
-  - Timeout scenarios in result/1
-  - Task lifecycle (attach_task/detach_task) edge cases
-  - Owner process death handling
-  - Backpressure scenarios with slow consumers
-  - Event ordering guarantees
-  """
-
+defmodule LemonAi.EventStreamTest do
   use ExUnit.Case, async: true
 
   alias LemonAi.EventStream
-  alias LemonAi.Types.{AssistantMessage, TextContent, Usage, Cost}
+  alias LemonAi.Types.AssistantMessage
 
-  test "push! makes overflow a terminal provider failure instead of silent loss" do
-    {:ok, stream} =
-      EventStream.start_link(max_queue: 1, timeout: :infinity, idle_timeout: :infinity)
+  describe "bounded queue" do
+    for {strategy, feedback, retained} <- [
+          {:drop_oldest, :ok, [2, 3, 4]},
+          {:drop_newest, :ok, [1, 2, 3]},
+          {:error, {:error, :overflow}, [1, 2, 3]}
+        ] do
+      test "#{strategy} reports overflow and keeps the expected events in FIFO order" do
+        stream = start_stream(max_queue: 3, drop_strategy: unquote(strategy))
+        assert EventStream.stats(stream) == %{max_queue: 3, queue_size: 0, dropped: 0}
+        for event <- 1..3, do: assert(:ok = EventStream.push(stream, event))
+        assert EventStream.push(stream, 4) == unquote(feedback)
+        assert EventStream.stats(stream) == %{max_queue: 3, queue_size: 3, dropped: 1}
 
-    assert :ok = EventStream.push!(stream, {:text_delta, 0, "accepted"})
-
-    assert catch_throw(EventStream.push!(stream, {:text_delta, 0, "rejected"})) ==
-             {:event_stream_push_failed, :overflow}
-
-    assert {:error, %AssistantMessage{error_message: "Event stream queue overflow"}} =
-             EventStream.result(stream)
-
-    assert [{:error, :error, %AssistantMessage{}}] = Enum.to_list(EventStream.events(stream))
-    GenServer.stop(stream)
-  end
-
-  test "push! rejection cannot overwrite a completed result" do
-    {:ok, stream} = EventStream.start_link(timeout: :infinity, idle_timeout: :infinity)
-    message = make_message()
-    EventStream.complete(stream, message)
-    assert {:ok, ^message} = EventStream.result(stream)
-
-    assert catch_throw(EventStream.push!(stream, :late)) ==
-             {:event_stream_push_failed, :canceled}
-
-    assert {:ok, ^message} = EventStream.result(stream)
-    GenServer.stop(stream)
-  end
-
-  test "resync overflow keeps its recovery marker through push! failure" do
-    {:ok, stream} =
-      EventStream.start_link(
-        max_queue: 1,
-        drop_strategy: :resync,
-        timeout: :infinity,
-        idle_timeout: :infinity
-      )
-
-    assert :ok = EventStream.push!(stream, :accepted)
-
-    assert catch_throw(EventStream.push!(stream, :rejected)) ==
-             {:event_stream_push_failed, :overflow}
-
-    assert {:error, :overflow} = EventStream.result(stream)
-
-    assert [:accepted, {:stream_resync, %{reason: :overflow}}] =
-             Enum.to_list(EventStream.events(stream))
-
-    GenServer.stop(stream)
-  end
-
-  # ============================================================================
-  # Test Helpers
-  # ============================================================================
-
-  defp make_message(opts \\ []) do
-    %AssistantMessage{
-      content: Keyword.get(opts, :content, []),
-      api: :test,
-      provider: :test,
-      model: "test",
-      usage: %Usage{cost: %Cost{}},
-      stop_reason: Keyword.get(opts, :stop_reason, :stop),
-      timestamp: System.system_time(:millisecond)
-    }
-  end
-
-  # Waits until `stream` has exactly one waiter registered in `field`
-  # (`:result_waiters` or `:take_waiters`).
-  defp await_waiter(stream, field) do
-    assert wait_until(fn -> :queue.len(Map.fetch!(:sys.get_state(stream), field)) == 1 end),
-           "waiter did not register in #{field}"
-  end
-
-  defp wait_until(fun, timeout_ms \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-
-    Stream.repeatedly(fn -> fun.() end)
-    |> Enum.reduce_while(false, fn result, _ ->
-      cond do
-        result ->
-          {:halt, true}
-
-        System.monotonic_time(:millisecond) > deadline ->
-          {:halt, false}
-
-        true ->
-          Process.sleep(5)
-          {:cont, false}
-      end
-    end)
-  end
-
-  defp extract_text_content(events) do
-    events
-    |> Enum.filter(&match?({:text_delta, _, _}, &1))
-    |> Enum.map(fn {:text_delta, _, text} -> text end)
-  end
-
-  # ============================================================================
-  # Queue Overflow with :drop_oldest Strategy
-  # ============================================================================
-
-  describe "queue overflow with :drop_oldest strategy" do
-    test "drops oldest events when queue is full" do
-      {:ok, stream} = EventStream.start_link(max_queue: 3, drop_strategy: :drop_oldest)
-
-      # Push 5 events into a queue of size 3
-      # Events 1 and 2 should be dropped
-      for i <- 1..5 do
-        assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
+        [first | remaining] = unquote(retained)
+        assert Enum.take(EventStream.events(stream), 1) == [first]
+        assert EventStream.stats(stream) == %{max_queue: 3, queue_size: 2, dropped: 1}
+        assert :ok = EventStream.push(stream, :new_capacity)
+        assert Enum.take(EventStream.events(stream), 3) == remaining ++ [:new_capacity]
+        assert EventStream.stats(stream) == %{max_queue: 3, queue_size: 0, dropped: 1}
       end
 
-      stats = EventStream.stats(stream)
-      assert stats.queue_size == 3
-      assert stats.dropped == 2
-
-      EventStream.complete(stream, make_message())
-      events = EventStream.events(stream) |> Enum.to_list()
-      texts = extract_text_content(events)
-
-      # Should have kept 3, 4, 5 but one more dropped for done event
-      assert length(texts) == 2
-      # Most recent events should be preserved
-      assert "msg_5" in texts
-    end
-
-    test "always returns :ok even when dropping" do
-      {:ok, stream} = EventStream.start_link(max_queue: 1, drop_strategy: :drop_oldest)
-
-      # All pushes should succeed
-      for i <- 1..10 do
-        result = EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
-        assert result == :ok
+      test "#{strategy} admits the terminal even when the queue is full" do
+        stream = start_stream(max_queue: 2, drop_strategy: unquote(strategy))
+        assert :ok = EventStream.push(stream, :was_oldest)
+        assert :ok = EventStream.push(stream, :more_recent)
+        message = %AssistantMessage{stop_reason: :stop}
+        assert :ok = EventStream.complete(stream, message)
+        assert EventStream.result(stream, 1_000) == {:ok, message}
+        assert EventStream.stats(stream) == %{max_queue: 2, queue_size: 2, dropped: 1}
+        assert Enum.to_list(EventStream.events(stream)) == [:more_recent, {:done, :stop, message}]
+        assert EventStream.stats(stream) == %{max_queue: 2, queue_size: 0, dropped: 1}
       end
-
-      stats = EventStream.stats(stream)
-      assert stats.dropped == 9
     end
 
-    test "preserves event order for remaining events" do
-      {:ok, stream} = EventStream.start_link(max_queue: 5, drop_strategy: :drop_oldest)
-
-      # Push 8 events, first 3 should be dropped
-      for i <- 1..8 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
-      end
-
-      EventStream.complete(stream, make_message())
-      events = EventStream.events(stream) |> Enum.to_list()
-      texts = extract_text_content(events)
-
-      # Events should be in order (4, 5, 6, 7 - after dropping oldest for done)
-      assert Enum.at(texts, 0) < Enum.at(texts, 1)
+    test "async overflow has no rejection reply, but counts toward dropped events" do
+      stream = start_stream(max_queue: 2, drop_strategy: :error)
+      assert :ok = EventStream.push(stream, :first)
+      assert :ok = EventStream.push_async(stream, :second)
+      assert :ok = EventStream.push_async(stream, :dropped)
+      assert EventStream.stats(stream) == %{max_queue: 2, queue_size: 2, dropped: 1}
+      assert Enum.take(EventStream.events(stream), 2) == [:first, :second]
     end
 
-    test "handles rapid overflow correctly" do
-      {:ok, stream} = EventStream.start_link(max_queue: 2, drop_strategy: :drop_oldest)
+    test "push! makes overflow a terminal provider failure instead of silent loss" do
+      stream = start_stream(max_queue: 1)
+      assert :ok = EventStream.push!(stream, {:text_delta, 0, "accepted"})
 
-      # Push many events very quickly
-      tasks =
-        for i <- 1..20 do
-          Task.async(fn ->
-            EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
-          end)
-        end
+      assert catch_throw(EventStream.push!(stream, :rejected)) ==
+               {:event_stream_push_failed, :overflow}
 
-      Enum.each(tasks, &Task.await(&1, 5000))
+      assert {:error, %AssistantMessage{error_message: "Event stream queue overflow"} = error} =
+               EventStream.result(stream, 1_000)
 
-      stats = EventStream.stats(stream)
-      assert stats.queue_size == 2
-      assert stats.dropped >= 18
-    end
-  end
-
-  # ============================================================================
-  # Queue Overflow with :drop_newest Strategy
-  # ============================================================================
-
-  describe "queue overflow with :drop_newest strategy" do
-    test "drops newest events when queue is full" do
-      {:ok, stream} = EventStream.start_link(max_queue: 3, drop_strategy: :drop_newest)
-
-      # Push 5 events into a queue of size 3
-      # Events 4 and 5 should be dropped (newest are dropped)
-      for i <- 1..5 do
-        assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
-      end
-
-      stats = EventStream.stats(stream)
-      assert stats.queue_size == 3
-      assert stats.dropped == 2
-
-      # complete() drops oldest (msg_1) to make room for done event
-      EventStream.complete(stream, make_message())
-      events = EventStream.events(stream) |> Enum.to_list()
-      texts = extract_text_content(events)
-
-      # Should have kept 2, 3 (msg_1 dropped for done event)
-      assert length(texts) == 2
-      assert "msg_2" in texts
-      assert "msg_3" in texts
-    end
-
-    test "always returns :ok even when dropping" do
-      {:ok, stream} = EventStream.start_link(max_queue: 1, drop_strategy: :drop_newest)
-
-      # All pushes should succeed
-      for i <- 1..10 do
-        result = EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
-        assert result == :ok
-      end
-
-      stats = EventStream.stats(stream)
-      assert stats.dropped == 9
-    end
-
-    test "preserves oldest events" do
-      {:ok, stream} = EventStream.start_link(max_queue: 3, drop_strategy: :drop_newest)
-
-      for i <- 1..10 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
-      end
-
-      # Queue has [msg_1, msg_2, msg_3], dropped 7 newest (msg_4..msg_10)
-      # complete() drops oldest (msg_1) to make room for done event
-      EventStream.complete(stream, make_message())
-      events = EventStream.events(stream) |> Enum.to_list()
-      texts = extract_text_content(events)
-
-      # Should have kept msg_2 and msg_3 (msg_1 dropped for done event)
-      assert "msg_2" in texts
-      assert "msg_3" in texts
-      # msg_1 was dropped to make room for done
-      refute "msg_1" in texts
-    end
-
-    test "logs debug message when dropping" do
-      {:ok, stream} = EventStream.start_link(max_queue: 1, drop_strategy: :drop_newest)
-
-      # Fill the queue
-      EventStream.push(stream, {:text_delta, 0, "msg_1"})
-
-      # This should trigger a log and drop the event
-      EventStream.push(stream, {:text_delta, 0, "msg_2"})
-
-      stats = EventStream.stats(stream)
-      assert stats.dropped == 1
-    end
-  end
-
-  # ============================================================================
-  # Queue Overflow with :error Strategy
-  # ============================================================================
-
-  describe "queue overflow with :error strategy" do
-    test "returns {:error, :overflow} when queue is full" do
-      {:ok, stream} = EventStream.start_link(max_queue: 2, drop_strategy: :error)
-
-      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_1"})
-      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_2"})
-      assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "msg_3"})
-    end
-
-    test "increments dropped count on overflow" do
-      {:ok, stream} = EventStream.start_link(max_queue: 1, drop_strategy: :error)
-
-      EventStream.push(stream, {:text_delta, 0, "msg_1"})
-
-      for _ <- 1..5 do
-        EventStream.push(stream, {:text_delta, 0, "overflow"})
-      end
-
-      stats = EventStream.stats(stream)
-      assert stats.dropped == 5
-    end
-
-    test "push_async silently drops on overflow" do
-      {:ok, stream} = EventStream.start_link(max_queue: 1, drop_strategy: :error)
-
-      # Fill the queue
-      EventStream.push(stream, {:text_delta, 0, "msg_1"})
-
-      # Async pushes should not block or return errors
-      for i <- 2..10 do
-        EventStream.push_async(stream, {:text_delta, 0, "msg_#{i}"})
-      end
-
-      # Wait for async messages to be processed
-      assert wait_until(fn ->
-               stats = EventStream.stats(stream)
-               stats.dropped >= 8
-             end)
-    end
-
-    test "allows pushing after consuming events" do
-      {:ok, stream} = EventStream.start_link(max_queue: 2, drop_strategy: :error)
-
-      # Fill the queue
-      EventStream.push(stream, {:text_delta, 0, "msg_1"})
-      EventStream.push(stream, {:text_delta, 0, "msg_2"})
-      assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "msg_3"})
-
-      # Start a consumer to drain some events
-      reader =
-        Task.async(fn ->
-          EventStream.events(stream) |> Enum.take(1)
-        end)
-
-      Task.await(reader, 1000)
-
-      # Now we should be able to push again
-      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_4"})
-    end
-
-    test "terminal events force room by dropping oldest" do
-      {:ok, stream} = EventStream.start_link(max_queue: 2, drop_strategy: :error)
-
-      # Fill the queue
-      EventStream.push(stream, {:text_delta, 0, "msg_1"})
-      EventStream.push(stream, {:text_delta, 0, "msg_2"})
-
-      # Complete should still work by dropping oldest
-      EventStream.complete(stream, make_message())
-
-      events = EventStream.events(stream) |> Enum.to_list()
-      assert Enum.any?(events, &match?({:done, _, _}, &1))
-    end
-  end
-
-  # ============================================================================
-  # Timeout Scenarios in result/1
-  # ============================================================================
-
-  describe "timeout scenarios in result/1" do
-    test "result/1 times out when stream doesn't complete" do
-      {:ok, stream} = EventStream.start_link()
-
-      # Don't complete the stream, just let result timeout
-      result = EventStream.result(stream, 100)
-      assert {:error, :timeout} = result
-    end
-
-    test "result/1 succeeds before timeout when stream completes" do
-      {:ok, stream} = EventStream.start_link()
-
-      # Complete after a short delay
-      Task.start(fn ->
-        Process.sleep(50)
-        EventStream.complete(stream, make_message(content: [%TextContent{text: "done"}]))
-      end)
-
-      result = EventStream.result(stream, 5_000)
-      assert {:ok, %AssistantMessage{}} = result
-    end
-
-    test "result/1 returns :stream_not_found for dead stream" do
-      {:ok, stream} = EventStream.start_link()
-      stream_ref = Process.monitor(stream)
-      EventStream.cancel(stream, :test)
-
-      # Wait for stream to die
-      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
-
-      result = EventStream.result(stream, 100)
-      assert {:error, :stream_not_found} = result
-    end
-
-    test "result/1 with :infinity timeout blocks until completion" do
-      {:ok, stream} = EventStream.start_link()
-
-      # Start a task to complete after delay
-      Task.start(fn ->
-        Process.sleep(100)
-        EventStream.complete(stream, make_message())
-      end)
-
-      # This should block until completion
-      result = EventStream.result(stream, :infinity)
-      assert {:ok, _} = result
-    end
-
-    test "multiple waiters all receive result" do
-      {:ok, stream} = EventStream.start_link()
-
-      # Start multiple waiters
-      waiters =
-        for _ <- 1..5 do
-          Task.async(fn ->
-            EventStream.result(stream, 5000)
-          end)
-        end
-
-      # Complete the stream
-      Process.sleep(50)
-      EventStream.complete(stream, make_message(content: [%TextContent{text: "shared result"}]))
-
-      # All waiters should get the result
-      results = Enum.map(waiters, &Task.await(&1, 1000))
-
-      assert Enum.all?(results, fn
-               {:ok, %AssistantMessage{content: [%TextContent{text: "shared result"}]}} -> true
-               _ -> false
-             end)
-    end
-
-    test "result/1 returns error result when stream errors" do
-      {:ok, stream} = EventStream.start_link()
-
-      EventStream.error(stream, make_message(stop_reason: :error))
-
-      result = EventStream.result(stream, 100)
-      assert {:error, %AssistantMessage{stop_reason: :error}} = result
-    end
-  end
-
-  # ============================================================================
-  # Task Lifecycle Edge Cases
-  # ============================================================================
-
-  describe "task lifecycle (attach_task/detach_task) edge cases" do
-    test "attaching task multiple times replaces previous task" do
-      {:ok, stream} = EventStream.start_link()
-      test_pid = self()
-
-      # Start first task
-      {:ok, task1_pid} =
-        Task.start(fn ->
-          send(test_pid, {:task1_started, self()})
-          receive do: (:stop -> :ok)
-        end)
-
-      EventStream.attach_task(stream, task1_pid)
-      assert_receive {:task1_started, ^task1_pid}, 1000
-
-      # Start second task
-      {:ok, task2_pid} =
-        Task.start(fn ->
-          send(test_pid, {:task2_started, self()})
-          receive do: (:stop -> :ok)
-        end)
-
-      EventStream.attach_task(stream, task2_pid)
-      assert_receive {:task2_started, ^task2_pid}, 1000
-
-      # Cancel stream - should only shutdown the currently attached task
-      task2_ref = Process.monitor(task2_pid)
-      EventStream.cancel(stream, :test)
-
-      # Wait for the attached task to be shut down
-      assert_receive {:DOWN, ^task2_ref, :process, _, _}, 5_000
-
-      # Task1 should still be alive (it was replaced)
-      assert Process.alive?(task1_pid)
-      refute Process.alive?(task2_pid)
-
-      # Cleanup task1
-      send(task1_pid, :stop)
-    end
-
-    test "parent shutdown still tears down the attached task (trap_exit teardown)" do
-      test_pid = self()
-
-      # The stream's parent is an intermediate process (like a fallback relay
-      # task); killing the parent with :shutdown must still shut down the
-      # attached streaming task instead of orphaning it (the pre-trap_exit
-      # link cascade skipped both do_cancel and terminate).
-      parent =
-        spawn(fn ->
-          {:ok, stream} = EventStream.start_link()
-
-          {:ok, task_pid} =
-            Task.start(fn ->
-              send(test_pid, {:task_started, self()})
-              Process.sleep(:infinity)
-            end)
-
-          EventStream.attach_task(stream, task_pid)
-          # Sync call to flush the attach_task cast before signalling ready.
-          _ = EventStream.stats(stream)
-          send(test_pid, {:ready, stream})
-          Process.sleep(:infinity)
-        end)
-
-      assert_receive {:task_started, task_pid}, 1000
-      assert_receive {:ready, stream}, 1000
-
-      stream_ref = Process.monitor(stream)
-      task_ref = Process.monitor(task_pid)
-
-      Process.exit(parent, :shutdown)
-
-      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 1000
-      assert_receive {:DOWN, ^task_ref, :process, _, _}, 1000
-    end
-
-    test "task crash before stream completion triggers error" do
-      {:ok, stream} = EventStream.start_link()
-
-      {:ok, task_pid} =
-        Task.start(fn ->
-          Process.sleep(50)
-          exit(:intentional_crash)
-        end)
-
-      EventStream.attach_task(stream, task_pid)
-
-      result = EventStream.result(stream, 5000)
-      assert {:error, %AssistantMessage{stop_reason: :error}} = result
-    end
-
-    test "task normal exit after completion doesn't affect stream" do
-      {:ok, stream} = EventStream.start_link()
-
-      {:ok, task_pid} =
-        Task.start(fn ->
-          Process.sleep(20)
-          EventStream.complete(stream, make_message())
-          # Task exits normally after completing
-        end)
-
-      EventStream.attach_task(stream, task_pid)
-
-      result = EventStream.result(stream, 5000)
-      assert {:ok, _} = result
-    end
-
-    test "attaching an already-dead task produces a retained terminal error" do
-      {:ok, stream} = EventStream.start_link()
-      task_pid = spawn(fn -> :done end)
-      task_ref = Process.monitor(task_pid)
-      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, _}, 5_000
-
-      EventStream.attach_task(stream, task_pid)
-
-      assert {:error,
-              %AssistantMessage{
-                stop_reason: :error,
-                error_message: "Streaming task crashed: :noproc"
-              } = error} = EventStream.result(stream, 5_000)
-
-      assert Process.alive?(stream)
-
-      # An unrelated late completion must not overwrite the producer's failure.
-      EventStream.complete(stream, make_message())
-      assert {:error, ^error} = EventStream.result(stream, 5_000)
       assert [{:error, :error, ^error}] = Enum.to_list(EventStream.events(stream))
     end
 
-    test "stream still works without any attached task" do
-      {:ok, stream} = EventStream.start_link()
+    test "resync overflow keeps its recovery marker through push! failure" do
+      stream = start_stream(max_queue: 1, drop_strategy: :resync)
+      assert :ok = EventStream.push!(stream, :accepted)
 
-      EventStream.push(stream, {:text_delta, 0, "hello"})
-      EventStream.complete(stream, make_message())
+      assert catch_throw(EventStream.push!(stream, :rejected)) ==
+               {:event_stream_push_failed, :overflow}
 
-      events = EventStream.events(stream) |> Enum.to_list()
-      assert length(events) == 2
+      assert EventStream.result(stream, 1_000) == {:error, :overflow}
+
+      assert Enum.to_list(EventStream.events(stream)) == [
+               :accepted,
+               {:stream_resync, %{reason: :overflow}}
+             ]
     end
 
-    test "task receives shutdown signal on owner death" do
-      test_pid = self()
+    @tag :concurrency
+    test "concurrent producers share the capacity and report each rejected push" do
+      stream = start_stream(max_queue: 5, drop_strategy: :error)
 
-      # Create an owner process
-      owner_pid =
-        spawn(fn ->
-          receive do: (:die -> :ok)
-        end)
-
-      {:ok, stream} = EventStream.start_link(owner: owner_pid)
-
-      {:ok, task_pid} =
-        Task.start(fn ->
-          send(test_pid, {:task_started, self()})
-          receive do: (_ -> :ok)
-        end)
-
-      EventStream.attach_task(stream, task_pid)
-      assert_receive {:task_started, ^task_pid}, 1000
-
-      # Kill the owner
-      stream_ref = Process.monitor(stream)
-      task_ref = Process.monitor(task_pid)
-      send(owner_pid, :die)
-
-      # Both stream and task should die
-      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
-      assert_receive {:DOWN, ^task_ref, :process, _, _}, 5_000
-    end
-  end
-
-  # ============================================================================
-  # Owner Process Death Handling
-  # ============================================================================
-
-  describe "owner process death handling" do
-    test "stream terminates when owner dies" do
-      test_pid = self()
-
-      owner =
-        spawn(fn ->
-          {:ok, stream} = EventStream.start_link(owner: self())
-          send(test_pid, {:stream, stream})
-          receive do: (:die -> :ok)
-        end)
-
-      stream =
-        receive do
-          {:stream, s} -> s
-        after
-          1000 -> flunk("Did not receive stream")
-        end
-
-      stream_ref = Process.monitor(stream)
-
-      # Kill owner
-      send(owner, :die)
-
-      # The stream should terminate once it handles the owner's DOWN message
-      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
-    end
-
-    test "result waiters receive error on owner death" do
-      test_pid = self()
-
-      owner =
-        spawn(fn ->
-          {:ok, stream} = EventStream.start_link(owner: self())
-          send(test_pid, {:stream, stream})
-          receive do: (:die -> :ok)
-        end)
-
-      stream =
-        receive do
-          {:stream, s} -> s
-        after
-          1000 -> flunk("Did not receive stream")
-        end
-
-      # Start waiting for result
-      waiter =
-        Task.async(fn ->
-          EventStream.result(stream, 5000)
-        end)
-
-      # Wait for waiter to register
-      await_waiter(stream, :result_waiters)
-
-      # Kill owner
-      send(owner, :die)
-
-      result = Task.await(waiter, 5_000)
-      assert {:error, {:canceled, :owner_down}} = result
-    end
-
-    test "events include canceled event with :owner_down reason" do
-      test_pid = self()
-
-      owner =
-        spawn(fn ->
-          {:ok, stream} = EventStream.start_link(owner: self())
-          send(test_pid, {:stream, stream})
-          receive do: (:die -> :ok)
-        end)
-
-      stream =
-        receive do
-          {:stream, s} -> s
-        after
-          1000 -> flunk("Did not receive stream")
-        end
-
-      # Start reading events
-      reader =
-        Task.async(fn ->
-          EventStream.events(stream) |> Enum.to_list()
-        end)
-
-      # Wait for reader to start waiting
-      await_waiter(stream, :take_waiters)
-
-      # Kill owner
-      send(owner, :die)
-
-      events = Task.await(reader, 5_000)
-      assert Enum.any?(events, &match?({:canceled, :owner_down}, &1))
-    end
-
-    test "stream with self as owner is not monitored" do
-      # When owner is self, the stream should not set up monitoring
-      {:ok, stream} = EventStream.start_link(owner: self())
-
-      # Stream should work normally
-      EventStream.push(stream, {:text_delta, 0, "hello"})
-      EventStream.complete(stream, make_message())
-
-      {:ok, _} = EventStream.result(stream, 100)
-    end
-
-    test "attached task is killed when owner dies" do
-      test_pid = self()
-
-      owner =
-        spawn(fn ->
-          {:ok, stream} = EventStream.start_link(owner: self())
-          send(test_pid, {:stream, stream})
-          receive do: (:die -> :ok)
-        end)
-
-      stream =
-        receive do
-          {:stream, s} -> s
-        after
-          1000 -> flunk("Did not receive stream")
-        end
-
-      {:ok, task_pid} =
-        Task.start(fn ->
-          send(test_pid, {:task_started, self()})
-          receive do: (_ -> :ok)
-        end)
-
-      EventStream.attach_task(stream, task_pid)
-      assert_receive {:task_started, ^task_pid}, 1000
-
-      # Kill owner
-      task_ref = Process.monitor(task_pid)
-      send(owner, :die)
-
-      # The task is shut down by the cascade
-      assert_receive {:DOWN, ^task_ref, :process, _, _}, 5_000
-    end
-  end
-
-  # ============================================================================
-  # Backpressure Scenarios with Slow Consumers
-  # ============================================================================
-
-  describe "backpressure scenarios with slow consumers" do
-    test "producer can push faster than consumer reads" do
-      {:ok, stream} = EventStream.start_link(max_queue: 100, drop_strategy: :error)
-
-      # Start slow consumer
-      consumer =
-        Task.async(fn ->
-          EventStream.events(stream)
-          |> Enum.map(fn event ->
-            Process.sleep(10)
-            event
-          end)
-          |> Enum.to_list()
-        end)
-
-      # Fast producer
-      for i <- 1..20 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
-      end
-
-      EventStream.complete(stream, make_message())
-
-      events = Task.await(consumer, 5000)
-      # All events should be received (queue is large enough)
-      assert length(events) == 21
-    end
-
-    test "backpressure with error strategy blocks producer" do
-      {:ok, stream} = EventStream.start_link(max_queue: 5, drop_strategy: :error)
-
-      # Fill the queue
-      for i <- 1..5 do
-        assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
-      end
-
-      # Next push should fail
-      assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "overflow"})
-
-      # Start consumer
-      consumer =
-        Task.async(fn ->
-          EventStream.events(stream) |> Enum.take(1)
-        end)
-
-      Task.await(consumer, 1000)
-
-      # Now push should work again
-      assert :ok = EventStream.push(stream, {:text_delta, 0, "after_consume"})
-    end
-
-    test "slow consumer with drop_oldest loses old events" do
-      {:ok, stream} = EventStream.start_link(max_queue: 3, drop_strategy: :drop_oldest)
-
-      # Fill queue and trigger drops
-      for i <- 1..10 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
-      end
-
-      stats = EventStream.stats(stream)
-      assert stats.dropped == 7
-
-      EventStream.complete(stream, make_message())
-
-      events = EventStream.events(stream) |> Enum.to_list()
-      texts = extract_text_content(events)
-
-      # Should have recent events (after dropping for done)
-      assert "msg_10" in texts or "msg_9" in texts
-      refute "msg_1" in texts
-    end
-
-    test "concurrent producers and consumer with backpressure" do
-      {:ok, stream} = EventStream.start_link(max_queue: 10, drop_strategy: :drop_oldest)
-
-      # Start consumer
-      consumer =
-        Task.async(fn ->
-          EventStream.events(stream)
-          |> Enum.map(fn event ->
-            Process.sleep(5)
-            event
-          end)
-          |> Enum.to_list()
-        end)
-
-      # Multiple producers
       producers =
-        for producer_id <- 1..3 do
+        for producer <- 1..4 do
           Task.async(fn ->
-            for i <- 1..10 do
-              EventStream.push(stream, {:text_delta, 0, "p#{producer_id}_#{i}"})
-              Process.sleep(1)
+            for serial <- 1..25 do
+              event = {producer, serial}
+              {EventStream.push(stream, event), event}
             end
           end)
         end
 
-      # Wait for producers
-      Enum.each(producers, &Task.await(&1, 5000))
-
-      # Complete and wait for consumer
-      EventStream.complete(stream, make_message())
-
-      events = Task.await(consumer, 10_000)
-
-      # Should have the done event
-      assert Enum.any?(events, &match?({:done, _, _}, &1))
-    end
-
-    test "take waiter gets event immediately when available" do
-      {:ok, stream} = EventStream.start_link()
-
-      # Push event before consumer starts
-      EventStream.push(stream, {:text_delta, 0, "already_there"})
-
-      # Consumer should get event immediately: the event is already queued, so
-      # the consumer finishes without any further producer activity.
-      consumer =
-        Task.async(fn ->
-          EventStream.events(stream) |> Enum.take(1)
-        end)
-
-      events = Task.await(consumer, 5_000)
-
-      assert [{:text_delta, 0, "already_there"}] = events
+      attempts = producers |> Task.await_many(1_000) |> List.flatten()
+      accepted = for {:ok, event} <- attempts, do: event
+      assert length(accepted) == 5
+      assert Enum.count(attempts, &match?({{:error, :overflow}, _}, &1)) == 95
+      assert EventStream.stats(stream) == %{max_queue: 5, queue_size: 5, dropped: 95}
+      assert Enum.sort(Enum.take(EventStream.events(stream), 5)) == Enum.sort(accepted)
     end
   end
 
-  # ============================================================================
-  # Event Ordering Guarantees
-  # ============================================================================
+  describe "events and terminal results" do
+    test "completion preserves FIFO arbitrary events and assistant, map and list payloads" do
+      message = %AssistantMessage{stop_reason: :stop}
+      accepted = [{:start, message}, :heartbeat, %{status: :working}, "chunk", 42]
 
-  describe "event ordering guarantees" do
-    test "events are delivered in FIFO order" do
-      {:ok, stream} = EventStream.start_link()
+      for {result, terminal} <- [
+            {message, {:done, :stop, message}},
+            {%{"stop_reason" => "length"}, {:done, "length", %{"stop_reason" => "length"}}},
+            {[message], {:agent_end, [message]}},
+            {[], {:agent_end, []}}
+          ] do
+        stream = start_stream()
+        {:ok, subscription} = EventStream.subscribe_result(stream)
+        for event <- accepted, do: assert(:ok = EventStream.push(stream, event))
+        assert :ok = EventStream.complete(stream, result)
+        assert :ok = EventStream.complete(stream, %AssistantMessage{stop_reason: :ignored})
+        assert :ok = EventStream.error(stream, :ignored, nil)
+        assert :ok = EventStream.push_async(stream, :ignored)
 
-      # Push events in order
-      for i <- 1..100 do
-        EventStream.push(
-          stream,
-          {:text_delta, 0, "msg_#{String.pad_leading(to_string(i), 3, "0")}"}
-        )
+        assert catch_throw(EventStream.push!(stream, :late)) ==
+                 {:event_stream_push_failed, :canceled}
+
+        assert EventStream.result(stream, 1_000) == {:ok, result}
+        assert Enum.to_list(EventStream.events(stream)) == accepted ++ [terminal]
+        assert EventStream.result(stream, 1_000) == {:ok, result}
+        assert_receive {:event_stream_result, ^subscription, {:ok, ^result}}, 1_000
+        refute_receive {:event_stream_result, ^subscription, _}, 0
       end
-
-      EventStream.complete(stream, make_message())
-
-      events = EventStream.events(stream) |> Enum.to_list()
-      texts = extract_text_content(events)
-
-      # Verify FIFO order
-      indexed = Enum.with_index(texts)
-
-      Enum.each(indexed, fn {text, idx} ->
-        expected = "msg_#{String.pad_leading(to_string(idx + 1), 3, "0")}"
-        assert text == expected, "Expected #{expected} at index #{idx}, got #{text}"
-      end)
     end
 
-    test "terminal events come after all regular events" do
-      {:ok, stream} = EventStream.start_link()
+    test "error is the first terminal and preserves its provider or partial-state payload" do
+      provider_error = %AssistantMessage{
+        stop_reason: :error,
+        error_message: "provider unavailable"
+      }
 
-      for i <- 1..10 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
+      stream = start_stream()
+      assert :ok = EventStream.error(stream, provider_error)
+      assert :ok = EventStream.complete(stream, [])
+
+      assert {:error,
+              %AssistantMessage{error_message: "provider unavailable", error_details: details} =
+                error} =
+               EventStream.result(stream, 1_000)
+
+      assert is_map(details)
+      assert [{:error, :error, ^error}] = Enum.to_list(EventStream.events(stream))
+
+      for partial <- [nil, %{messages: [:partial]}] do
+        stream = start_stream()
+        assert :ok = EventStream.error(stream, :tool_failed, partial)
+        assert :ok = EventStream.complete(stream, [])
+        assert EventStream.result(stream, 1_000) == {:error, :tool_failed, partial}
+        assert Enum.to_list(EventStream.events(stream)) == [{:error, :tool_failed, partial}]
       end
-
-      EventStream.complete(stream, make_message())
-
-      events = EventStream.events(stream) |> Enum.to_list()
-
-      # Done event should be last
-      {last, rest} = List.pop_at(events, -1)
-      assert {:done, _, _} = last
-
-      # All other events should be text_delta
-      Enum.each(rest, fn event ->
-        assert {:text_delta, _, _} = event
-      end)
     end
 
-    test "multiple consumers see same order" do
-      {:ok, stream} = EventStream.start_link()
-
-      # Push some events
-      for i <- 1..5 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
+    test "events halts after yielding each supported pushed terminal" do
+      for terminal <- [
+            {:agent_end, []},
+            {:error, :failed, nil},
+            {:done, :stop, %{}},
+            {:canceled, :user}
+          ] do
+        stream = start_stream()
+        assert :ok = EventStream.push(stream, :before)
+        assert :ok = EventStream.push(stream, terminal)
+        assert :ok = EventStream.push(stream, :still_queued)
+        assert Enum.to_list(EventStream.events(stream)) == [:before, terminal]
+        assert EventStream.stats(stream).queue_size == 1
       end
-
-      EventStream.complete(stream, make_message())
-
-      # Consume all events
-      events = EventStream.events(stream) |> Enum.to_list()
-      texts = extract_text_content(events)
-
-      assert texts == ["msg_1", "msg_2", "msg_3", "msg_4", "msg_5"]
     end
 
-    test "order preserved under concurrent push" do
-      {:ok, stream} = EventStream.start_link(max_queue: 1000)
-
-      # Use a single producer to ensure deterministic ordering
-
-      for i <- 1..50 do
-        EventStream.push(stream, {:text_delta, 0, "#{i}"})
-      end
-
-      EventStream.complete(stream, make_message())
-
-      events = EventStream.events(stream) |> Enum.to_list()
-      texts = extract_text_content(events)
-      numbers = Enum.map(texts, &String.to_integer/1)
-
-      # Should be strictly increasing
-      assert numbers == Enum.to_list(1..50)
+    test "collect_text concatenates async text deltas and skips non-text events" do
+      stream = start_stream()
+      assert :ok = EventStream.push_async(stream, {:text_delta, 0, "Hello"})
+      assert :ok = EventStream.push_async(stream, {:thinking_delta, 0, "not shown"})
+      assert :ok = EventStream.push_async(stream, {:text_delta, 0, " world"})
+      assert :ok = EventStream.complete(stream, %AssistantMessage{stop_reason: :stop})
+      assert EventStream.collect_text(stream) == "Hello world"
     end
 
-    test "waiters receive events in order they arrive" do
-      {:ok, stream} = EventStream.start_link()
-
-      # Start consumer first
-      consumer =
-        Task.async(fn ->
-          EventStream.events(stream) |> Enum.to_list()
-        end)
-
-      # Give consumer time to start waiting
-      Process.sleep(20)
-
-      # Push events
-      for i <- 1..10 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
-        Process.sleep(5)
-      end
-
-      EventStream.complete(stream, make_message())
-
-      events = Task.await(consumer, 5000)
-      texts = extract_text_content(events)
-
-      # Order should be preserved
-      expected = for i <- 1..10, do: "msg_#{i}"
-      assert texts == expected
+    test "a result call can time out without closing the stream" do
+      stream = start_stream()
+      assert EventStream.result(stream, 0) == {:error, :timeout}
+      assert :ok = EventStream.complete(stream, [])
+      assert EventStream.result(stream, 1_000) == {:ok, []}
+      assert [{:agent_end, []}] = Enum.to_list(EventStream.events(stream))
     end
 
-    test "drop_oldest preserves order of remaining events" do
-      {:ok, stream} = EventStream.start_link(max_queue: 5, drop_strategy: :drop_oldest)
-
-      # Push 10 events, first 5 will be dropped
-      for i <- 1..10 do
-        EventStream.push(stream, {:text_delta, 0, "#{i}"})
-      end
-
-      EventStream.complete(stream, make_message())
-
-      events = EventStream.events(stream) |> Enum.to_list()
-      texts = extract_text_content(events)
-      numbers = Enum.map(texts, &String.to_integer/1)
-
-      # Remaining events should be in order
-      assert numbers == Enum.sort(numbers)
+    test "calls to a dead stream return boundary errors" do
+      stream = start_stream()
+      :ok = GenServer.stop(stream)
+      assert EventStream.push(stream, :late) == {:error, :canceled}
+      assert EventStream.result(stream, 1_000) == {:error, :stream_not_found}
+      assert Enum.to_list(EventStream.events(stream)) == [{:canceled, :stream_closed}]
     end
   end
 
-  # ============================================================================
-  # Edge Cases and Error Handling
-  # ============================================================================
+  describe "concurrent delivery" do
+    @tag :concurrency
+    test "blocked take requests receive events in registration order independently of all result waiters" do
+      stream = start_stream()
+      waiters = for _ <- 1..2, do: Task.async(fn -> EventStream.result(stream) end)
+      await(fn -> :queue.len(:sys.get_state(stream).result_waiters) == 2 end)
 
-  describe "edge cases and error handling" do
-    test "push to canceled stream returns :canceled" do
-      {:ok, stream} = EventStream.start_link()
-      stream_ref = Process.monitor(stream)
-      EventStream.cancel(stream, :test)
+      consumers =
+        for index <- 1..3 do
+          task = Task.async(fn -> Enum.take(EventStream.events(stream), 1) end)
+          await(fn -> :queue.len(:sys.get_state(stream).take_waiters) == index end)
+          task
+        end
 
-      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
-
-      result = EventStream.push(stream, {:text_delta, 0, "test"})
-      assert {:error, :canceled} = result
+      assert :ok = EventStream.push(stream, :first)
+      assert :ok = EventStream.push_async(stream, :second)
+      assert EventStream.stats(stream).queue_size == 0
+      assert Task.await(hd(consumers), 1_000) == [:first]
+      assert Task.await(Enum.at(consumers, 1), 1_000) == [:second]
+      assert :queue.len(:sys.get_state(stream).result_waiters) == 2
+      assert :ok = EventStream.complete(stream, [])
+      assert Task.await(List.last(consumers), 1_000) == [{:agent_end, []}]
+      assert Task.await_many(waiters, 1_000) == [{:ok, []}, {:ok, []}]
     end
 
-    test "completing already completed stream preserves first result" do
-      {:ok, stream} = EventStream.start_link()
+    @tag :concurrency
+    test "concurrent producers preserve per-producer order and consumers partition events exactly once" do
+      stream = start_stream(max_queue: 500)
 
-      EventStream.complete(stream, make_message(content: [%TextContent{text: "first"}]))
+      consumers =
+        for _ <- 1..2, do: Task.async(fn -> Enum.to_list(EventStream.events(stream)) end)
 
-      # Get the result from the first completion
-      {:ok, result} = EventStream.result(stream, 100)
-      assert [%TextContent{text: "first"}] = result.content
+      await(fn -> :queue.len(:sys.get_state(stream).take_waiters) == 2 end)
 
-      # Second complete is a cast, so it may still modify state
-      # But result should already be set from first complete
-    end
+      producers =
+        for producer <- 1..4 do
+          Task.async(fn ->
+            for serial <- 1..100 do
+              assert :ok = EventStream.push(stream, {producer, serial})
+            end
+          end)
+        end
 
-    test "stats available after stream completion" do
-      {:ok, stream} = EventStream.start_link(max_queue: 10)
+      Task.await_many(producers, 1_000)
+      assert :ok = EventStream.complete(stream, [])
+      batches = Task.await_many(consumers, 1_000)
+      assert Enum.count(List.flatten(batches), &(&1 == {:agent_end, []})) == 1
 
-      for i <- 1..5 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
+      for producer <- 1..4 do
+        sequences = for batch <- batches, do: for({^producer, serial} <- batch, do: serial)
+        assert Enum.sort(List.flatten(sequences)) == Enum.to_list(1..100)
+        assert Enum.all?(sequences, fn serials -> serials == Enum.sort(serials) end)
       end
-
-      EventStream.complete(stream, make_message())
-
-      # Consume all events
-      EventStream.events(stream) |> Enum.to_list()
-
-      # Stats should still be available (though queue is empty now)
-      stats = EventStream.stats(stream)
-      assert stats.max_queue == 10
     end
 
-    test "empty stream completes correctly" do
-      {:ok, stream} = EventStream.start_link()
+    @tag :concurrency
+    test "a push racing completion is either delivered before the terminal or rejected" do
+      stream = start_stream()
+      producer = Task.async(fn -> EventStream.push(stream, :racing_event) end)
+      assert :ok = EventStream.complete(stream, [])
+      events = Enum.to_list(EventStream.events(stream))
 
-      # Complete without any events
-      EventStream.complete(stream, make_message())
-
-      events = EventStream.events(stream) |> Enum.to_list()
-      assert [{:done, :stop, _}] = events
-    end
-
-    test "very large queue handles many events" do
-      {:ok, stream} = EventStream.start_link(max_queue: 100_000)
-
-      # Push many events
-      for i <- 1..1000 do
-        EventStream.push(stream, {:text_delta, 0, "#{i}"})
+      case Task.await(producer, 1_000) do
+        :ok -> assert events == [:racing_event, {:agent_end, []}]
+        {:error, :canceled} -> assert events == [{:agent_end, []}]
       end
-
-      stats = EventStream.stats(stream)
-      assert stats.queue_size == 1000
-      assert stats.dropped == 0
-
-      EventStream.complete(stream, make_message())
-      {:ok, _} = EventStream.result(stream, 5000)
     end
 
-    test "stream timeout cancels waiting result calls" do
-      {:ok, stream} = EventStream.start_link(timeout: 500)
+    test "a crashed reader does not stop delivery to another reader or result waiter" do
+      stream = start_stream()
 
-      waiter =
-        Task.async(fn ->
-          EventStream.result(stream, 5000)
+      {crasher, monitor} =
+        spawn_monitor(fn ->
+          [:first] = Enum.take(EventStream.events(stream), 1)
+          exit(:reader_failed)
         end)
 
-      result = Task.await(waiter, 5_000)
-      assert {:error, {:canceled, :timeout}} = result
+      await(fn -> :queue.len(:sys.get_state(stream).take_waiters) == 1 end)
+      assert :ok = EventStream.push(stream, :first)
+      assert_receive {:DOWN, ^monitor, :process, ^crasher, :reader_failed}, 1_000
+      reader = Task.async(fn -> Enum.to_list(EventStream.events(stream)) end)
+      waiter = Task.async(fn -> EventStream.result(stream) end)
+      await(fn -> :queue.len(:sys.get_state(stream).result_waiters) == 1 end)
+      assert :ok = EventStream.push(stream, :second)
+      assert :ok = EventStream.complete(stream, [])
+      assert Task.await(reader, 1_000) == [:second, {:agent_end, []}]
+      assert Task.await(waiter, 1_000) == {:ok, []}
+    end
+
+    @tag timeout: 15_000
+    test "a queued push survives a suspended stream beyond the legacy five-second call timeout" do
+      stream = start_stream()
+      parent = self()
+      :ok = :sys.suspend(stream)
+
+      {producer, monitor} =
+        spawn_monitor(fn -> send(parent, {:pushed, EventStream.push(stream, :heartbeat)}) end)
+
+      on_exit(fn -> Process.exit(producer, :kill) end)
+
+      try do
+        await(fn ->
+          {:messages, messages} = Process.info(stream, :messages)
+          Enum.any?(messages, &match?({:"$gen_call", {^producer, _}, {:push, :heartbeat}}, &1))
+        end)
+
+        # Start the wait only once the call is queued; GenServer.call/2 would time out here.
+        refute_receive {:DOWN, ^monitor, :process, ^producer, _}, 5_100
+        refute_receive {:pushed, _}, 0
+      after
+        :ok = :sys.resume(stream)
+      end
+
+      assert_receive {:pushed, :ok}, 1_000
+      assert_receive {:DOWN, ^monitor, :process, ^producer, :normal}, 1_000
+      assert Enum.take(EventStream.events(stream), 1) == [:heartbeat]
+    end
+  end
+
+  defp start_stream(opts \\ []) do
+    {:ok, stream} =
+      EventStream.start_link(Keyword.merge([timeout: :infinity, idle_timeout: :infinity], opts))
+
+    stream
+  end
+
+  defp await(predicate), do: await(predicate, System.monotonic_time(:millisecond) + 1_000)
+
+  defp await(predicate, deadline) do
+    unless predicate.() do
+      assert System.monotonic_time(:millisecond) < deadline, "stream did not reach expected state"
+      Process.sleep(1)
+      await(predicate, deadline)
     end
   end
 end

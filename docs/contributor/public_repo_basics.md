@@ -42,7 +42,7 @@ cd clients/tui && bun install
 # TUI attached to a shared runtime (boots and owns one if none is up)
 ./bin/lemon-tui
 
-# Messaging runtime only (gateway, router, channels) from source
+# `./bin/lemon start` under the lemon_gateway node name (reuses a healthy runtime)
 ./bin/lemon-gateway
 ```
 

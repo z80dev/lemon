@@ -23,11 +23,7 @@ defmodule LemonControlPlane.Methods.SessionsLabel do
     with {:ok, key, cwd} <- NativeSessions.target(params),
          {:ok, entry_id} <- NativeSessions.string(params, "entryId", 256),
          {:ok, label} <- label(params) do
-      case AgentRuntime.call(
-             :session_label,
-             [key, cwd, entry_id, label],
-             {:error, :outcome_unknown}
-           ) do
+      case AgentRuntime.mutate(:session_label, [key, cwd, entry_id, label]) do
         {:ok, result} when is_map(result) ->
           {:ok,
            result

@@ -5,7 +5,7 @@ defmodule LemonCore.Secrets.KeyRotation do
   Rotation generates a new master key, re-encrypts every stored secret under
   it, and replaces the key in the provider that supplied the current one (the
   Keychain entry or the key file). Operators run it as
-  `lemon secrets rotate-key` or `mix lemon.secrets.rotate_key`.
+  `lemon secrets rotate-key`.
 
   ## Preview, then confirm
 

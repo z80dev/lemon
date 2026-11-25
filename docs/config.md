@@ -54,6 +54,8 @@ Policy that may only be narrowed:
 - `runtime.tools.bash.git_guard`, `runtime.secret_obfuscation.enabled`,
   `memory.write_approval`, `skills.write_approval`: only `true`
 - `memory.auto_recall`: only `false`; `[features]` flags: only `"off"`
+- `skills.learning_nudge.enabled`: only `false`; `memory_turn_interval` and
+  `skill_tool_threshold`: only at or above the global value
 - `runtime.tools.lsp.servers.<id>.disabled`: only `true`
 - `profiles.<id>.tool_policy`: intersected with the effective global profile
   policy, including the inherited `runtime.tools.approval_mode`; a project
@@ -67,7 +69,7 @@ references), `[secrets]` and external secret sources, `[gateway]` (including
 voice reply hosts and keys), web search/fetch hosts, keys and SSRF switches
 (`allow_private_network`, `allowed_hostnames`), `runtime.extension_paths` and
 `[runtime.extensions]`, `[runtime.shell]`, `runtime.git_path`, LSP server
-commands/args/env, WASM settings, `[runtime.provider_routing]` and credential
+commands/args/env, `[runtime.provider_routing]` and credential
 pools, `[logging]`, `[automation]`, update settings, and any key not listed
 above.
 
@@ -124,7 +126,6 @@ Existing LAN clients must explicitly opt in and restart:
 | `LEMON_WEB_BIND_IP` | `127.0.0.1` | Operator browser interface |
 | `LEMON_CONTROL_PLANE_NODE_BIND_IP` | `127.0.0.1` | Node-only gateway |
 | `LEMON_CONTROL_PLANE_NODE_PORT` | `4044` | Node-only port; `0` disables it |
-| `LEMON_CONTROL_PLANE_REMOTE_HTTP` | empty | Comma-separated subset of `openai,acp` |
 | `LEMON_CONTROL_PLANE_ALLOWED_ORIGINS` | empty | Comma-separated exact browser origins allowed on `/ws` and `/acp/ws` |
 
 Loopback peers of the main and A2A listeners must send a `Host` of `localhost`,
@@ -145,15 +146,14 @@ binds require `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` and refuse
 `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true`. Put TLS in front of
 LemonWeb: an operator login over plaintext LAN HTTP exposes the credential.
 Remote peers on the main listener get only `GET /ws` and `GET /healthz`;
-everything else is 404 unless the corresponding HTTP API is explicitly enabled
-with `LEMON_CONTROL_PLANE_REMOTE_HTTP` and its dedicated
-`LEMON_OPENAI_COMPAT_API_TOKEN` / `LEMON_ACP_API_TOKEN`.
+everything else, including `/acp/ws`, is 404. Lemon has no OpenAI-compatible
+`/v1` API or single-shot `POST /acp` endpoint, and no remote HTTP API opt-in.
 
-OpenAI and ACP require authentication locally too. If their dedicated token is
-unset they accept the operator token, including the launcher's private
+`/acp/ws` requires the operator token, including the launcher's private
 `~/.lemon/run/control-plane-<port>.token` file. The explicit default-off loopback
-compatibility flag permits tokenless local APIs only when no token is configured;
-it also gates tokenless local A2A. Never enable it behind a local reverse proxy.
+compatibility flag permits tokenless local operator access only when no token is
+configured; it also gates tokenless local A2A. Never enable it behind a local
+reverse proxy.
 
 Forward node traffic only to **4044**: its `/ws` accepts node and enrollment
 credentials, never operator or tokenless clients; `/healthz` identifies
@@ -284,9 +284,8 @@ extension_paths = []
 # git_path = "/usr/bin/git"
 
 [runtime.extensions]
-# false: no session compiles an extension file, installs an extension hook,
-# registers an extension provider or starts the WASM runtime; manifest
-# diagnostics stay available.
+# false: no session compiles an extension file, installs an extension hook or
+# registers an extension provider; manifest diagnostics stay available.
 enabled = true
 # true also loads the global ~/.lemon/agent/extensions (never a project dir).
 # Like `enabled`, operator-only: ignored in a project .lemon/config.toml.
@@ -309,18 +308,6 @@ allowed_hostnames = []
 
 [runtime.tools.web.fetch.firecrawl]
 enabled = true
-
-[runtime.tools.wasm]
-enabled = false
-auto_build = true
-runtime_path = ""
-tool_paths = []
-default_memory_limit = 10485760
-default_timeout_ms = 60000
-default_fuel_limit = 10000000
-cache_compiled = true
-cache_dir = ""
-max_tool_invoke_depth = 4
 
 [tui]
 theme = "lemon"
@@ -379,6 +366,9 @@ mock_mode = false
 # inbound message is dropped.
 allowed_inboxes = ["<sender inbox id>"]
 # allow_all = true               # explicit opt-out: accept every sender when allowed_inboxes is empty
+
+[gateway.ingress]
+enabled = false
 
 [gateway.voice]
 enabled = false
@@ -578,49 +568,6 @@ cause actual usage to exceed a cap. Already-exhausted or zero caps prevent reque
 Tool calls requested by the response that exhausts a cap are recorded as rejected
 error results without executing their side effects. Increase the configured cap
 if you intentionally want to continue an exhausted session.
-
-## Optional session advisor
-
-The native session API accepts `advisor: [...]`; it is **off by default**.
-This is an explicit local session option, not a TOML setting. For example:
-
-```elixir
-CodingAgent.start_session(
-  cwd: cwd,
-  model: primary_model,
-  advisor: [
-    model: reviewer_model,
-    max_notes: 3,
-    max_note_chars: 2000,
-    max_events: 1000,
-    timeout_ms: 30_000,
-    agent_options: [stream_options: reviewer_stream_options, get_api_key: reviewer_credentials]
-  ]
-)
-```
-
-The reviewer inherits the primary model unless `model:` is supplied. Supply
-provider credentials/options through `agent_options`, using the same trusted
-local API as `LemonAgent.Agent`. No paid review runs occur unless enabled.
-Each review starts with only the newly subscribed event delta, at a primary
-tool-turn boundary. Pending deltas wait for the current review, never for the
-primary turn. Subscription overflow, buffer overflow, timeout or reviewer
-failure retires the temporary advisor without restarting or failing the primary.
-
-Its tools are the intersection of primary authority and the built-in `read`,
-`grep`, `find`, `ls` allowlist; extensions and MCP cannot override those tools.
-Inherited denials and approvals remain in force. Tool results are fenced as
-untrusted context. The local `advise` tool normalizes whitespace, deduplicates
-case-insensitively across updates and caps accepted notes per update.
-Oversized/empty notes are suppressed. `critical` notes preempt the primary's
-remaining tool queue; `warning` and `info` notes use non-preempting follow-up
-delivery. Notes are advisory, not new user authority.
-
-The numbers above are caller-policy defaults, not measured tuning results.
-Completed advisor responses charge the primary run's `BudgetTracker`, including
-unknown usage; an already-exhausted budget prevents another review. Concurrent
-primary/reviewer requests can still finish after a limit is reached. No latency
-or quality improvement is claimed; measure before enabling by default.
 
 ## Native Execution and Subagents
 
@@ -949,7 +896,7 @@ treat it, and every other Lemon credential file, as off limits:
 
 Lemon keeps no MCP OAuth token cache on disk. `LemonCore.CredentialPaths` is
 the single check every model-reachable reader consults before it opens a file:
-file tools (`read`, including JSON, SQLite and archive selectors, `write`,
+file tools (`read`, including SQLite and archive selectors, `write`,
 `edit`, `patch`, `ls`, `grep`, `find`, `ast_grep`), `semantic_find`, LSP
 document synchronization and location excerpts, media analysis and
 transcription inputs, and browser `file:` navigation, content reads, captures
@@ -1084,8 +1031,8 @@ Environment variables override file values. Common overrides:
   started by `./bin/lemon-tui` is stopped with the TUI. Start a persistent
   source runtime with `./bin/lemon daemon`, then attach with the same token.
 - `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` — explicit legacy
-  compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator,
-  OpenAI/ACP HTTP and A2A access from direct loopback peers. Defaults to `false`; never enable it
+  compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator
+  (including `/acp/ws`) and A2A access from direct loopback peers. Defaults to `false`; never enable it
   for a reverse-proxied control plane.
 
 The browser monitoring client intentionally has no build-time or URL-based
@@ -1097,7 +1044,6 @@ place the shared server token in `VITE_*` configuration.
 - `LEMON_TUI_NOTIFICATIONS=auto|osc|bell|off` — overrides the Bun TUI's global `[tui] notifications`; legacy `0` means `off`, `1` means `auto`
 - `LEMON_SECRET_OBFUSCATION_ENABLED` — overrides `[runtime.secret_obfuscation] enabled`
 - `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`); local servers use `OLLAMA_BASE_URL`/`OLLAMA_HOST`, `LM_STUDIO_BASE_URL`, `LLAMA_CPP_BASE_URL` and `LITELLM_BASE_URL` only when config sets no `base_url` (see [OpenAI-Compatible Endpoints](#openai-compatible-endpoints))
-- `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
 - `LEMON_TERMINAL_BACKENDS_ALLOW`, `LEMON_TERMINAL_BACKENDS_DENY`, `LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL`
 - `LEMON_DOCKER_TERMINAL_IMAGE`, `LEMON_DOCKER_TERMINAL_MEMORY`, `LEMON_DOCKER_TERMINAL_CPUS`, `LEMON_DOCKER_TERMINAL_PIDS_LIMIT`, `LEMON_DOCKER_TERMINAL_NETWORK`
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
@@ -1528,7 +1474,7 @@ without ad-hoc environment variables.
 ```toml
 [features]
 session_search               = "default-on" # durable memory ingest and search (default)
-routing_feedback             = "default-on" # task fingerprinting + routing feedback (default)
+routing_feedback             = "off"        # task fingerprinting + routing feedback (enable with "on")
 skill_synthesis_drafts       = "default-on" # skill synthesis draft pipeline (default)
 crash_resume                = "off"        # hard-crash continuation is explicitly opt-in
 ```
@@ -1536,8 +1482,11 @@ crash_resume                = "off"        # hard-crash continuation is explicit
 `session_search` defaults to `"default-on"`: durable memory ingest and search
 are active on a stock install (retention 30 days, max 500 documents per scope;
 runs whose summaries look like they contain a secret are dropped entirely, not
-redacted). Set it to `"off"` to disable. The learning-loop flags
-(`routing_feedback`, `skill_synthesis_drafts`) also default to `"default-on"`.
+redacted). Set it to `"off"` to disable. `skill_synthesis_drafts` also defaults
+to `"default-on"`. `routing_feedback` defaults to `"off"`; when enabled, routing
+history only replaces `[defaults] model` for un-pinned runs in a task context
+where the default measured worse (see
+[Adaptive Behavior](user-guide/adaptive.md#how-it-influences-routing)).
 
 Valid rollout states:
 
@@ -1552,7 +1501,7 @@ Each flag can be overridden via an environment variable using the pattern
 
 ```bash
 LEMON_FEATURE_SESSION_SEARCH=off       # kill switch for durable memory
-LEMON_FEATURE_ROUTING_FEEDBACK=default-on
+LEMON_FEATURE_ROUTING_FEEDBACK=on      # record and use routing history
 ```
 
 Config validation fails cleanly if a flag is set to an unrecognised state.
@@ -1594,6 +1543,19 @@ converge to interrupted/unknown instead. Graceful restart carryover still works
 independently of this flag. A recovery or replay call that times out is an
 unknown outcome for that run ID alone: it stays pending for the next boot while
 the remaining runs and carried items are still recovered.
+
+A committed terminal decision survives restart even when the live run record
+does not. Lemon does not resume or abandon those completed runs. It retries
+pending completion publication and finalization effects in bounded batches
+without invoking the executor. Run-topic notifications may repeat with the
+same `run_completed:<run_id>` event ID. Channel delivery is not exactly once.
+From the operator console, `LemonCore.TerminalOutbox.decision(run_id)` reads
+the content-free execution status and `LemonCore.TerminalOutbox.repair(run_id)`
+retries pending history, memory, usage and session-index projections.
+`LemonCore.TerminalOutbox.delivery_status(run_id)` shows the independent effect
+statuses. After the automatic projection retry budget is exhausted, call
+`repair(run_id)` or `repair_delivery(run_id)` on the same module once the
+underlying storage or delivery problem has been resolved.
 
 From a local operator console,
 `LemonRouter.RestartCarryover.CrashRecovery.operator_view(limit: 20)` returns recent
@@ -1806,12 +1768,12 @@ values. `lemon secrets check` reports a resolved credential only as `present`.
 
 ## Dotenv Autoload
 
-Source launchers (`./bin/lemon`, `./bin/lemon-gateway`, `./bin/lemon-control-plane`)
-load one `.env` file at startup, and the config reloader re-reads it when it
-changes:
+Source launchers (`./bin/lemon` and `./bin/lemon-gateway`, which runs
+`./bin/lemon start`) load one `.env` file at startup, and the config reloader
+re-reads it when it changes:
 
 - `$LEMON_DOTENV_DIR/.env` when `LEMON_DOTENV_DIR` is set in the launching
-  environment (or `--dotenv-dir` for `lemon-control-plane`);
+  environment;
 - otherwise `~/.lemon/.env`.
 
 Environment variables override every config file, so this file is operator
@@ -2522,7 +2484,9 @@ an isolated native session and loopback fixture endpoint, rejects the primary
 model with HTTP 503, and verifies the configured alternate model answers and
 the session is persisted. The smoke script is not part of the CI test lane.
 
-`MIX_ENV=test mix run --no-start scripts/live_provider_ownership_smoke.exs`
+`MIX_ENV=test mix run --no-compile --no-start scripts/live_provider_ownership_smoke.exs`
+(or its ExUnit equivalent,
+`scripts/test path apps/coding_agent/test/coding_agent/session/live_provider_ownership_test.exs`)
 exercises public native Session and Agent model switches, missing-selected-login
 refusal (including plan-role selection), successful keyless transitions,
 switch-then-fallback header isolation and same-provider rebinding with no caller
@@ -2552,7 +2516,7 @@ Other subscription and browser sign-ins offered by `lemon model <provider>`:
 | --- | --- | --- |
 | `openrouter` | Browser PKCE sign-in (callback on `http://localhost:54549/callback`, or paste the redirect URL); a pasted `sk-or-` key is checked and accepted | A durable OpenRouter API key in `providers.openrouter.api_key_secret` |
 | `xai` | SuperGrok / X Premium+ device code (`--auth oauth`); API key remains the default | Refreshable login in `providers.xai.api_key_secret`, `auth_source = "oauth"` |
-| `kimi_coding` (`kimi-code`) | Kimi Code device code (default), API key, or existing omp login (`--auth omp`) | Refreshable login in `providers.kimi_coding.api_key_secret`, `auth_source = "oauth"`; omp mode stores only `auth_source = "omp"` and an optional executable path, never credentials |
+| `kimi_coding` (`kimi-code`) | Kimi Code device code (default), API key, or existing omp login (`--auth omp`); `--region global` for kimi.ai accounts | Refreshable login in `providers.kimi_coding.api_key_secret`, `auth_source = "oauth"`; omp mode stores only `auth_source = "omp"` and an optional executable path, never credentials; `--region` also writes `base_url` |
 | `zai` | GLM Coding Plan sign-in (`--auth oauth`): paste the full final `zcode://zai-auth/callback?...` redirect (or `code#state`, not a bare code); Lemon finds or creates an API key named `lemon` | A durable Z.AI API key in `providers.zai.api_key_secret` |
 
 Refreshable logins renew shortly before expiry and when a provider rejects the
@@ -2561,7 +2525,8 @@ variables (for example `XAI_API_KEY` or `KIMI_API_KEY`) do not override the
 stored login. `lemon model <provider> --status` reports the stored login or key
 without printing it; `--logout` deletes it and its config references but does
 not revoke it at the provider. `KIMI_CODE_OAUTH_HOST` overrides the Kimi auth
-host; the `ZAI_OAUTH_*` variables override the Z.AI endpoints for allowlist
+host for a new sign-in (a stored Kimi login refreshes at the host that issued
+it); the `ZAI_OAUTH_*` variables override the Z.AI endpoints for allowlist
 changes.
 
 Token-grant requests do not follow redirects. Device-code deadlines include
@@ -2586,7 +2551,8 @@ rename no longer changes it; if the file cannot be written, the derived id is
 used for that process.
 
 Kimi Code reasoning models (`k3`, `k3-256k`, `k3.1-pro`, `k3.1-pro-highspeed`,
-`kimi-for-coding`) are requested with `thinking: {type: "adaptive"}` plus
+`kimi-for-coding`), under both `kimi_coding` and `kimi` (API key), are
+requested with `thinking: {type: "adaptive"}` plus
 `output_config.effort` (`low`, `high` or `max`; other levels clamp) and the
 `effort-2025-11-24` beta; a forced tool choice sends effort `low` without
 thinking. `max_tokens` defaults to the model's maximum output (an explicit
@@ -2605,10 +2571,84 @@ An access token that has already expired is not sent. `lemon doctor --live`
 checks `kimi_coding` against `/coding/v1/models` with the same authentication
 and fingerprint as model requests.
 
+With a `kimi_coding` credential, the model picker lists the models the account
+serves, from `GET https://api.kimi.com/coding/v1/models` (or the provider's
+`base_url`), refreshed every five minutes, instead of the bundled list. Each
+listed model takes its name, context window, image input, reasoning and effort
+levels from the listing; models with effort levels use adaptive thinking. The
+listing has no output limit, so `max_tokens` uses the documented per-family caps
+(`k3`/`k3-256k` 131072, `kimi-for-coding`/`-highspeed` 32768), then the bundled
+entry, then 32000. A model new to the listing can be selected by id
+(`kimi_coding:<id>`) once the picker has listed it. When the listing fails, the
+bundled models stay.
+
 If another Lemon process refreshes the same stored login at the same time, the
 refresh that loses the conditional write adopts the winner's stored token when
 it is different and unexpired, instead of failing. This applies to every
 refreshable OAuth login.
+
+### Kimi Code regions
+
+Kimi Code runs two separate deployments, and accounts and tokens belong to the
+one that issued them, as in omp's `kimi-code` and `kimi-code-global`
+providers:
+
+| `--region` | Accounts | Sign-in host | API `base_url` | omp provider |
+| --- | --- | --- | --- | --- |
+| `china` (default) | kimi.com | `https://auth.kimi.com` | `https://api.kimi.com/coding` | `kimi-code` |
+| `global` | kimi.ai | `https://auth.kimi.ai` | `https://api.kimi.ai/coding` | `kimi-code-global` |
+
+```bash
+lemon model kimi-code --region global              # device sign-in
+lemon model kimi-code --region global --auth omp   # reuse omp's kimi-code-global login
+```
+
+`--region` writes the region's `base_url` to `[providers.kimi_coding]`; model
+requests, model discovery, `--status` quota, `lemon doctor --live` and Kimi web
+search all use that `base_url`. A stored login records the host that issued it
+and refreshes there. Without `--region`, onboarding leaves `base_url` as it is.
+
+### Several Kimi Code accounts
+
+Two or more Kimi Code subscription logins on `kimi_coding` (credential pool
+entries under `runtime.provider_routing.credential_pools.<pool>.credentials`,
+or several `omp_broker` accounts) are ordered for new sessions by quota
+headroom, as omp ranks its Kimi accounts: Lemon reads each login's quota from
+`/coding/v1/usages` (cached per account for five minutes, one minute after a
+failure), puts accounts with an exhausted window last (earliest reset first)
+and accounts whose 5h window is at least 85% used after the rest, and prefers
+the account whose long window (`7d`, else `month`) and then 5h window has the
+most unused quota per hour left before it resets. Accounts whose quota cannot
+be read and API keys follow in configured order. A session keeps the
+credential it started with; rate-limited credentials still cool down and
+rotate as for any pool.
+
+```toml
+[runtime.provider_routing]
+default_pool = "kimi"
+
+[runtime.provider_routing.credential_pools.kimi.credentials]
+kimi_coding = ["secret:llm_kimi_coding_second"]
+```
+
+Store a second login with
+`lemon model kimi-code --secret-name llm_kimi_coding_second`, then point
+`providers.kimi_coding.api_key_secret` back at the first.
+
+### Moonshot tool schemas
+
+Lemon's `kimi` and `kimi_coding` providers use the Anthropic Messages wire.
+A model configured with `api = "openai_completions"` against a Moonshot-native
+host (`api.moonshot.ai`, `api.moonshot.cn`, `api.kimi.com`, `api.kimi.ai`)
+sends its tool parameters as Moonshot Flavored JSON Schema, the subset those
+hosts accept (omp's `normalizeSchemaForMoonshot`): `const` becomes a typed
+`enum`, `oneOf` becomes `anyOf`, `type` arrays and `nullable` collapse to one
+type, and validation keywords such as `format`, `pattern` or `minItems` are
+removed and summarized in the field's `description`. Local `$ref`s into
+`$defs`/`definitions` are inlined first (a recursive reference becomes `{}`,
+and at most 1,000 references are inlined); remote references are left as they
+are and never fetched. Other hosts, including proxies in front of Moonshot,
+receive the schema unchanged.
 
 ### Kimi Code authentication through omp
 
@@ -2639,7 +2679,8 @@ the executable need not exist on the machine validating the config. Runtime
 resolution checks that the selected path is executable.
 
 Both credential resolution and readiness obtain an access token by running
-`omp token kimi-code`, without a shell. Readiness does not launch a login flow
+`omp token kimi-code` (`omp token kimi-code-global` when `base_url` is on
+kimi.ai), without a shell. Readiness does not launch a login flow
 or inspect omp's credential files. The selected source is authoritative:
 `KIMI_API_KEY`, `MOONSHOT_API_KEY`, inline `api_key`, `api_key_env`, and stored
 `api_key_secret` / `oauth_secret` credentials do not override it, including when
@@ -2715,7 +2756,7 @@ API key flow:
 ```bash
 lemon model anthropic --auth api_key
 # or store the key directly:
-mix lemon.secrets.set llm_anthropic_api_key_raw <token>
+lemon secrets set llm_anthropic_api_key_raw <token>
 ```
 
 Subscription flow (browser sign-in, stored encrypted and refreshed automatically):
@@ -2755,7 +2796,7 @@ approval_mode = "write" # ask | write | yolo
 Leaving the setting unset preserves existing behavior, including configured
 per-tool and source-specific approval requirements. Reads/search/web fetches
 are `read`; built-in file/state mutations are `write`; shell/process control,
-eval/debug, browser evaluation, MCP/WASM/extension and unknown tools are `exec`.
+eval/debug, browser evaluation, MCP, extension, and unknown tools are `exec`.
 LSP navigation and edit previews are `read`; applying edits, raw requests and
 server reloads are `exec`. A `write`, `edit` or `patch` call whose effective
 `diagnostics` or `format` option is on (the argument, or the host default when
@@ -2764,8 +2805,8 @@ is `exec`. `lsp_diagnostics` is `exec` and records a durable tool intent first.
 
 Config supplies only the default. A canonical tool policy can set
 `approval_mode = "ask"`, `"write"` or `"yolo"` in
-`[profiles.<id>.tool_policy]` or through the existing PolicyStore session/runtime
-policy. Explicit policy modes win over the config default. Policy intersections
+`[profiles.<id>.tool_policy]` or through the PolicyStore session policy
+(`sessions.patch`). Explicit policy modes win over the config default. Policy intersections
 retain the stricter mode, so delegated work cannot weaken parent approval gates.
 The existing `approvals` map (`always`/`never`) overrides tier defaults in every
 mode; `require_approval`, parent floors, and explicitly configured MCP approval
@@ -2926,6 +2967,11 @@ api_key = "<exa-api-key>"
 [runtime.tools.web.search.providers.tavily]
 api_key_secret = "TAVILY_API_KEY"
 
+# kimi takes the same shape plus an optional base_url; with no key it uses
+# KIMI_SEARCH_API_KEY / MOONSHOT_SEARCH_API_KEY, then the kimi_coding model credential.
+[runtime.tools.web.search.providers.kimi]
+base_url = "https://api.kimi.com/coding"
+
 [runtime.tools.web.fetch]
 enabled = true
 max_chars = 50000
@@ -2997,25 +3043,6 @@ endpoint as a secret: Lemon redacts common credential query parameters and
 reports only endpoint hashes in status surfaces. Backend/controller identity is
 explicit and fail-closed; an unavailable controller never falls back to a
 different browser profile. See [`docs/tools/web.md`](tools/web.md).
-
-## WASM Tools
-
-WASM tools are disabled by default and run in a per-session Rust sidecar.
-See [`docs/tools/wasm.md`](tools/wasm.md) for runtime behavior and troubleshooting.
-
-```toml
-[runtime.tools.wasm]
-enabled = false
-auto_build = true
-runtime_path = ""
-tool_paths = []
-default_memory_limit = 10485760
-default_timeout_ms = 60000
-default_fuel_limit = 10000000
-cache_compiled = true
-cache_dir = ""
-max_tool_invoke_depth = 4
-```
 
 ## Computer Use
 
@@ -3185,7 +3212,7 @@ pinned = []              # tool names that always stay directly exposed
 - **`auto`** (default): selects `coding` for cwd-scoped coding sessions (including
   local TUI, ACP, and `lemon -p`/`run`) and `legacy` for main assistant and messaging
   sessions. Explicit profile settings retain precedence over this inference.
-- **`legacy`**: built-in tools stay exposed. The MCP, extension and WASM tools
+- **`legacy`**: built-in tools stay exposed. MCP and extension tools
   are deferred only when the estimated schema cost of the whole catalog exceeds
   `budget_tokens`; below it the tool list is unchanged.
 - **`coding`**: only the coding core stays
@@ -3204,18 +3231,10 @@ as `extra_tools` always stay exposed, and sessions started with an explicit
 `tools` list skip disclosure. Names `tool_search` and `tool_invoke` are
 reserved; a real tool using either name is dropped while disclosure is active.
 
-WASM host aliases resolve from this same frozen, policy-authorized runtime
-catalog, not only the schemas currently shown to the model. A permitted optional
-built-in such as `browser_tabs` therefore remains a host capability under either
-profile. Host calls retain the catalog's wrapped implementation and the current
-plan-mode gate; reload replaces that inventory so removed authority is not kept
-alive by an old host lookup. Neither WASM tools nor the disclosure bridge tools
-can be host targets, preventing recursive calls through the deferred catalog.
-
-Target closures are wrapped before disclosure partitions the catalog. Direct,
-bridged and host execution restore secret arguments before target hooks and
-approval checks. Plan-mode bridge and host writes reuse the session's restricted
-write/edit wrappers, including the final directory check after hook replacement;
+Target closures are wrapped before disclosure partitions the catalog. Direct
+and deferred calls restore secret arguments before target hooks and approval
+checks. Deferred writes in plan mode reuse the session's restricted write/edit
+wrappers, including the final directory check after hook replacement;
 schema deferral does not create another execution authority.
 
 The tool list is computed at session start and on extension reload, never per
@@ -3271,7 +3290,6 @@ suppresses bootstrap even when resuming an assistant session.
 - `defaults`: global default provider, model, and thinking level for native execution.
 - `runtime`: runtime behavior and tool settings.
 - `runtime.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
-- `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
 - `runtime.tools.disclosure`: deferring tool schemas behind `tool_search` / `tool_invoke` (see [Tool Disclosure](#tool-disclosure)).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings. Automatic compaction runs when the request
@@ -3359,7 +3377,8 @@ Top-level `[gateway]` keys (defaults from `LemonCore.Config.Gateway`):
 | `max_concurrent_runs` | `2` | Positive global execution permit limit (`LEMON_GATEWAY_MAX_CONCURRENT_RUNS`), enforced by `LemonRouter.Slots` even without gateway ingress. |
 | `default_cwd` | unset | Fallback working directory for unbound chats (`LEMON_GATEWAY_DEFAULT_CWD`). |
 | `auto_resume` | `false` | Resume interrupted sessions on start. |
-| `enable_telegram`, `enable_discord`, `enable_xmtp`, `enable_webhook`, `enable_a2a` | `false` | Enable the named channel; `enable_<id>` is read per registered channel (and `LEMON_GATEWAY_ENABLE_<ID>` overrides it). |
+| `enable_telegram`, `enable_discord`, `enable_xmtp`, `enable_a2a` | `false` | Enable the named channel (`LEMON_GATEWAY_ENABLE_<ID>` overrides it). |
+| `enable_webhook` | `false` | Enable the built-in generic webhook listener when gateway ingress is enabled (`LEMON_GATEWAY_ENABLE_WEBHOOK`). |
 
 `enable_webhook` is validated as a boolean. Invalid execution capacity fails
 startup; there is no fallback to 10. Engine-session ownership is always a
@@ -3378,6 +3397,35 @@ RunProcesses, including those waiting for permits. It is independent of
 `max_concurrent_runs`. See the canonical
 [admission inventory](architecture/admission-gates.md) for every gate and
 saturation behavior.
+
+## Gateway ingress
+
+Gateway opens no listeners by default and is not required for native execution.
+In the operator's global `~/.lemon/config.toml`, set:
+
+```toml
+[gateway.ingress]
+enabled = true
+```
+
+`enabled` must be a boolean and defaults to `false`.
+`LEMON_GATEWAY_INGRESS_ENABLED=true` or `false` overrides it. Project TOML
+cannot enable ingress. Restart the runtime after changing listener enablement,
+bind addresses or ports. This gate does not affect messaging adapters in
+`lemon_channels`.
+
+If you previously opted in via the `:gateway_ingress_enabled` application
+setting, move that opt-in to `[gateway.ingress]`.
+
+| Surface | Per-surface enablement and authentication | Default listener |
+| --- | --- | --- |
+| Generic webhook | `[gateway] enable_webhook = true`, plus a token in `[gateway.webhook.integrations.<id>]`. Send `Authorization: Bearer <token>` to `POST /webhooks/<id>`. No transport registration is needed. | Loopback, `4046` |
+| Twilio SMS | `[gateway.sms] webhook_enabled = true` (or `LEMON_SMS_WEBHOOK_ENABLED=true`) and a Twilio auth token (`auth_token_secret` or `TWILIO_AUTH_TOKEN`). Set `webhook_url` to the exact public callback URL when behind a proxy. | Loopback, `4041` |
+| Twilio voice | `[gateway.voice] enabled = true`. Configure an HTTPS `public_url` and a Twilio auth token to authenticate requests. | Loopback, `4047` |
+
+Keep the listeners on loopback and forward only the required routes through a
+TLS reverse proxy or tunnel. See the [gateway README](https://github.com/z80dev/lemon/blob/main/apps/lemon_gateway/README.md#transports)
+for webhook policy and SMS behavior, and [Voice](#voice) for signed callbacks.
 
 ## A2A peers
 
@@ -3563,7 +3611,7 @@ Earlier releases accepted every XMTP sender. After upgrading, an XMTP adapter wi
 
 ## Voice
 
-Voice transport is configured under `[gateway.voice]`.
+Voice requires both `[gateway.ingress] enabled = true` and `[gateway.voice] enabled = true`.
 
 ```toml
 [gateway.voice]
@@ -3583,8 +3631,8 @@ max_call_duration_seconds = 600
 silence_timeout_ms = 5000
 ```
 
-Canonical voice settings are loaded from `gateway.voice`. Legacy `:lemon_gateway` app env
-fallbacks remain only as temporary compatibility shims and should not be used for new setup.
+Voice settings are loaded from `[gateway.voice]`; no application environment
+configuration is needed.
 
 Every voice webhook and the media-stream WebSocket handshake must carry a valid
 `X-Twilio-Signature` made with the configured Twilio auth token over the URL derived
@@ -3768,7 +3816,9 @@ proof; mention-triggered Discord prompts do not depend on this declaration.
 ## Telegram Context Compaction
 
 When a Telegram run approaches the model context limit, Lemon can proactively mark the session for compaction so the
-next user message is automatically rewritten with a compact transcript and sent as a fresh session.
+next user message is automatically rewritten with a compact transcript and sent as a fresh session. The check uses
+the context of the run's latest model call, not the tokens the whole run consumed: a run of many model calls does not
+compact sooner because it made more calls.
 
 ```toml
 [gateway.telegram.compaction]
@@ -3865,23 +3915,26 @@ slash command. Direct messages always run.
 Forum topic management:
 - `/topic <name>`: create a new topic in the current Telegram forum supergroup.
 
-## Learning Reminders (skills.json)
+## Learning Reminders
 
-Learning reminder settings use the existing skills configuration, **not**
-`config.toml`: global `~/.lemon/agent/skills.json` (or `LEMON_AGENT_DIR/skills.json`)
-and project `<cwd>/.lemon/skills.json`. A project file can only narrow the
-global one: `enabled = false`, or a larger `memory_turn_interval` /
-`skill_tool_threshold`; every other project `learning_nudge` key (including
-`background_review`) is ignored.
+Learning reminder settings live in `config.toml` under `[skills.learning_nudge]`.
+A project `.lemon/config.toml` can only narrow the global table: `enabled = false`,
+or a `memory_turn_interval` / `skill_tool_threshold` at or above the effective
+global value. `[skills.learning_nudge.background_review]` (model, timeouts, turn
+caps) is operator-only; a project value is ignored with a warning.
 
-```json
-{
-  "learning_nudge": {
-    "enabled": true,
-    "memory_turn_interval": 10,
-    "skill_tool_threshold": 15
-  }
-}
+`skills.json` is skill state only (the `disabled` list): a `learning_nudge` object
+left there is no longer read, and `lemon doctor` warns about it. Move it here.
+
+```toml
+[skills.learning_nudge]
+enabled = true
+memory_turn_interval = 10
+skill_tool_threshold = 15
+
+[skills.learning_nudge.background_review]
+enabled = false
+# model = "openai:gpt-4o-mini"
 ```
 
 | Key | Default | Meaning |
@@ -3896,8 +3949,9 @@ global one: `enabled = false`, or a larger `memory_turn_interval` /
 | `background_review.max_tool_turns` | `3` | Maximum assistant tool-use turns (maximum 10). |
 | `background_review.timeout_ms` | `60000` | Review execution timeout (maximum 300000). |
 
-Numeric settings must be positive integers; invalid values use their defaults.
-Configuration is read at the next user turn. With background review disabled,
+Numeric settings must be positive integers and unknown keys are rejected; an
+invalid value is a configuration error reported by config validation and
+`lemon doctor`. Configuration is read at the next user turn. With background review disabled,
 the fixed reminder text is bounded volatile context with no extra model calls,
 memory reads, automatic saves or transcript scans. Enabling background review
 costs **one additional model run per accepted trigger**, using the parent model

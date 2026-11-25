@@ -11,7 +11,7 @@ defmodule LemonControlPlane.Methods.McpSupport do
   # pending or changed project MCP trust and rejected host-secret references. Its
   # bounded redacted command/URL `preview` from `LemonSkills.McpDiscovery` joins
   # every configured argument and keeps URL paths, so it is configuration
-  # returned only when `previews?` (admin, as for `config.get`); read scope gets
+  # returned only when `previews?` (admin); read scope gets
   # name, provider, transport and enablement. It only reads files: viewing never
   # connects, reconnects or grants trust.
 

@@ -2,7 +2,7 @@ defmodule CodingAgent.Tools.TodoPlanTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.{Session, SessionManager}
-  alias CodingAgent.Tools.{Todo, TodoRead, TodoStore, TodoWrite}
+  alias CodingAgent.Tools.Todo
   alias LemonAgent.Types.AgentToolResult
   alias LemonAgent.Test.Mocks
 
@@ -27,19 +27,15 @@ defmodule CodingAgent.Tools.TodoPlanTest do
         id: session_file
       )
 
-    session_id = Session.get_state(session_pid).session_manager.header.id
-
-    on_exit(fn ->
-      TodoStore.delete(session_id)
-      File.rm_rf!(cwd)
-    end)
+    on_exit(fn -> File.rm_rf!(cwd) end)
 
     session_pid
   end
 
-  defp write(session_pid, todos) do
-    TodoWrite.execute("write", %{"todos" => todos}, nil, nil, session_pid)
-  end
+  defp write(session_pid, todos),
+    do: Todo.execute("write", %{"action" => "write", "todos" => todos}, nil, nil, session_pid)
+
+  defp read(session_pid), do: Todo.execute("read", %{"action" => "read"}, nil, nil, session_pid)
 
   test "nullable optional fields work through constrained provider schemas", %{
     session_pid: session_pid
@@ -207,7 +203,7 @@ defmodule CodingAgent.Tools.TodoPlanTest do
     assert {:ok, ^original, ^revision} = Session.todos(session_pid)
   end
 
-  test "standalone read preserves journaled metadata without adding it to the plan", %{
+  test "read preserves journaled metadata without adding it to the plan", %{
     session_pid: session_pid
   } do
     todos = [
@@ -228,7 +224,7 @@ defmodule CodingAgent.Tools.TodoPlanTest do
     ]
 
     assert %AgentToolResult{} = write(session_pid, todos)
-    result = TodoRead.execute("read", %{}, nil, nil, session_pid)
+    result = read(session_pid)
     assert %AgentToolResult{} = result
     assert result.details.todos == todos
 
@@ -246,12 +242,8 @@ defmodule CodingAgent.Tools.TodoPlanTest do
     first = write(session_pid, [%{"content" => "First session"}])
     second = write(other_session, [%{"content" => "Second session"}])
 
-    assert TodoRead.execute("read", %{}, nil, nil, session_pid).details.plan == first.details.plan
-
-    assert TodoRead.execute("read", %{}, nil, nil, other_session).details.plan ==
-             second.details.plan
-
-    assert Todo.execute("read", %{"action" => "read"}, nil, nil, new_session).details.plan ==
-             %{entries: []}
+    assert read(session_pid).details.plan == first.details.plan
+    assert read(other_session).details.plan == second.details.plan
+    assert read(new_session).details.plan == %{entries: []}
   end
 end

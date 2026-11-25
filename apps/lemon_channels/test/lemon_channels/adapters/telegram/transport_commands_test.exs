@@ -33,4 +33,14 @@ defmodule LemonChannels.Adapters.Telegram.TransportCommandsTest do
     assert Commands.telegram_command_args("/remind@lemon_bot in 20m check oven", "remind") ==
              "in 20m check oven"
   end
+
+  test "recognizes goal and kanban commands addressed to this bot" do
+    assert Commands.goal_command?("/goal", "lemon_bot")
+    assert Commands.goal_command?("/goal@lemon_bot", "lemon_bot")
+    refute Commands.goal_command?("/goal@other_bot", "lemon_bot")
+
+    assert Commands.kanban_command?("/kanban", "lemon_bot")
+    assert Commands.kanban_command?("/kanban@lemon_bot", "lemon_bot")
+    refute Commands.kanban_command?("/kanban@other_bot", "lemon_bot")
+  end
 end

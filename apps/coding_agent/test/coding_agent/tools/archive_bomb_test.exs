@@ -2,7 +2,7 @@ defmodule CodingAgent.Tools.ArchiveBombTest do
   # Measures VM-wide memory while inflating; must not overlap other suites.
   use ExUnit.Case, async: false
 
-  alias CodingAgent.Tools.{ReadArchive, WriteArchive}
+  alias CodingAgent.Tools.ReadArchive
   alias LemonAgent.AbortSignal
 
   @moduletag :tmp_dir
@@ -109,40 +109,6 @@ defmodule CodingAgent.Tools.ArchiveBombTest do
     assert growth < 64 * @mib
   end
 
-  test "in-place ZIP writes bound decoding of unrelated members", %{tmp_dir: dir} do
-    {data, crc} = zero_deflate(256 * @mib)
-    path = Path.join(dir, "write.zip")
-    original = zip([{"bomb.bin", 8, data, crc, 256 * @mib}])
-    File.write!(path, original)
-
-    {result, growth} =
-      peak_memory_during(fn ->
-        WriteArchive.write({path, "new.txt"}, "hi", AbortSignal.new(), dir,
-          format_max_decoded_bytes: 8 * @mib
-        )
-      end)
-
-    assert {:error, message} = result
-    assert message =~ ":format_max_decoded_bytes"
-    assert growth < 64 * @mib
-    assert File.read!(path) == original
-  end
-
-  test "in-place tar.gz writes bound the gunzipped archive", %{tmp_dir: dir} do
-    path = Path.join(dir, "write.tgz")
-    raw = :binary.copy(<<0>>, 16 * @mib)
-    File.write!(path, :zlib.gzip(raw))
-    original = File.read!(path)
-
-    assert {:error, message} =
-             WriteArchive.write({path, "new.txt"}, "hi", AbortSignal.new(), dir,
-               format_max_decoded_bytes: @mib
-             )
-
-    assert message =~ ":format_max_decoded_bytes"
-    assert File.read!(path) == original
-  end
-
   test "tar.gz listing is bounded by the decoded-archive cap", %{tmp_dir: dir} do
     path = Path.join(dir, "big.tgz")
     File.write!(path, :zlib.gzip(:binary.copy(<<0>>, 16 * @mib)))
@@ -153,17 +119,11 @@ defmodule CodingAgent.Tools.ArchiveBombTest do
     assert message =~ ":format_max_decoded_bytes"
   end
 
-  test "ordinary zip members still round-trip through read and write", %{tmp_dir: dir} do
+  test "ordinary zip members still read", %{tmp_dir: dir} do
     path = Path.join(dir, "ok.zip")
     {:ok, _} = :zip.create(String.to_charlist(path), [{~c"a.txt", "alpha"}, {~c"b.txt", "beta"}])
 
     assert {:ok, result} = ReadArchive.read(path, "a.txt", %{}, AbortSignal.new(), [])
     assert hd(result.content).text =~ "alpha"
-
-    assert %LemonAgent.Types.AgentToolResult{} =
-             WriteArchive.write({path, "c.txt"}, "gamma", AbortSignal.new(), dir, [])
-
-    {:ok, files} = :zip.extract(String.to_charlist(path), [:memory])
-    assert Enum.sort(files) == [{~c"a.txt", "alpha"}, {~c"b.txt", "beta"}, {~c"c.txt", "gamma"}]
   end
 end

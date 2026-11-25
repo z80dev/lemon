@@ -94,7 +94,6 @@ defmodule LemonAi.Models.Catalog do
     "openai_prompt_cache_options" => :openai_prompt_cache_options,
     "openai_temperature_requires_none" => :openai_temperature_requires_none,
     "bedrock_reasoning_config" => :bedrock_reasoning_config,
-    "anthropic_effort_only" => :anthropic_effort_only,
     "anthropic_session_user_id" => :anthropic_session_user_id,
     "anthropic_context_window_overflow" => :anthropic_context_window_overflow,
     "supports_store" => :supports_store,

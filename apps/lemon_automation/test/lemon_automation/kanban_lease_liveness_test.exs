@@ -1,7 +1,7 @@
 defmodule LemonAutomation.KanbanLeaseLivenessTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Workspace.KanbanStore
+  alias LemonAutomation.KanbanStore
   alias LemonAutomation.KanbanDispatcher
 
   setup do

@@ -86,38 +86,58 @@ defmodule LemonControlPlane.A2A.Router do
       |> send_chunked(200)
 
     try do
-      task = A2AStore.get_task(task_id)
-
-      case stream_json(conn, request_id, %{"task" => TaskView.render(task)}) do
-        {:ok, conn} ->
-          if Protocol.terminal_state?(task.state) or
-               task.state in ["TASK_STATE_INPUT_REQUIRED", "TASK_STATE_AUTH_REQUIRED"] do
-            finish_stream(conn)
-          else
-            receive do
-              {:a2a_task_terminal, ^task_id} ->
-                final = A2AStore.get_task(task_id)
-
-                update = %{
-                  "statusUpdate" => %{
-                    "taskId" => final.id,
-                    "contextId" => final.context_id,
-                    "status" => TaskView.render(final)["status"]
+      with {:ok, %{} = task} <- A2AStore.fetch_task(task_id),
+           {:ok, view} <- TaskView.render(task),
+           {:ok, conn} <- stream_json(conn, request_id, %{"task" => view}) do
+        if Protocol.terminal_state?(task.state) or
+             task.state in ["TASK_STATE_INPUT_REQUIRED", "TASK_STATE_AUTH_REQUIRED"] do
+          finish_stream(conn)
+        else
+          receive do
+            {:a2a_task_terminal, ^task_id} ->
+              case A2AStore.fetch_task(task_id) do
+                {:ok, %{} = final} ->
+                  update = %{
+                    "statusUpdate" => %{
+                      "taskId" => final.id,
+                      "contextId" => final.context_id,
+                      "status" => TaskView.status(final)
+                    }
                   }
-                }
 
-                with {:ok, conn} <- stream_json(conn, request_id, update),
-                     do: finish_stream(conn)
-            after
-              Config.current().reply_timeout_ms -> finish_stream(conn)
-            end
+                  case stream_json(conn, request_id, update) do
+                    {:ok, conn} -> finish_stream(conn)
+                    _ -> conn
+                  end
+
+                _ ->
+                  stream_task_unavailable(conn, request_id)
+              end
+          after
+            Config.current().reply_timeout_ms -> finish_stream(conn)
           end
+        end
+      else
+        {:error, :store_unavailable} ->
+          stream_task_unavailable(conn, request_id)
+
+        {:ok, nil} ->
+          stream_task_unavailable(conn, request_id)
 
         _ ->
           conn
       end
     after
       LemonCore.Bus.unsubscribe(topic)
+    end
+  end
+
+  defp stream_task_unavailable(conn, request_id) do
+    error = Protocol.error(request_id, -32_603, "Task store is temporarily unavailable")
+
+    case chunk(conn, "data: " <> Jason.encode!(error) <> "\n\n") do
+      {:ok, conn} -> finish_stream(conn)
+      _ -> conn
     end
   end
 

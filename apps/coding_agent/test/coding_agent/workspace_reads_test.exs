@@ -86,7 +86,6 @@ defmodule CodingAgent.WorkspaceReadsTest do
 
   defp real_session(root, opts \\ []) do
     settings = SettingsManager.load(root)
-    settings = %{settings | tools: Map.put(settings.tools, :wasm, %{enabled: false})}
 
     defaults = [
       cwd: root,

@@ -5,7 +5,7 @@ defmodule LemonAutomation.KanbanDispatcherLiveTest do
   @moduletag :automation_live
 
   alias LemonAutomation.KanbanDispatcher
-  alias LemonAgent.Workspace.KanbanStore
+  alias LemonAutomation.KanbanStore
 
   test "provider-backed dispatcher completes concurrent kanban work through real workers" do
     case live_config() do
@@ -26,7 +26,7 @@ defmodule LemonAutomation.KanbanDispatcherLiveTest do
         {:ok, _apps} = Application.ensure_all_started(:lemon_router)
 
         {:ok, authority} =
-          LemonAgent.Workspace.KanbanAuthority.new(
+          LemonAutomation.KanbanAuthority.new(
             %{agent_id: "default", session_key: "agent:default:main"},
             nil,
             workspace
@@ -40,7 +40,7 @@ defmodule LemonAutomation.KanbanDispatcherLiveTest do
                  )
 
         # Workers run in place (worktrees off) only with the operator grant.
-        digest = LemonAgent.Workspace.KanbanAuthority.workspace_digest(board.workspace)
+        digest = LemonAutomation.KanbanAuthority.workspace_digest(board.workspace)
         assert {:ok, _} = KanbanStore.grant_in_place(board.id, digest)
 
         tasks =

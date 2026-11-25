@@ -48,8 +48,7 @@ check_twilio_creds() {
         echo "    export TWILIO_ACCOUNT_SID=your_account_sid"
         echo "    export TWILIO_AUTH_TOKEN=your_auth_token"
         echo ""
-        echo "  Or store them with: mix lemon.secrets.set twilio_account_sid VALUE"
-        echo "  and retrieve with:  mix lemon.secrets.get twilio_account_sid"
+        echo "  To store them for the Lemon runtime too: lemon secrets set twilio_account_sid VALUE"
         exit 1
     fi
 }

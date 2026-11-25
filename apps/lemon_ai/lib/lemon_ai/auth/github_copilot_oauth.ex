@@ -59,14 +59,10 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
              opts
            ),
          {:ok, %{token: copilot_token, expires_at_ms: expires_at_ms}} <-
-           fetch_copilot_token(github_access_token, enterprise_domain),
-         {:ok, secret} <-
-           build_oauth_secret(
-             github_access_token,
-             copilot_token,
-             expires_at_ms,
-             enterprise_domain
-           ) do
+           fetch_copilot_token(github_access_token, enterprise_domain) do
+      secret =
+        build_oauth_secret(github_access_token, copilot_token, expires_at_ms, enterprise_domain)
+
       maybe_enable_models(secret, opts)
       {:ok, secret}
     end
@@ -327,21 +323,15 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
   # ----------------------------------------------------------------------------
 
   defp build_oauth_secret(refresh_token, access_token, expires_at_ms, enterprise_domain) do
-    if is_binary(refresh_token) and refresh_token != "" and
-         is_binary(access_token) and access_token != "" and is_integer(expires_at_ms) do
-      {:ok,
-       %{
-         "type" => @secret_type,
-         "refresh_token" => refresh_token,
-         "access_token" => access_token,
-         "expires_at_ms" => expires_at_ms,
-         "enterprise_domain" => enterprise_domain,
-         "base_url" => copilot_base_url(access_token, enterprise_domain),
-         "updated_at_ms" => System.system_time(:millisecond)
-       }}
-    else
-      {:error, :invalid_oauth_secret_fields}
-    end
+    %{
+      "type" => @secret_type,
+      "refresh_token" => refresh_token,
+      "access_token" => access_token,
+      "expires_at_ms" => expires_at_ms,
+      "enterprise_domain" => enterprise_domain,
+      "base_url" => copilot_base_url(access_token, enterprise_domain),
+      "updated_at_ms" => System.system_time(:millisecond)
+    }
   end
 
   defp copilot_base_url(token, enterprise_domain) do

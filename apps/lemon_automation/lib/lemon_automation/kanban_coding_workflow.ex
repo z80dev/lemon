@@ -17,7 +17,7 @@ defmodule LemonAutomation.KanbanCodingWorkflow do
   (`:publication_not_authorized`).
   """
 
-  alias LemonAgent.Workspace.{KanbanAuthority, KanbanStore}
+  alias LemonAutomation.{KanbanAuthority, KanbanStore}
   alias LemonAutomation.{KanbanGitWorkflow, KanbanReview, KanbanRunWorker, RunCompletionWaiter}
   alias LemonCore.{Id, RunStore}
 

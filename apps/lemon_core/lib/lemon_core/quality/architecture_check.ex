@@ -431,7 +431,6 @@ defmodule LemonCore.Quality.ArchitectureCheck do
       {:ok, MapSet.to_list(refs)}
     else
       {:error, reason} -> {:error, reason}
-      error -> {:error, error}
     end
   end
 

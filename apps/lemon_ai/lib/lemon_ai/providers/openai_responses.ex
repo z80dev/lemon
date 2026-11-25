@@ -120,7 +120,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
                        tier,
                        Map.merge(
                          %{"flex" => 0.5, "priority" => 2.0},
-                         model.service_tier_cost || %{}
+                         model.service_tier_cost
                        )
                      )
                    end
@@ -262,7 +262,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
 
     # Add tools if present
     params =
-      if context.tools && context.tools != [] do
+      if context.tools != [] do
         params
         |> Map.put("tools", OpenAIResponsesShared.convert_tools(context.tools))
         |> Map.put("tool_choice", "auto")
@@ -306,7 +306,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
     # Add GitHub Copilot specific headers if applicable
     headers =
       if model.provider in [:github_copilot, :"github-copilot", "github-copilot"] do
-        messages = context.messages || []
+        messages = context.messages
         last_message = List.last(messages)
         is_agent_call = last_message && last_message.role != :user
 
@@ -362,8 +362,8 @@ defmodule LemonAi.Providers.OpenAIResponses do
         |> Map.put("include", ["reasoning.encrypted_content"])
       else
         # GPT-5 workaround for disabling reasoning
-        model_name = String.downcase(model.name || "")
-        model_id = String.downcase(model.id || "")
+        model_name = String.downcase(model.name)
+        model_id = String.downcase(model.id)
 
         if String.starts_with?(model_name, "gpt-5") or String.starts_with?(model_id, "gpt-5") do
           juice_message = %{
@@ -421,7 +421,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
       url: url,
       input_items: count_input_items(Map.get(body, "input")),
       input_summary: summarize_input(Map.get(body, "input")),
-      tools_count: length(context.tools || []),
+      tools_count: length(context.tools),
       system_prompt_bytes:
         HttpTrace.summarize_text_size(LemonAi.SystemPrompt.text(context.system_prompt)),
       max_output_tokens: Map.get(body, "max_output_tokens"),

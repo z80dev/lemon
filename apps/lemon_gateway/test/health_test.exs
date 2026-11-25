@@ -25,7 +25,6 @@ defmodule LemonGateway.HealthTest do
   setup do
     keys = [
       LemonGateway.Config,
-      :gateway_ingress_enabled,
       :health_checks,
       :xmtp_transport_module
     ]
@@ -45,8 +44,12 @@ defmodule LemonGateway.HealthTest do
     end)
 
     Application.stop(:lemon_gateway)
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{enable_xmtp: false})
-    Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
+
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      enable_xmtp: false,
+      ingress: %{enabled: true}
+    })
+
     Application.delete_env(:lemon_gateway, :health_checks)
     Application.delete_env(:lemon_gateway, :xmtp_transport_module)
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -68,7 +71,7 @@ defmodule LemonGateway.HealthTest do
 
   test "health reports missing ingress when the satellite is disabled" do
     Application.stop(:lemon_gateway)
-    Application.delete_env(:lemon_gateway, :gateway_ingress_enabled)
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{ingress: %{enabled: false}})
     assert {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
     conn = conn(:get, "/healthz") |> LemonGateway.Health.Router.call([])
@@ -103,6 +106,7 @@ defmodule LemonGateway.HealthTest do
       max_concurrent_runs: 1,
       enable_telegram: false,
       enable_xmtp: true,
+      ingress: %{enabled: true},
       xmtp: %{
         require_live: true,
         mock_mode: true,
@@ -171,6 +175,7 @@ defmodule LemonGateway.HealthTest do
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 1,
       enable_telegram: false,
+      ingress: %{enabled: true},
       enable_xmtp: true
     })
 

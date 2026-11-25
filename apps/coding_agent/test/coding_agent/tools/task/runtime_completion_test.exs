@@ -68,7 +68,7 @@ defmodule CodingAgent.Tools.Task.RuntimeCompletionTest do
     assert {:ok, %{status: :completed}} = TaskStore.get_record(id)
 
     :ok = :sys.resume(owner)
-    assert_eventually(fn -> match?({:aborted, _}, TaskRuntimeHelpers.state(id)) end)
+    assert_eventually(fn -> match?({:completed, _}, TaskRuntimeHelpers.state(id)) end)
     refute_receive {:followup, _text, _entry}, 300
   end
 end

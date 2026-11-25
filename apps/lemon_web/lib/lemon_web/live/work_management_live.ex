@@ -49,7 +49,7 @@ defmodule LemonWeb.WorkManagementLive do
     if connected?(socket) do
       Bus.subscribe("cron")
       Bus.subscribe("goals")
-      Bus.subscribe(LemonAgent.Workspace.KanbanStore.changed_topic())
+      Bus.subscribe(LemonAutomation.KanbanStore.changed_topic())
       {:ok, load_work(socket)}
     else
       {:ok, socket}
@@ -519,7 +519,7 @@ defmodule LemonWeb.WorkManagementLive do
         >
           <:meta>
             <span class="inline-flex items-center gap-1.5 text-xs text-muted">
-              <.status_dot tone="success" pulse /> Live · cron and goal events, 3s board refresh
+              <.status_dot tone="success" pulse /> Live · updates on kanban, goal and cron events
             </span>
           </:meta>
           <:actions>

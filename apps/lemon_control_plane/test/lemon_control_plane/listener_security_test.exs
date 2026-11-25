@@ -1,7 +1,6 @@
 defmodule LemonControlPlane.ListenerSecurityTest do
   use ExUnit.Case, async: false
   import Plug.Conn
-  import Plug.Test, except: [conn: 2, conn: 3]
 
   alias LemonControlPlane.{ListenerPolicy, NodeGateway}
   alias LemonControlPlane.HTTP.{NodeRouter, Router}
@@ -18,17 +17,11 @@ defmodule LemonControlPlane.ListenerSecurityTest do
     :ip,
     :operator_token,
     :allow_unauthenticated_loopback_operator,
-    :remote_http_apis,
     :model_catalog,
     :public_ws_url,
     :node_source_checkout
   ]
-  @env [
-    "LEMON_CONTROL_PLANE_OPERATOR_TOKEN",
-    "LEMON_OPENAI_COMPAT_API_TOKEN",
-    "LEMON_OPENAI_COMPAT_TOKEN",
-    "LEMON_ACP_API_TOKEN"
-  ]
+  @env ["LEMON_CONTROL_PLANE_OPERATOR_TOKEN"]
 
   setup do
     old = Map.new(@keys, &{&1, Application.fetch_env(:lemon_control_plane, &1)})
@@ -53,15 +46,6 @@ defmodule LemonControlPlane.ListenerSecurityTest do
     :ok
   end
 
-  test "dedicated tokens use canonical environment names and the OpenAI alias" do
-    System.put_env("LEMON_OPENAI_COMPAT_TOKEN", " alias-secret ")
-    assert ListenerPolicy.api_token(:openai) == "alias-secret"
-    System.put_env("LEMON_OPENAI_COMPAT_API_TOKEN", " primary-secret ")
-    assert ListenerPolicy.api_token(:openai) == "primary-secret"
-    System.put_env("LEMON_ACP_API_TOKEN", " acp-secret ")
-    assert ListenerPolicy.api_token(:acp) == "acp-secret"
-  end
-
   test "off-loopback main listener only exposes websocket and health by default" do
     for {method, path} <- [
           {:get, "/v1/models"},
@@ -78,62 +62,19 @@ defmodule LemonControlPlane.ListenerSecurityTest do
     assert_websocket_upgrade(RemoteRouter)
   end
 
-  test "remote API opt-in still requires its bearer and is path-segment limited" do
-    Application.put_env(:lemon_control_plane, :remote_http_apis, [:openai])
-    System.put_env("LEMON_OPENAI_COMPAT_API_TOKEN", "api-secret")
-    assert (remote(:get, "/v1/models") |> Router.call([])).status == 401
-
-    assert (remote(:get, "/v1/models")
-            |> put_req_header("authorization", "Bearer api-secret")
-            |> Router.call([])).status == 200
-
-    assert (remote(:get, "/acp/ws") |> Router.call([])).status == 404
-    assert (remote(:get, "/v1-other") |> Router.call([])).status == 404
-    # Caller-supplied proxy headers do not turn a remote peer into loopback.
-    assert (remote(:get, "/acp")
-            |> put_req_header("x-forwarded-for", "127.0.0.1")
-            |> Router.call([])).status == 404
-  end
-
-  test "local HTTP defaults fail closed and accept the operator token as fallback" do
-    for {method, path} <- [{:get, "/v1/models"}, {:post, "/acp"}] do
-      denied = conn(method, path) |> Router.call([])
-      assert denied.status == 401
-      assert denied.resp_body =~ "control-plane-<port>.token"
-    end
-
+  test "off-loopback peers never reach /acp/ws or the retired HTTP surfaces" do
     Application.put_env(:lemon_control_plane, :operator_token, "operator-secret")
 
-    assert (conn(:get, "/v1/models")
-            |> put_req_header("authorization", "Bearer operator-secret")
-            |> Router.call([])).status == 200
+    for {method, path} <- [{:get, "/acp/ws"}, {:get, "/v1/models"}, {:post, "/acp"}] do
+      assert (remote(method, path)
+              |> put_req_header("authorization", "Bearer operator-secret")
+              |> Router.call([])).status == 404
+    end
 
-    acp =
-      conn(
-        :post,
-        "/acp",
-        Jason.encode!(%{
-          jsonrpc: "2.0",
-          id: 1,
-          method: "initialize",
-          params: %{protocolVersion: 1}
-        })
-      )
-
-    response =
-      acp
-      |> put_req_header("content-type", "application/json")
-      |> put_req_header("authorization", "Bearer operator-secret")
-      |> Router.call([])
-
-    assert response.status == 200
-    assert Jason.decode!(response.resp_body)["jsonrpc"] == "2.0"
-
-    Application.delete_env(:lemon_control_plane, :operator_token)
-    Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, true)
-    assert (conn(:get, "/v1/models") |> Router.call([])).status == 200
-    Application.put_env(:lemon_control_plane, :remote_http_apis, [:openai])
-    assert (remote(:get, "/v1/models") |> Router.call([])).status == 401
+    # Caller-supplied proxy headers do not turn a remote peer into loopback.
+    assert (remote(:get, "/acp/ws")
+            |> put_req_header("x-forwarded-for", "127.0.0.1")
+            |> Router.call([])).status == 404
   end
 
   test "public main and web binds require an operator credential and reject compatibility" do
@@ -146,11 +87,6 @@ defmodule LemonControlPlane.ListenerSecurityTest do
     Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, true)
     assert {:error, message} = ListenerPolicy.validate()
     assert message =~ "ALLOW_UNAUTHENTICATED_LOOPBACK"
-    Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, false)
-    Application.put_env(:lemon_control_plane, :remote_http_apis, [:openai])
-    assert {:error, _} = ListenerPolicy.validate()
-    System.put_env("LEMON_OPENAI_COMPAT_API_TOKEN", "api-secret")
-    assert :ok = ListenerPolicy.validate()
   end
 
   test "node gateway exposes only health and websocket" do

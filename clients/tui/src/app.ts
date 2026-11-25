@@ -42,11 +42,7 @@ import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
 import { type CommandHost, type CommandRegistry, createCommandRegistry } from "./commands/index.ts";
 import { contextWindowFromCache } from "./commands/model.ts";
-import {
-	discoverFileCommands,
-	fileSlashCommand,
-	type PaletteSourceOptions,
-} from "./commands/palette-source.ts";
+import { daemonFileCommands } from "./commands/palette-source.ts";
 import { parsePlanReceipt } from "./commands/plan.ts";
 import { type OverlayHost, SUBMISSION_MODES } from "./commands/registry.ts";
 import {
@@ -100,7 +96,7 @@ import { Banner } from "./ui/components/banner.ts";
 import { ContextPanelComponent } from "./ui/components/context-panel.ts";
 import { CustomEditor } from "./ui/components/custom-editor.ts";
 import { ModelPicker } from "./ui/components/model-picker.ts";
-import { confirmAction, PickerOverlay } from "./ui/components/pickers.ts";
+import { confirmAction, isPrintable, PickerOverlay } from "./ui/components/pickers.ts";
 import { QueuePanelComponent } from "./ui/components/queue-panel.ts";
 import { ReadinessCard } from "./ui/components/readiness-card.ts";
 import { SessionSwitcher } from "./ui/components/session-switcher.ts";
@@ -171,8 +167,6 @@ export interface AppShellOptions {
 	/** `[tui] vim_mode`: start the composer in Vim-style modal editing. */
 	vimMode?: boolean;
 	keybindings?: unknown;
-	/** Local roots for skills, prompts and file commands; tests inject a fixture home. */
-	resources?: Omit<PaletteSourceOptions, "cwd">;
 }
 
 /** How a prompt reaches its session; `confirm` verifies and remembers a probed profile route. */
@@ -505,10 +499,7 @@ export class AppShell {
 		this.#host = this.#buildHost();
 		this.commands = createCommandRegistry({
 			openExternalEditor: () => this.openExternalEditor(),
-		}).setFileCommandSource(async () => {
-			const found = await discoverFileCommands({ ...options.resources, cwd: this.#cwd });
-			return { commands: found.commands.map(fileSlashCommand), issues: found.issues };
-		});
+		}).setFileCommandSource(() => daemonFileCommands(this.methods, this.#cwd));
 		this.#palette = new CommandPalette({
 			context: () => ({
 				store: this.store,
@@ -526,7 +517,6 @@ export class AppShell {
 			present: (overlay) => this.selectors.open(overlay),
 			repaint: () => this.selectors.repaint(),
 			notice: (text, level) => this.events.notice(text, level),
-			resources: options.resources,
 			bindingKeys: (action) => this.input.keybindings.getKeys(action as never),
 		});
 		this.commandController = new CommandController({
@@ -649,7 +639,15 @@ export class AppShell {
 				// A pending startup request refreshes after it has picked the session.
 				if (!this.#startup) void this.refreshPlanMode();
 				if (!this.#startup) void this.refreshSteers();
-				if (this.#sessionReady) void refreshSetupStatus(this.store, this.methods);
+				if (this.#sessionReady) {
+					void refreshSetupStatus(this.store, this.methods);
+					void this.sessions
+						.watchFocused()
+						.then(() => this.sessions.resync())
+						.catch((error: unknown) =>
+							this.events.notice(`could not watch session: ${describeError(error)}`, "error"),
+						);
+				}
 				if (this.#sessionReady || this.#initialSessionLoad) return;
 				const startup = this.#startup;
 				this.#startup = undefined;
@@ -1976,6 +1974,7 @@ export class AppShell {
 					})),
 					footer: spec.footer,
 					detail: () => spec.detail,
+					onKey: spec.filterable === false ? (data) => isPrintable(data) : undefined,
 					onSelect: (item) => {
 						this.selectors.close();
 						this.#settle(() => spec.onSelect(item));

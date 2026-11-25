@@ -3,7 +3,7 @@ defmodule CodingAgent.AsyncFollowupsTest do
 
   alias CodingAgent.{AsyncFollowups, Messages, TaskStore}
   alias CodingAgent.Session.State
-  alias CodingAgent.Tools.Task.Followup
+  alias CodingAgent.TaskRuntime.Followup
 
   defmodule SessionSpy do
     def handle_async_followup(owner, message) do

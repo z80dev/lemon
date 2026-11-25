@@ -372,11 +372,9 @@ defmodule LemonChannels.ChannelAdmissionFailClosedTest do
       current_thread_generation: fn _state, _chat_id, _thread_id -> 0 end,
       maybe_index_telegram_msg_session: fn _state, _scope, _session_key, _ids -> :ok end,
       maybe_subscribe_to_session: fn _session_key -> :ok end,
-      resolve_model_hint: fn _state, _session_key, _chat_id, _thread_id -> {nil, nil} end,
       resolve_session_key: fn _state, _inbound, _scope, _meta ->
         {"agent:default:telegram:default:dm:#{chat_id}", false}
       end,
-      resolve_thinking_hint: fn _state, _chat_id, _thread_id -> {nil, nil} end,
       send_submission_failure: fn _state, _chat_id, _thread_id, _msg_id, failure ->
         send(parent, {:telegram_failure, failure})
       end,

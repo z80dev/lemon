@@ -140,10 +140,6 @@ defmodule LemonCore.Config.ProjectTrustTest do
      &__MODULE__.extension_paths/1, [], "runtime.extension_paths"},
     {"extension autoload", ~s([runtime.extensions]\nauto_load_default_paths = true\n), "",
      &__MODULE__.extension_autoload/1, false, "runtime.extensions.auto_load_default_paths"},
-    {"wasm runtime path", ~s([runtime.tools.wasm]\nruntime_path = "./bin/evil"\n), "",
-     &__MODULE__.wasm_runtime/1, "", "runtime.tools.wasm.runtime_path"},
-    {"wasm enable", ~s([runtime.tools.wasm]\nenabled = true\n), "", &__MODULE__.wasm_enabled/1,
-     false, "runtime.tools.wasm.enabled"},
     {"lsp command", ~s([runtime.tools.lsp.servers.clangd]\ncommand = "./evil"\n), "",
      &__MODULE__.lsp_servers/1, %{}, "runtime.tools.lsp.servers.clangd.command"},
     {"ssrf private network", ~s([runtime.tools.web.fetch]\nallow_private_network = true\n), "",
@@ -402,8 +398,6 @@ defmodule LemonCore.Config.ProjectTrustTest do
   def vertex_location(config), do: config.providers.providers["google_vertex"].location
   def extension_paths(config), do: config.agent.extension_paths
   def extension_autoload(config), do: config.agent.extensions.auto_load_default_paths
-  def wasm_runtime(config), do: config.tools.wasm.runtime_path
-  def wasm_enabled(config), do: config.tools.wasm.enabled
   def lsp_servers(config), do: config.tools.lsp["servers"]
   def private_network(config), do: config.tools.web.fetch.allow_private_network
   def allowed_hosts(config), do: config.tools.web.fetch.allowed_hostnames

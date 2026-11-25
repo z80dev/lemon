@@ -30,12 +30,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
                                              [integer() | nil] ->
                                                any()),
           maybe_subscribe_to_session: (binary() -> any()),
-          resolve_model_hint: (map(), binary() | nil, integer() | nil, integer() | nil ->
-                                 {binary() | nil, atom() | nil}),
           resolve_session_key: (map(), map(), ChatScope.t() | nil, map() ->
                                   {binary() | nil, boolean()}),
-          resolve_thinking_hint: (map(), integer() | nil, integer() | nil ->
-                                    {binary() | nil, atom() | nil}),
           send_submission_failure: (map(),
                                     integer(),
                                     integer()
@@ -119,19 +115,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
         "forked=#{inspect(forked?)} progress_msg_id=#{inspect(progress_msg_id)}"
     )
 
-    {model_hint, model_scope} =
-      callbacks.resolve_model_hint.(state, session_key, chat_id, thread_id)
-
-    {thinking_hint, thinking_scope} = callbacks.resolve_thinking_hint.(state, chat_id, thread_id)
-
+    # Model and thinking level come from the router (`PolicyStore` session and
+    # chat rows), never from channel meta.
     meta =
       meta0
       |> Map.put(:session_key, session_key)
       |> Map.put(:forked_session, forked?)
-      |> maybe_put(:model, model_hint)
-      |> maybe_put(:model_scope, model_scope)
-      |> maybe_put(:thinking_level, thinking_hint)
-      |> maybe_put(:thinking_scope, thinking_scope)
 
     meta =
       if is_nil(meta[:resume]) and is_nil(meta["resume"]) and
@@ -324,9 +313,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
     {List.wrap(meta[:transport_dedupe_refs]),
      %{inbound | meta: Map.delete(meta, :transport_dedupe_refs)}}
   end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp drop_non_native_resume(meta) do
     Enum.reduce([:resume, "resume"], meta, fn key, acc ->

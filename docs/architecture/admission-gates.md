@@ -115,10 +115,26 @@ configured capacity. This is an inference from ordering and configuration, not
 an observed latency distribution. Likewise, the redundant worker FIFO being
 normally empty follows from upstream single-flight; it was not load-measured.
 
-No before/after latency benchmark, post-change LOC total, or performance gain is
-claimed here. This documentation change ran no tests, builds or formatters.
-Integration must report its exact tested revision and actual command results;
-the issue's quality/docs acceptance is not established by this ADR alone.
+### One-owner trace (#728)
+
+On macOS arm64, OTP 29.1.2 and Elixir 1.20.5, one admitted local run per
+revision used the native executor with a deterministic provider emitting 100
+one-character deltas. After the provider opened, the probe counted live
+processes by role and traced BEAM sends from the executor runner onward with
+`:erlang.trace/3`. A run-topic observer acknowledged each delta before the next
+one was emitted; both runs received all 100 deltas and one successful
+completion.
+
+| Counter | Before (`ce420ad09a9b`) | After (#728) |
+|---|---:|---:|
+| Run owners | 2 (router and gateway) | 1 (router) |
+| Live processes in the run execution slice (owners, executor runner, native session) | 4 | 3 |
+| Internal delta mailbox deliveries after the executor runner (100 deltas) | 200 (runner → gateway → router) | 100 (runner → router) |
+
+The measurement excludes shared supervisors, the conversation queue owner,
+provider/session internals before the runner, and external subscribers and
+channel presentation. It measures the removed relay, not latency or whole-VM
+process count.
 
 ## Measurement methodology
 

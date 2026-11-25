@@ -41,12 +41,23 @@ fail closed when called with malformed data.
 - allowlists intersect;
 - deny and blocked lists form a union;
 - approval requirements form a union and the stricter per-tool mode wins;
+- a per-tool `never` survives only when neither side gates that tool at any
+  approval tier: the tier depends on call arguments (for example `write` with
+  `diagnostics`) and tool source, so one side cannot waive the other's gate;
+  a dropped `never` inherits the stricter `approval_mode`;
 - command allowlists intersect and blocklists form a union;
 - numeric limits take the lower value;
-- silent-mode restrictions cannot be removed.
+- silent-mode restrictions cannot be removed;
+- `workspace_read_exempt` is kept from the parent unless the request sets
+  `false`; a request cannot enable it when the parent does not.
 
-Router policy layers and child requests use this operation. A later policy
-layer can narrow authority but cannot undo an earlier restriction.
+Child requests, request overrides at router admission, and execution-node wire
+policies use `restrict/2`, so the result is always within the parent
+(`subset?/2`). Trusted operator layers (agent, channel, session, runtime and
+profile policy) use `LemonCore.ToolPolicy.layer/2`, which is identical except
+that an unset `workspace_read_exempt` is neutral, so any operator layer may
+enable it and an explicit `false` wins. A later policy layer can narrow
+authority but cannot undo an earlier restriction.
 
 ### Stored-policy upgrade semantics
 

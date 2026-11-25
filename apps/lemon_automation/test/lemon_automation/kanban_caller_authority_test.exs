@@ -9,10 +9,10 @@ defmodule LemonAutomation.KanbanCallerAuthorityTest do
   """
 
   use ExUnit.Case, async: false
-  alias LemonAgent.Workspace.{KanbanAuthority, KanbanStore}
+  alias LemonAutomation.{KanbanAuthority, KanbanStore}
   alias LemonAutomation.{KanbanDispatcher, KanbanRunWorker}
   alias LemonCore.{ExecutionContext, ToolPolicy}
-  alias LemonSkills.Tools.Kanban
+  alias LemonAutomation.Tools.Kanban
 
   defmodule Router do
     @moduledoc false

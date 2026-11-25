@@ -40,16 +40,15 @@ defmodule LemonRouter.RunProcess do
   | running or confirming idle | output, action, keepalive | running / fresh idle timeout |
   | running | idle expiry | confirming idle, or aborting if no prompt can be delivered |
   | confirming idle | confirmation expiry or cancel | aborting / executor cancel with the real reason |
-  | running | executor DOWN | stopped / one failed completion |
+  | running | executor DOWN | presenting / one failed completion |
   | active | abort or restart boundary | aborting / executor cancel, 15 s drain |
-  | aborting | executor completion, DOWN or drain expiry | stopped / one cancelled completion |
-  | any | completion | stopped normally |
+  | aborting | executor completion, DOWN or drain expiry | presenting / one cancelled completion |
+  | presenting | presentation returned | stopped normally; failed effects stay replayable |
 
   The executor sends its completion before it exits, so its DOWN can never
-  overtake it. A terminal record already written by another writer (a durable
-  abort fence, a replay) is adopted rather than contradicted. Terminal
-  evidence retention follows answer delivery and is best-effort: the durable
-  run summary stays the authority, and boot reconciliation re-derives it.
+  overtake it. Admission and completion share a durable terminal fence. An
+  existing decision is adopted, never contradicted; its outbox owns publication
+  and replay of failed presentation effects.
   """
 
   @behaviour :gen_statem
@@ -64,7 +63,7 @@ defmodule LemonRouter.RunProcess do
   import CodingAgent.Executor.Event, only: [is_started: 1, is_action_event: 1, is_completed: 1]
 
   alias CodingAgent.Executor.Event
-  alias LemonCore.{Bus, Events, ExecutionCommand, Introspection, RunStore}
+  alias LemonCore.{Bus, Events, ExecutionCommand, Introspection, RunStore, TerminalOutbox}
   alias LemonRouter.{EngineSessionClaim, MediaJobRecorder, RunCompletion, Slots, SurfaceManager}
 
   alias LemonRouter.RunProcess.{
@@ -422,10 +421,25 @@ defmodule LemonRouter.RunProcess do
     :keep_state_and_data
   end
 
+  def handle_event(
+        :info,
+        {:engine_delta, run_ref, %LemonCore.Event{type: :delta} = event},
+        phase,
+        %{run_ref: run_ref} = state
+      ) do
+    Bus.broadcast_from(Bus.run_topic(state.run_id), event)
+
+    # The native session already publishes this delta in its cursor batch.
+    unless is_map_key(event.meta || %{}, :session_seq) do
+      Bus.broadcast(Bus.session_topic(state.session_key), event)
+    end
+
+    on_delta(state, phase, event.payload)
+  end
+
   def handle_event(:info, {:engine_delta, run_ref, text}, phase, %{run_ref: run_ref} = state)
       when is_binary(text) do
     seq = state.delta_seq + 1
-    state = maybe_first_token(state)
 
     delta =
       Events.Delta.new(%{
@@ -437,20 +451,7 @@ defmodule LemonRouter.RunProcess do
       })
 
     publish(state, :delta, delta)
-
-    # Finalize the previous tool-status segment before streaming a new answer chunk.
-    if state.saw_delta == false do
-      SurfaceManager.commit_status_segment(state, :status)
-    end
-
-    SurfaceManager.ingest_answer_delta(state, delta)
-
-    Watchdog.activity(phase, %{
-      state
-      | saw_delta: true,
-        delta_seq: seq,
-        accumulated_text: state.accumulated_text <> text
-    })
+    on_delta(state, phase, delta)
   end
 
   def handle_event(
@@ -477,13 +478,41 @@ defmodule LemonRouter.RunProcess do
 
   # --- Events other processes publish on this run's topic.
 
-  # Another writer terminalized this run (an abort fence, a replay); adopt
-  # the durable record and stop the executor rather than contradict it.
-  def handle_event(:info, %LemonCore.Event{type: :run_completed} = event, _phase, state) do
-    if state.executor, do: _ = Execution.control(state.executor, :cancel, state.control_ctx)
-    state = release_execution(state)
-    Bus.broadcast(Bus.session_topic(state.session_key), event)
-    complete_run(event, state)
+  # The outbox may publish a decision that predates this owner. Adopt only a
+  # committed attempt, never an unversioned notification on the run topic.
+  def handle_event(
+        :info,
+        %LemonCore.Event{type: :run_completed, meta: %{attempt_id: attempt_id}} = event,
+        _phase,
+        state
+      ) do
+    case TerminalOutbox.decision(state.run_id) do
+      {:ok, %{attempt_id: ^attempt_id}} ->
+        if state.run_ref, do: Execution.control(state.executor, :cancel, state.control_ctx)
+        complete_run(event, release_execution(state))
+
+      _ ->
+        :keep_state_and_data
+    end
+  end
+
+  def handle_event(:info, %LemonCore.Event{type: type}, _phase, _state)
+      when type in [:run_started, :run_completed],
+      do: :keep_state_and_data
+
+  def handle_event(:internal, {:present, event, retried?}, :presenting, state) do
+    case present(state, event, retried?) do
+      :ok -> TerminalOutbox.ack(state.run_id, :presentation)
+      {:error, _} -> TerminalOutbox.failed(state.run_id, :presentation)
+    end
+
+    _ =
+      LemonRouter.RunReceiptStore.retain_terminal_evidence_best_effort(
+        state.receipt_store,
+        state.run_id
+      )
+
+    {:stop, :normal, state}
   end
 
   def handle_event(
@@ -614,8 +643,17 @@ defmodule LemonRouter.RunProcess do
   end
 
   defp terminal_fence(state) do
+    case TerminalOutbox.decision(state.run_id) do
+      {:ok, %{} = _decision} -> :terminal
+      {:ok, nil} -> legacy_terminal_fence(state)
+      _ -> :unavailable
+    end
+  end
+
+  defp legacy_terminal_fence(state) do
     case RunStore.fetch(state.run_id) do
       {:ok, %{summary: %{completed: completed}}} when is_map(completed) -> :terminal
+      {:error, :evicted} -> :terminal
       {:ok, nil} -> :open
       {:ok, %{summary: nil}} -> :open
       _ -> :unavailable
@@ -678,7 +716,7 @@ defmodule LemonRouter.RunProcess do
 
   # The durable record is the truth: adopt it without publishing a second one.
   defp adopt_terminal_record(state) do
-    finalize(state, failed_completion(state, :already_finalized))
+    complete_run(RunCompletion.reconcile(state.run_id), release_execution(state))
   end
 
   # ---------------------------------------------------------------------------
@@ -695,7 +733,12 @@ defmodule LemonRouter.RunProcess do
       origin: Execution.meta_field(command, :origin)
     })
 
-    opts = [cwd: Execution.cwd(command), run_id: state.run_id, slot_lender: Slots]
+    opts = [
+      cwd: Execution.cwd(command),
+      run_id: state.run_id,
+      slot_lender: Slots,
+      canonical_delta: true
+    ]
 
     case Execution.start(state.executor, command, opts, self()) do
       {:ok, run_ref, control_ctx} ->
@@ -754,6 +797,21 @@ defmodule LemonRouter.RunProcess do
 
   defp maybe_first_token(state), do: state
 
+  defp on_delta(state, phase, %{seq: seq, text: text} = delta) do
+    state = maybe_first_token(state)
+
+    if state.saw_delta == false, do: SurfaceManager.commit_status_segment(state, :status)
+
+    SurfaceManager.ingest_answer_delta(state, delta)
+
+    Watchdog.activity(phase, %{
+      state
+      | saw_delta: true,
+        delta_seq: seq,
+        accumulated_text: state.accumulated_text <> text
+    })
+  end
+
   defp on_engine_action(%LemonCore.Event{payload: action_ev}, phase, state) do
     {state, tool_status_surface, capture_current_turn?} =
       SurfaceManager.prepare_status_action(state, action_ev)
@@ -781,18 +839,36 @@ defmodule LemonRouter.RunProcess do
     end
   end
 
+  defp publish(state, :run_started, payload) do
+    state
+    |> new_event(:run_started, payload, %{})
+    |> LemonCore.Event.identify_run(state.run_id, attempt_id(state))
+    |> Bus.publish_run_lifecycle()
+  end
+
   # Publish on the run topic for other subscribers and forward to the session
   # topic. The owner handles its own events inline, never through the bus.
-  defp publish(state, type, payload, extra_meta \\ %{}) do
+  defp publish(state, type, payload), do: publish(state, type, payload, %{})
+
+  defp publish(state, type, payload, extra_meta) do
+    event = new_event(state, type, payload, extra_meta)
+    Bus.broadcast_from(Bus.run_topic(state.run_id), event)
+    Bus.broadcast(Bus.session_topic(state.session_key), event)
+    event
+  end
+
+  defp new_event(state, type, payload, extra_meta) do
     meta =
       state.run_id
       |> Execution.event_meta(state.session_key, state.execution_request)
       |> Map.merge(extra_meta)
 
-    event = LemonCore.Event.new(type, payload, meta)
-    Bus.broadcast_from(Bus.run_topic(state.run_id), event)
-    Bus.broadcast(Bus.session_topic(state.session_key), event)
-    event
+    LemonCore.Event.new(type, payload, meta)
+  end
+
+  defp attempt_id(state) do
+    context = state.execution_request.execution_context
+    context && context.attempt_id
   end
 
   # ---------------------------------------------------------------------------
@@ -900,8 +976,8 @@ defmodule LemonRouter.RunProcess do
   defp cancellation_meta(%{abort_reason: nil}), do: %{cancelled: false}
   defp cancellation_meta(state), do: %{cancelled: true, cancel_reason: state.abort_reason}
 
-  # Release the permit and claim, persist the terminal record (the run's only
-  # writer), publish it, then finish router-side completion and stop.
+  # Release execution, commit the outcome and hand off its notification before
+  # running presentation. A presentation crash cannot change execution truth.
   defp finalize(state, completed, extra_meta \\ nil) do
     answer = Map.get(completed, :answer)
 
@@ -935,8 +1011,8 @@ defmodule LemonRouter.RunProcess do
         meta
       )
 
-    {_outcome, event} = RunCompletion.finalize(state.execution_request, event)
-    Bus.broadcast(Bus.session_topic(state.session_key), event)
+    {_outcome, event} = RunCompletion.finalize(state.execution_request, event, router_owned: true)
+
     complete_run(event, state)
   end
 
@@ -957,14 +1033,18 @@ defmodule LemonRouter.RunProcess do
     }
   end
 
+  defp complete_run(nil, state), do: {:stop, :normal, state}
+
   defp complete_run(event, state) do
     {ok?, err} = CompactionTrigger.extract_completed_ok_and_error(event)
-    usage = CompactionTrigger.extract_completed_usage(event)
+
+    context_tokens =
+      event |> CompactionTrigger.extract_completed_usage() |> Events.Usage.context_tokens()
 
     Logger.info(
       "RunProcess completed run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} " <>
         "ok=#{inspect(ok?)} error=#{inspect(err)} saw_delta=#{inspect(state.saw_delta)} " <>
-        "usage_input_tokens=#{inspect(CompactionTrigger.usage_input_tokens(usage))}"
+        "context_tokens=#{inspect(context_tokens)}"
     )
 
     duration_ms =
@@ -995,17 +1075,101 @@ defmodule LemonRouter.RunProcess do
     CompactionTrigger.maybe_mark_pending_compaction_near_limit(state, event)
     retried? = RetryHandler.maybe_retry_zero_answer_failure(state, event)
 
-    # Mark still-running tool calls completed so an editable status message
-    # can't get stuck at [running] if a final action completion was missed.
+    {:next_state, :presenting, state, [{:next_event, :internal, {:present, event, retried?}}]}
+  end
+
+  @impl true
+  def terminate(reason, phase, state) do
+    if is_pid(state.coordinator_pid) do
+      send(state.coordinator_pid, {:run_process_terminated, state.run_id, reason})
+    end
+
+    if reason != :normal do
+      if state.run_ref && state.executor,
+        do: Execution.control(state.executor, :cancel, state.control_ctx)
+
+      _ = release_execution(state)
+
+      if committed_execution?(phase, state.run_id) do
+        TerminalOutbox.failed(state.run_id, :presentation)
+        record_termination(state, :answer_presentation_failed, reason)
+      else
+        record_termination(state, :run_failed, reason)
+        LemonRouter.RunCountTracker.record_terminal(state.run_id, true)
+        terminalize_crashed_owner(state, reason)
+      end
+    end
+
+    SurfaceManager.flush_all(state)
+    LemonCore.EventBridge.unsubscribe_run(state.run_id)
+    :ok
+  end
+
+  defp record_termination(state, type, reason) do
+    Introspection.record(
+      type,
+      %{reason: CompactionTrigger.safe_error_label(reason)},
+      run_id: state.run_id,
+      session_key: state.session_key,
+      engine: "lemon",
+      provenance: :direct
+    )
+  end
+
+  # An owner failure is advisory. The one durable completion, below, is what
+  # releases terminal-only subscribers and survives restart.
+  defp terminalize_crashed_owner(state, reason) do
+    new_event(
+      state,
+      :run_failed,
+      Events.RunFailed.new(%{
+        run_id: state.run_id,
+        session_key: state.session_key,
+        reason: Execution.exit_class(reason)
+      }),
+      %{synthetic: true}
+    )
+    |> LemonCore.Event.identify_run(state.run_id, attempt_id(state))
+    |> Bus.publish_run_lifecycle()
+
+    event =
+      new_event(
+        state,
+        :run_completed,
+        Events.RunCompleted.new(%{
+          completed:
+            Events.Completion.new(%{
+              ok: false,
+              error: :run_owner_terminated,
+              answer: state.accumulated_text,
+              meta: cancellation_meta(state)
+            }),
+          duration_ms: nil
+        }),
+        %{synthetic: true}
+      )
+
+    _ = RunCompletion.finalize(state.execution_request, event, router_owned: true)
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp present(state, event, retried?) do
+    # Mark any still-running tool calls as completed so the editable "Tool calls"
+    # status message (Telegram) can't get stuck at [running] if a final action
+    # completion event is missed/raced.
     SurfaceManager.finalize_status(state, event)
 
-    # Without streamed deltas, flush tool status before the single final answer.
+    # If we never streamed deltas, make sure any tool-status output is flushed
+    # before we emit a single final answer chunk.
     if state.saw_delta == false do
       SurfaceManager.flush_status(state)
     end
 
-    unless retried? do
-      extra_meta = safe_finalize_meta(state, event)
+    if retried? do
+      :ok
+    else
+      {artifact_status, extra_meta} = safe_finalize_meta(state, event)
       media_recording = safe_record_media_jobs(extra_meta, state)
       surface_event = strip_media_directives_from_event(event)
 
@@ -1023,9 +1187,9 @@ defmodule LemonRouter.RunProcess do
         provenance: :direct
       )
 
-      # The answer path keeps channels' dedicated final-answer behavior
-      # separate from tool status UI.
-      SurfaceManager.finalize_answer(state, surface_event, extra_meta)
+      # SurfaceManager finalizes the answer path through the existing answer-stream surface, so
+      # channels keep their dedicated final-answer behavior separate from tool status UI.
+      delivery = SurfaceManager.finalize_answer(state, surface_event, extra_meta)
 
       Introspection.record(
         :answer_finalize_completed,
@@ -1037,88 +1201,81 @@ defmodule LemonRouter.RunProcess do
       )
 
       # Optional fanout: forward the final answer text to additional destinations.
-      SurfaceManager.fanout_final_answer(state, event)
+      fanout = SurfaceManager.fanout_final_answer(state, surface_event)
+
+      if delivery == :ok and fanout == :ok and artifact_status == :ok and
+           media_recording.failed_count == 0,
+         do: :ok,
+         else: {:error, :presentation_failed}
     end
-
-    # Deliver first: terminal evidence is best-effort bookkeeping (see
-    # `RunReceiptStore.retain_terminal_evidence_best_effort/2`).
-    _ =
-      LemonRouter.RunReceiptStore.retain_terminal_evidence_best_effort(
-        state.receipt_store,
-        state.run_id
-      )
-
-    {:stop, :normal, %{state | run_ref: :completed}}
   end
 
-  @impl true
-  def terminate(reason, _phase, state) do
-    if is_pid(state.coordinator_pid) do
-      send(state.coordinator_pid, {:run_process_terminated, state.run_id, reason})
-    end
+  defp committed_execution?(:presenting, _run_id), do: true
 
-    if reason != :normal do
-      if state.executor, do: _ = Execution.control(state.executor, :cancel, state.control_ctx)
-      _ = release_execution(state)
-
-      Introspection.record(
-        :run_failed,
-        %{reason: CompactionTrigger.safe_error_label(reason)},
-        run_id: state.run_id,
-        session_key: state.session_key,
-        engine: "lemon",
-        provenance: :direct
-      )
-
-      LemonRouter.RunCountTracker.record_terminal(state.run_id, true)
-      terminalize_crashed_owner(state, reason)
-    end
-
-    # Flush any pending coalescer output
-    SurfaceManager.flush_all(state)
-
-    # Unsubscribe control-plane EventBridge from run events
-    LemonCore.EventBridge.unsubscribe_run(state.run_id)
-
-    :ok
+  defp committed_execution?(_phase, run_id) do
+    # An unavailable authority is not evidence that execution failed.
+    LemonCore.TerminalOutbox.decision(run_id) != {:ok, nil}
   end
 
-  # A crashed owner still terminalizes its run once, so waiters never hang.
-  defp terminalize_crashed_owner(state, reason) do
-    Bus.broadcast(
-      Bus.run_topic(state.run_id),
-      LemonCore.Event.new(
-        :run_failed,
-        Events.RunFailed.new(%{
-          run_id: state.run_id,
-          session_key: state.session_key,
-          reason: reason
-        }),
-        %{run_id: state.run_id, session_key: state.session_key, synthetic: true}
-      )
-    )
+  @doc false
+  def replay_presentation(
+        run_id,
+        %{started_at: started_at, summary: %{session_key: session_key} = summary} = record
+      ) do
+    cond do
+      is_nil(Process.whereis(LemonRouter.RunRegistry)) ->
+        :busy
 
-    if state.run_ref != :completed do
-      event =
-        LemonCore.Event.new(
-          :run_completed,
-          Events.RunCompleted.new(%{
-            completed:
-              Events.Completion.new(%{
-                ok: false,
-                error: :run_owner_terminated,
-                answer: state.accumulated_text,
-                meta: cancellation_meta(state)
-              }),
-            duration_ms: nil
-          }),
-          %{run_id: state.run_id, session_key: state.session_key, synthetic: true}
-        )
+      Registry.lookup(LemonRouter.RunRegistry, run_id) != [] ->
+        :busy
 
-      _ = RunCompletion.finalize(state.execution_request, event)
+      true ->
+        event = LemonCore.TerminalOutbox.event(run_id, summary)
+
+        state = %{
+          run_id: run_id,
+          session_key: session_key,
+          saw_delta: false,
+          terminal_replay: true,
+          execution_request: %ExecutionCommand{
+            run_id: run_id,
+            session_key: session_key,
+            meta: summary[:meta],
+            cwd: summary[:presentation_cwd],
+            prompt: summary[:prompt]
+          }
+        }
+
+        state =
+          Enum.reduce(record[:events] || [], state, fn
+            %{__event__: :action_event} = action, acc ->
+              acc
+              |> ArtifactTracker.track_generated_images(action)
+              |> ArtifactTracker.track_requested_send_files(action)
+
+            _, acc ->
+              acc
+          end)
+
+        :ok = LemonRouter.RunReceiptStore.retain_terminal_evidence(run_id)
+
+        with :ok <- replay_conversation_projections(state, event, started_at) do
+          present(state, event, false)
+        end
     end
-  catch
-    _kind, _reason -> :ok
+  end
+
+  defp replay_conversation_projections(state, event, started_at) do
+    with {:ok, index} <- LemonCore.RunStore.fetch_session_index(state.session_key) do
+      if Registry.lookup(LemonRouter.SessionRegistry, state.session_key) == [] and
+           is_map(index) and index.updated_at_ms <= started_at do
+        CompactionTrigger.maybe_reset_resume_on_context_overflow(state, event)
+        CompactionTrigger.maybe_store_chat_state(state, event)
+        CompactionTrigger.maybe_mark_pending_compaction_near_limit(state, event)
+      end
+
+      :ok
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -1133,7 +1290,7 @@ defmodule LemonRouter.RunProcess do
   # after boot silently dropped final-answer MEDIA directives.
   defp safe_finalize_meta(state, event) do
     answer = CompactionTrigger.extract_completed_answer(event)
-    artifact_tracker(state).finalize_meta(state, answer)
+    {:ok, artifact_tracker(state).finalize_meta(state, answer)}
   rescue
     error ->
       Introspection.record(
@@ -1150,7 +1307,7 @@ defmodule LemonRouter.RunProcess do
           "session_key=#{inspect(state.session_key)} error=#{Exception.message(error)}"
       )
 
-      %{}
+      {:error, %{}}
   end
 
   defp strip_media_directives_from_event(%LemonCore.Event{payload: payload} = event)

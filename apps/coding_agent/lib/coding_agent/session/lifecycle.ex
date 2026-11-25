@@ -20,8 +20,7 @@ defmodule CodingAgent.Session.Lifecycle do
     PromptComposer,
     PromptJournal,
     ProviderFallback,
-    State,
-    WasmBridge
+    State
   }
 
   alias CodingAgent.Session.BranchState
@@ -251,15 +250,6 @@ defmodule CodingAgent.Session.Lifecycle do
 
     secret_obfuscator = SecretObfuscator.for_session(settings_manager)
 
-    wasm_boot =
-      WasmBridge.maybe_start_wasm_sidecar(
-        cwd,
-        settings_manager,
-        session_manager.header.id,
-        tool_policy,
-        approval_context
-      )
-
     # The plan gate is also a tool option so self-gated tools (`task`) can
     # enforce plan mode at execution time.
     plan_gate = Planning.new_gate()
@@ -298,8 +288,6 @@ defmodule CodingAgent.Session.Lifecycle do
       )
       |> Keyword.merge(private_native_opts(approval_context))
       |> Keyword.put(:native_managed_context, InvocationAuthority.named_messaging_managed?(opts))
-      |> Keyword.put(:wasm_tools, wasm_boot.wasm_tools)
-      |> Keyword.put(:wasm_status, wasm_boot.wasm_status)
       |> Keyword.put(:plan_gate, plan_gate)
 
     # Delegated children and reloads inherit `:extra_tools`; keep only what this
@@ -317,8 +305,6 @@ defmodule CodingAgent.Session.Lifecycle do
         tool_opts: tool_opts,
         custom_tools: custom_tools,
         extra_tools: extra_tools,
-        wasm_tools: wasm_boot.wasm_tools,
-        wasm_status: wasm_boot.wasm_status,
         tool_policy: tool_policy,
         approval_context: approval_context,
         secret_obfuscator: secret_obfuscator
@@ -676,9 +662,6 @@ defmodule CodingAgent.Session.Lifecycle do
       extensions: lifecycle.extensions,
       hooks: lifecycle.hooks,
       extension_status_report: lifecycle.extension_status_report,
-      wasm_sidecar_pid: wasm_boot.sidecar_pid,
-      wasm_tool_names: wasm_boot.wasm_tool_names,
-      wasm_status: wasm_boot.wasm_status,
       plan_gate: plan_gate,
       auto_compaction: %CompactionLifecycle.State{},
       overflow_recovery: %OverflowRecovery.State{}
@@ -700,8 +683,6 @@ defmodule CodingAgent.Session.Lifecycle do
   @spec reload_extensions(Session.t()) ::
           {:ok, Extensions.extension_status_report() | nil, Session.t()}
   def reload_extensions(state) do
-    wasm_reload = WasmBridge.reload_wasm_tools(state)
-
     tool_opts =
       [
         model: state.model,
@@ -743,8 +724,6 @@ defmodule CodingAgent.Session.Lifecycle do
         memory_context_verified:
           (state.approval_context || %{})[:memory_context_verified] == true,
         shared_memory_grant: (state.approval_context || %{})[:shared_memory_grant] == true,
-        wasm_tools: wasm_reload.wasm_tools,
-        wasm_status: wasm_reload.wasm_status,
         tool_disclosure: state.tool_disclosure,
         bot_folder_root: state.bot_folder_root,
         config_cwd: state.config_cwd,
@@ -766,8 +745,6 @@ defmodule CodingAgent.Session.Lifecycle do
         # A hand-assembled toolset stays the same closed set across reloads.
         custom_tools: Keyword.get(state.tool_opts, :tools),
         extra_tools: state.extra_tools,
-        wasm_tools: wasm_reload.wasm_tools,
-        wasm_status: wasm_reload.wasm_status,
         tool_policy: state.tool_policy,
         approval_context: state.approval_context,
         secret_obfuscator: state.secret_obfuscator,
@@ -794,9 +771,6 @@ defmodule CodingAgent.Session.Lifecycle do
         base_tools: lifecycle.tools,
         tool_catalog: lifecycle.tool_catalog,
         extension_status_report: lifecycle.extension_status_report,
-        wasm_sidecar_pid: wasm_reload.sidecar_pid,
-        wasm_tool_names: wasm_reload.wasm_tool_names,
-        wasm_status: wasm_reload.wasm_status,
         tool_opts: Keyword.merge(state.tool_opts, tool_opts),
         journaled_prompt: nil
     }
@@ -915,7 +889,6 @@ defmodule CodingAgent.Session.Lifecycle do
       rebind_approval_context(state.approval_context, previous_session_id, session_id)
 
     state = %{state | approval_context: approval_context}
-    wasm = WasmBridge.reload_wasm_tools(state)
 
     tool_opts =
       Keyword.merge(state.tool_opts,
@@ -926,9 +899,7 @@ defmodule CodingAgent.Session.Lifecycle do
         thinking_level: state.thinking_level,
         parent_session: session_id,
         session_id: session_id,
-        approval_context: approval_context,
-        wasm_tools: wasm.wasm_tools,
-        wasm_status: wasm.wasm_status
+        approval_context: approval_context
       )
 
     built =
@@ -941,8 +912,6 @@ defmodule CodingAgent.Session.Lifecycle do
         hooks: state.hooks,
         custom_tools: Keyword.get(tool_opts, :tools),
         extra_tools: state.extra_tools,
-        wasm_tools: wasm.wasm_tools,
-        wasm_status: wasm.wasm_status,
         tool_policy: state.tool_policy,
         approval_context: approval_context,
         secret_obfuscator: state.secret_obfuscator
@@ -952,10 +921,7 @@ defmodule CodingAgent.Session.Lifecycle do
       state
       | tool_opts: tool_opts,
         base_tools: built.tools,
-        tool_catalog: built.tool_catalog,
-        wasm_sidecar_pid: wasm.sidecar_pid,
-        wasm_tool_names: wasm.wasm_tool_names,
-        wasm_status: wasm.wasm_status
+        tool_catalog: built.tool_catalog
     }
   end
 

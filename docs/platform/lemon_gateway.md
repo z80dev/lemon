@@ -1,9 +1,9 @@
 # lemon_gateway
 
 `lemon_gateway` owns optional webhook, SMS, and voice ingress. With
-`:gateway_ingress_enabled` unset in the `:lemon_gateway` application environment,
-it starts an empty supervisor: no ingress, voice task supervisor, or health
-listener on port 4042. No other app depends on it.
+[`[gateway.ingress] enabled = true`](../config.md#gateway-ingress) unset,
+it starts an empty supervisor: no ingress, voice task supervisor or health
+listener on port 4042. The three surfaces also have individual enable flags.
 
 Gateway submits `LemonCore.RunRequest` through `LemonCore.RouterBridge`.
 Integrations that previously submitted execution commands directly must use

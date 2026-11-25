@@ -3,9 +3,8 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
 
   alias CodingAgent.{ControlPlaneProvider, Session, SessionManager}
   alias CodingAgent.SessionManager.SessionEntry
-  alias CodingAgent.Tools.{TodoStore, TodoWrite}
+  alias CodingAgent.Tools.Todo
   alias LemonControlPlane.ACP
-  alias LemonCore.Store
   alias LemonAi.Types.{Model, ModelCost}
 
   @tag :tmp_dir
@@ -23,7 +22,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
 
     assert {:ok, created} = ACP.new_session(%{"cwd" => cwd})
     id = created["sessionId"]
-    session = Store.get(:acp_sessions, id)
+    {:ok, session} = LemonCore.SessionMetadataStore.fetch_acp_by_id(id)
     # ACP owns its session identity; create the native journal through the
     # supported /plan lifecycle rather than the canonical-key creation RPC.
     for _ <- 1..2 do
@@ -42,10 +41,9 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
     target = manager.leaf_id
 
     on_exit(fn ->
-      Store.delete(:acp_sessions, id)
+      LemonCore.SessionMetadataStore.delete(session.session_key)
       LemonCore.ChatStateStore.delete(session.session_key)
       LemonCore.RunStore.delete_session(session.session_key)
-      TodoStore.delete(native_id)
       File.rm_rf!(CodingAgent.Config.sessions_dir(cwd))
     end)
 
@@ -115,7 +113,6 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
       })
 
     :ok = SessionManager.save_to_file(path, manager)
-    TodoStore.delete(native_id)
 
     for method <- ["session/load", "session/resume"] do
       updates = invoke(method, %{"sessionId" => id, "cwd" => cwd})
@@ -127,10 +124,10 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
     assert plans(fork_updates) == [entries(first)]
     child = Enum.find(sessions, &(&1["sessionId"] != id))
     child_id = child["sessionId"]
-    child_session = Store.get(:acp_sessions, child_id)
+    {:ok, child_session} = LemonCore.SessionMetadataStore.fetch_acp_by_id(child_id)
 
     on_exit(fn ->
-      Store.delete(:acp_sessions, child_id)
+      LemonCore.SessionMetadataStore.delete(child_session.session_key)
       LemonCore.ChatStateStore.delete(child_session.session_key)
       LemonCore.RunStore.delete_session(child_session.session_key)
     end)
@@ -182,10 +179,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
 
     id = Session.get_state(pid).session_manager.header.id
 
-    on_exit(fn ->
-      TodoStore.delete(id)
-      File.rm_rf!(CodingAgent.Config.sessions_dir(cwd))
-    end)
+    on_exit(fn -> File.rm_rf!(CodingAgent.Config.sessions_dir(cwd)) end)
 
     Session.subscribe(pid)
     refute_receive {:session_event, ^id, _, _}
@@ -291,7 +285,6 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
            tools: []}
         )
 
-      on_exit(fn -> TodoStore.delete(manager.header.id) end)
       Session.subscribe(pid)
 
       assert_receive {:session_event, _, {:todos_unavailable, :unsupported_todo_entry} = initial,
@@ -395,10 +388,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
 
     id = Session.get_state(pid).session_manager.header.id
 
-    on_exit(fn ->
-      TodoStore.delete(id)
-      File.rm_rf!(CodingAgent.Config.sessions_dir(cwd))
-    end)
+    on_exit(fn -> File.rm_rf!(CodingAgent.Config.sessions_dir(cwd)) end)
 
     Session.subscribe(pid)
     refute_receive {:session_event, ^id, {:todos_changed, []}, _}
@@ -462,7 +452,13 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
   defp write(pid, content) do
     assert %LemonAgent.Types.AgentToolResult{} =
              result =
-             TodoWrite.execute("write", %{"todos" => [%{"content" => content}]}, nil, nil, pid)
+             Todo.execute(
+               "write",
+               %{"action" => "write", "todos" => [%{"content" => content}]},
+               nil,
+               nil,
+               pid
+             )
 
     result
   end

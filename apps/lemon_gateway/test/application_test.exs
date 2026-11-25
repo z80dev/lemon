@@ -4,7 +4,7 @@ defmodule LemonGateway.ApplicationTest do
   alias LemonGateway.{Health, IngressSupervisor, TaskSupervisor, TransportSupervisor}
 
   setup do
-    keys = [:gateway_ingress_enabled, :health_enabled, :health_port]
+    keys = [LemonGateway.Config, :health_enabled, :health_port]
     previous = Map.new(keys, &{&1, Application.fetch_env(:lemon_gateway, &1)})
     was_running? = is_pid(Process.whereis(LemonGateway.Supervisor))
 
@@ -20,7 +20,7 @@ defmodule LemonGateway.ApplicationTest do
     end)
 
     Application.stop(:lemon_gateway)
-    Application.delete_env(:lemon_gateway, :gateway_ingress_enabled)
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{ingress: %{enabled: false}})
     Application.put_env(:lemon_gateway, :health_enabled, true)
     Application.put_env(:lemon_gateway, :health_port, 0)
     :ok
@@ -88,7 +88,7 @@ defmodule LemonGateway.ApplicationTest do
   end
 
   defp enable_ingress do
-    Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{ingress: %{enabled: true}})
     assert {:ok, _} = Application.ensure_all_started(:lemon_gateway)
   end
 

@@ -440,8 +440,8 @@ defmodule LemonAi.Retry do
 
     case Regex.run(duration_pattern, text) do
       [_, hours, minutes, seconds] ->
-        h = if hours && hours != "", do: String.to_integer(hours), else: 0
-        m = if minutes && minutes != "", do: String.to_integer(minutes), else: 0
+        h = if hours != "", do: String.to_integer(hours), else: 0
+        m = if minutes != "", do: String.to_integer(minutes), else: 0
         {s, _} = Float.parse(seconds)
         normalize_delay_ms(((h * 60 + m) * 60 + s) * 1000)
 

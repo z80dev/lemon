@@ -50,10 +50,12 @@ end
 
 Each case needs exactly one platform app, and all are `optional: true`: `BackendCase`
 and `EventsCase` need `lemon_core`, `ProviderCase` needs `lemon_memory`, `FakeLLM` needs
-`lemon_ai` and `lemon_agent`, and `PluginCase` needs `lemon_channels`, which is not
-published to Hex, so outside this repository it requires a path dependency on a Lemon
-checkout. A missing dependency raises at compile time naming the package to add. Package
-details live in `apps/lemon_platform_test/README.md`.
+`lemon_ai` and `lemon_agent`, and `PluginCase` needs `lemon_channels`. Because
+`lemon_channels` is not published to Hex, `PluginCase` is left out of the Hex package;
+outside this repository it comes from a path dependency on a Lemon checkout's
+`apps/lemon_platform_test`. Siblings from Hex are required at the kit's own 0.x minor
+(`~> 0.3.0`). A missing dependency raises at compile time naming the package to add.
+Package details live in `apps/lemon_platform_test/README.md`.
 
 `test/compliance/` in this repo runs the kit against the platform's own implementations:
 the ETS, JSONL and SQLite store backends, the Discord, Email and Telegram channel

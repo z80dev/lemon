@@ -12,7 +12,12 @@ defmodule LemonCore.Runtime.Boot do
   2. Reject dev Erlang distribution cookie in production releases.
   3. Apply port values from the resolved `Env` struct to the OTP application
      environment.
-  4. Start each application in the requested `Profile` in order.
+  4. Start each application in the requested `Profile` in order: `:permanent`
+     applications as permanent applications, so one exiting stops the
+     runtime instead of leaving it half-alive and health-green; `:load`
+     applications are only loaded. `:lemon_core` itself refuses to start when
+     a capability the product requires is unavailable
+     (`LemonCore.Capabilities`), so boot fails at `:lemon_core`.
 
   ## Usage (from a mix eval or release boot)
 
@@ -69,7 +74,9 @@ defmodule LemonCore.Runtime.Boot do
       profile = Profile.get(profile_name)
       Logger.info("[boot] Starting profile :#{profile_name} (#{length(profile.apps)} apps)")
 
-      start_apps(profile.apps)
+      # /healthz and `lemon doctor` expect the booted profile's applications.
+      Application.put_env(:lemon_core, :runtime_profile, profile_name)
+      start_applications(profile.applications)
     end
   end
 
@@ -99,22 +106,23 @@ defmodule LemonCore.Runtime.Boot do
   end
 
   @doc """
-  Returns a summary of which apps in `profile_name` are currently started.
+  Returns a summary of which running apps of `profile_name` are started.
   """
   @spec status(atom()) :: map()
   def status(profile_name \\ :runtime_full) do
-    profile = Profile.get(profile_name)
-    Health.status(apps: profile.apps)
+    Health.status(apps: Profile.running_apps(profile_name))
   end
 
-  # ──────────────────────────────────────────────────────────────────────────
-  # Private helpers
-  # ──────────────────────────────────────────────────────────────────────────
-
-  defp start_apps(apps) do
-    Enum.reduce_while(apps, :ok, fn app, :ok ->
-      case Application.ensure_all_started(app) do
-        {:ok, _started} ->
+  @doc """
+  Starts `{app, :permanent | :load}` entries in order, stopping at the first
+  failure. `:permanent` applications (and their dependencies) are started as
+  permanent applications; `:load` applications are only loaded.
+  """
+  @spec start_applications([{atom(), Profile.start_type()}]) :: :ok | {:error, {atom(), term()}}
+  def start_applications(applications) do
+    Enum.reduce_while(applications, :ok, fn {app, type}, :ok ->
+      case start_application(app, type) do
+        :ok ->
           Logger.info("[boot] Started :#{app}")
           {:cont, :ok}
 
@@ -123,6 +131,25 @@ defmodule LemonCore.Runtime.Boot do
           {:halt, {:error, {app, reason}}}
       end
     end)
+  end
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Private helpers
+  # ──────────────────────────────────────────────────────────────────────────
+
+  defp start_application(app, :permanent) do
+    case Application.ensure_all_started(app, :permanent) do
+      {:ok, _started} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp start_application(app, :load) do
+    case Application.load(app) do
+      :ok -> :ok
+      {:error, {:already_loaded, ^app}} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp production_context? do

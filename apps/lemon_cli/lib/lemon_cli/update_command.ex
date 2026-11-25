@@ -15,7 +15,7 @@ defmodule LemonCli.UpdateCommand do
   def run(args) do
     with {:ok, command, opts} <- parse(args),
          :ok <- validate_mode(command) do
-      ensure_started()
+      _ = ensure_started()
       execute(command, opts)
     else
       {:error, :usage} -> usage_error()

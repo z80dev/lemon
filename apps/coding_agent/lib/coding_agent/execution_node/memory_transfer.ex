@@ -3,14 +3,14 @@ defmodule CodingAgent.ExecutionNode.MemoryTransfer do
 
   alias LemonSkills.ProfileMemoryTransfer
 
-  @methods ~w(memory.transfer.prepare memory.transfer.snapshot memory.transfer.validate memory.transfer.preview memory.transfer.apply memory.transfer.status memory.transfer.inspect)
+  @methods ~w(memory.transfer.prepare memory.transfer.snapshot memory.transfer.validate memory.transfer.release memory.transfer.preview memory.transfer.apply memory.transfer.status memory.transfer.inspect)
 
   def methods, do: @methods
 
   @spec execute(String.t(), map(), String.t()) :: {:ok, map()} | {:error, atom()}
   def execute("memory.transfer." <> operation, args, node_id) when is_map(args) do
     expected_node =
-      if operation in ["prepare", "snapshot", "validate"],
+      if operation in ["prepare", "snapshot", "validate", "release"],
         do: args["sourceNodeId"],
         else: args["nodeId"]
 
@@ -48,6 +48,18 @@ defmodule CodingAgent.ExecutionNode.MemoryTransfer do
   defp dispatch("validate", args, _node_id) do
     case ProfileMemoryTransfer.validate(args) do
       :ok -> {:ok, %{"valid" => true}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp dispatch("release", args, _node_id) do
+    case ProfileMemoryTransfer.release(
+           args["profileId"],
+           args["mutationId"],
+           args["sourceNodeId"],
+           args["nodeId"]
+         ) do
+      :ok -> {:ok, %{"released" => true}}
       {:error, reason} -> {:error, reason}
     end
   end

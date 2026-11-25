@@ -86,7 +86,7 @@ defmodule LemonCore.Events do
     channel_delivery: Events.ChannelDelivery
   }
 
-  @nested [Events.Completion, Events.Action, Events.ApprovalPending]
+  @nested [Events.Completion, Events.Usage, Events.Action, Events.ApprovalPending]
 
   @doc """
   Event type atom to payload module.

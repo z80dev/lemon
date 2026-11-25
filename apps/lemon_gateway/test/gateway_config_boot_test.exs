@@ -10,10 +10,8 @@ defmodule LemonGateway.GatewayConfigBootTest do
 
   setup do
     previous_replacement = Application.fetch_env(:lemon_gateway, @replacement_key)
-    previous_ingress = Application.fetch_env(:lemon_gateway, :gateway_ingress_enabled)
     was_running? = is_pid(Process.whereis(LemonGateway.Supervisor))
     Application.stop(:lemon_gateway)
-    Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
     previous_home = System.get_env("HOME")
 
     home =
@@ -27,14 +25,9 @@ defmodule LemonGateway.GatewayConfigBootTest do
     on_exit(fn ->
       Application.stop(:lemon_gateway)
 
-      for {key, previous} <- [
-            {@replacement_key, previous_replacement},
-            {:gateway_ingress_enabled, previous_ingress}
-          ] do
-        case previous do
-          {:ok, value} -> Application.put_env(:lemon_gateway, key, value)
-          :error -> Application.delete_env(:lemon_gateway, key)
-        end
+      case previous_replacement do
+        {:ok, value} -> Application.put_env(:lemon_gateway, @replacement_key, value)
+        :error -> Application.delete_env(:lemon_gateway, @replacement_key)
       end
 
       if previous_home, do: System.put_env("HOME", previous_home), else: System.delete_env("HOME")
@@ -53,6 +46,9 @@ defmodule LemonGateway.GatewayConfigBootTest do
       File.write!(path, """
       [gateway]
       max_concurrent_runs = 4
+
+      [gateway.ingress]
+      enabled = true
 
       [gateway.queue]
       mode = "#{mode}"

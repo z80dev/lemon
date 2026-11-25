@@ -2,13 +2,11 @@ defmodule LemonGateway.Application do
   @moduledoc """
   OTP application for LemonGateway, an opt-in ingress satellite.
 
-  Execution is not here: `LemonRouter.RunProcess` owns every run, its permit
-  and its executor. The gateway hosts only its own ingress (webhook, SMS,
-  voice), which starts when `:gateway_ingress_enabled` is set for
-  `:lemon_gateway` (see `LemonGateway.IngressSupervisor`), together with the
-  voice task supervisor and the health server. Disabled, it starts an empty
-  supervisor and opens no listener. Gateway settings are read live from
-  `LemonCore.GatewayConfig`; there is no config process.
+  `LemonRouter.RunProcess` owns execution, permits and the executor. Gateway
+  starts its webhook, SMS and voice ingress only when `[gateway.ingress] enabled`
+  is true, along with the voice task supervisor and optional health listener.
+  Otherwise it starts an empty supervisor and opens no listener. Settings are
+  read live through `LemonCore.GatewayConfig`.
   """
 
   use Application
@@ -60,6 +58,7 @@ defmodule LemonGateway.Application do
   end
 
   defp gateway_ingress_enabled? do
-    Application.get_env(:lemon_gateway, :gateway_ingress_enabled, false)
+    ingress = LemonCore.GatewayConfig.get(:ingress)
+    LemonCore.GatewayConfig.fetch(ingress, :enabled, false) == true
   end
 end

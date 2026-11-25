@@ -26,14 +26,12 @@ defmodule LemonControlPlane.EventBridge do
 
   ## Topics Subscribed
 
-  - `run:*` - Run lifecycle events (agent, chat events, task lifecycle)
-  - `session:*` - Session lifecycle and task events
-  - `session_events` - Sequenced native session broadcast batches
+  - `run:*` - Legacy run-stream forwarding for unscoped clients
+  - `session:*` - Connection-owned subscriptions for scoped clients
   - `channels` - Channel-related events
   - `exec_approvals` - Approval request/resolution events
   - `cron` - Cron job events
   - `goals` - Durable goal lifecycle events
-  - `system` - System events (shutdown, health, tick)
   - `nodes` - Node pairing events
   - `presence` - Presence events
   - `omp` (`LemonOmp.bus_topic/0`) - omp delegate session snapshots
@@ -67,16 +65,10 @@ defmodule LemonControlPlane.EventBridge do
   | :cron_run_completed      | cron                      |
   | :cron_lifecycle_action   | cron.audit                |
   | :cron_tick               | tick                      |
-  | :tick                    | tick                      |
   | :presence_changed        | presence                  |
-  | :heartbeat               | heartbeat                 |
   | :heartbeat_alert         | heartbeat                 |
-  | :metrics                 | metrics                   |
-  | :log                     | log                       |
   | :node_pair_requested     | node.pair.requested       |
   | :node_pair_resolved      | node.pair.resolved        |
-  | :shutdown                | shutdown                  |
-  | :health_changed          | health                    |
   | :task_started            | task.started              |
   | :task_completed          | task.completed            |
   | :task_error              | task.error                |
@@ -97,18 +89,16 @@ defmodule LemonControlPlane.EventBridge do
 
   @bus_topics [
     "exec_approvals",
-    "session_events",
     "user_prompts",
     "channels",
     "cron",
     "goals",
-    "system",
     "nodes",
     "presence"
   ]
 
   # State version tracking for client reconciliation
-  @state_version_keys [:presence, :health, :cron]
+  @state_version_keys [:presence, :cron]
 
   # Scopes that select an event view (see `authorize_event/3`).
   @event_scopes [:read, :content, :approvals, :pairing]
@@ -132,10 +122,6 @@ defmodule LemonControlPlane.EventBridge do
     "tick" => ~w(timestampMs),
     "presence" => ~w(connections count),
     "heartbeat" => ~w(agentId status runId jobId timestampMs),
-    # `payload` is a free-form map with no schema, so read-only recipients get
-    # only the envelope.
-    "metrics" => ~w(timestampMs runId sessionKey),
-    "log" => ~w(level timestampMs runId sessionKey),
     "task.started" => @task_metadata,
     "task.completed" => @task_metadata,
     "task.error" => @task_metadata,
@@ -281,7 +267,6 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   defp state_version_key_for(:presence_changed), do: :presence
-  defp state_version_key_for(:health_changed), do: :health
   defp state_version_key_for(:cron_tick), do: :cron
   defp state_version_key_for(:cron_run_started), do: :cron
   defp state_version_key_for(:cron_run_completed), do: :cron
@@ -310,8 +295,19 @@ defmodule LemonControlPlane.EventBridge do
     end
   end
 
+  def legacy_recipient?(pid, name, payload) do
+    case Connections.watched_session(pid) do
+      nil -> name != "session.event"
+      _key when name in ["chat", "agent", "session.event"] -> false
+      key -> payload["sessionKey"] in [nil, key]
+    end
+  end
+
   defp recipient_view(info, event_name, payload, views) do
-    case recipient_scopes(info) do
+    scopes =
+      if legacy_recipient?(info.pid, event_name, payload), do: recipient_scopes(info)
+
+    case scopes do
       nil ->
         {[], views}
 
@@ -429,15 +425,44 @@ defmodule LemonControlPlane.EventBridge do
   #
   # `meta` is deliberately still a free map (see docs/platform/bus-events.md §4.1), so it is
   # read with `Access`; the payload never is.
-  def project(%LemonCore.Event{type: type, payload: payload, meta: meta}) do
-    map_event_type(type, Events.coerce(type, payload), meta || %{})
+  def project(%{type: type, payload: payload} = event) do
+    meta = Map.get(event, :meta) || %{}
+
+    case meta[:schema_version] do
+      version when version in [nil, 1] ->
+        add_identity(map_event_type(type, Events.coerce(type, payload), meta), meta)
+
+      _ ->
+        nil
+    end
   end
 
-  def project(%{type: type, payload: payload} = event) do
-    map_event_type(type, Events.coerce(type, payload), Map.get(event, :meta) || %{})
+  def project(%{"type" => _} = event) do
+    with {:ok, canonical} <- LemonCore.Event.decode_run_lifecycle(event) do
+      project(canonical)
+    else
+      {:error, _} -> nil
+    end
   end
 
   def project(_), do: nil
+
+  @identity_keys ~w(schemaVersion eventId attemptId sequence)
+
+  defp add_identity({name, payload}, %{schema_version: 1} = meta)
+       when name == "session.event" or
+              (name in ["agent", "chat"] and not is_map_key(meta, :session_seq)) do
+    identity = %{
+      "schemaVersion" => 1,
+      "eventId" => meta[:event_id],
+      "attemptId" => meta[:attempt_id],
+      "sequence" => meta[:session_seq] || meta[:seq]
+    }
+
+    {name, Map.merge(payload, Map.reject(identity, fn {_key, value} -> is_nil(value) end))}
+  end
+
+  defp add_identity(projected, _meta), do: projected
 
   @doc """
   Returns the view of a projected event (`project/1`) that a recipient holding
@@ -490,7 +515,7 @@ defmodule LemonControlPlane.EventBridge do
 
     {"session.event",
      batch
-     |> Map.take(["sessionKey", "eventId", "cursor"])
+     |> Map.take(["sessionKey", "cursor" | @identity_keys])
      |> Map.put("events", authorized)}
   end
 
@@ -499,7 +524,7 @@ defmodule LemonControlPlane.EventBridge do
   defp metadata_view("agent", %{"type" => type} = payload) do
     case agent_metadata(type, payload) do
       nil -> nil
-      view -> {"agent", view}
+      view -> {"agent", Map.merge(view, Map.take(payload, @identity_keys))}
     end
   end
 
@@ -513,9 +538,6 @@ defmodule LemonControlPlane.EventBridge do
 
     {"goal", view}
   end
-
-  # Bounded system status without a payload contract or transcript source.
-  defp metadata_view(name, payload) when name in ["health", "shutdown"], do: {name, payload}
 
   defp metadata_view(name, payload)
        when is_map(payload) and is_map_key(@metadata_keys, name),
@@ -875,12 +897,6 @@ defmodule LemonControlPlane.EventBridge do
      }}
   end
 
-  # Tick events - handle both :tick and :cron_tick
-  defp map_event_type(:tick, payload, _meta) do
-    timestamp = extract_timestamp(payload)
-    {"tick", %{"timestampMs" => timestamp}}
-  end
-
   defp map_event_type(:cron_tick, %Events.CronTick{} = payload, _meta) do
     {"tick", %{"timestampMs" => payload.timestamp_ms}}
   end
@@ -891,16 +907,6 @@ defmodule LemonControlPlane.EventBridge do
      %{
        "connections" => payload[:connections] || [],
        "count" => payload[:count] || 0
-     }}
-  end
-
-  # Heartbeat events
-  defp map_event_type(:heartbeat, payload, _meta) do
-    {"heartbeat",
-     %{
-       "agentId" => payload[:agent_id],
-       "status" => to_string(payload[:status] || :ok),
-       "timestampMs" => payload[:timestamp_ms] || System.system_time(:millisecond)
      }}
   end
 
@@ -925,29 +931,6 @@ defmodule LemonControlPlane.EventBridge do
      }}
   end
 
-  defp map_event_type(:metrics, payload, meta) do
-    {"metrics",
-     add_target_fields(
-       %{
-         "payload" => stringify_keys(payload || %{}),
-         "timestampMs" => System.system_time(:millisecond)
-       },
-       meta
-     )}
-  end
-
-  defp map_event_type(:log, payload, meta) do
-    {"log",
-     add_target_fields(
-       %{
-         "level" => get_field(payload, :level),
-         "message" => truncate(get_field(payload, :message), 500),
-         "timestampMs" => get_field(payload, :timestamp_ms) || System.system_time(:millisecond)
-       },
-       meta
-     )}
-  end
-
   # Node events
   defp map_event_type(:node_pair_requested, payload, _meta) do
     {"node.pair.requested",
@@ -968,15 +951,6 @@ defmodule LemonControlPlane.EventBridge do
        "approved" => payload[:approved] || false,
        "rejected" => payload[:rejected] || false
      }}
-  end
-
-  # System events
-  defp map_event_type(:shutdown, payload, _meta) do
-    {"shutdown", payload}
-  end
-
-  defp map_event_type(:health_changed, payload, _meta) do
-    {"health", payload}
   end
 
   # Task lifecycle events
@@ -1157,11 +1131,6 @@ defmodule LemonControlPlane.EventBridge do
     end
   end
 
-  # Helper to extract timestamp from various payload formats
-  defp extract_timestamp(%{timestamp_ms: ts}), do: ts
-  defp extract_timestamp(ts) when is_integer(ts), do: ts
-  defp extract_timestamp(_), do: System.system_time(:millisecond)
-
   # Thinking levels are atoms on the bus and strings on the wire; blank strings become nil so
   # a client can test the key for presence rather than for emptiness.
   defp normalize_event_string(value) when is_binary(value) do
@@ -1208,26 +1177,6 @@ defmodule LemonControlPlane.EventBridge do
 
   defp stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
   defp stringify_keys(value), do: value
-
-  defp add_target_fields(payload, meta) do
-    meta
-    |> target_fields()
-    |> Enum.reduce(payload, fn {key, value}, acc ->
-      if is_binary(value) and value != "" do
-        Map.put(acc, key, value)
-      else
-        acc
-      end
-    end)
-  end
-
-  defp target_fields(meta) do
-    case get_field(meta || %{}, :target) do
-      "run:" <> run_id -> [{"runId", run_id}]
-      "session:" <> session_key -> [{"sessionKey", session_key}]
-      _ -> []
-    end
-  end
 
   defp map_cron_job_event(type, %Events.CronJobChanged{} = payload) do
     job = payload.job

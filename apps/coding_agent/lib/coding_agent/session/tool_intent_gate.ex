@@ -78,15 +78,9 @@ defmodule CodingAgent.Session.ToolIntentGate do
     Process.demonitor(ref, [:flush])
     state = %{state | pending_tool_intents: Map.delete(state.pending_tool_intents, ref)}
 
-    same_signal? =
-      Enum.any?(state.pending_tool_intents, fn {_, p} -> p.signal == pending.signal end)
+    unless Enum.any?(state.pending_tool_intents, fn {_, p} -> p.signal == pending.signal end),
+      do: AbortSignal.unsubscribe(pending.signal)
 
-    wasm_waiter? =
-      Enum.any?(Map.get(state, :wasm_host_calls, %{}), fn {_, call} ->
-        Map.get(call, :parent_signal) == pending.signal
-      end)
-
-    unless same_signal? or wasm_waiter?, do: AbortSignal.unsubscribe(pending.signal)
     state
   end
 

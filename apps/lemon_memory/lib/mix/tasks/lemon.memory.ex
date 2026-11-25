@@ -111,15 +111,24 @@ defmodule Mix.Tasks.Lemon.Memory do
 
         Mix.shell().info("Erasing memory documents for #{scope} #{inspect(key)}...")
 
-        case scope do
-          "session" -> LemonMemory.Store.delete_by_session(key)
-          "agent" -> LemonMemory.Store.delete_by_agent(key)
-          "workspace" -> LemonMemory.Store.delete_by_workspace(key)
-        end
+        result =
+          case scope do
+            "session" -> LemonMemory.Store.delete_by_session(key)
+            "agent" -> LemonMemory.Store.delete_by_agent(key)
+            "workspace" -> LemonMemory.Store.delete_by_workspace(key)
+          end
 
-        # Give the async cast a moment to complete before we exit
+        # Agent and workspace erasure are casts: give them a moment to complete.
         Process.sleep(200)
-        Mix.shell().info([:green, "Done.", :reset])
+
+        case result do
+          :ok ->
+            Mix.shell().info([:green, "Done.", :reset])
+
+          {:error, _reason} ->
+            Mix.shell().error("Memory store unavailable; nothing was confirmed erased.")
+            System.halt(1)
+        end
     end
   end
 

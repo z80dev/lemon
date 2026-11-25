@@ -66,11 +66,12 @@ defmodule LemonRouter.SubmissionBuilder do
   @spec admission_settings() :: {:ok, map()} | {:error, :config_unavailable}
   def admission_settings do
     config = LemonCore.Config.cached()
+    operator = operator_config(config)
 
     {:ok,
      %{
-       default_model: operator_default_model(config),
-       routing_feedback: Features.enabled?(config.features, :routing_feedback),
+       default_model: operator.agent.default_model,
+       routing_feedback: Features.enabled?(operator.features, :routing_feedback),
        crash_resume: Features.enabled?(config.features, :crash_resume),
        agent_ids: Map.keys(config.agents || %{})
      }}
@@ -103,12 +104,13 @@ defmodule LemonRouter.SubmissionBuilder do
     with {:ok, settings} <- settings(opts),
          :ok <- require_channel_provenance(origin, meta),
          :ok <- require_goal_binding(origin, meta, cwd_override),
-         {:ok, session_config} <- get_session_config(session_key),
+         {:ok, session_row} <- get_session_row(session_key),
+         {:ok, chat_defaults} <- get_chat_defaults(session_key),
          {:ok, agent_profile} <- get_execution_profile(agent_id, meta, settings),
          {:ok, tool_policy} <-
            resolve_tool_policy(agent_profile, tool_policy_override, %{
-             agent_id: agent_id,
              session_key: session_key,
+             session_policy: {:ok, session_row},
              channel_context: MapHelpers.get_key(meta, :channel_context)
            }),
          cwd <- resolve_effective_cwd(cwd_override, meta, origin),
@@ -152,33 +154,46 @@ defmodule LemonRouter.SubmissionBuilder do
           prompt
         end
 
+      session_config = session_row || %{}
       session_model = MapHelpers.get_key(session_config, :model)
-      session_thinking_level = MapHelpers.get_key(session_config, :thinking_level)
-      request_thinking_level = MapHelpers.get_key(meta, :thinking_level)
+
+      thinking_input = %{
+        request_thinking_level: MapHelpers.get_key(meta, :thinking_level),
+        session_thinking_level: MapHelpers.get_key(session_config, :thinking_level),
+        chat_thinking_level: chat_defaults.thinking_level
+      }
+
       profile_model = MapHelpers.get_key(agent_profile, :model)
       profile_system_prompt = MapHelpers.get_key(agent_profile, :system_prompt)
       default_model = settings.default_model
 
-      explicit_model = request_model || MapHelpers.get_key(meta, :model)
       explicit_system_prompt = MapHelpers.get_key(meta, :system_prompt)
 
-      history_model = resolve_history_model(prompt, cwd, explicit_model, settings)
-
-      selection_input = %{
+      configured_selection = %{
         explicit_model: request_model,
         model_explicit: params.model_explicit,
         meta_model: MapHelpers.get_key(meta, :model),
         session_model: session_model,
+        chat_model: chat_defaults.model,
         profile_model: profile_model,
-        history_model: history_model,
         default_model: default_model
       }
+
+      # History is consulted only when the router default would otherwise win.
+      history_model =
+        if ModelSelection.resolve(%{configured_selection | default_model: nil}).model do
+          nil
+        else
+          resolve_history_model(prompt, cwd, default_model, settings)
+        end
+
+      selection_input = Map.put(configured_selection, :history_model, history_model)
 
       selection = ModelSelection.resolve(selection_input)
       resolved_model = selection.model
 
       resolved_thinking_level =
-        normalize_thinking_level(request_thinking_level || session_thinking_level)
+        thinking_input |> ModelSelection.thinking_level() |> normalize_thinking_level()
 
       resolved_system_prompt = explicit_system_prompt || profile_system_prompt
 
@@ -249,8 +264,8 @@ defmodule LemonRouter.SubmissionBuilder do
   defp settings(%{admission_settings: %{} = settings}), do: {:ok, settings}
   defp settings(_opts), do: admission_settings()
 
-  # Channel-origin runs carry the transport-derived context (channel policy and
-  # group approval floor) and sender identity (memory isolation, approvals) that
+  # Channel-origin runs carry the transport-derived context (group approval
+  # floor) and sender identity (memory isolation, approvals) that
   # `LemonChannels.RunRequestBuilder` attaches. A channel request without them,
   # such as work persisted before they existed and replayed after an upgrade, is
   # definitively refused rather than run with no channel restrictions.
@@ -312,7 +327,6 @@ defmodule LemonRouter.SubmissionBuilder do
     with {:ok, profile} <- get_managed_profile(profile_id),
          {:ok, policy} <-
            resolve_tool_policy(profile, nil, %{
-             agent_id: profile_id,
              session_key: session_key,
              channel_context: MapHelpers.get_key(meta || %{}, :channel_context)
            }) do
@@ -324,17 +338,27 @@ defmodule LemonRouter.SubmissionBuilder do
     with {:ok, base} <- Policy.resolve_validated_for_run(context),
          {:ok, profile} <-
            Policy.merge_validated(base, normalize_profile_tool_policy(agent_profile)) do
-      Policy.merge_validated(profile, override)
+      Policy.restrict_validated(profile, override)
     end
   end
 
-  defp get_session_config(nil), do: {:ok, %{}}
+  # The session's one PolicyStore read per admission: model, thinking level and
+  # tool policy all come from this row.
+  defp get_session_row(nil), do: {:ok, nil}
 
-  defp get_session_config(session_key) do
+  defp get_session_row(session_key) do
     case LemonCore.PolicyStore.fetch_session(session_key) do
-      {:ok, nil} -> {:ok, %{}}
-      {:ok, config} when is_map(config) -> {:ok, config}
+      {:ok, row} when is_map(row) or is_nil(row) -> {:ok, row}
       {:ok, _invalid} -> {:error, :invalid_session_policy}
+      {:error, _reason} -> {:error, :policy_unavailable}
+    end
+  end
+
+  # Model and thinking defaults of the session's channel route (thread, chat,
+  # account, channel). A non-channel session has none and reads nothing.
+  defp get_chat_defaults(session_key) do
+    case LemonCore.PolicyStore.resolve_chat(session_key) do
+      {:ok, defaults} -> {:ok, defaults}
       {:error, _reason} -> {:error, :policy_unavailable}
     end
   end
@@ -495,12 +519,12 @@ defmodule LemonRouter.SubmissionBuilder do
 
   defp normalize_cwd(_), do: nil
 
-  # The router default is operator configuration: the global layer, never a
-  # project file under the router's working directory.
-  defp operator_default_model(config) do
+  # The router default and the routing-feedback flag are operator configuration:
+  # the global layer, never a project file under the router's working directory.
+  defp operator_config(config) do
     case config.provenance do
-      %{operator: operator} -> operator.agent.default_model
-      _ -> config.agent.default_model
+      %{operator: operator} -> operator
+      _ -> config
     end
   end
 
@@ -512,25 +536,23 @@ defmodule LemonRouter.SubmissionBuilder do
   defp normalize_thinking_level(level) when is_binary(level), do: ThinkingLevel.normalize(level)
   defp normalize_thinking_level(_), do: nil
 
-  defp resolve_history_model(prompt, cwd, explicit_model, _settings)
-       when is_binary(explicit_model) and byte_size(explicit_model) > 0 do
-    _ = {prompt, cwd}
-    nil
-  end
+  # Routing feedback is opt-in and advisory: the store suggests a model only
+  # when the configured default has itself been measured here and done worse.
+  # An unavailable store keeps the configured selection.
+  defp resolve_history_model(prompt, cwd, default_model, %{routing_feedback: true}) do
+    context_key =
+      TaskFingerprint.context_key(%TaskFingerprint{
+        task_family: TaskFingerprint.classify_prompt(prompt),
+        workspace_key: cwd
+      })
 
-  defp resolve_history_model(_prompt, _cwd, _explicit_model, %{routing_feedback: false}), do: nil
-
-  defp resolve_history_model(prompt, cwd, _explicit_model, _settings) do
-    fp = %TaskFingerprint{
-      task_family: TaskFingerprint.classify_prompt(prompt),
-      workspace_key: cwd
-    }
-
-    case RoutingFeedbackStore.best_model_for_context(TaskFingerprint.context_key(fp)) do
+    case RoutingFeedbackStore.best_model_for_context(context_key, default_model) do
       {:ok, model} -> model
-      _ -> nil
+      :keep_default -> nil
     end
   catch
     :exit, _ -> nil
   end
+
+  defp resolve_history_model(_prompt, _cwd, _default_model, _settings), do: nil
 end

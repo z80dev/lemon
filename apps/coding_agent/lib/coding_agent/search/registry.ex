@@ -142,6 +142,7 @@ defmodule CodingAgent.Search.Registry do
       {"kagi", CodingAgent.Search.Providers.Kagi, 80},
       {"jina", CodingAgent.Search.Providers.Jina, 75},
       {"keenable", CodingAgent.Search.Providers.Keenable, 70},
+      {"kimi", CodingAgent.Search.Providers.Kimi, 65},
       {"duckduckgo", CodingAgent.Search.Providers.DuckDuckGo, 50},
       {"searxng", CodingAgent.Search.Providers.Searxng, 40},
       {"direct", CodingAgent.Search.Providers.DirectExtract, 100},

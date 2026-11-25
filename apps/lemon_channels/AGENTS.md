@@ -23,7 +23,9 @@ and script notifications.
 - Each platform config implements `LemonCore.Config.Gateway.Channel`, registers
   under `:gateway_channels`, and owns its env declarations. Production transport
   settings come from canonical TOML via `GatewayConfig`, not app-env overlays.
-  The full-replacement test config layer is for isolation only.
+  The full-replacement test config layer is for isolation only. A shipped
+  adapter must be startable from that canonical config; a channel with no
+  config path is removed, not registered or reported as configured (#699).
 
 ## Authorization
 
@@ -104,10 +106,8 @@ and script notifications.
   unknown; `outbox_adapter_contract_test.exs` asserts every built-in adapter
   normalizes its ambiguous sends to it, so a new adapter extends that test.
   Return unknown only where the message may already have been accepted: an SMTP
-  connection lost once DATA was issued and a WhatsApp bridge `sendMessage`
-  exception (flagged `outcome_unknown` by the bridge) are unknown; SMTP
-  rejections, a connection lost before DATA, and a WhatsApp failure before the
-  send call (not connected, unreadable media) stay terminal.
+  connection lost once DATA was issued is unknown; SMTP rejections and a
+  connection lost before DATA stay terminal.
   Honor rate-limit hints.
 - Telegram markdown entity offsets are UTF-16, not bytes/graphemes. Truncation
   must preserve native resume lines and table column boundaries.
@@ -134,9 +134,8 @@ and script notifications.
   wrapper rather than bypassing its policy.
 - Generated media is opt-in, count/size bounded and cwd/symlink checked upstream.
   Rendering must not expose host-only `MEDIA:` directive lines.
-- XMTP and WhatsApp retain separate process identities/scripts/event tags while
-  sharing `PortBridge` lifecycle mechanics. A stopped port must not leave its
-  child or stale reconnect state alive.
+- Stopping or losing XMTP's `PortBridge` port terminates its child process
+  group before the port closes or restarts.
 
 ## Operator paths and verification
 

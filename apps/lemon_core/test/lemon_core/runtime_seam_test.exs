@@ -116,13 +116,35 @@ defmodule LemonCore.RuntimeSeamTest do
   end
 
   test "a reached mutation failure is never replayed" do
-    assert {:error, :outcome_unknown} =
-             RuntimeSeam.invoke(Provider, :mutation, [self()],
-               unavailable: {:error, :unavailable},
-               exception: {:error, :outcome_unknown}
-             )
+    capture_log(fn ->
+      assert {:error, :outcome_unknown} =
+               RuntimeSeam.invoke(Provider, :mutation, [self()],
+                 unavailable: {:error, :unavailable},
+                 exception: {:error, :outcome_unknown}
+               )
+    end)
 
     assert_received :mutation_applied
     refute_received :mutation_applied
+  end
+
+  test "reached failures are logged by default; absent callbacks are not" do
+    log = capture_log(fn -> RuntimeSeam.invoke(Provider, :fail, [:raise], unavailable: :x) end)
+    assert log =~ "RuntimeSeam callback failed"
+    assert log =~ "failure_class=exception"
+
+    assert capture_log(fn ->
+             RuntimeSeam.invoke(Provider, :missing, [], unavailable: :x)
+             RuntimeSeam.invoke(nil, :answer, [], unavailable: :x)
+           end) == ""
+  end
+
+  test "log_level overrides the default level" do
+    log =
+      capture_log([level: :error], fn ->
+        RuntimeSeam.invoke(Provider, :fail, [:raise], unavailable: :x, log_level: :warning)
+      end)
+
+    assert log == ""
   end
 end

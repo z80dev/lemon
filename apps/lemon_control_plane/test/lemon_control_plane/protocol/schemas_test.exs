@@ -265,10 +265,9 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
     end
 
     # New tests for parity methods
-    test "validates config.set method requires key and value" do
-      assert {:error, _} = Schemas.validate("config.set", %{})
-      assert {:error, _} = Schemas.validate("config.set", %{"key" => "test"})
-      assert :ok = Schemas.validate("config.set", %{"key" => "test", "value" => "val"})
+    test "validates commands.list method requires cwd" do
+      assert {:error, _} = Schemas.validate("commands.list", %{})
+      assert :ok = Schemas.validate("commands.list", %{"cwd" => "/tmp/project"})
     end
 
     test "validates connect.challenge method requires challenge" do

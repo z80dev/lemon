@@ -11,7 +11,8 @@ defmodule CodingAgent.BackgroundRun.Worker do
   alias CodingAgent.BackgroundRun.Registry
   alias CodingAgent.{Session, SessionRegistry, TaskStore}
   alias CodingAgent.Parallel.Semaphore
-  alias CodingAgent.Tools.Task.{Result, Runner}
+  alias CodingAgent.TaskRuntime.Runner
+  alias CodingAgent.Tools.Task.Result
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
 

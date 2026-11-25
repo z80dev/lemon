@@ -4,8 +4,25 @@ All notable changes to `lemon_cli` are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- `lemon policy` manages `LemonCore.PolicyStore` chat rows; `--peer` without
+  `--account` names the `default` account and `--thread` requires `--peer`
+  (#714).
 ### Added
 
+- `LemonCli.SecretsCommand` is the single `lemon secrets` implementation, with
+  `CLI.run/1` tests for stdout, stderr and exit codes of every subcommand and a
+  golden `list` (#717). `LemonCli.SecretWriter` sends `secrets set|delete|
+  import-env` and gateway bot-token writes to a running runtime that owns the
+  store (`secrets.set` / `secrets.delete`); unreachable runtimes write nothing
+  and unconfirmed writes report outcome unknown. Default API-key provider
+  onboarding goes to the runtime's `providers.management.api_key.set` (and
+  `default.set` when a default model is chosen); other provider sign-ins refuse
+  with `lemon stop` guidance while a runtime owns the store (#667).
+- `lemon model kimi-code --region china|global` signs in to the selected Kimi
+  Code deployment (with `--auth omp`, omp's `kimi-code` or `kimi-code-global`
+  login) and writes its `base_url` (#525).
 - `lemon browser stop` stops the runtime's local browser driver and the
   Chrome it launched through the admin `browser.stop` method (#660).
 - `lemon setup omp [status|disconnect]` connects Lemon providers to omp's auth
@@ -103,6 +120,14 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Changed
 
+- **Breaking:** `lemon bot https` and the setup wizard's Lemon Bot HTTPS step are
+  removed; Bot HTTPS is `lemon-bot https enable|status|disable` in the Lemon Bot
+  CLI. `LemonCli.Doctor.BotAdmission` stays read-only: it checks the explicit
+  origin, `LEMON_BOT_PUBLIC_URL` or the origin published in
+  `~/.lemon/bot-https.json`, and reads the effective allowlists from
+  `LemonRouter.NativeFollowupAdmission.allowed_origins/0` and
+  `LemonAutomation.CronAdmission.allowed_origins/0` through `:doctor_runtime`
+  instead of their application configuration (#723).
 - Consolidate onboarding prompt handling, runtime port resolution, and setup/doctor
   provider recovery text. Doctor providers now register live checks without an
   empty offline adapter.
@@ -158,6 +183,8 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Fixed
 
+- `lemon print` renders a structured `agent.wait` error (`kind`, HTTP
+  `status`, `message`) instead of crashing on a non-text error (#620).
 - One-shot commands boot `:lemon_core` in client mode through
   `LemonCore.CLI.start/2` (context, learn, learning, mcp, update, migrate,
   providers and onboarding included), so they no longer expire a running

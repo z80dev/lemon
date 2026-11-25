@@ -37,7 +37,10 @@ defmodule LemonRouter.Application do
         LemonCore.Supervision.subtree(LemonRouter.ConversationSupervisor, [
           {Registry, keys: :unique, name: LemonRouter.RunRegistry},
           {Registry, keys: :unique, name: LemonRouter.SessionRegistry},
-          {Registry, keys: :unique, name: LemonRouter.ConversationRegistry},
+          {Registry,
+           keys: :unique,
+           name: LemonRouter.ConversationRegistry,
+           meta: [admission_epoch: :crypto.strong_rand_bytes(16)]},
           # A lost permit authority or claim registry restarts every later
           # child, so runs holding permits stop before new work is admitted.
           {Registry, keys: :unique, name: LemonRouter.EngineSessionRegistry},
@@ -63,6 +66,12 @@ defmodule LemonRouter.Application do
         configure_router_bridge()
         :ok = LemonCore.AgentMessaging.configure(LemonRouter.AgentMessaging)
         :ok = LemonCore.Drain.register(:router, LemonRouter.RestartCarryover, order: 50)
+
+        :ok =
+          LemonCore.SessionLifecycle.Participant.register(:router, LemonRouter.SessionParticipant,
+            operations: [:delete, :reset]
+          )
+
         {:ok, pid}
 
       other ->

@@ -121,12 +121,12 @@ defmodule LemonMemory.Ingest do
   A non-default instance binds its server name as the hook's leading argument:
   `{LemonMemory.Ingest, :handle_finalize_run, [:tenant_a_ingest]}`.
   """
-  @spec handle_finalize_run(map()) :: :ok
+  @spec handle_finalize_run(map()) :: :ok | {:error, term()}
   def handle_finalize_run(event), do: handle_finalize_run(__MODULE__, event)
 
-  @spec handle_finalize_run(GenServer.server(), map()) :: :ok
+  @spec handle_finalize_run(GenServer.server(), map()) :: :ok | {:error, term()}
   def handle_finalize_run(server, %{run_id: run_id, record: record, summary: summary}) do
-    ingest(server, run_id, record, summary)
+    GenServer.call(server, {:ingest, run_id, record, summary})
   end
 
   # ── GenServer callbacks ────────────────────────────────────────────────────────
@@ -158,6 +158,17 @@ defmodule LemonMemory.Ingest do
 
   @impl true
   def handle_cast({:ingest, run_id, record, summary}, state) do
+    {_result, state} = persist_run(run_id, record, summary, state)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_call({:ingest, run_id, record, summary}, _from, state) do
+    {result, state} = persist_run(run_id, record, summary, state)
+    {:reply, result, state}
+  end
+
+  defp persist_run(run_id, record, summary, state) do
     t0 = System.monotonic_time(:microsecond)
 
     # Resolve feature flags from the TTL-cached config; loading a full TOML
@@ -170,49 +181,60 @@ defmodule LemonMemory.Ingest do
     # skip building the Document entirely.
     # Notification-only duplicates (e.g. cron's forwarded summary) carry no
     # admitted owner; ingesting them would relabel private output as legacy.
-    if not memory_opt_out?(summary) and (session_search? or routing_feedback?) do
-      try do
-        doc = Document.from_run(run_id, record, summary)
+    result =
+      if not memory_opt_out?(summary) and (session_search? or routing_feedback?) do
+        try do
+          doc = Document.from_run(run_id, record, summary)
 
-        if valid_doc?(doc) and Safety.safe_document?(doc) do
-          if session_search? do
-            put_memory_doc(state.memory_store_kind, state.memory_store, doc)
+          if valid_doc?(doc) and Safety.safe_document?(doc) do
+            with :ok <-
+                   if(session_search?,
+                     do: put_memory_doc(state.memory_store_kind, state.memory_store, doc),
+                     else: :ok
+                   ) do
+              if routing_feedback? do
+                broadcast_routing_feedback(doc, record)
+              end
+
+              duration_us = System.monotonic_time(:microsecond) - t0
+
+              LemonCore.Telemetry.emit(
+                [:lemon, :memory, :ingest, :ok],
+                %{duration_us: duration_us},
+                %{run_id: run_id, session_key: doc.session_key, agent_id: doc.agent_id}
+              )
+
+              Logger.debug(
+                "[Ingest] ingested doc_id=#{doc.doc_id} run_id=#{doc.run_id} " <>
+                  "session=#{doc.session_key} agent=#{doc.agent_id} duration_us=#{duration_us}"
+              )
+
+              :ok
+            end
+          else
+            :ok
           end
+        rescue
+          e ->
+            duration_us = System.monotonic_time(:microsecond) - t0
 
-          if routing_feedback? do
-            broadcast_routing_feedback(doc, record)
-          end
+            LemonCore.Telemetry.emit(
+              [:lemon, :memory, :ingest, :failure],
+              %{count: 1, duration_us: duration_us},
+              %{run_id: run_id, error: Exception.message(e)}
+            )
 
-          duration_us = System.monotonic_time(:microsecond) - t0
+            Logger.warning(
+              "[Ingest] ingest failed for run #{inspect(run_id)}: #{Exception.message(e)}"
+            )
 
-          LemonCore.Telemetry.emit(
-            [:lemon, :memory, :ingest, :ok],
-            %{duration_us: duration_us},
-            %{run_id: run_id, session_key: doc.session_key, agent_id: doc.agent_id}
-          )
-
-          Logger.debug(
-            "[Ingest] ingested doc_id=#{doc.doc_id} run_id=#{doc.run_id} " <>
-              "session=#{doc.session_key} agent=#{doc.agent_id} duration_us=#{duration_us}"
-          )
+            {:error, :memory_ingest_failed}
         end
-      rescue
-        e ->
-          duration_us = System.monotonic_time(:microsecond) - t0
-
-          LemonCore.Telemetry.emit(
-            [:lemon, :memory, :ingest, :failure],
-            %{count: 1, duration_us: duration_us},
-            %{run_id: run_id, error: Exception.message(e)}
-          )
-
-          Logger.warning(
-            "[Ingest] ingest failed for run #{inspect(run_id)}: #{Exception.message(e)}"
-          )
+      else
+        :ok
       end
-    end
 
-    {:noreply, state}
+    {result, state}
   end
 
   # ── Private helpers ────────────────────────────────────────────────────────────
@@ -283,12 +305,12 @@ defmodule LemonMemory.Ingest do
 
   # The default store routes through the provider registry so the configured
   # provider chain still applies; a named or pid'd instance is written directly.
-  defp put_memory_doc(:providers, _memory_store, %Document{} = doc), do: Providers.put(doc)
+  defp put_memory_doc(:providers, _memory_store, %Document{} = doc), do: Providers.put_sync(doc)
 
   defp put_memory_doc(:module, memory_store, %Document{} = doc), do: memory_store.put(doc)
 
   defp put_memory_doc(:server, memory_store, %Document{} = doc),
-    do: Store.put(memory_store, doc)
+    do: Store.put_sync(memory_store, doc)
 
   defp broadcast_routing_feedback(%Document{} = doc, record) do
     fingerprint = TaskFingerprint.from_document(doc)
@@ -303,7 +325,8 @@ defmodule LemonMemory.Ingest do
         fingerprint_key: fingerprint_key,
         outcome: doc.outcome,
         duration_ms: duration_ms
-      })
+      }),
+      %{run_id: doc.run_id, event_id: "routing_feedback:#{doc.run_id}"}
     )
   rescue
     e ->

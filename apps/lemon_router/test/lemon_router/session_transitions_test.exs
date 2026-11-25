@@ -2,7 +2,7 @@ defmodule LemonRouter.SessionTransitionsTest do
   use ExUnit.Case, async: true
 
   alias LemonCore.ExecutionCommand
-  alias LemonRouter.{SessionState, SessionTransitions, Submission}
+  alias LemonRouter.{SessionState, SessionTransitions, Submission, SubmissionBuilder}
 
   test "idle submit queues work and requests start" do
     state = SessionState.new(conversation_key: {:session, "s1"})
@@ -716,38 +716,77 @@ defmodule LemonRouter.SessionTransitionsTest do
     assert busy_effects == []
   end
 
-  test "regular followups keep scalar metadata merge behavior" do
-    previous =
-      submission("run1", "s1", :followup, "part1",
-        meta: %{task_id: "first", run_id: "run1", source: "left", keep: "left"},
-        request_meta: %{task_id: "first", run_id: "run1", source: "left", keep: "left"}
-      )
+  describe "debounce-merged followups built by SubmissionBuilder" do
+    test "the survivor keeps its own execution context and carries both prompts" do
+      session_key = "agent:default:transitions-merge:#{System.unique_integer([:positive])}"
 
-    current =
-      submission("run2", "s1", :followup, "part2",
-        meta: %{task_id: "second", source: "right", extra: "right"},
-        request_meta: %{task_id: "second", source: "right", extra: "right"}
-      )
+      previous =
+        built_submission(session_key, "part1", %{
+          task_id: "first",
+          source: "left",
+          keep: "left"
+        })
 
-    merged = merge_followups(previous, current)
+      current =
+        built_submission(session_key, "part2", %{
+          task_id: "second",
+          source: "right",
+          extra: "right"
+        })
 
-    assert merged.execution_request.prompt == "part1\npart2"
+      state = %SessionState{
+        conversation_key: current.conversation_key,
+        queue: [previous],
+        last_followup_at_ms: 100
+      }
 
-    assert merged.meta == %{
-             task_id: "second",
-             run_id: "run1",
-             source: "right",
-             keep: "left",
-             extra: "right"
-           }
+      assert {:ok, next, [:maybe_start_next]} = SessionTransitions.submit(state, current, 200)
+      assert [merged] = next.queue
+      assert next.merged_run_ids == %{current.run_id => [previous.run_id]}
 
-    assert merged.execution_request.meta == %{
-             task_id: "second",
-             run_id: "run1",
-             source: "right",
-             keep: "left",
-             extra: "right"
-           }
+      assert merged.run_id == current.run_id
+      assert merged.execution_request.run_id == current.run_id
+
+      assert merged.execution_request.execution_context ==
+               current.execution_request.execution_context
+
+      assert merged.execution_request.execution_context.run_id == current.run_id
+      assert merged.execution_request.prompt == "part1\npart2"
+
+      assert Map.take(merged.execution_request.meta, [:task_id, :source, :keep, :extra]) == %{
+               task_id: "second",
+               source: "right",
+               keep: "left",
+               extra: "right"
+             }
+
+      # Restart carryover replays `request`: it must hold the merged prompt under
+      # the survivor's identity.
+      assert %LemonCore.RunRequest{} = merged.request
+      assert merged.request.run_id == current.run_id
+      assert merged.request.prompt == "part1\npart2"
+    end
+
+    test "two steers falling back at the same instant merge into the newest owner" do
+      session_key = "agent:default:transitions-steer:#{System.unique_integer([:positive])}"
+      first = %{built_submission(session_key, "first", %{}) | queue_mode: :steer}
+      second = %{built_submission(session_key, "second", %{}) | queue_mode: :steer}
+
+      state = %SessionState{
+        conversation_key: first.conversation_key,
+        active: %{run_id: "active", session_key: session_key},
+        pending_steers: %{"active" => [{first, :followup}, {second, :followup}]}
+      }
+
+      assert {:ok, state, []} = SessionTransitions.steer_rejected(state, first.run_id, 300)
+      assert {:ok, state, []} = SessionTransitions.steer_rejected(state, second.run_id, 300)
+
+      assert [merged] = state.queue
+      assert merged.run_id == second.run_id
+      assert merged.execution_request.execution_context.run_id == second.run_id
+      assert merged.execution_request.prompt == "first\nsecond"
+      assert merged.request.prompt == "first\nsecond"
+    end
   end
 
   test "two async followups stay separate within the debounce window" do
@@ -1187,10 +1226,27 @@ defmodule LemonRouter.SessionTransitionsTest do
     %{input | execution_request: %{input.execution_request | tool_policy: policy}}
   end
 
-  defp merge_followups(previous, current) do
-    next_state = submit_followups(previous, current)
-    assert [merged] = next_state.queue
-    merged
+  defp built_submission(session_key, prompt, meta) do
+    request =
+      LemonCore.RunRequest.new(%{
+        origin: :control_plane,
+        session_key: session_key,
+        agent_id: "default",
+        prompt: prompt,
+        queue_mode: :followup,
+        meta: meta,
+        run_id: "run_#{System.unique_integer([:positive])}"
+      })
+
+    assert {:ok, %Submission{} = submission} =
+             SubmissionBuilder.build(request, %{
+               run_supervisor: LemonRouter.RunSupervisor,
+               run_process_module: LemonRouter.RunProcess,
+               run_process_opts: %{}
+             })
+
+    assert submission.execution_request.execution_context.run_id == submission.run_id
+    submission
   end
 
   defp submit_followups(previous, current) do

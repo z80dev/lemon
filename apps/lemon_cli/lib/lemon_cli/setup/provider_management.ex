@@ -338,13 +338,26 @@ defmodule LemonCli.Setup.ProviderManagement do
 
   @doc false
   # Shared by terminal onboarding and logout. The patch runs inside the same
-  # config lock as the API; secret snapshots precede every mutation.
+  # config lock as the API; secret snapshots precede every mutation. A one-shot
+  # VM beside a running runtime that owns the store refuses credential changes
+  # with `{:error, :runtime_owned}` before touching config or secrets.
   def persist(config_path, changes, patch, opts \\ []) do
-    locked(config_path, fn ->
-      with {:ok, content, _config} <- read_config(config_path) do
-        persist_locked(config_path, changes, patch, content, opts)
-      end
-    end)
+    with :ok <- credential_store_writable(changes, opts) do
+      locked(config_path, fn ->
+        with {:ok, content, _config} <- read_config(config_path) do
+          persist_locked(config_path, changes, patch, content, opts)
+        end
+      end)
+    end
+  end
+
+  defp credential_store_writable([], _opts), do: :ok
+
+  defp credential_store_writable(_changes, opts) do
+    if Keyword.get(opts, :secrets, Secrets) == Secrets and
+         LemonCore.Store.write_access() == {:error, :runtime_owned},
+       do: {:error, :runtime_owned},
+       else: :ok
   end
 
   defp persist_locked(config_path, changes, patch, original, opts) do

@@ -9,8 +9,10 @@ defmodule CodingAgent.Executor.Behaviour do
 
   Executors send lifecycle events (`CodingAgent.Executor.Event`) to the sink as
   `{:engine_event, run_ref, event}` and streamed text as
-  `{:engine_delta, run_ref, text}`, and finish with exactly one `:completed`
-  event. Control operations that an executor cannot perform return
+  `{:engine_delta, run_ref, text}`. With `canonical_delta: true`, a local
+  executor can forward the existing `LemonCore.Event` delta in place of text.
+  A started executor finishes with exactly one `:completed` event.
+  Control operations that an executor cannot perform return
   `{:error, :unsupported}`. `cancel/1` only requests cancellation and must not
   block: the run owner keeps its permit and engine-session claim until the
   executor process exits or the 15-second drain deadline passes.

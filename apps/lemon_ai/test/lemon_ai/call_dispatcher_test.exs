@@ -37,83 +37,190 @@ defmodule LemonAi.CallDispatcherTest do
       assert CallDispatcher.last_error(provider)["message"] =~ "temporarily unavailable"
     end
 
-    test "dispatch allows requests when conditions are met", %{provider: provider} do
-      # Start rate limiter and circuit breaker for this provider
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 10, max_tokens: 5})
-      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
+    test "dispatch lets an admitted callback run and emits a timestamp", %{provider: provider} do
+      attach_dispatcher_events(provider, [:dispatch])
+      before = System.system_time()
 
-      result = CallDispatcher.dispatch(provider, fn -> {:ok, "success"} end)
+      assert {:ok, "success"} = CallDispatcher.dispatch(provider, fn -> {:ok, "success"} end)
 
-      assert {:ok, "success"} = result
+      assert_receive {:dispatcher_event, :dispatch, %{system_time: started},
+                      %{provider: ^provider}}
+
+      assert started >= before
+      assert started <= System.system_time()
     end
 
-    test "dispatch rejects when circuit is open", %{provider: provider} do
-      # Start rate limiter and circuit breaker
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 10, max_tokens: 5})
-      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 2})
-
-      # Record enough failures to open the circuit
-      CircuitBreaker.record_failure(provider)
-      CircuitBreaker.record_failure(provider)
-
-      # Result recording publishes the ETS admission snapshot before returning.
-
-      result = CallDispatcher.dispatch(provider, fn -> {:ok, "should not run"} end)
-
-      assert {:error, :circuit_open} = result
-    end
-
-    test "dispatch rejects when rate limited", %{provider: provider} do
-      # Start rate limiter with only 1 token and no refill
+    test "open circuits reject before consuming rate limit tokens", %{provider: provider} do
       start_supervised!({RateLimiter, provider: provider, tokens_per_second: 0, max_tokens: 1})
-      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
+      advance = start_breaker_with_clock(provider, failure_threshold: 1, recovery_timeout: 100)
+      assert :ok = CircuitBreaker.record_failure(provider)
 
-      # First request should succeed
-      assert {:ok, _} = CallDispatcher.dispatch(provider, fn -> {:ok, "first"} end)
+      attach_dispatcher_events(provider, [:rejected])
 
-      # Second request should be rate limited (no tokens left)
-      result = CallDispatcher.dispatch(provider, fn -> {:ok, "second"} end)
+      assert {:error, :circuit_open} =
+               CallDispatcher.dispatch(provider, fn -> flunk("open circuit admitted callback") end)
 
-      assert {:error, :rate_limited} = result
+      assert_receive {:dispatcher_event, :rejected, %{duration: duration, system_time: time},
+                      %{provider: ^provider, reason: :circuit_open, retry_after_ms: 100}}
+
+      assert is_integer(time)
+      assert duration >= 0
+      assert {:ok, %{available_tokens: 1}} = RateLimiter.get_state(provider)
+      advance.(100)
+      assert {:ok, :probe} = CallDispatcher.dispatch(provider, fn -> {:ok, :probe} end)
     end
 
-    test "dispatch enforces concurrency cap", %{provider: provider} do
-      # Start rate limiter and circuit breaker
-      start_supervised!(
-        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
-      )
+    test "rate limiting rejects without affecting the circuit or leaking a slot",
+         %{provider: provider} do
+      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 0, max_tokens: 1})
+      attach_dispatcher_events(provider, [:rejected])
+      assert {:ok, :first} = CallDispatcher.dispatch(provider, fn -> {:ok, :first} end)
 
-      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
+      for _ <- 1..3 do
+        assert {:error, :rate_limited} =
+                 CallDispatcher.dispatch(provider, fn ->
+                   flunk("empty bucket admitted callback")
+                 end)
 
-      # Set concurrency cap to 1
-      CallDispatcher.set_concurrency_cap(provider, 1)
+        assert_receive {:dispatcher_event, :rejected, %{duration: duration},
+                        %{provider: ^provider, reason: :rate_limited}}
 
-      # Start a long-running request that holds the slot
-      parent = self()
+        assert is_integer(duration) and duration >= 0
+      end
 
-      task =
-        Task.async(fn ->
-          CallDispatcher.dispatch(provider, fn ->
-            send(parent, :slot_acquired)
-            # Hold the slot for a while
-            receive do
-              :release -> {:ok, "done"}
-            end
+      assert {:ok, %{circuit_state: :closed, failure_count: 0}} =
+               CircuitBreaker.get_state(provider)
+
+      assert CallDispatcher.get_active_requests(provider) == 0
+    end
+
+    test "dispatch enforces the concurrency cap when queueing is disabled", %{provider: provider} do
+      assert :ok = CallDispatcher.set_concurrency_cap(provider, 1)
+      holder = hold_slot(provider, :holder)
+      attach_dispatcher_events(provider, [:rejected])
+
+      assert {:error, :max_concurrency} =
+               CallDispatcher.dispatch(provider, fn -> flunk("full cap admitted callback") end,
+                 queue_timeout_ms: 0
+               )
+
+      assert_receive {:dispatcher_event, :rejected, %{duration: duration},
+                      %{provider: ^provider, reason: :max_concurrency}}
+
+      assert is_integer(duration) and duration >= 0
+      send(holder.pid, :release)
+      assert {:ok, :holder} = Task.await(holder)
+      assert CallDispatcher.get_active_requests(provider) == 0
+    end
+
+    test "successful callback results pass through and clear circuit failures", %{
+      provider: provider
+    } do
+      for value <- [{:ok, :success}, "raw_string", nil] do
+        assert {:error, :timeout} =
+                 CallDispatcher.dispatch(provider, fn -> {:error, :timeout} end)
+
+        assert {:ok, %{failure_count: 1}} = CircuitBreaker.get_state(provider)
+
+        assert CallDispatcher.dispatch(provider, fn -> value end) == value
+        assert {:ok, %{failure_count: 0}} = CircuitBreaker.get_state(provider)
+      end
+    end
+
+    test "re-raises callback exceptions, releases slots and records circuit failures",
+         %{provider: provider} do
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 2})
+      assert :ok = CallDispatcher.set_concurrency_cap(provider, 1)
+
+      for count <- 1..2 do
+        assert_raise RuntimeError, "simulated error", fn ->
+          CallDispatcher.dispatch(provider, fn -> raise "simulated error" end,
+            queue_timeout_ms: 0
+          )
+        end
+
+        assert {:ok, %{failure_count: ^count}} = CircuitBreaker.get_state(provider)
+        assert CallDispatcher.get_active_requests(provider) == 0
+      end
+
+      assert CircuitBreaker.open?(provider)
+    end
+
+    test "concurrent dispatch failures are counted below and at the threshold",
+         %{provider: provider} do
+      for {threshold, state} <- [{3, :open}, {6, :closed}] do
+        key = "#{provider}-#{threshold}"
+
+        start_supervised!({CircuitBreaker, provider: key, failure_threshold: threshold},
+          id: {CircuitBreaker, key}
+        )
+
+        tasks =
+          for _ <- 1..5 do
+            Task.async(fn ->
+              CallDispatcher.dispatch(key, fn -> {:error, :timeout} end)
+            end)
+          end
+
+        results = Task.await_many(tasks)
+        expected_count = min(threshold, 5)
+        assert Enum.count(results, &(&1 == {:error, :timeout})) >= expected_count
+        assert Enum.all?(results, &(&1 in [{:error, :timeout}, {:error, :circuit_open}]))
+
+        assert {:ok, %{circuit_state: ^state, failure_count: ^expected_count}} =
+                 CircuitBreaker.get_state(key)
+
+        assert CallDispatcher.get_active_requests(key) == 0
+      end
+    end
+
+    test "opening the circuit rejects concurrent newcomers, not work already admitted",
+         %{provider: provider} do
+      advance = start_breaker_with_clock(provider, failure_threshold: 1, recovery_timeout: 100)
+      holder = hold_slot(provider, :in_flight)
+      assert {:error, :timeout} = CallDispatcher.dispatch(provider, fn -> {:error, :timeout} end)
+
+      tasks =
+        for _ <- 1..5 do
+          Task.async(fn ->
+            CallDispatcher.dispatch(provider, fn -> flunk("open circuit admitted callback") end)
           end)
-        end)
+        end
 
-      # Wait for the first request to acquire the slot
-      assert_receive :slot_acquired, 1000
+      assert Task.await_many(tasks) == List.duplicate({:error, :circuit_open}, 5)
+      send(holder.pid, :release)
+      assert {:ok, :in_flight} = Task.await(holder)
+      assert CircuitBreaker.open?(provider)
 
-      # With queueing disabled, a second request is rejected immediately
-      result =
-        CallDispatcher.dispatch(provider, fn -> {:ok, "should not run"} end, queue_timeout_ms: 0)
+      advance.(100)
 
-      assert {:error, :max_concurrency} = result
+      tasks =
+        for probe <- [:first, :second] do
+          hold_slot(provider, probe)
+        end
 
-      # Release the first request
-      send(task.pid, :release)
-      Task.await(task)
+      assert {:ok, %{circuit_state: :half_open}} = CircuitBreaker.get_state(provider)
+      Enum.each(tasks, &send(&1.pid, :release))
+      assert Task.await_many(tasks) == [{:ok, :first}, {:ok, :second}]
+
+      assert {:ok, %{circuit_state: :closed, failure_count: 0}} =
+               CircuitBreaker.get_state(provider)
+    end
+
+    test "nested dispatch to another provider does not consume the outer provider's cap",
+         %{provider: provider} do
+      inner = :"#{provider}_inner"
+      assert :ok = CallDispatcher.set_concurrency_cap(provider, 1)
+      assert :ok = CallDispatcher.set_concurrency_cap(inner, 1)
+
+      assert {:ok, {:ok, :inner}} =
+               CallDispatcher.dispatch(provider, fn ->
+                 {:ok,
+                  CallDispatcher.dispatch(inner, fn -> {:ok, :inner} end, queue_timeout_ms: 0)}
+               end)
+
+      assert CallDispatcher.get_active_requests(provider) == 0
+      assert CallDispatcher.get_active_requests(inner) == 0
     end
 
     test "dispatcher releases slot if caller is killed", %{provider: provider} do
@@ -169,66 +276,37 @@ defmodule LemonAi.CallDispatcherTest do
                CallDispatcher.dispatch(provider, fn -> {:ok, "after_stream"} end)
     end
 
-    test "stream terminal error is recorded as circuit breaker failure", %{provider: provider} do
-      start_supervised!(
-        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
-      )
+    for {description, error, count, summary} <- [
+          {"provider failure", "stream failed", 1, "request failed"},
+          {"authentication failure", "Authentication failed (HTTP 401): invalid x-api-key", 0,
+           "authentication failed"},
+          {"rate limit", "Rate limit exceeded (HTTP 429): too many requests", 0,
+           "rate limit exceeded"}
+        ] do
+      @terminal_error error
+      @failure_count count
+      @summary summary
+      test "accounts for stream terminal #{description}", %{provider: provider} do
+        start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
 
-      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
+        {:ok, stream} =
+          CallDispatcher.dispatch(provider, fn -> EventStream.start_link(owner: self()) end)
 
-      {:ok, stream} =
-        CallDispatcher.dispatch(provider, fn ->
-          EventStream.start_link(owner: self())
-        end)
+        wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
+        assert {:ok, %{failure_count: 0}} = CircuitBreaker.get_state(provider)
 
-      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
+        EventStream.error(stream, %{
+          stop_reason: :error,
+          error_message: @terminal_error,
+          content: []
+        })
 
-      {:ok, cb_before} = CircuitBreaker.get_state(provider)
-      assert cb_before.failure_count == 0
+        wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
 
-      EventStream.error(stream, %{
-        stop_reason: :error,
-        error_message: "stream failed",
-        content: []
-      })
+        assert {:ok, %{failure_count: @failure_count}} = CircuitBreaker.get_state(provider)
 
-      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
-
-      wait_until(fn ->
-        {:ok, state} = CircuitBreaker.get_state(provider)
-        state.failure_count == 1
-      end)
-    end
-
-    test "auth-shaped stream terminal error is not recorded as circuit breaker failure",
-         %{provider: provider} do
-      start_supervised!(
-        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
-      )
-
-      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
-
-      {:ok, stream} =
-        CallDispatcher.dispatch(provider, fn ->
-          EventStream.start_link(owner: self())
-        end)
-
-      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
-
-      {:ok, cb_before} = CircuitBreaker.get_state(provider)
-      assert cb_before.failure_count == 0
-
-      EventStream.error(stream, %{
-        stop_reason: :error,
-        error_message: "Authentication failed (HTTP 401): invalid x-api-key",
-        content: []
-      })
-
-      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
-
-      {:ok, cb_after} = CircuitBreaker.get_state(provider)
-      assert cb_after.failure_count == 0
-      assert CallDispatcher.last_error(provider)["message"] =~ "authentication failed"
+        assert CallDispatcher.last_error(provider)["message"] =~ @summary
+      end
     end
 
     for api <- [:anthropic_messages, :openai_completions, :openai_responses] do
@@ -261,33 +339,6 @@ defmodule LemonAi.CallDispatcherTest do
         assert {:ok, :still_available} =
                  CallDispatcher.dispatch(provider, fn -> {:ok, :still_available} end)
       end
-    end
-
-    test "rate-limit-shaped stream terminal error is not recorded as circuit breaker failure",
-         %{provider: provider} do
-      start_supervised!(
-        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
-      )
-
-      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
-
-      {:ok, stream} =
-        CallDispatcher.dispatch(provider, fn ->
-          EventStream.start_link(owner: self())
-        end)
-
-      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
-
-      EventStream.error(stream, %{
-        stop_reason: :error,
-        error_message: "Rate limit exceeded (HTTP 429): too many requests",
-        content: []
-      })
-
-      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
-
-      {:ok, cb_after} = CircuitBreaker.get_state(provider)
-      assert cb_after.failure_count == 0
     end
 
     test "user-driven stream cancel is not recorded as circuit breaker failure",
@@ -519,132 +570,99 @@ defmodule LemonAi.CallDispatcherTest do
     end
   end
 
-  describe "LemonAi.RateLimiter" do
-    test "acquire allows requests when tokens available", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 10, max_tokens: 5})
+  describe "dynamic concurrency caps" do
+    test "lowering the cap preserves active requests and blocks new admission",
+         %{provider: provider} do
+      assert :ok = CallDispatcher.set_concurrency_cap(provider, 3)
+      holders = for i <- 1..3, do: hold_slot(provider, i)
+      assert CallDispatcher.get_active_requests(provider) == 3
 
-      # Should allow multiple requests up to max_tokens
-      assert :ok = RateLimiter.acquire(provider)
-      assert :ok = RateLimiter.acquire(provider)
-      assert :ok = RateLimiter.acquire(provider)
+      assert :ok = CallDispatcher.set_concurrency_cap(provider, 1)
+      assert CallDispatcher.get_active_requests(provider) == 3
+
+      assert {:error, :max_concurrency} =
+               CallDispatcher.dispatch(provider, fn -> flunk("lower cap admitted callback") end,
+                 queue_timeout_ms: 0
+               )
+
+      Enum.each(holders, &send(&1.pid, :release))
+      assert Task.await_many(holders) == [{:ok, 1}, {:ok, 2}, {:ok, 3}]
+      assert CallDispatcher.get_active_requests(provider) == 0
     end
 
-    test "acquire rejects when bucket is empty", %{provider: provider} do
-      # Start with only 2 tokens and no refill
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 0, max_tokens: 2})
+    test "raising the cap admits a queued waiter before existing work releases",
+         %{provider: provider} do
+      assert :ok = CallDispatcher.set_concurrency_cap(provider, 1)
+      holder = hold_slot(provider, :holder)
+      parent = self()
+      waiter = Task.async(fn -> dispatch_holding_slot(parent, provider, :waiter) end)
+      wait_until(fn -> queued_count(provider) == 1 end)
 
-      # Use up all tokens
-      assert :ok = RateLimiter.acquire(provider)
-      assert :ok = RateLimiter.acquire(provider)
+      assert :ok = CallDispatcher.set_concurrency_cap(provider, 2)
+      assert_receive {:slot_acquired, :waiter}
+      assert CallDispatcher.get_active_requests(provider) == 2
 
-      # Should be rate limited now
-      assert {:error, :rate_limited} = RateLimiter.acquire(provider)
+      send(waiter.pid, :release)
+      assert {:ok, :waiter} = Task.await(waiter)
+
+      assert {:ok, :new} =
+               CallDispatcher.dispatch(provider, fn -> {:ok, :new} end, queue_timeout_ms: 0)
+
+      send(holder.pid, :release)
+      assert {:ok, :holder} = Task.await(holder)
+      assert CallDispatcher.get_active_requests(provider) == 0
     end
 
-    test "tokens refill over time", %{provider: provider} do
-      # 2 tokens per second (one every 500ms) leaves the empty-bucket assertion
-      # plenty of slack on a slow scheduler.
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 2, max_tokens: 5})
+    test "concurrent cap changes and queued dispatches do not lose results or slots",
+         %{provider: provider} do
+      assert :ok = CallDispatcher.set_concurrency_cap(provider, 1)
+      holder = hold_slot(provider, :holder)
+      parent = self()
 
-      # Use the initial tokens
-      for _ <- 1..5 do
-        assert :ok = RateLimiter.acquire(provider)
+      waiters =
+        for i <- 1..10 do
+          Task.async(fn -> CallDispatcher.dispatch(provider, fn -> report_ran(parent, i) end) end)
+        end
+
+      wait_until(fn -> queued_count(provider) == 10 end)
+
+      cap_changer =
+        Task.async(fn ->
+          for cap <- [2, 1, 3, 2, 1],
+              do: assert(:ok = CallDispatcher.set_concurrency_cap(provider, cap))
+        end)
+
+      send(holder.pid, :release)
+      assert {:ok, :holder} = Task.await(holder)
+      Task.await(cap_changer)
+      assert Task.await_many(waiters) == Enum.map(1..10, &{:ok, &1})
+      assert queued_count(provider) == 0
+      assert CallDispatcher.get_active_requests(provider) == 0
+    end
+
+    test "concurrent providers have independent slots", %{provider: provider} do
+      other = :"#{provider}_other"
+      assert :ok = CallDispatcher.set_concurrency_cap(provider, 1)
+      assert :ok = CallDispatcher.set_concurrency_cap(other, 1)
+
+      holders = [hold_slot(provider, :first), hold_slot(other, :other)]
+
+      for key <- [provider, other] do
+        assert CallDispatcher.get_active_requests(key) == 1
+
+        assert {:error, :max_concurrency} =
+                 CallDispatcher.dispatch(key, fn -> flunk("full provider admitted callback") end,
+                   queue_timeout_ms: 0
+                 )
       end
 
-      # Should be empty
-      assert {:error, :rate_limited} = RateLimiter.acquire(provider)
-
-      # Should have tokens again once the bucket refills
-      wait_until(fn -> RateLimiter.acquire(provider) == :ok end, 5_000)
+      Enum.each(holders, &send(&1.pid, :release))
+      assert Task.await_many(holders) == [{:ok, :first}, {:ok, :other}]
+      assert CallDispatcher.get_active_requests(provider) == 0
+      assert CallDispatcher.get_active_requests(other) == 0
     end
   end
 
-  describe "LemonAi.CircuitBreaker" do
-    test "starts in closed state", %{provider: provider} do
-      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
-
-      # Circuit should be closed (not open)
-      refute CircuitBreaker.open?(provider)
-
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :closed
-    end
-
-    test "opens after threshold failures", %{provider: provider} do
-      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
-
-      # Circuit should start closed
-      refute CircuitBreaker.open?(provider)
-
-      # Record failures
-      CircuitBreaker.record_failure(provider)
-      CircuitBreaker.record_failure(provider)
-
-      # Still closed (only 2 failures)
-      refute CircuitBreaker.open?(provider)
-
-      # Third failure should open the circuit
-      CircuitBreaker.record_failure(provider)
-
-      assert CircuitBreaker.open?(provider)
-
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :open
-    end
-
-    test "transitions to half_open after timeout", %{provider: provider} do
-      advance_clock =
-        start_breaker_with_clock(provider, failure_threshold: 2, recovery_timeout: 200)
-
-      # Open the circuit
-      CircuitBreaker.record_failure(provider)
-      CircuitBreaker.record_failure(provider)
-
-      assert CircuitBreaker.open?(provider)
-
-      # Move time past the recovery timeout
-      advance_clock.(200)
-
-      # Should transition to half_open (not open)
-      refute CircuitBreaker.open?(provider)
-
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :half_open
-    end
-
-    test "closes after successful requests in half_open", %{provider: provider} do
-      advance_clock =
-        start_breaker_with_clock(provider, failure_threshold: 2, recovery_timeout: 200)
-
-      # Open the circuit
-      CircuitBreaker.record_failure(provider)
-      CircuitBreaker.record_failure(provider)
-
-      assert CircuitBreaker.open?(provider)
-
-      # Move time past the recovery timeout
-      advance_clock.(200)
-
-      refute CircuitBreaker.open?(provider)
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :half_open
-
-      # Record successful requests (need 2 for half_open_success_threshold)
-      CircuitBreaker.record_success(provider)
-
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :half_open
-
-      CircuitBreaker.record_success(provider)
-
-      # Should be closed now
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :closed
-    end
-  end
-
-  # Starts a circuit breaker on a manually advanced clock; returns a function
-  # that moves the clock forward by the given milliseconds.
   defp start_breaker_with_clock(provider, opts) do
     clock = :atomics.new(1, signed: true)
 
@@ -655,12 +673,35 @@ defmodule LemonAi.CallDispatcherTest do
        |> Keyword.put(:monotonic_time, fn -> :atomics.get(clock, 1) end)}
     )
 
-    fn milliseconds ->
-      # A call from the same process observes all earlier casts before time moves.
-      {:ok, _state} = CircuitBreaker.get_state(provider)
-      :atomics.add_get(clock, 1, milliseconds)
-    end
+    fn milliseconds -> :atomics.add_get(clock, 1, milliseconds) end
   end
+
+  defp attach_dispatcher_events(provider, events) do
+    handler_id = {__MODULE__, self()}
+    events = Enum.map(events, &[:lemon_ai, :dispatcher, &1])
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        events,
+        &__MODULE__.handle_telemetry/4,
+        {self(), provider}
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
+  @doc false
+  def handle_telemetry(
+        [:lemon_ai, :dispatcher, event],
+        measurements,
+        %{provider: provider} = metadata,
+        {pid, provider}
+      ) do
+    send(pid, {:dispatcher_event, event, measurements, metadata})
+  end
+
+  def handle_telemetry(_event, _measurements, _metadata, _config), do: :ok
 
   # Starts a task whose dispatch holds a slot until it receives `:release`.
   defp hold_slot(provider, name) do
@@ -689,18 +730,22 @@ defmodule LemonAi.CallDispatcherTest do
     Map.get(CallDispatcher.get_state().queued, provider, 0)
   end
 
-  defp wait_until(fun, timeout_ms \\ 5_000, step_ms \\ 10) do
+  defp wait_until(fun, timeout_ms \\ 5_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
+    wait_until(fun, deadline, timeout_ms)
+  end
 
-    if fun.() do
-      :ok
-    else
-      if System.monotonic_time(:millisecond) < deadline do
-        Process.sleep(step_ms)
-        wait_until(fun, timeout_ms, step_ms)
-      else
+  defp wait_until(fun, deadline, timeout_ms) do
+    cond do
+      fun.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) < deadline ->
+        Process.sleep(10)
+        wait_until(fun, deadline, timeout_ms)
+
+      true ->
         flunk("condition not met within #{timeout_ms}ms")
-      end
     end
   end
 end

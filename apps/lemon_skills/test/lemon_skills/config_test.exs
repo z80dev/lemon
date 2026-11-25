@@ -1,7 +1,8 @@
 defmodule LemonSkills.ConfigTest do
   use ExUnit.Case, async: false
 
-  alias LemonSkills.Config
+  alias LemonCore.Doctor.Check
+  alias LemonSkills.{Config, PromptView, Usage}
 
   @moduletag :tmp_dir
 
@@ -41,109 +42,180 @@ defmodule LemonSkills.ConfigTest do
     end
   end
 
-  describe "load_config/1" do
-    test "a project skills.json can disable and slow the learning nudge", %{tmp_dir: tmp_dir} do
+  describe "disabled_keys/1 and skill_disabled?/2" do
+    test "unites the global and project disabled lists; the project prompt omits both",
+         %{tmp_dir: tmp_dir} do
       project_dir = Path.join(tmp_dir, "project")
       System.put_env("LEMON_AGENT_DIR", Path.join(tmp_dir, "agent"))
-      File.mkdir_p!(project_dir)
+      for key <- ["a", "b", "c"], do: write_project_skill!(project_dir, key)
 
-      write_json!(Config.project_config_file(project_dir), %{
-        "disabled" => ["project-disabled", 7],
-        "learning_nudge" => %{
-          "enabled" => false,
-          "memory_turn_interval" => 40,
-          "skill_tool_threshold" => "99",
-          "background_review" => %{"enabled" => true}
-        }
-      })
+      write_json!(Config.global_config_file(), %{"disabled" => ["a"]})
+      write_json!(Config.project_config_file(project_dir), %{"disabled" => ["b"]})
 
-      assert Config.load_config(project_dir) == %{
-               "disabled" => ["project-disabled"],
-               "learning_nudge" => %{"enabled" => false, "memory_turn_interval" => 40}
-             }
+      assert {:ok, keys} = Config.disabled_keys(project_dir)
+      assert Enum.sort(keys) == ["a", "b"]
+      assert {:ok, global_keys} = Config.disabled_keys()
+      assert Enum.sort(global_keys) == ["a"]
+      assert Config.skill_disabled?("a", project_dir)
+      assert Config.skill_disabled?("b", project_dir)
+      refute Config.skill_disabled?("c", project_dir)
+      refute Config.skill_disabled?("b")
 
-      assert Config.load_config() == %{}
+      LemonSkills.refresh(cwd: project_dir)
+      on_exit(fn -> LemonSkills.refresh() end)
+
+      prompt = PromptView.render_for_prompt(project_dir)
+      assert prompt =~ "<key>c</key>"
+      refute prompt =~ "<key>a</key>"
+      refute prompt =~ "<key>b</key>"
     end
 
-    test "a project skills.json can only narrow the operator config", %{tmp_dir: tmp_dir} do
+    test "settings keys in skills.json are ignored", %{tmp_dir: tmp_dir} do
       project_dir = Path.join(tmp_dir, "project")
       System.put_env("LEMON_AGENT_DIR", Path.join(tmp_dir, "agent"))
-      File.mkdir_p!(project_dir)
-
-      write_json!(Config.global_config_file(), %{
-        "disabled" => ["operator-disabled"],
-        "learning_nudge" => %{"enabled" => false, "memory_turn_interval" => 20},
-        "skills" => %{"lint" => %{"endpoint" => "https://operator.example"}}
-      })
 
       write_json!(Config.project_config_file(project_dir), %{
-        "disabled" => ["project-disabled"],
-        "learning_nudge" => %{
-          "enabled" => true,
-          "memory_turn_interval" => 1,
-          "skill_tool_threshold" => 1
-        },
-        "skills" => %{"lint" => %{"endpoint" => "https://attacker.example"}},
-        "mode" => "project"
+        "learning_nudge" => %{"enabled" => false},
+        "skills" => %{"lint" => %{"endpoint" => "https://attacker.example"}}
       })
 
-      config = Config.load_config(project_dir)
-
-      assert Enum.sort(config["disabled"]) == ["operator-disabled", "project-disabled"]
-      assert Config.skill_disabled?("operator-disabled", project_dir)
-      assert config["learning_nudge"] == %{"enabled" => false, "memory_turn_interval" => 20}
-      assert config["skills"] == %{"lint" => %{"endpoint" => "https://operator.example"}}
-      refute Map.has_key?(config, "mode")
+      assert {:ok, keys} = Config.disabled_keys(project_dir)
+      assert MapSet.size(keys) == 0
     end
   end
 
-  describe "disable/2, enable/2, and skill_disabled?/2" do
-    test "updates project config only when global: false", %{tmp_dir: tmp_dir} do
-      agent_dir = Path.join(tmp_dir, "agent")
+  describe "disable/2 and enable/2" do
+    test "a project enable leaves globally disabled and archived skills disabled",
+         %{tmp_dir: tmp_dir} do
       project_dir = Path.join(tmp_dir, "project")
-
-      System.put_env("LEMON_AGENT_DIR", agent_dir)
+      System.put_env("LEMON_AGENT_DIR", Path.join(tmp_dir, "agent"))
       File.mkdir_p!(project_dir)
+      project = [global: false, cwd: project_dir]
 
-      write_json!(Config.global_config_file(), %{"disabled" => ["global-only"]})
+      write_json!(Config.global_config_file(), %{"disabled" => ["global-off", "global-archived"]})
+      assert :ok = Usage.set_state("global-archived", :archived)
 
-      refute Config.skill_disabled?("local-skill", project_dir)
+      # The curator archives a project skill: disabled, then marked archived.
+      assert :ok = Config.disable("archived", project)
+      assert :ok = Usage.set_state("archived", :archived, scope: :project, cwd: project_dir)
+      assert :ok = Config.disable("local-off", project)
+      assert :ok = Config.disable("local-off", project)
 
-      assert :ok = Config.disable("local-skill", global: false, cwd: project_dir)
-      assert Config.skill_disabled?("local-skill", project_dir)
+      assert read_json!(Config.project_config_file(project_dir)) == %{
+               "disabled" => ["archived", "local-off"]
+             }
+
+      global_before = File.read!(Config.global_config_file())
+
+      assert {:error, :disabled_globally} = Config.enable("global-off", project)
+      assert {:error, :disabled_globally} = Config.enable("global-archived", project)
+      assert {:error, :archived} = Config.enable("archived", project)
+      assert {:error, :archived} = Config.enable("global-archived")
+      assert :ok = Config.enable("local-off", project)
+
+      assert File.read!(Config.global_config_file()) == global_before
+      assert read_json!(Config.project_config_file(project_dir)) == %{"disabled" => ["archived"]}
+
+      for key <- ["global-off", "global-archived", "archived"],
+          do: assert(Config.skill_disabled?(key, project_dir))
+
+      refute Config.skill_disabled?("local-off", project_dir)
+      assert Usage.archived?("archived", scope: :project, cwd: project_dir)
+      assert Usage.archived?("global-archived")
+    end
+
+    test "enable writes nothing without a key to remove and never leaves an empty list",
+         %{tmp_dir: tmp_dir} do
+      project_dir = Path.join(tmp_dir, "project")
+      System.put_env("LEMON_AGENT_DIR", Path.join(tmp_dir, "agent"))
+      project = [global: false, cwd: project_dir]
+      path = Config.project_config_file(project_dir)
+
+      assert :ok = Config.enable("never-disabled", project)
+      refute File.exists?(path)
+
+      assert :ok = Config.disable("local-skill", project)
+      assert File.stat!(path).mode |> Bitwise.band(0o777) == 0o600
       refute Config.skill_disabled?("local-skill")
 
-      assert read_json!(Config.project_config_file(project_dir)) == %{
-               "disabled" => ["local-skill"]
-             }
-
-      assert :ok = Config.disable("local-skill", global: false, cwd: project_dir)
-
-      assert read_json!(Config.project_config_file(project_dir)) == %{
-               "disabled" => ["local-skill"]
-             }
-
-      assert :ok = Config.enable("local-skill", global: false, cwd: project_dir)
+      assert :ok = Config.enable("local-skill", project)
+      assert read_json!(path) == %{}
       refute Config.skill_disabled?("local-skill", project_dir)
 
-      assert read_json!(Config.project_config_file(project_dir)) == %{
-               "disabled" => []
-             }
+      assert {:error, :missing_cwd} = Config.disable("x", global: false)
+    end
 
-      assert read_json!(Config.global_config_file()) == %{"disabled" => ["global-only"]}
+    test "a corrupt skills.json re-enables nothing and the doctor reports it",
+         %{tmp_dir: tmp_dir} do
+      project_dir = Path.join(tmp_dir, "project")
+      System.put_env("LEMON_AGENT_DIR", Path.join(tmp_dir, "agent"))
+      write_project_skill!(project_dir, "visible")
+      global = Config.global_config_file()
+      File.mkdir_p!(Path.dirname(global))
+
+      for {bytes, reason} <- [
+            {~s({"disabled": ["visible"]), :invalid_json},
+            {~s(["visible"]), :not_an_object},
+            {~s({"disabled": "visible"}), :invalid_disabled}
+          ] do
+        File.write!(global, bytes)
+
+        assert {:error, {:skills_state, :global, ^reason}} = Config.disabled_keys(project_dir)
+        assert Config.skill_disabled?("visible", project_dir)
+        assert Config.skill_disabled?("anything-else")
+        assert {:error, {:skills_state, :global, ^reason}} = Config.enable("visible")
+        assert {:error, {:skills_state, :global, ^reason}} = Config.disable("other")
+        assert File.read!(global) == bytes
+
+        assert [%Check{status: :fail} = check] =
+                 project_dir |> doctor() |> Enum.filter(&(&1.name == "skills.state"))
+
+        assert check.message =~ to_string(reason)
+      end
+
+      LemonSkills.refresh(cwd: project_dir)
+      on_exit(fn -> LemonSkills.refresh() end)
+      refute PromptView.render_for_prompt(project_dir) =~ "<key>visible</key>"
+      assert LemonSkills.find_relevant("visible", cwd: project_dir) == []
+
+      File.write!(global, ~s({"disabled": []}))
+      project_state = Config.project_config_file(project_dir)
+      File.write!(project_state, "not json")
+
+      assert {:error, {:skills_state, :project, :invalid_json}} =
+               Config.disabled_keys(project_dir)
+
+      assert {:error, {:skills_state, :project, :invalid_json}} =
+               Config.enable("visible", global: false, cwd: project_dir)
+
+      assert File.read!(project_state) == "not json"
+      assert Config.skill_disabled?("visible", project_dir)
+      refute Config.skill_disabled?("visible")
+
+      File.rm!(project_state)
+
+      assert [%Check{status: :pass}] =
+               Enum.filter(doctor(project_dir), &(&1.name == "skills.state"))
     end
   end
 
-  describe "set_skill_config/2 and get_skill_config/1" do
-    test "per-skill configuration is operator-only", %{tmp_dir: tmp_dir} do
-      System.put_env("LEMON_AGENT_DIR", Path.join(tmp_dir, "agent"))
-      skill_config = %{"timeout" => 10, "nested" => %{"a" => 1}}
+  defp doctor(project_dir), do: LemonSkills.Doctor.Checks.Skills.run(project_dir: project_dir)
 
-      assert :ok = Config.set_skill_config("lint", skill_config)
-      assert Config.get_skill_config("lint") == skill_config
-      assert read_json!(Config.global_config_file()) == %{"skills" => %{"lint" => skill_config}}
-      assert Config.get_skill_config("other") == %{}
-    end
+  defp write_project_skill!(project_dir, key) do
+    dir = Path.join(Config.project_skills_dir(project_dir), key)
+    File.mkdir_p!(dir)
+
+    File.write!(Path.join(dir, "SKILL.md"), """
+    ---
+    name: #{key}
+    description: Visible test skill #{key}
+    ---
+
+    Body of #{key}
+    """)
+
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(dir)
+    :ok = LemonSkills.Audit.State.authorize({:project, project_dir}, key, hash, :pass)
   end
 
   defp write_json!(path, data) do

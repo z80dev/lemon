@@ -5,7 +5,7 @@ defmodule LemonCli.UpdateCommandTest do
 
   alias LemonCli.CLI
 
-  alias LemonCore.Update.{ManagedInstall, ReceiptStore, Version}
+  alias LemonCore.Update.{ManagedInstall, ReceiptStore}
 
   @moduletag :tmp_dir
 
@@ -109,7 +109,7 @@ defmodule LemonCli.UpdateCommandTest do
   end
 
   defp rollback_fixture(home, snapshot, restart_status) do
-    current = Version.current()
+    current = LemonCore.BuildInfo.version()
     versions = Path.join([home, ".lemon", "versions"])
     System.put_env("HOME", home)
     System.put_env("RELEASE_ROOT", Path.join(versions, current))

@@ -111,6 +111,36 @@ defmodule LemonCli.Setup.OmpAuthTest do
     refute output =~ ctx.token
   end
 
+  test "--region global reads omp's kimi-code-global login and writes the kimi.ai base URL",
+       ctx do
+    File.write!(ctx.omp, """
+    #!/bin/sh
+    printf '%s\\n' "$*" >> '#{ctx.calls}'
+    if [ "$#" -eq 2 ] && [ "$1" = token ] && [ "$2" = kimi-code-global ]; then
+      printf '%s\\n' '#{ctx.token}'
+    else
+      exit 91
+    fi
+    """)
+
+    args = ["--auth", "omp", "-n", "--no-set-default", "--config-path", ctx.config_path]
+
+    assert_raise Mix.Error, ~r/Unknown --region "mars"\. Use one of: china, global\./, fn ->
+      Runner.run(args ++ ["--region", "mars"], Providers.fetch!("kimi_coding"), io: io())
+    end
+
+    assert :ok =
+             Runner.run(args ++ ["--region", "global"], Providers.fetch!("kimi_coding"), io: io())
+
+    assert Toml.decode_file!(ctx.config_path)["providers"]["kimi_coding"] == %{
+             "auth_source" => "omp",
+             "omp_path" => ctx.omp,
+             "base_url" => "https://api.kimi.ai/coding"
+           }
+
+    assert File.read!(ctx.calls) == "token kimi-code-global\n"
+  end
+
   test "interactive picker offers omp without requiring encrypted secrets", ctx do
     io =
       Map.put(io(), :select, fn params ->

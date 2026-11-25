@@ -52,7 +52,7 @@ defmodule LemonCore.ToolPolicyTest do
     end
 
     for tool <-
-          ~w(bash process_input kill_process eval debug lsp_diagnostics browser_evaluate mcp_server_tool wasm_echo unknown) do
+          ~w(bash process_input kill_process eval debug lsp_diagnostics browser_evaluate mcp_server_tool extension_echo unknown) do
       assert ToolPolicy.tier(tool) == :exec
     end
 
@@ -511,20 +511,21 @@ defmodule LemonCore.ToolPolicyTest do
                ToolPolicy.normalize(%{"workspace_read_exempt" => "invalid"})
     end
 
-    test "restrict/2 tri-state: nil neutral, false wins, true only if none supplies false" do
+    test "restrict/2 tri-state: a request withdraws but never adds the parent's exemption" do
+      # {parent, requested, restrict/2, layer/2}
       cases = [
-        {true, true, true},
-        {true, nil, true},
-        {nil, true, true},
-        {nil, nil, nil},
-        {false, true, false},
-        {true, false, false},
-        {false, nil, false},
-        {nil, false, false},
-        {false, false, false}
+        {true, true, true, true},
+        {true, nil, true, true},
+        {nil, true, nil, true},
+        {nil, nil, nil, nil},
+        {false, true, false, false},
+        {true, false, false, false},
+        {false, nil, false, false},
+        {nil, false, false, false},
+        {false, false, false, false}
       ]
 
-      for {parent_val, requested_val, expected} <- cases do
+      for {parent_val, requested_val, restricted_val, layered_val} <- cases do
         parent =
           if is_nil(parent_val),
             do: %{},
@@ -536,7 +537,11 @@ defmodule LemonCore.ToolPolicyTest do
             else: %{workspace_read_exempt: requested_val}
 
         assert {:ok, restricted} = ToolPolicy.restrict(parent, requested)
-        assert restricted.workspace_read_exempt == expected
+        assert restricted.workspace_read_exempt == restricted_val
+        assert ToolPolicy.subset?(restricted, parent)
+
+        assert {:ok, layered} = ToolPolicy.layer(parent, requested)
+        assert layered.workspace_read_exempt == layered_val
       end
     end
 
@@ -603,6 +608,58 @@ defmodule LemonCore.ToolPolicyTest do
       assert ToolPolicy.subset?(
                %{},
                %{workspace_read_exempt: false}
+             )
+    end
+  end
+
+  describe "argument-dependent approval gates" do
+    test "a requested never cannot waive a parent gate that depends on call arguments" do
+      diagnostics = %{"path" => "a.ex", "content" => "x", "diagnostics" => true}
+      parent = %{approval_mode: :write}
+      assert ToolPolicy.requires_approval?(parent, "write", diagnostics)
+
+      for {left, right} <- [
+            {parent, %{approvals: %{"write" => :never}}},
+            {%{approvals: %{"write" => "never"}}, parent}
+          ],
+          combine <- [&ToolPolicy.restrict/2, &ToolPolicy.layer/2] do
+        assert {:ok, result} = combine.(left, right)
+        assert ToolPolicy.requires_approval?(result, "write", diagnostics)
+        refute ToolPolicy.requires_approval?(result, "write", %{"path" => "a.ex"})
+        assert ToolPolicy.subset?(result, parent)
+      end
+
+      intersected = ToolPolicy.intersect(parent, %{"approvals" => %{"write" => "never"}})
+      assert ToolPolicy.requires_approval?(intersected, "write", diagnostics)
+    end
+
+    test "a never both sides agree on survives intersection" do
+      policy = %{approval_mode: :ask, approvals: %{"read" => :never, "bash" => :never}}
+      assert {:ok, restricted} = ToolPolicy.restrict(policy, policy)
+      assert restricted.approvals == %{"read" => :never, "bash" => :never}
+
+      assert {:ok, restricted} = ToolPolicy.restrict(%{}, policy)
+      assert restricted.approvals == %{"read" => :never, "bash" => :never}
+      refute ToolPolicy.requires_approval?(restricted, "bash", %{"command" => "ls"})
+    end
+
+    test "subset? compares every tier, not argument-free strength" do
+      parent = %{approval_mode: :write}
+      refute ToolPolicy.subset?(%{approvals: %{"write" => :never}}, parent)
+
+      refute ToolPolicy.subset?(%{approvals: %{"write" => :never}}, %{
+               approvals: %{"write" => :always}
+             })
+
+      # `dangerous` and `always` gate every call identically.
+      assert ToolPolicy.subset?(
+               %{approvals: %{"bash" => :dangerous}},
+               %{approvals: %{"bash" => :always}}
+             )
+
+      assert ToolPolicy.subset?(
+               %{approvals: %{"bash" => :always}},
+               %{approvals: %{"bash" => :dangerous}}
              )
     end
   end

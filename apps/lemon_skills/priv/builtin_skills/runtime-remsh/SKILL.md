@@ -55,7 +55,10 @@ elixir --no-halt --erl "$LEMON_ATTACH_ERL" +iex \
   --name lemon_attach@my-host.example.com --remsh lemon_gateway@my-host.example.com
 ```
 
-Tip: `./bin/lemon-gateway` prints the exact `Remote shell target` to use.
+Tip: `./bin/lemon-gateway` runs `./bin/lemon start` and prints the
+`Distributed node` to attach to. If a healthy runtime already answers on the
+control port, it is reused instead: attach to that runtime's node (`lemon` for
+`./bin/lemon start` or `daemon`).
 
 ## Recompile changed code in the live runtime
 

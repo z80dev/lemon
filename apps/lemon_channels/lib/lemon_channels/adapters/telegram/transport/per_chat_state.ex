@@ -1,6 +1,7 @@
 defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
   @moduledoc false
 
+  alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Runtime
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
   alias LemonCore.{ChatScope, ChatState, ChatStateStore, ResumeToken, SessionKey}
@@ -16,13 +17,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
     ChatStateStore.get(key)
   end
 
-  @spec safe_delete_session_model(term()) :: :ok
-  def safe_delete_session_model(session_key) when is_binary(session_key) do
-    :ok = StateStore.delete_session_model(session_key)
-    :ok
-  end
-
-  def safe_delete_session_model(_session_key), do: :ok
+  @spec safe_delete_session_model(term()) :: :ok | {:error, term()}
+  def safe_delete_session_model(session_key),
+    do: ModelPolicyAdapter.delete_session_model_override(session_key)
 
   @spec safe_abort_session(term(), term()) :: :ok | {:error, term()}
   def safe_abort_session(session_key, reason)

@@ -88,8 +88,8 @@ defmodule LemonAutomation.CronAuthority do
     * the run's `meta.trigger_policy`, when an agent session triggered it, and
     * for a job whose base session is a channel peer session, the live policy
       of that chat (`LemonRouter.Policy.resolve_validated_for_run/1` with
-      `origin: :channel`: channel restrictions, the group approval floor for
-      any peer that is not a direct message, and the chat session's policy).
+      `origin: :channel`: the group approval floor for any peer that is not a
+      direct message, and the chat session's policy).
 
   `nil` when none applies. A malformed record or trigger policy, or an
   unreadable policy layer, is an error, never an unrestricted run.
@@ -133,13 +133,12 @@ defmodule LemonAutomation.CronAuthority do
 
   defp run_trigger_policy(_run), do: {:ok, nil}
 
-  defp chat_policy(%{session_key: session_key, agent_id: agent_id}) when is_binary(session_key) do
+  defp chat_policy(%{session_key: session_key}) when is_binary(session_key) do
     case SessionKey.parse(session_key) do
       %{kind: :channel_peer} = parsed ->
         chat_session_key = SessionKey.rebuild(%{parsed | sub_id: nil})
 
         case LemonRouter.Policy.resolve_validated_for_run(%{
-               agent_id: agent_id,
                session_key: chat_session_key,
                origin: :channel,
                channel_context: %{

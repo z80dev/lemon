@@ -1,21 +1,21 @@
 # LemonGateway contributor guide
 
 Gateway owns optional SMS, voice and webhook ingress, enabled explicitly through
-`:gateway_ingress_enabled`. Router owns execution; channels owns messaging
-adapters. See [README](README.md).
+`[gateway.ingress]`. Router owns execution; channels owns messaging adapters.
+See [README](README.md).
 
 ## Ingress and idempotency
 
 Prefer `lemon_channels` for new messaging platforms. Gateway ingress submits
 `LemonCore.RunRequest` through `RouterBridge`, with stable session and run IDs.
-Disabled ingress returns `:ignore` from startup; use shared binding resolution.
+When disabled, the application starts an empty supervisor; use shared binding resolution.
 
 Webhook mutation boundaries are deliberately conservative:
 
 - Derive `meta.channel_context` (`channel_id: "webhook"`) from the integration
   whose token authenticated the request, never from the payload; the router
-  applies the `webhook` channel policy from it and refuses `:webhook` requests
-  without it. Authentication is not content trust: classify the integration
+  applies the approval floor from it and refuses `:webhook` requests without
+  it. Authentication is not content trust: classify the integration
   `peer_kind: :automation` (group approval floor) unless the operator's global
   config sets a literal `trusted_automation = true` on that integration.
 - Reserve idempotency keys atomically before submission. Hash the caller's key

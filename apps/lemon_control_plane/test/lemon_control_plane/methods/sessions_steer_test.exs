@@ -11,21 +11,16 @@ defmodule LemonControlPlane.Methods.SessionsSteerTest do
   alias LemonCore.AgentRuntime
 
   defmodule Provider do
-    @behaviour LemonCore.AgentRuntime.Provider
-
-    @impl true
     def session_steer(key, run_id, text, id) do
       send(self(), {:steer, key, run_id, text, id})
       result(:steer_result, {:ok, %{id: id, accepted_after_turn: 3}})
     end
 
-    @impl true
     def session_withdraw_steer(key, id) do
       send(self(), {:withdraw, key, id})
       result(:withdraw_result, :ok)
     end
 
-    @impl true
     def session_pending_steers(key) do
       send(self(), {:pending, key})
       result(:pending_result, {:ok, []})
@@ -43,11 +38,11 @@ defmodule LemonControlPlane.Methods.SessionsSteerTest do
 
   setup do
     previous = AgentRuntime.provider()
-    :ok = AgentRuntime.register(Provider)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, Provider)
 
     on_exit(fn ->
       if previous,
-        do: AgentRuntime.register(previous),
+        do: Application.put_env(:lemon_core, :agent_runtime_provider, previous),
         else: Application.delete_env(:lemon_core, :agent_runtime_provider)
     end)
 

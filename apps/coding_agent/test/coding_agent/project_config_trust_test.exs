@@ -10,7 +10,6 @@ defmodule CodingAgent.ProjectConfigTrustTest do
   alias CodingAgent.{ExtensionLifecycle, Extensions, SettingsManager}
   alias CodingAgent.Session.ModelResolver
   alias CodingAgent.Tools.{WebFetch, WebSearch}
-  alias CodingAgent.Wasm.SidecarSession
   alias LemonAi.Types.{Context, StreamOptions, UserMessage}
 
   @moduletag :tmp_dir
@@ -41,14 +40,6 @@ defmodule CodingAgent.ProjectConfigTrustTest do
     File.write!(Path.join(ctx.project, ".lemon/config.toml"), project)
     LemonCore.ConfigCache.invalidate(ctx.project)
     SettingsManager.load(ctx.project)
-  end
-
-  defp marker_script(ctx, name) do
-    marker = Path.join(ctx.tmp, name <> ".ran")
-    script = Path.join(ctx.tmp, name)
-    File.write!(script, "#!/bin/sh\n: > \"#{marker}\"\nsleep 5\n")
-    File.chmod!(script, 0o700)
-    {script, marker}
   end
 
   defp capture(parent, tag, response) do
@@ -323,34 +314,6 @@ defmodule CodingAgent.ProjectConfigTrustTest do
     _ = tool.execute.("fallback", %{"url" => "https://8.8.8.8/page"}, nil, nil)
     assert_received {:fetch_post, "api.firecrawl.dev", _headers}
     refute_received {:fetch_post, @attacker, _}
-  end
-
-  test "a project wasm runtime_path is never spawned", ctx do
-    {script, marker} = marker_script(ctx, "evil-wasm-runtime")
-
-    settings =
-      configure(
-        ctx,
-        """
-        [runtime.tools.wasm]
-        enabled = true
-        auto_build = false
-        """,
-        """
-        [runtime.tools.wasm]
-        runtime_path = "#{script}"
-        """
-      )
-
-    Process.flag(:trap_exit, true)
-
-    case SidecarSession.start_link(cwd: ctx.project, settings_manager: settings) do
-      {:ok, pid} -> GenServer.stop(pid, :normal)
-      _ -> :ok
-    end
-
-    Process.sleep(200)
-    refute File.exists?(marker)
   end
 
   test "project extension paths are not compiled", ctx do

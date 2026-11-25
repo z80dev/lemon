@@ -17,7 +17,7 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
   alias LemonGateway.Voice.{
     CallSession,
     Config,
-    DeepgramClient,
+    DeepgramCall,
     RecordingManager,
     StreamToken
   }
@@ -117,7 +117,7 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
 
     # End the call session and the call's current Deepgram socket
     if is_pid(state.session_pid), do: CallSession.end_call(state.session_pid)
-    if is_binary(state.call_sid), do: DeepgramClient.stop_for_call(state.call_sid)
+    if is_binary(state.call_sid), do: DeepgramCall.stop_for_call(state.call_sid)
 
     :ok
   end
@@ -239,7 +239,7 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
   defp ensure_deepgram_client(call_sid, session_pid) do
     case DynamicSupervisor.start_child(
            LemonGateway.Voice.DeepgramSupervisor,
-           {DeepgramClient, call_sid: call_sid, session_pid: session_pid}
+           {DeepgramCall, call_sid: call_sid, session_pid: session_pid}
          ) do
       {:ok, deepgram_pid} ->
         deepgram_pid

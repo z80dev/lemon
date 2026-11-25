@@ -66,11 +66,12 @@ defmodule LemonAgent.Security.UntrustedToolBoundary do
   envelope. A message already wrapped by this transform, with unchanged
   content, is left as is.
   """
-  @spec transform([term()], reference() | nil) :: {:ok, [term()]}
+  @spec transform([term()], LemonAgent.AbortSignal.t() | nil) :: {:ok, [term()]}
   def transform(messages, signal \\ nil) when is_list(messages),
     do: transform(messages, signal, [])
 
-  @spec transform([term()], reference() | nil, keyword() | map()) :: {:ok, [term()]}
+  @spec transform([term()], LemonAgent.AbortSignal.t() | nil, keyword() | map()) ::
+          {:ok, [term()]}
   def transform(messages, _signal, opts) when is_list(messages) do
     max_bytes =
       case opt_get(opts, :max_tool_result_bytes) do

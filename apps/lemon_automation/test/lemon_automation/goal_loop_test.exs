@@ -2,7 +2,7 @@ defmodule LemonAutomation.GoalLoopTest do
   use ExUnit.Case, async: false
 
   alias LemonAutomation.{GoalLoop, GoalLoopManager}
-  alias LemonAgent.Workspace.GoalStore
+  alias LemonAutomation.GoalStore
 
   defmodule LoopRouterOk do
     @moduledoc false
@@ -358,7 +358,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Keep going",
                agent_id: "agent_1",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, %{run_id: "run_loop", goal: updated, verdict: verdict}} =
@@ -385,7 +385,7 @@ defmodule LemonAutomation.GoalLoopTest do
   test "done verdict completes the goal without submitting", %{session_key: session_key} do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Finish me",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, %{run_id: nil, goal: completed, verdict: verdict}} =
@@ -401,7 +401,7 @@ defmodule LemonAutomation.GoalLoopTest do
   test "blocked verdict pauses the goal without submitting", %{session_key: session_key} do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Blocked work",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, %{run_id: nil, goal: paused, verdict: verdict}} =
@@ -419,7 +419,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Judge me",
                agent_id: "agent_1",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, %{run_id: nil, goal: completed, verdict: verdict}} =
@@ -449,7 +449,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Judge me",
                agent_id: "agent_1",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, %{run_id: nil, goal: completed, verdict: verdict}} =
@@ -471,7 +471,7 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Judge via router",
                agent_id: "agent_1",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, _goal} = GoalStore.record_continuation(session_key, "previous_continuation")
@@ -495,7 +495,7 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Judge via router",
                agent_id: "agent_1",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, _goal} = GoalStore.record_continuation(session_key, "previous_continuation")
@@ -544,7 +544,7 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Judge through the live router path",
                agent_id: "default",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, %{run_id: nil, goal: completed, verdict: verdict}} =
@@ -570,7 +570,7 @@ defmodule LemonAutomation.GoalLoopTest do
   } do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Fail closed",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:error, {:judge_failed, :judge_unavailable}} =
@@ -584,7 +584,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Fail open",
                agent_id: "agent_1",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, %{run_id: "run_fail_open", verdict: verdict}} =
@@ -609,7 +609,7 @@ defmodule LemonAutomation.GoalLoopTest do
                agent_id: "agent_1",
                budget: %{"max_continuations" => 0},
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:error, :budget_exhausted} =
@@ -625,7 +625,7 @@ defmodule LemonAutomation.GoalLoopTest do
 
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Pause me",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, _paused} = GoalStore.pause(session_key)
@@ -643,7 +643,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Keep going autonomously",
                agent_id: "agent_1",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, result} =
@@ -673,7 +673,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Finish synchronously",
                agent_id: "agent_1",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, %{status: :limit_reached, tick_count: 1}} =
@@ -697,7 +697,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Timeout",
                agent_id: "agent_1",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:error, {:completion_outcome_unknown, "run_timeout"}} =
@@ -720,7 +720,7 @@ defmodule LemonAutomation.GoalLoopTest do
 
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Auto start me",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     manager =
@@ -748,7 +748,7 @@ defmodule LemonAutomation.GoalLoopTest do
   } do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Retain accepted run after worker crash",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     manager =
@@ -789,7 +789,7 @@ defmodule LemonAutomation.GoalLoopTest do
 
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Scheduled",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, _goal} =
@@ -820,7 +820,7 @@ defmodule LemonAutomation.GoalLoopTest do
   } do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Do not submit an unowned run",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     manager =
@@ -853,7 +853,7 @@ defmodule LemonAutomation.GoalLoopTest do
   } do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Keep ownership on storage failure",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     manager =
@@ -908,7 +908,7 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Auto judge through router",
                agent_id: "default",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, _goal} =
@@ -946,7 +946,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Stop after this run",
                agent_id: "agent_1",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     manager =
@@ -1016,7 +1016,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Persist abort intent before dispatch",
                agent_id: "agent_1",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     opts = [
@@ -1096,7 +1096,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Stop with ambiguous abort",
                agent_id: "agent_1",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     manager =
@@ -1154,7 +1154,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Stop inside the acceptance window",
                agent_id: "default",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     manager =
@@ -1232,7 +1232,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Retain uncertain work",
                agent_id: "agent_1",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     manager =
@@ -1286,7 +1286,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Retain malformed waiter ownership",
                agent_id: "agent_1",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     manager =
@@ -1336,7 +1336,7 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Keep uncertain abort ownership",
                meta: %{"testPid" => self()},
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     manager =
@@ -1422,7 +1422,7 @@ defmodule LemonAutomation.GoalLoopTest do
 
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Do not overlap restored work",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     assert {:ok, _goal} = GoalStore.record_loop_status(session_key, :running, run_id: run_id)
@@ -1445,7 +1445,7 @@ defmodule LemonAutomation.GoalLoopTest do
   test "managed one-shot owns uncertain runs and blocks all restart paths", %{session_key: key} do
     assert {:ok, _} =
              GoalStore.set(key, "One guarded continuation",
-               authority: LemonAgent.Workspace.GoalAuthority.operator()
+               authority: LemonAutomation.GoalAuthority.operator()
              )
 
     manager =

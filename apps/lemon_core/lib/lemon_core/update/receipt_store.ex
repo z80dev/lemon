@@ -70,7 +70,7 @@ defmodule LemonCore.Update.ReceiptStore do
       {:ok, %File.Stat{type: :regular, mtime: mtime}} ->
         if System.os_time(:second) - mtime >= @legacy_stale_seconds do
           Logger.warning("Recovered a stale update lock left by an earlier Lemon release")
-          File.rm(path)
+          _ = File.rm(path)
           :ok
         else
           {:error, :update_locked}
@@ -87,12 +87,13 @@ defmodule LemonCore.Update.ReceiptStore do
   # Staging directories exist only while a holder runs; under the lock any
   # remaining one was stranded by a holder that died before its cleanup ran.
   defp clean_staging(opts) do
-    for dir <- [ManagedInstall.versions_dir(opts), ManagedInstall.bot_versions_dir(opts)],
-        {:ok, entries} <- [File.ls(dir)],
-        entry <- entries,
-        String.ends_with?(entry, ".partial") do
-      File.rm_rf(Path.join(dir, entry))
-    end
+    _ =
+      for dir <- [ManagedInstall.versions_dir(opts), ManagedInstall.bot_versions_dir(opts)],
+          {:ok, entries} <- [File.ls(dir)],
+          entry <- entries,
+          String.ends_with?(entry, ".partial") do
+        _ = File.rm_rf(Path.join(dir, entry))
+      end
 
     :ok
   end

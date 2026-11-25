@@ -4,7 +4,7 @@ defmodule CodingAgent.Tools.ReadImageQuestion do
   alias CodingAgent.Session
   alias CodingAgent.Session.ModelResolver
   alias CodingAgent.SettingsManager
-  alias CodingAgent.Tools.{PathHelpers, ReadImage, ReadJson, ReadSqlite, ReadSvg}
+  alias CodingAgent.Tools.{PathHelpers, ReadImage, ReadSqlite, ReadSvg}
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.{Context, ImageContent, Model, TextContent, UserMessage}
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
@@ -14,7 +14,7 @@ defmodule CodingAgent.Tools.ReadImageQuestion do
 
   # Full literal filenames win. Search suffixes from right to left so a filename
   # may itself contain '?' or '?q='. Only existing local sources opt into this
-  # syntax, and JSON/SQLite queries keep their format-specific meanings.
+  # syntax, and SQLite queries keep their format-specific meaning.
   def split_path(path, cwd, opts) when is_binary(path) do
     if File.exists?(PathHelpers.resolve_path(path, cwd, opts)) do
       :none
@@ -27,8 +27,7 @@ defmodule CodingAgent.Tools.ReadImageQuestion do
         target = String.replace_suffix(source, ":img", "")
         resolved = PathHelpers.resolve_path(target, cwd, opts)
 
-        if File.regular?(resolved) and is_nil(ReadJson.split_path(resolved <> "?q=")) and
-             is_nil(ReadSqlite.split_path(resolved <> "?q=")) do
+        if File.regular?(resolved) and is_nil(ReadSqlite.split_path(resolved <> "?q=")) do
           question = binary_part(path, position + size, byte_size(path) - position - size)
           image_question(source, target, question)
         end

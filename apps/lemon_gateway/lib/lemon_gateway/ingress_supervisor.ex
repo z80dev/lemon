@@ -2,9 +2,9 @@ defmodule LemonGateway.IngressSupervisor do
   @moduledoc """
   Supervisor for gateway-owned ingress children.
 
-  Default `LemonGateway.Application` startup is execution-only; this supervisor
-  starts transport, SMS, and voice children only when
-  `:gateway_ingress_enabled` is set.
+  Default `LemonGateway.Application` startup is empty; this supervisor
+  starts only when `[gateway.ingress] enabled` is true. Each surface also has
+  its own enable flag.
 
   These surfaces are gateway-owned **by design**, not pending migration. SMS is
   an OTP-code inbox exposed as agent tools with no reply path; webhook is a

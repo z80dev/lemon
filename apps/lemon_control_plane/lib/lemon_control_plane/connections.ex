@@ -65,6 +65,20 @@ defmodule LemonControlPlane.Connections do
     end
   end
 
+  def watch_session(key) do
+    entry = {:session_watch, self()}
+    Registry.unregister(__MODULE__, entry)
+    {:ok, _} = Registry.register(__MODULE__, entry, key)
+    :ok
+  end
+
+  def watched_session(pid) do
+    case Registry.lookup(__MODULE__, {:session_watch, pid}) do
+      [{^pid, key}] -> key
+      _ -> nil
+    end
+  end
+
   def counts do
     Enum.reduce(list(), %{total: 0, operators: 0, nodes: 0}, fn {_id, info}, counts ->
       counts = %{counts | total: counts.total + 1}

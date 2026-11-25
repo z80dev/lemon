@@ -94,6 +94,37 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     def delete(state, table, key), do: EtsBackend.delete(state, table, key)
   end
 
+  # Suspends RunHistoryStore right after session_policies deletion for the
+  # target key, pausing a confirmed reset mid-operation (between ancillary
+  # deletion and run-history deletion) while the lifecycle fence is held.
+  defmodule SuspendHistoryOnPolicyDeleteBackend do
+    alias LemonCore.Store.EtsBackend
+
+    for {name, arity} <- EtsBackend.__info__(:functions), {name, arity} != {:delete, 3} do
+      args = Macro.generate_arguments(arity, __MODULE__)
+
+      def unquote(name)(unquote_splicing(args)),
+        do: EtsBackend.unquote(name)(unquote_splicing(args))
+    end
+
+    def delete(state, :session_policies = table, key) do
+      result = EtsBackend.delete(state, table, key)
+
+      if Application.get_env(:lemon_router, :sessions_reset_suspend_history_key) == key do
+        Application.delete_env(:lemon_router, :sessions_reset_suspend_history_key)
+
+        if pid = Process.whereis(LemonCore.RunHistoryStore) do
+          spawn(fn -> :sys.suspend(pid) end)
+          Process.sleep(20)
+        end
+      end
+
+      result
+    end
+
+    def delete(state, table, key), do: EtsBackend.delete(state, table, key)
+  end
+
   setup do
     suffix = Integer.to_string(System.unique_integer([:positive]))
     key = "agent:default:tui:local:main:reset-#{suffix}"
@@ -103,6 +134,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     Application.put_env(:lemon_router, :sessions_reset_test_pid, self())
 
     on_exit(fn ->
+      Application.delete_env(:lemon_router, :sessions_reset_suspend_history_key)
       if pid = Process.whereis(RunHistoryStore), do: :sys.resume(pid)
       LemonRouter.abort(key)
       restore_env(:test_executor, previous_runtime)
@@ -125,7 +157,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     assert {:error,
             {:conflict, _message,
              %{"reason" => "session_busy", "mutationMayHaveApplied" => false}}} =
-             SessionsReset.handle(%{"sessionKey" => key}, %{})
+             confirm_reset(key)
 
     assert policy(key) == %{model: "private-model"}
     refute ChatStateStore.get(key) == nil
@@ -138,7 +170,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     end)
 
     assert {:ok, %{"summary" => %{"verified" => true, "reset" => true}}} =
-             SessionsReset.handle(%{"sessionKey" => key}, %{})
+             confirm_reset(key)
 
     assert policy(key) == nil
     assert ChatStateStore.get(key) == nil
@@ -148,8 +180,13 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
   test "run admission for the session is refused while its reset is in flight", %{key: key} do
     seed_session(key)
     history = Process.whereis(RunHistoryStore)
-    :ok = :sys.suspend(history)
-    reset = Task.async(fn -> SessionsReset.handle(%{"sessionKey" => key}, %{}) end)
+    params = confirm_reset_params(key)
+    second_params = confirm_reset_params(key)
+
+    reset =
+      with_suspend_history_on_policy_delete(key, fn ->
+        Task.async(fn -> SessionsReset.handle(params, %{}) end)
+      end)
 
     try do
       # The reset has deleted policy and is now waiting on run-history deletion.
@@ -160,13 +197,17 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
 
       refute_receive {:execution, _}, 100
 
-      for method <- [SessionsReset, SessionsDelete] do
+      for {method, call_params} <- [
+            {SessionsReset, second_params},
+            {SessionsDelete, %{"sessionKey" => key}}
+          ] do
         assert {:error,
                 {:conflict, _message,
                  %{"reason" => "lifecycle_in_progress", "mutationMayHaveApplied" => false}}} =
-                 method.handle(%{"sessionKey" => key}, %{})
+                 method.handle(call_params, %{})
       end
     after
+      restore_store_backend()
       :sys.resume(history)
     end
 
@@ -184,7 +225,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
        %{key: key} do
     seed_session(key)
     history = Process.whereis(RunHistoryStore)
-    :ok = :sys.suspend(history)
+    params = confirm_reset_params(key)
 
     try do
       assert {:error,
@@ -193,13 +234,17 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
                  "reason" => "outcome_unknown",
                  "retrySafe" => false,
                  "mutationMayHaveApplied" => true
-               }}} = SessionsReset.handle(%{"sessionKey" => key}, %{})
+               }}} =
+               with_suspend_history_on_policy_delete(key, fn ->
+                 SessionsReset.handle(params, %{})
+               end)
 
       {:messages, messages} = Process.info(history, :messages)
 
       assert Enum.count(messages, &match?({:"$gen_call", _from, {:delete_session, ^key}}, &1)) ==
                1
     after
+      restore_store_backend()
       :sys.resume(history)
     end
   end
@@ -207,8 +252,12 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
   test "a dead reset owner's fence is held until reconciled, then released", %{key: key} do
     seed_session(key)
     history = Process.whereis(RunHistoryStore)
-    :ok = :sys.suspend(history)
-    caller = spawn(fn -> SessionsReset.handle(%{"sessionKey" => key}, %{}) end)
+    params = confirm_reset_params(key)
+
+    caller =
+      with_suspend_history_on_policy_delete(key, fn ->
+        spawn(fn -> SessionsReset.handle(params, %{}) end)
+      end)
 
     try do
       await(fn -> policy(key) == nil end)
@@ -228,6 +277,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
       assert {:error, :session_lifecycle_in_progress} =
                LemonRouter.submit(request(key, "still blocked"))
     after
+      restore_store_backend()
       :sys.resume(history)
     end
 
@@ -244,8 +294,13 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
   test "the admission fence survives an orchestrator restart", %{key: key} do
     seed_session(key)
     history = Process.whereis(RunHistoryStore)
-    :ok = :sys.suspend(history)
-    reset = Task.async(fn -> SessionsReset.handle(%{"sessionKey" => key}, %{}) end)
+    params = confirm_reset_params(key)
+    second_params = confirm_reset_params(key)
+
+    reset =
+      with_suspend_history_on_policy_delete(key, fn ->
+        Task.async(fn -> SessionsReset.handle(params, %{}) end)
+      end)
 
     try do
       await(fn -> policy(key) == nil end)
@@ -262,11 +317,15 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
 
       refute_receive {:execution, _}, 100
 
-      for method <- [SessionsReset, SessionsDelete] do
+      for {method, call_params} <- [
+            {SessionsReset, second_params},
+            {SessionsDelete, %{"sessionKey" => key}}
+          ] do
         assert {:error, {:conflict, _message, %{"reason" => "lifecycle_in_progress"}}} =
-                 method.handle(%{"sessionKey" => key}, %{})
+                 method.handle(call_params, %{})
       end
     after
+      restore_store_backend()
       :sys.resume(history)
     end
 
@@ -287,7 +346,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     assert {:ok, %{presence: %{idle: true}}} = LemonRouter.run_presence(%{session_key: key})
 
     assert {:ok, %{"summary" => %{"verified" => true}}} =
-             SessionsReset.handle(%{"sessionKey" => key}, %{})
+             confirm_reset(key)
   end
 
   test "a submission refused by the fence leaves no unresolved admission", %{key: key} do
@@ -301,7 +360,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     assert {:ok, %{presence: %{idle: true}}} = LemonRouter.run_presence(%{session_key: key})
 
     assert {:ok, %{"summary" => %{"verified" => true}}} =
-             SessionsReset.handle(%{"sessionKey" => key}, %{})
+             confirm_reset(key)
   end
 
   @tag :tmp_dir
@@ -352,7 +411,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     assert {:ok, %{presence: %{idle: false}}} = LemonRouter.run_presence(%{session_key: key})
 
     assert {:error, {:conflict, _message, %{"reason" => "session_busy"}}} =
-             SessionsReset.handle(%{"sessionKey" => key}, %{})
+             confirm_reset(key)
 
     send(turn, :finish_turn)
 
@@ -420,7 +479,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     assert Process.alive?(session)
 
     assert {:error, {:conflict, _message, %{"reason" => "session_busy"}}} =
-             SessionsReset.handle(%{"sessionKey" => key}, %{})
+             confirm_reset(key)
 
     send(turn, :finish_turn)
 
@@ -602,12 +661,13 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
 
   test "a failed fence release is reconciled after the operation ends", %{key: key} do
     seed_session(key)
+    params = confirm_reset_params(key)
     Application.put_env(:lemon_router, :sessions_reset_fail_fence_delete, true)
     :sys.replace_state(Store, &%{&1 | backend: FenceDeleteFailingBackend})
 
     try do
       assert {:ok, %{"summary" => %{"verified" => true}}} =
-               SessionsReset.handle(%{"sessionKey" => key}, %{})
+               SessionsReset.handle(params, %{})
 
       assert {:ok, %{state: "held"}} = LemonCore.LifecycleFenceStore.fetch(key)
       assert {:error, :session_lifecycle_in_progress} = LemonRouter.submit(request(key, "held"))
@@ -653,9 +713,32 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     assert {:ok, []} = RunHistoryStore.fetch(key, limit: 1)
   end
 
+  for method <- [SessionsReset, SessionsDelete] do
+    test "#{inspect(method)} removes every channel model and thinking override", %{key: key} do
+      alias LemonChannels.Adapters.Discord.ModelPolicyAdapter, as: DiscordModels
+      alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter, as: TelegramModels
+      alias LemonControlPlane.SessionModel
+
+      seed_session(key)
+      :ok = TelegramModels.put_session_model_override(key, "telegram-model")
+      assert SessionModel.override(key) == "telegram-model"
+      :ok = DiscordModels.put_session_model_override(key, "discord-model")
+      {:ok, _row} = PolicyStore.update_session(key, &Map.put(&1, :thinking_level, "high"))
+      assert SessionModel.overrides(key) == %{model: "discord-model", thinking_level: "high"}
+
+      assert {:ok, _result} = unquote(method).handle(%{"sessionKey" => key}, %{})
+
+      assert policy(key) == nil
+      assert SessionModel.overrides(key) == %{model: nil, thinking_level: nil}
+      assert TelegramModels.session_model_override(key) == nil
+      assert DiscordModels.session_model_override(key) == nil
+    end
+  end
+
   test "run admission for the session is refused while its deletion is in flight",
        %{key: key} do
     seed_session(key)
+    reset_params = confirm_reset_params(key)
     history = Process.whereis(RunHistoryStore)
     :ok = :sys.suspend(history)
     delete = Task.async(fn -> SessionsDelete.handle(%{"sessionKey" => key}, %{}) end)
@@ -669,11 +752,14 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
 
       refute_receive {:execution, _}, 100
 
-      for method <- [SessionsReset, SessionsDelete] do
+      for {method, call_params} <- [
+            {SessionsReset, reset_params},
+            {SessionsDelete, %{"sessionKey" => key}}
+          ] do
         assert {:error,
                 {:conflict, _message,
                  %{"reason" => "lifecycle_in_progress", "mutationMayHaveApplied" => false}}} =
-                 method.handle(%{"sessionKey" => key}, %{})
+                 method.handle(call_params, %{})
       end
     after
       :sys.resume(history)
@@ -724,8 +810,13 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
         :ok = ChatStateStore.put(key, %{last_engine: "lemon", last_resume_token: "kept"})
         :ok = PolicyStore.put_session(key, %{model: "private-model"})
 
+        call_params =
+          if method == SessionsReset,
+            do: confirm_reset_params(key),
+            else: %{"sessionKey" => key}
+
         assert {:error, {^expected_code, _message, ^expected_details}} =
-                 method.handle(%{"sessionKey" => key}, %{})
+                 method.handle(call_params, %{})
 
         assert_receive {:policy_delete, ^key}
         refute_receive {:policy_delete, ^key}, 100
@@ -880,7 +971,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     assert {:ok, %{presence: %{idle: false}}} = LemonRouter.run_presence(%{session_key: key})
 
     assert {:error, {:conflict, _message, %{"reason" => "session_busy"}}} =
-             SessionsReset.handle(%{"sessionKey" => key}, %{})
+             confirm_reset(key)
   end
 
   defp assert_idle_then_reset(key) do
@@ -889,7 +980,27 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     end)
 
     assert {:ok, %{"summary" => %{"verified" => true}}} =
-             SessionsReset.handle(%{"sessionKey" => key}, %{})
+             confirm_reset(key)
+  end
+
+  defp confirm_reset(key), do: SessionsReset.handle(confirm_reset_params(key), %{})
+
+  defp confirm_reset_params(key) do
+    assert {:ok, %{"dryRun" => true, "confirmToken" => token}} =
+             SessionsReset.handle(%{"sessionKey" => key, "dryRun" => true}, %{})
+
+    %{"sessionKey" => key, "dryRun" => false, "confirmToken" => token}
+  end
+
+  defp with_suspend_history_on_policy_delete(key, fun) do
+    Application.put_env(:lemon_router, :sessions_reset_suspend_history_key, key)
+    :sys.replace_state(Store, &%{&1 | backend: SuspendHistoryOnPolicyDeleteBackend})
+    fun.()
+  end
+
+  defp restore_store_backend do
+    Application.delete_env(:lemon_router, :sessions_reset_suspend_history_key)
+    :sys.replace_state(Store, &%{&1 | backend: LemonCore.Store.EtsBackend})
   end
 
   defp forward_node_events(test) do

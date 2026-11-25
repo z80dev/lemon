@@ -141,6 +141,6 @@ LemonSim, the simulation and benchmark arena, is a separate application in
 ## Further reading
 
 - [Exact dependency policy](../architecture_boundaries.md), derived from `mix.exs`
-- [Config reference](../config.md), [context](../context.md) and [bootstrap](../assistant_bootstrap_contract.md)
+- [Config reference](../config.md) and [bootstrap](../assistant_bootstrap_contract.md)
 - [Contributor/app guide index](../../AGENTS.md#ownership-and-app-guides)
 - [Testing](../testing.md), [safety](../security/safety.md) and [backups](../user-guide/backups.md)

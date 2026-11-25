@@ -1029,6 +1029,43 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
              ]
     end
 
+    test "list_provider_api_keys ranks several Kimi Code logins by quota headroom" do
+      jwt = fn account ->
+        claims = Jason.encode!(%{"user_id" => "#{account}-#{System.unique_integer()}"})
+        "eyJhbGciOiJub25lIn0." <> Base.url_encode64(claims, padding: false) <> ".sig"
+      end
+
+      loaded = jwt.("loaded")
+      fresh = jwt.("fresh")
+      System.put_env("RAW_REF_KEY", loaded)
+      System.put_env("POOL_KEY_TWO", fresh)
+
+      config = %{
+        providers: %{"kimi_coding" => %{base_url: "https://api.kimi.ai/coding"}},
+        provider_routing: %{
+          default_pool: "kimi",
+          credential_pools: %{
+            "kimi" => %{
+              providers: ["kimi_coding"],
+              strategy: "priority",
+              credentials: %{"kimi_coding" => ["env:RAW_REF_KEY", "env:POOL_KEY_TWO"]}
+            }
+          }
+        }
+      }
+
+      fetch = fn token, opts ->
+        assert opts[:base_url] == "https://api.kimi.ai/coding"
+        used = if token == loaded, do: 0.95, else: 0.1
+        {:ok, [%{id: "5h", label: "5h", used_fraction: used, resets_at: nil}]}
+      end
+
+      assert [%{ref: "env:POOL_KEY_TWO"}, %{ref: "env:RAW_REF_KEY"} | _] =
+               LemonAgent.ModelRuntime.Credentials.list_provider_api_keys(config, :kimi_coding,
+                 kimi_ranking: [fetch: fetch]
+               )
+    end
+
     test "list_provider_api_keys accepts raw string refs from hand-built settings" do
       assert {:ok, _} = Secrets.set("bare_secret_name", "bare-secret-key")
       System.put_env("RAW_REF_KEY", "raw-env-key")

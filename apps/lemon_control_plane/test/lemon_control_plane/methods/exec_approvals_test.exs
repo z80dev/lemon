@@ -25,11 +25,8 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
   defp clean_policies do
     for table <- [
           :exec_approvals_policy,
-          :exec_approvals_policy_node,
           :exec_approvals_policy_agent,
           :exec_approvals_policy_session,
-          :exec_approvals_policy_map,
-          :exec_approvals_policy_node_map,
           :exec_approvals_pending
         ] do
       try do
@@ -163,13 +160,31 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
       assert ExecApprovalsGet.name() == "exec.approvals.get"
     end
 
-    test "returns global policy map when set" do
-      policy = %{"bash" => "allow", "write" => "require"}
-      :ok = LemonCore.ExecApprovalStore.put_global_policy_map(policy)
+    test "lists remembered global approvals and no unwritten policy map" do
+      action_hash = "hash-#{System.unique_integer([:positive])}"
+
+      :ok =
+        LemonCore.ExecApprovalStore.put_global_policy("bash", action_hash, %{
+          approved: true,
+          approved_at_ms: 1
+        })
 
       {:ok, result} = ExecApprovalsGet.handle(%{}, %{})
 
-      assert result["policy"] == policy
+      assert Map.keys(result) |> Enum.sort() == ["approvals", "pending", "summary"]
+
+      assert result["approvals"] == [
+               %{
+                 "tool" => "bash",
+                 "actionHash" => action_hash,
+                 "scope" => "global",
+                 "approved" => true,
+                 "approvedAtMs" => 1
+               }
+             ]
+
+      refute Map.has_key?(result["summary"], "policyCount")
+      refute Map.has_key?(result["summary"]["cleanup"], "includesPolicy")
     end
 
     test "returns active pending approvals with structured action metadata" do
@@ -218,7 +233,6 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
       assert pending["action"]["nested"]["state_hash"] == "abc123"
       assert pending["action"]["nested"]["api_key"] == %{"redacted" => true, "kind" => "secret"}
       refute inspect(result) =~ "should-not-leak"
-      assert result["summary"]["policyCount"] == 0
       assert result["summary"]["approvalCount"] == 0
       assert result["summary"]["pendingCount"] == 1
       assert result["summary"]["pendingToolCounts"]["mcp_mcp_oauth"] == 1

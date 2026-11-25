@@ -6,6 +6,16 @@ defmodule CodingAgent.BashExecutorTest do
   alias LemonAgent.AbortSignal
   alias LemonCore.ProcessGroup
 
+  @moduletag :tmp_dir
+
+  # on_chunk runs outside the caller; an Agent makes delivery synchronous.
+  defp collect_chunks do
+    {:ok, agent} = Agent.start_link(fn -> [] end)
+    {agent, fn chunk -> Agent.update(agent, &[chunk | &1]) end}
+  end
+
+  defp received_chunks(agent), do: agent |> Agent.get(& &1) |> Enum.reverse() |> Enum.join()
+
   @tag :python3
   test "stream relay captures authentic stdout, stderr and shell exit status" do
     assert {:ok, result} =
@@ -36,22 +46,47 @@ defmodule CodingAgent.BashExecutorTest do
     test "executes simple command and returns Result struct" do
       {:ok, result} = BashExecutor.execute("echo hello", "/tmp")
       assert %Result{} = result
-      assert result.output =~ "hello"
+      assert result.output == "hello\n"
       assert result.exit_code == 0
       assert result.cancelled == false
       assert result.truncated == false
+      assert result.full_output_path == nil
     end
 
-    test "captures non-zero exit code" do
-      {:ok, result} = BashExecutor.execute("exit 42", "/tmp")
-      assert result.exit_code == 42
-      assert result.cancelled == false
+    test "returns the command output verbatim for varied command forms", %{tmp_dir: tmp_dir} do
+      long_arg = String.duplicate("x", 10_000)
+
+      for {command, expected} <- [
+            {"echo error >&2", "error\n"},
+            {"printf test", "test"},
+            {"echo line1; echo line2", "line1\nline2\n"},
+            {"echo line1\necho line2", "line1\nline2\n"},
+            {"echo 'hello world'", "hello world\n"},
+            {"echo 'hello' | tr 'h' 'H'", "Hello\n"},
+            {~s(echo "it's a \\"test\\""), ~s(it's a "test"\n)},
+            {"echo \"#{long_arg}\"", long_arg <> "\n"}
+          ] do
+        assert {:ok, %{output: ^expected, exit_code: 0}} = BashExecutor.execute(command, tmp_dir)
+      end
     end
 
-    test "captures stderr (merged with stdout)" do
-      {:ok, result} = BashExecutor.execute("echo error >&2", "/tmp")
-      assert result.output =~ "error"
-      assert result.exit_code == 0
+    test "propagates exit codes", %{tmp_dir: tmp_dir} do
+      for {command, code} <- [
+            {"exit 0", 0},
+            {"exit 42", 42},
+            {"exit 255", 255},
+            {"nonexistent_cmd_xyz_123", 127}
+          ] do
+        assert {:ok, %{exit_code: ^code, cancelled: false}} =
+                 BashExecutor.execute(command, tmp_dir)
+      end
+    end
+
+    test "empty and whitespace-only commands succeed without output", %{tmp_dir: tmp_dir} do
+      for command <- ["", "   ", "true"] do
+        assert {:ok, %{exit_code: 0, cancelled: false, output: ""}} =
+                 BashExecutor.execute(command, tmp_dir)
+      end
     end
 
     test "respects working directory" do
@@ -59,143 +94,33 @@ defmodule CodingAgent.BashExecutorTest do
       assert result.output =~ "/tmp"
     end
 
-    test "handles command with multiple outputs" do
-      {:ok, result} = BashExecutor.execute("echo line1; echo line2; echo line3", "/tmp")
-      assert result.output =~ "line1"
-      assert result.output =~ "line2"
-      assert result.output =~ "line3"
-    end
-
-    test "handles timeout" do
-      {:ok, result} = BashExecutor.execute("sleep 10", "/tmp", timeout: 100)
-      # Should timeout and return result with cancelled=true
-      assert result.cancelled == true
-      assert result.exit_code == nil
-    end
-
-    test "handles abort signal" do
-      signal = AbortSignal.new()
-
-      # Start a long-running command
-      task =
-        Task.async(fn ->
-          BashExecutor.execute("sleep 10", "/tmp", signal: signal)
-        end)
-
-      # Give it a moment to start
-      Process.sleep(50)
-
-      # Abort it
-      AbortSignal.abort(signal)
-
-      # Wait for result
-      {:ok, result} = Task.await(task, 5_000)
-
-      assert result.cancelled == true
-      assert result.exit_code == nil
-    end
-
-    test "calls on_chunk callback for streaming" do
-      # Use an Agent to collect chunks since the callback runs synchronously
-      {:ok, agent} = Agent.start_link(fn -> [] end)
-
-      callback = fn chunk ->
-        Agent.update(agent, fn chunks -> [chunk | chunks] end)
-      end
-
-      {:ok, result} = BashExecutor.execute("echo line1; echo line2", "/tmp", on_chunk: callback)
-
-      # Get collected chunks
-      chunks = Agent.get(agent, fn chunks -> Enum.reverse(chunks) end)
-      Agent.stop(agent)
-
-      # Should have received at least some output chunks
-      assert chunks != []
-      combined = Enum.join(chunks, "")
-      assert combined =~ "line1"
-      assert combined =~ "line2"
-
-      # The final result should also have the output
-      assert result.output =~ "line1"
-    end
-
-    test "handles empty output command" do
-      {:ok, result} = BashExecutor.execute("true", "/tmp")
-      assert result.exit_code == 0
-      assert result.cancelled == false
-    end
-
-    test "handles command with environment variables" do
-      {:ok, result} = BashExecutor.execute("echo $HOME", "/tmp")
-      assert result.exit_code == 0
-      # Should have output (the home directory)
-      assert String.trim(result.output) != ""
-    end
-
-    test "handles command with special characters" do
-      {:ok, result} = BashExecutor.execute("echo 'hello world'", "/tmp")
-      assert result.output =~ "hello world"
-    end
-
-    test "handles piped commands" do
-      {:ok, result} = BashExecutor.execute("echo 'hello' | tr 'h' 'H'", "/tmp")
-      assert result.output =~ "Hello"
-    end
-
-    test "handles command that produces large output with truncation" do
-      # Generate more than default max_lines (2000 lines)
-      {:ok, result} =
-        BashExecutor.execute(
-          "for i in $(seq 1 3000); do echo line$i; done",
-          "/tmp",
-          max_bytes: 10_000
-        )
-
-      assert result.truncated == true
-      # Should contain later lines (tail truncation keeps the end)
-      assert result.output =~ "line3000"
-      # Full output should be saved to temp file
-      assert result.full_output_path != nil
-      assert File.exists?(result.full_output_path)
-
-      # Cleanup temp file
-      File.rm(result.full_output_path)
+    test "a missing working directory fails without running the command" do
+      assert {:ok, result} = BashExecutor.execute("echo ran", "/nonexistent/path/xyz")
+      assert result.exit_code != 0
+      refute result.output =~ "ran"
     end
 
     test "handles output exceeding OS pipe buffer without deadlock" do
       # Generate output larger than OS pipe buffer (64KB on Linux, 16KB on macOS).
       # This is a regression test for pipe deadlock issues.
-      # Using Python if available, otherwise use a shell loop
       command = """
       if command -v python3 >/dev/null 2>&1; then
         python3 -c "print('A' * 131072)"
       elif command -v python >/dev/null 2>&1; then
         python -c "print('A' * 131072)"
       else
-        # Fallback: use dd to generate large output
         dd if=/dev/zero bs=1024 count=130 2>/dev/null | tr '\\0' 'A'
       fi
       """
 
-      # Should complete without hanging (deadlock)
-      # Set a timeout to detect deadlock
-      task =
-        Task.async(fn ->
-          BashExecutor.execute(command, "/tmp", max_bytes: 10_000)
-        end)
+      task = Task.async(fn -> BashExecutor.execute(command, "/tmp", max_bytes: 10_000) end)
 
-      # Wait for result with timeout - if it deadlocks, this will timeout
       case Task.yield(task, 10_000) do
         {:ok, {:ok, result}} ->
           assert result.exit_code == 0
           assert result.truncated == true
-          # Should contain the 'A' characters
           assert result.output =~ "AAAA"
-
-          # Cleanup temp file if created
-          if result.full_output_path do
-            File.rm(result.full_output_path)
-          end
+          if result.full_output_path, do: File.rm(result.full_output_path)
 
         {:ok, {:error, reason}} ->
           flunk("Command failed: #{inspect(reason)}")
@@ -205,112 +130,234 @@ defmodule CodingAgent.BashExecutorTest do
           flunk("Command timed out - possible pipe deadlock")
       end
     end
+  end
 
-    test "does not truncate small output" do
-      {:ok, result} = BashExecutor.execute("echo small", "/tmp")
-      assert result.truncated == false
-      assert result.full_output_path == nil
+  describe "streaming" do
+    test "on_chunk receives sanitized output in order", %{tmp_dir: tmp_dir} do
+      {ref, on_chunk} = collect_chunks()
+
+      {:ok, result} =
+        BashExecutor.execute(
+          "for i in 1 2 3 4 5; do echo \"line$i\"; sleep 0.01; done; printf '\\033[31mred\\033[0m'",
+          tmp_dir,
+          on_chunk: on_chunk
+        )
+
+      combined = received_chunks(ref)
+      assert combined == "line1\nline2\nline3\nline4\nline5\nred"
+      assert result.output == combined
+    end
+
+    test "a raising on_chunk callback is returned as an error", %{tmp_dir: tmp_dir} do
+      assert {:error, %RuntimeError{message: "callback error"}} =
+               BashExecutor.execute("echo test", tmp_dir,
+                 on_chunk: fn _chunk -> raise "callback error" end
+               )
+    end
+
+    test "concurrent executions keep output and callbacks isolated", %{tmp_dir: tmp_dir} do
+      tasks =
+        for name <- ["task1_output", "task2_output"] do
+          Task.async(fn ->
+            {ref, on_chunk} = collect_chunks()
+            {:ok, result} = BashExecutor.execute("echo #{name}", tmp_dir, on_chunk: on_chunk)
+            {name, result.output, received_chunks(ref)}
+          end)
+        end
+
+      for {name, output, chunks} <- Task.await_many(tasks, 5_000) do
+        assert output == name <> "\n"
+        assert chunks == name <> "\n"
+      end
+    end
+  end
+
+  describe "timeout" do
+    test "kills the command after the timeout and keeps partial output", %{tmp_dir: tmp_dir} do
+      {:ok, result} =
+        BashExecutor.execute(
+          "for i in $(seq 1 1000); do echo line$i; done; sleep 10",
+          tmp_dir,
+          timeout: 2_000
+        )
+
+      assert result.cancelled == true
+      assert result.exit_code == nil
+      assert result.output =~ "line1\n"
+    end
+
+    test "zero, negative or generous timeouts let the command finish", %{tmp_dir: tmp_dir} do
+      for {command, timeout} <- [{"sleep 0.1", 5_000}, {"echo fast", 0}, {"echo fast", -1000}] do
+        assert {:ok, %{cancelled: false, exit_code: 0}} =
+                 BashExecutor.execute(command, tmp_dir, timeout: timeout)
+      end
+    end
+  end
+
+  describe "abort signal" do
+    test "handles abort signal" do
+      signal = AbortSignal.new()
+      task = Task.async(fn -> BashExecutor.execute("sleep 10", "/tmp", signal: signal) end)
+
+      Process.sleep(50)
+      AbortSignal.abort(signal)
+
+      {:ok, result} = Task.await(task, 5_000)
+      assert result.cancelled == true
+      assert result.exit_code == nil
+    end
+
+    test "an already aborted signal cancels without an exit code", %{tmp_dir: tmp_dir} do
+      signal = AbortSignal.new()
+      AbortSignal.abort(signal)
+
+      assert {:ok, %{cancelled: true, exit_code: nil}} =
+               BashExecutor.execute("echo test", tmp_dir, signal: signal)
+    end
+
+    test "abort preserves partial output", %{tmp_dir: tmp_dir} do
+      signal = AbortSignal.new()
+      parent = self()
+
+      task =
+        Task.async(fn ->
+          BashExecutor.execute(
+            "echo before_abort; sleep 5; echo after_abort",
+            tmp_dir,
+            signal: signal,
+            on_chunk: fn chunk -> send(parent, {:chunk, chunk}) end
+          )
+        end)
+
+      # Abort only once the command has produced output (a fixed sleep races
+      # shell startup under full-suite load).
+      assert_receive {:chunk, _chunk}, 5_000
+      AbortSignal.abort(signal)
+
+      {:ok, result} = Task.await(task, 5_000)
+
+      assert result.cancelled == true
+      assert result.output =~ "before_abort"
+      refute result.output =~ "after_abort"
+    end
+
+    test "abort from the first output callback is observed without another chunk", %{
+      tmp_dir: tmp_dir
+    } do
+      signal = AbortSignal.new()
+      on_chunk = fn _chunk -> AbortSignal.abort(signal) end
+
+      assert {:ok, result} =
+               BashExecutor.execute("printf ready; sleep 30", tmp_dir,
+                 signal: signal,
+                 on_chunk: on_chunk,
+                 timeout: 5_000
+               )
+
+      assert result.cancelled
+      refute result.timed_out
+      assert result.output =~ "ready"
+    end
+
+    test "concurrent abort signals are independent", %{tmp_dir: tmp_dir} do
+      signal1 = AbortSignal.new()
+      signal2 = AbortSignal.new()
+
+      task1 = Task.async(fn -> BashExecutor.execute("sleep 5", tmp_dir, signal: signal1) end)
+
+      task2 =
+        Task.async(fn ->
+          BashExecutor.execute("echo independent; sleep 0.5", tmp_dir, signal: signal2)
+        end)
+
+      Process.sleep(50)
+      AbortSignal.abort(signal1)
+
+      {:ok, result1} = Task.await(task1, 5_000)
+      {:ok, result2} = Task.await(task2, 5_000)
+
+      assert result1.cancelled == true
+      assert result2.cancelled == false
+      assert result2.exit_code == 0
+    end
+  end
+
+  describe "output truncation" do
+    test "truncation preserves head and tail and archives the full output", %{tmp_dir: tmp_dir} do
+      {:ok, result} =
+        BashExecutor.execute(
+          "for i in $(seq 1 3000); do echo line$i; done",
+          tmp_dir,
+          max_bytes: 10_000,
+          max_lines: 100
+        )
+
+      assert result.truncated == true
+      assert result.output =~ "line1\n"
+      assert result.output =~ "line3000"
+      assert result.output =~ "line2999"
+      assert result.output =~ "showing head and tail"
+      refute result.output =~ "line1500\n"
+
+      assert File.read!(result.full_output_path) ==
+               Enum.map_join(1..3000, "", &"line#{&1}\n")
+
+      File.rm!(result.full_output_path)
     end
   end
 
   describe "sanitize_output/1" do
-    test "strips ANSI escape codes (color)" do
-      input = "\e[31mred\e[0m text"
-      output = BashExecutor.sanitize_output(input)
-      assert output == "red text"
+    test "strips ANSI and control codes, drops carriage returns, keeps text" do
+      for {input, expected} <- [
+            {"\e[31mred\e[0m text", "red text"},
+            {"\e[1mbold\e[0m \e[4munderline\e[0m", "bold underline"},
+            {"\e[2Jcleared\e[H", "cleared"},
+            {"line1\r\nline2\r\n", "line1\nline2\n"},
+            {"progress\rprogress2\rdone", "progressprogress2done"},
+            {"before\0after", "beforeafter"},
+            {"normal\abell\bbackspace", "normalbellbackspace"},
+            {"col1\tcol2\nrow2col1\trow2col2", "col1\tcol2\nrow2col1\trow2col2"},
+            {"hello world 123", "hello world 123"},
+            {"", ""}
+          ] do
+        assert BashExecutor.sanitize_output(input) == expected, inspect(input)
+      end
     end
 
-    test "strips ANSI escape codes (bold, etc.)" do
-      input = "\e[1mbold\e[0m \e[4munderline\e[0m"
-      output = BashExecutor.sanitize_output(input)
-      assert output == "bold underline"
-    end
-
-    test "strips cursor movement codes" do
-      input = "\e[2Jcleared\e[H"
-      output = BashExecutor.sanitize_output(input)
-      assert output == "cleared"
-    end
-
-    test "handles invalid UTF-8 gracefully" do
-      # Binary with invalid UTF-8 sequence
-      input = <<104, 101, 108, 108, 111, 255, 254>>
-      output = BashExecutor.sanitize_output(input)
-      assert is_binary(output)
-      assert output =~ "hello"
-      # Should not raise
-    end
-
-    test "removes carriage returns (Windows line endings)" do
-      input = "line1\r\nline2\r\n"
-      output = BashExecutor.sanitize_output(input)
-      assert output == "line1\nline2\n"
-    end
-
-    test "removes standalone carriage returns" do
-      input = "progress\rprogress2\rdone"
-      output = BashExecutor.sanitize_output(input)
-      assert output == "progressprogress2done"
-    end
-
-    test "preserves tabs and newlines" do
-      input = "col1\tcol2\nrow2col1\trow2col2"
-      output = BashExecutor.sanitize_output(input)
-      assert output == "col1\tcol2\nrow2col1\trow2col2"
-    end
-
-    test "handles empty input" do
-      assert BashExecutor.sanitize_output("") == ""
-    end
-
-    test "handles plain text without changes" do
-      input = "hello world 123"
-      output = BashExecutor.sanitize_output(input)
-      assert output == input
+    test "replaces invalid UTF-8 bytes" do
+      assert BashExecutor.sanitize_output(<<"hello", 255, 254>>) == "hello\uFFFD\uFFFD"
     end
   end
 
   describe "truncate_tail/2" do
     test "keeps last N lines when line limit exceeded" do
-      content = Enum.map(1..100, &"line #{&1}") |> Enum.join("\n")
+      content = Enum.map_join(1..100, "\n", &"line #{&1}")
 
       {truncated, was_truncated, info} = BashExecutor.truncate_tail(content, max_lines: 10)
 
       assert was_truncated == true
       assert info.total_lines == 100
+      assert info.total_bytes == byte_size(content)
       assert info.output_lines == 10
-      # Should contain the truncation notice
+      assert info.output_bytes > 0
       assert truncated =~ "[Output truncated."
-      # Should contain later lines (tail keeps end)
       assert truncated =~ "line 100"
       assert truncated =~ "line 91"
+      refute truncated =~ "line 90\n"
     end
 
-    test "returns unchanged when within line limits" do
-      content = "short output"
-      {truncated, was_truncated, info} = BashExecutor.truncate_tail(content)
+    test "returns content unchanged within or exactly at the limits" do
+      at_limit = Enum.map_join(1..2000, "\n", &"line #{&1}")
 
-      assert was_truncated == false
-      assert info.total_lines == 1
-      assert info.output_lines == 1
-      assert truncated == content
-    end
-
-    test "returns unchanged when exactly at limits" do
-      # Create content with exactly max_lines
-      content = Enum.map(1..2000, &"line #{&1}") |> Enum.join("\n")
-
-      {truncated, was_truncated, _info} = BashExecutor.truncate_tail(content, max_lines: 2000)
-
-      # If not exceeding byte limit, should not be truncated
-      if byte_size(content) <= 50_000 do
-        assert was_truncated == false
-        assert truncated == content
+      for content <- ["short output", at_limit] do
+        assert {^content, false, %{output_lines: lines, total_lines: lines}} =
+                 BashExecutor.truncate_tail(content, max_lines: 2000)
       end
+
+      assert {"", false, %{total_lines: 1, total_bytes: 0}} = BashExecutor.truncate_tail("")
     end
 
     test "truncates by bytes when byte limit exceeded" do
-      # Create content that exceeds byte limit but not line limit
       content = String.duplicate("x", 60_000)
 
       {truncated, was_truncated, info} = BashExecutor.truncate_tail(content, max_bytes: 10_000)
@@ -320,49 +367,20 @@ defmodule CodingAgent.BashExecutorTest do
       assert info.output_bytes <= 10_000
       assert truncated =~ "[Output truncated."
     end
-
-    test "handles empty content" do
-      {truncated, was_truncated, info} = BashExecutor.truncate_tail("")
-
-      assert was_truncated == false
-      assert truncated == ""
-      # empty string splits to [""]
-      assert info.total_lines == 1
-      assert info.total_bytes == 0
-    end
-
-    test "provides correct info in truncation metadata" do
-      content = Enum.map(1..50, &"line #{&1}") |> Enum.join("\n")
-
-      {_truncated, was_truncated, info} = BashExecutor.truncate_tail(content, max_lines: 20)
-
-      assert was_truncated == true
-      assert info.total_lines == 50
-      assert info.total_bytes == byte_size(content)
-      assert info.output_lines == 20
-      assert info.output_bytes > 0
-    end
   end
 
-  describe "get_shell_config/0" do
-    test "returns shell path and args" do
-      {shell, args} = BashExecutor.get_shell_config()
-      assert is_binary(shell)
-      assert is_list(args)
-      # Should have -c for Unix or /C for Windows
-      assert "-c" in args or "/C" in args
-    end
+  test "get_shell_config/0 returns a shell and its command flag" do
+    {shell, args} = BashExecutor.get_shell_config()
+    assert is_binary(shell)
+    assert "-c" in args or "/C" in args
   end
 
   describe "ProcessGroup.terminate/2" do
     test "handles killing non-existent process gracefully" do
-      # Use a PID that's very likely not to exist
-      result = ProcessGroup.terminate(999_999_999, signal: :sigkill)
-      assert result == :ok
+      assert ProcessGroup.terminate(999_999_999, signal: :sigkill) == :ok
     end
 
     test "can kill actual process" do
-      # Start a sleep process
       port =
         Port.open(
           {:spawn_executable, "/bin/sleep"},
@@ -371,80 +389,31 @@ defmodule CodingAgent.BashExecutorTest do
 
       {:os_pid, os_pid} = Port.info(port, :os_pid)
 
-      # Kill it
       assert ProcessGroup.terminate(os_pid, signal: :sigkill) == :ok
-
-      # Process should terminate - wait for exit status
-      receive do
-        {^port, {:exit_status, _}} -> :ok
-      after
-        1000 ->
-          Port.close(port)
-      end
-    end
-  end
-
-  describe "Result struct" do
-    test "has expected fields" do
-      result = %Result{
-        output: "test output",
-        exit_code: 0,
-        cancelled: false,
-        truncated: false,
-        full_output_path: nil
-      }
-
-      assert result.output == "test output"
-      assert result.exit_code == 0
-      assert result.cancelled == false
-      assert result.truncated == false
-      assert result.full_output_path == nil
+      assert_receive {^port, {:exit_status, _}}, 1_000
     end
   end
 
   describe "pty option" do
-    test "executes command with pty: true" do
-      {:ok, result} = BashExecutor.execute("echo pty_hello", "/tmp", pty: true)
-      assert %Result{} = result
-      assert result.output =~ "pty_hello"
-      assert result.exit_code == 0
-      assert result.cancelled == false
-    end
-
-    test "executes command with pty: false" do
-      {:ok, result} = BashExecutor.execute("echo no_pty", "/tmp", pty: false)
-      assert %Result{} = result
-      assert result.output =~ "no_pty"
-      assert result.exit_code == 0
-    end
-
-    test "pty mode respects working directory" do
-      {:ok, result} = BashExecutor.execute("pwd", "/tmp", pty: true)
-      assert result.output =~ "/tmp"
-    end
-
-    test "pty mode captures non-zero exit code" do
-      {:ok, result} = BashExecutor.execute("exit 42", "/tmp", pty: true)
-      assert result.cancelled == false
-    end
-
-    test "pty mode works with streaming callback" do
-      chunks = :ets.new(:chunks, [:bag, :public])
-
-      callback = fn chunk ->
-        :ets.insert(chunks, {:chunk, chunk})
-      end
+    test "pty mode runs in the working directory and streams output" do
+      {ref, on_chunk} = collect_chunks()
 
       {:ok, result} =
-        BashExecutor.execute("echo pty_stream", "/tmp", pty: true, on_chunk: callback)
+        BashExecutor.execute("pwd; echo pty_stream", "/tmp", pty: true, on_chunk: on_chunk)
 
+      assert %Result{cancelled: false, exit_code: 0} = result
+      assert result.output =~ "/tmp"
       assert result.output =~ "pty_stream"
+      assert received_chunks(ref) =~ "pty_stream"
+    end
 
-      all_chunks = :ets.lookup(chunks, :chunk) |> Enum.map(fn {:chunk, c} -> c end)
-      combined = Enum.join(all_chunks)
-      assert combined =~ "pty_stream"
+    test "pty: false behaves like the default pipe mode" do
+      assert {:ok, %Result{output: "no_pty\n", exit_code: 0}} =
+               BashExecutor.execute("echo no_pty", "/tmp", pty: false)
+    end
 
-      :ets.delete(chunks)
+    test "pty mode does not cancel non-zero exits" do
+      assert {:ok, %Result{cancelled: false}} = BashExecutor.execute("exit 42", "/tmp", pty: true)
     end
 
     test "pty mode handles timeout" do

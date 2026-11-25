@@ -296,6 +296,9 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:oauth, :api_key, :omp],
       default_auth_mode: :oauth,
       preferred_models: ["k3", "kimi-for-coding", "kimi-k2.5-coding"],
+      # `--region global` signs in at auth.kimi.ai and writes the kimi.ai base URL.
+      switches: [region: :string],
+      oauth_opts_builder: &Function.identity/1,
       api_key_prompt: "Enter your Kimi Code API key: ",
       api_key_choice_label: "Paste API key",
       oauth_choice_label: "Sign in with Kimi Code (device code)",

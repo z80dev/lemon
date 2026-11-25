@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.Task.StepsAndCompletionTest do
 
   alias CodingAgent.TaskStore
   alias CodingAgent.Tools.Task, as: TaskTool
-  alias CodingAgent.Tools.Task.Followup
+  alias CodingAgent.TaskRuntime.Followup
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent

@@ -47,8 +47,8 @@ defmodule LemonRouter.RunProcessExecutionTest do
     run_id = command.run_id
     cwd = command.cwd
 
-    assert_receive {:executor_invoked, ^command, [cwd: ^cwd, run_id: ^run_id, slot_lender: Slots],
-                    ^pid}
+    assert_receive {:executor_invoked, ^command,
+                    [cwd: ^cwd, run_id: ^run_id, slot_lender: Slots, canonical_delta: true], ^pid}
 
     runner = await_runner(run)
     wait_for_slots(1, 0)
@@ -166,6 +166,21 @@ defmodule LemonRouter.RunProcessExecutionTest do
     assert {:ok, %{summary: ^summary}} = RunStore.fetch(command.run_id)
     assert claim_holder({:session, command.session_key}) == nil
     wait_for_slots(0, 0)
+  end
+
+  test "an evicted terminal run is never reopened" do
+    command = command()
+    now = System.system_time(:millisecond)
+
+    # The terminal fence survives retention of the volatile record.
+    assert :ok = Store.put(:run_terminals, command.run_id, %{finalized_at_ms: now})
+    on_exit(fn -> Store.delete(:run_terminals, command.run_id) end)
+    assert {:error, :evicted} = RunStore.fetch(command.run_id)
+
+    run = start_owner(command)
+    assert_down(run)
+    assert_not_started(run)
+    refute_terminal(run)
   end
 
   test "the durable fence is checked again when a waiting owner receives its permit" do
@@ -707,15 +722,14 @@ defmodule LemonRouter.RunProcessExecutionTest do
     refute_received {:run_telemetry, :first_token, _, _}
     assert_received {:run_telemetry, :stop, %{duration_ms: ^duration_ms, ok: true}, _}
 
-    assert {:ok,
-            %{
-              summary: %{completed: ^completed, session_key: ^session_key, engine: "lemon"},
-              events: [
-                %{__event__: :completed, ok: true, answer: ""},
-                %{__event__: :action_event, action: %{id: "file"}},
-                %{__event__: :started, resume: %{value: ^value}}
-              ]
-            }} = RunStore.fetch(run_id)
+    assert %{
+             summary: %{completed: ^completed, session_key: ^session_key, engine: "lemon"},
+             events: [
+               %{__event__: :completed, ok: true, answer: ""},
+               %{__event__: :action_event, action: %{id: "file"}},
+               %{__event__: :started, resume: %{value: ^value}}
+             ]
+           } = Store.get_run_with_events(run_id)
 
     assert_down(run)
     refute_terminal(run)
@@ -876,7 +890,7 @@ defmodule LemonRouter.RunProcessExecutionTest do
     assert formatted.postponed == []
     assert formatted.log == []
 
-    assert {%LemonCore.StatusRedaction.RedactedCrash{}, [{__MODULE__, :run, 1, _}]} =
+    assert {%LemonCore.StatusRedaction.RedactedCrashError{}, [{__MODULE__, :run, 1, _}]} =
              formatted.reason
   end
 
@@ -991,6 +1005,10 @@ defmodule LemonRouter.RunProcessExecutionTest do
     }
 
     assert :ok = RunCompletion.abandon(command.run_id, summary)
+
+    # Model a notification delivered before this owner can observe it.
+    assert :ok = LemonCore.TerminalOutbox.ack(command.run_id, :notification)
+
     summary
   end
 

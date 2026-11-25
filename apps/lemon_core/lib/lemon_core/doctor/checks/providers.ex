@@ -33,20 +33,10 @@ defmodule LemonCore.Doctor.Checks.Providers do
   end
 
   defp check_default_provider(config) do
-    case config.agent.default_provider do
-      nil ->
-        Check.fail(
-          "providers.default",
-          "No default provider is set.",
-          "Run `lemon setup` to sign in and choose a default model."
-        )
-
-      provider ->
-        Check.pass(
-          "providers.default",
-          "Default provider: #{ProviderDiagnostics.public_provider(provider)}"
-        )
-    end
+    Check.pass(
+      "providers.default",
+      "Default provider: #{ProviderDiagnostics.public_provider(config.agent.default_provider)}"
+    )
   end
 
   defp check_default_model(config) do
@@ -61,7 +51,7 @@ defmodule LemonCore.Doctor.Checks.Providers do
           "Run `lemon setup provider --set-default` to select a model."
         )
 
-      is_binary(provider) and String.contains?(model, ":") and
+      String.contains?(model, ":") and
           normalize_provider(hd(String.split(model, ":", parts: 2))) !=
             normalize_provider(provider) ->
         Check.fail(
@@ -77,7 +67,7 @@ defmodule LemonCore.Doctor.Checks.Providers do
 
   defp check_provider_credentials(config, status) do
     provider = config.agent.default_provider
-    providers = (config.providers && config.providers.providers) || %{}
+    providers = config.providers.providers
 
     provider_config =
       Enum.find_value(providers, %{}, fn {name, settings} ->

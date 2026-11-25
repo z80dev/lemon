@@ -444,7 +444,31 @@ export class EventController {
 	#onAgent(event: AgentEvent, canonical = false): void {
 		const owner = this.#sessionFor(event.sessionKey);
 		if (!owner) return;
-		if (!canonical && (owner.eventCursor || owner.snapshotRequired)) return;
+		if (event.type === "started" || event.type === "completed") {
+			if (event.schemaVersion !== undefined && event.schemaVersion !== 1) {
+				this.#requestRecovery(owner, true);
+				return;
+			}
+		}
+		if (!canonical && (owner.eventCursor || owner.snapshotRequired)) {
+			if (event.type === "started" && event.schemaVersion === 1) {
+				owner.setModel(
+					{ model: event.model, provider: event.provider, thinkingLevel: event.thinkingLevel },
+					"run",
+				);
+				this.#onStatusChanged?.();
+			}
+			if (
+				event.type === "completed" &&
+				event.schemaVersion === 1 &&
+				!owner.isRunTerminal(event.runId)
+			) {
+				owner.addRunCost(event.runId, event.usage);
+				owner.recoveryEventVersion += 1;
+				this.#requestRecovery(owner, true);
+			}
+			return;
+		}
 		owner.recoveryEventVersion += 1;
 		// Spend is session-wide, not a projection: it counts once per run whether or
 		// not the event passes the ownership fences below, and whether the session

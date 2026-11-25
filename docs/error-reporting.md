@@ -69,7 +69,7 @@ this:
    supervisor reports, `Task` terminating reports, unexpected-`handle_info`
    reports and the emulator's "Error in process" exits:
    - reasons become an exit atom, `{tag, :redacted}`, or
-     `LemonCore.StatusRedaction.RedactedCrash` naming the original exception
+     `LemonCore.StatusRedaction.RedactedCrashError` naming the original exception
      module (its message is dropped);
    - stacktrace arguments (e.g. function-clause arguments) become arities and
      locations keep only file/line;
@@ -85,7 +85,7 @@ this:
    names and atom timer contents are kept) and reduces exit reasons the same
    way. This also covers `:sys.get_status/1`. Processes covered:
    `CodingAgent.Session`, `CodingAgent.Executor.SessionRunner`,
-   `CodingAgent.Executor.RemoteSessionRunner`, `CodingAgent.Advisor`,
+   `CodingAgent.Executor.RemoteSessionRunner`,
    `CodingAgent.AsyncFollowups`, `CodingAgent.BackgroundRun.Worker`,
    `LemonAgent.Agent`, `LemonRouter.RunProcess`,
    `LemonRouter.StreamCoalescer`, `LemonRouter.SessionCoordinator`,

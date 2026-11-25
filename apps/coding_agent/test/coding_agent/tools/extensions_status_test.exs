@@ -27,14 +27,11 @@ defmodule CodingAgent.Tools.ExtensionsStatusTest do
       assert props["include_details"]["type"] == "boolean"
     end
 
-    test "tool has action parameter with enum" do
+    test "is status-only: no action parameter and no reload advertised" do
       tool = ExtensionsStatus.tool("/tmp")
 
-      props = tool.parameters["properties"]
-      assert Map.has_key?(props, "action")
-      assert props["action"]["type"] == "string"
-      assert props["action"]["enum"] == ["status", "reload"]
-      assert props["action"]["default"] == "status"
+      assert Map.keys(tool.parameters["properties"]) == ["include_details"]
+      refute tool.description =~ ~r/reload/i
     end
   end
 
@@ -217,38 +214,36 @@ defmodule CodingAgent.Tools.ExtensionsStatusTest do
     end
   end
 
-  describe "reload action" do
-    test "reload returns error without session context", %{tmp_dir: tmp_dir} do
-      tool = ExtensionsStatus.tool(tmp_dir, session_id: "")
-      result = tool.execute.("call-1", %{"action" => "reload"}, nil, nil)
+  describe "session reports" do
+    test "a registered session renders its own report", %{tmp_dir: tmp_dir} do
+      session =
+        start_supervised!(
+          {CodingAgent.Session,
+           cwd: tmp_dir,
+           workspace_dir: Path.join(tmp_dir, "workspace"),
+           model: LemonAgent.Test.Mocks.mock_model(),
+           register: true,
+           tools: []}
+        )
 
-      assert {:error, message} = result
-      assert message =~ "no session context"
+      session_id = CodingAgent.Session.get_state(session).session_manager.header.id
+      tool = ExtensionsStatus.tool(tmp_dir, session_id: session_id)
+
+      assert %AgentToolResult{content: [%{text: text}], details: details} =
+               tool.execute.("call-1", %{}, nil, nil)
+
+      assert text =~ "# Extension Status Report"
+      assert Map.has_key?(details, :tool_disclosure)
+      refute details.title =~ "session not found"
     end
 
-    test "reload returns error with non-existent session", %{tmp_dir: tmp_dir} do
-      tool = ExtensionsStatus.tool(tmp_dir, session_id: "nonexistent-session-id")
-      result = tool.execute.("call-1", %{"action" => "reload"}, nil, nil)
-
-      assert {:error, message} = result
-      assert message =~ "session not found"
-    end
-
-    test "status action is the default", %{tmp_dir: tmp_dir} do
+    test "an unknown action parameter is ignored, never a reload", %{tmp_dir: tmp_dir} do
       tool = ExtensionsStatus.tool(tmp_dir, session_id: "")
 
-      # Without action parameter
-      result_default = tool.execute.("call-1", %{}, nil, nil)
-      # With explicit status action
-      result_status = tool.execute.("call-2", %{"action" => "status"}, nil, nil)
+      assert %AgentToolResult{details: %{title: title}} =
+               tool.execute.("call-1", %{"action" => "reload"}, nil, nil)
 
-      # Both should return AgentToolResult (not error tuples like reload would)
-      assert %AgentToolResult{} = result_default
-      assert %AgentToolResult{} = result_status
-
-      # Both should have the same structure
-      assert Map.has_key?(result_default.details, :extensions) or
-               Map.has_key?(result_default.details, :title)
+      assert title =~ "no session context"
     end
   end
 end

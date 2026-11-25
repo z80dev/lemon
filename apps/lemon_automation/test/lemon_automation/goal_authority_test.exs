@@ -8,10 +8,10 @@ defmodule LemonAutomation.GoalAuthorityTest do
   use ExUnit.Case, async: false
 
   alias LemonAgent.Types.AgentToolResult
-  alias LemonAgent.Workspace.{GoalAuthority, GoalStore}
+  alias LemonAutomation.{GoalAuthority, GoalStore}
   alias LemonAutomation.GoalLoopManager
   alias LemonCore.ToolPolicy
-  alias LemonSkills.Tools.Goal
+  alias LemonAutomation.Tools.Goal
 
   defmodule Executor do
     @behaviour CodingAgent.Executor.Behaviour
@@ -80,8 +80,8 @@ defmodule LemonAutomation.GoalAuthorityTest do
     outside = Path.join(base, "outside")
     File.mkdir_p!(Path.join(root, "work"))
     File.mkdir_p!(outside)
-    {:ok, root} = LemonAgent.Workspace.KanbanAuthority.canonical_directory(root)
-    {:ok, outside} = LemonAgent.Workspace.KanbanAuthority.canonical_directory(outside)
+    {:ok, root} = LemonAutomation.KanbanAuthority.canonical_directory(root)
+    {:ok, outside} = LemonAutomation.KanbanAuthority.canonical_directory(outside)
 
     key = "agent:default:goal-authority-#{System.unique_integer([:positive])}"
 
@@ -343,6 +343,11 @@ defmodule LemonAutomation.GoalAuthorityTest do
 
     send(GoalLoopManager, :auto_tick)
     assert {:ok, _status} = GoalLoopManager.status(key)
+
+    assert {:ok, %{^key => %{running: running, control_revision: revision}}} =
+             GoalLoopManager.status_many([key])
+
+    assert is_boolean(running) and is_binary(revision)
     refute_receive {:execution, _command}, 300
 
     assert {:error, _reason} = GoalLoopManager.start_loop(key, max_ticks: 1)

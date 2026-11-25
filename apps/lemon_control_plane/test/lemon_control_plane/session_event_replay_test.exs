@@ -4,11 +4,10 @@ defmodule LemonControlPlane.SessionEventReplayTest do
   alias LemonControlPlane.{Connections, EventBridge}
   alias LemonControlPlane.Methods.{Registry, SessionsEvents, SessionsSnapshot}
   alias LemonControlPlane.Protocol.{Frames, Schemas}
+  alias LemonControlPlane.WS.Connection
   alias LemonCore.{AgentRuntime, Event}
 
   defmodule Runtime do
-    @behaviour LemonCore.AgentRuntime.Provider
-
     def session_event_replay(key, cursor, limit) do
       state =
         Agent.get_and_update(owner(), fn state ->
@@ -50,7 +49,6 @@ defmodule LemonControlPlane.SessionEventReplayTest do
   end
 
   defmodule MissingRuntime do
-    @behaviour LemonCore.AgentRuntime.Provider
   end
 
   setup do
@@ -76,7 +74,7 @@ defmodule LemonControlPlane.SessionEventReplayTest do
       )
 
     Application.put_env(:lemon_control_plane, Runtime, state)
-    :ok = AgentRuntime.register(Runtime)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, Runtime)
     if is_nil(Process.whereis(Registry)), do: start_supervised!(Registry)
     if is_nil(Process.whereis(Connections)), do: start_supervised!(Connections)
     if is_nil(Process.whereis(EventBridge)), do: start_supervised!(EventBridge)
@@ -89,7 +87,7 @@ defmodule LemonControlPlane.SessionEventReplayTest do
     %{key: key, state: state, conn_id: conn_id, cursor: initial}
   end
 
-  test "method, schema, event, and optional provider callback are registered", c do
+  test "method, schema, event, and required provider callback are registered", c do
     assert Registry.lookup("sessions.events") == {:ok, SessionsEvents}
     assert Registry.dispatch_mode("sessions.events") == :async
     assert SessionsEvents.scopes() == [:read]
@@ -98,6 +96,10 @@ defmodule LemonControlPlane.SessionEventReplayTest do
     assert "session.event" in Frames.supported_events()
 
     assert {:session_event_replay, 3} in LemonCore.AgentRuntime.Provider.behaviour_info(
+             :callbacks
+           )
+
+    refute {:session_event_replay, 3} in LemonCore.AgentRuntime.Provider.behaviour_info(
              :optional_callbacks
            )
 
@@ -164,9 +166,24 @@ defmodule LemonControlPlane.SessionEventReplayTest do
     refute next["hasMore"]
   end
 
-  test "session_events bus forwards recursive projected batches but never to nodes", c do
-    register(c, ctx().auth)
-    bridge = Process.whereis(EventBridge)
+  test "the watched session forwards recursive projected batches but never to nodes", c do
+    auth = ctx().auth
+    register(c, auth)
+    {:ok, socket} = Connection.init([])
+    socket = %{socket | connected: true, auth: auth, conn_id: c.conn_id}
+
+    request =
+      Jason.encode!(%{
+        type: "req",
+        id: "watch",
+        method: "sessions.watch",
+        params: %{sessionKey: c.key}
+      })
+
+    assert {:push, {:text, response}, socket} =
+             Connection.handle_in({request, [opcode: :text]}, socket)
+
+    assert Jason.decode!(response)["ok"]
     parent = self()
     node = start_supervised!({Task, fn -> collect_node(c.conn_id, parent) end})
     send(node, {:register_node, parent})
@@ -178,17 +195,22 @@ defmodule LemonControlPlane.SessionEventReplayTest do
     expected = wire_entry(c.key, outer) |> Map.put("sessionKey", c.key)
     assert :ok = Schemas.validate_event("session.event", expected)
 
-    LemonCore.Bus.broadcast("session_events", envelope(c.key, outer))
-    :sys.get_state(bridge)
-    assert_receive {:event, "session.event", ^expected, _versions}, 1_000
+    outer_event = envelope(c.key, outer)
+    LemonCore.Bus.broadcast(LemonCore.Bus.session_topic(c.key), outer_event)
+    assert_receive ^outer_event
+    assert {:push, {:text, frame}, socket} = Connection.handle_info(outer_event, socket)
+    assert %{"event" => "session.event", "payload" => ^expected} = Jason.decode!(frame)
     send(node, {:barrier, parent})
     assert_receive {:node_barrier, ^node}
     refute_receive {:node_session_event, _}, 0
 
     empty = entry(3, [])
     empty_payload = wire_entry(c.key, empty) |> Map.put("sessionKey", c.key)
-    LemonCore.Bus.broadcast("session_events", envelope(c.key, empty))
-    assert_receive {:event, "session.event", ^empty_payload, _versions}, 1_000
+    empty_event = envelope(c.key, empty)
+    LemonCore.Bus.broadcast(LemonCore.Bus.session_topic(c.key), empty_event)
+    assert_receive ^empty_event
+    assert {:push, {:text, frame}, _socket} = Connection.handle_info(empty_event, socket)
+    assert %{"event" => "session.event", "payload" => ^empty_payload} = Jason.decode!(frame)
   end
 
   test "invalid bounded inputs and unsupported cursor versions never reach the provider", c do
@@ -264,7 +286,7 @@ defmodule LemonControlPlane.SessionEventReplayTest do
                SessionsEvents.handle(params(c), ctx())
     end
 
-    :ok = AgentRuntime.register(MissingRuntime)
+    :ok = Application.put_env(:lemon_core, :agent_runtime_provider, MissingRuntime)
     assert {:error, {:unavailable, _, nil}} = SessionsEvents.handle(params(c), ctx())
     Application.delete_env(:lemon_core, :agent_runtime_provider)
     assert {:error, {:unavailable, _, nil}} = SessionsEvents.handle(params(c), ctx())
@@ -437,15 +459,17 @@ defmodule LemonControlPlane.SessionEventReplayTest do
     request = %{"sessionKey" => c.key, "cursor" => initial}
     assert {:ok, %{"entries" => [], "cursor" => ^initial}} = SessionsEvents.handle(request, ctx())
 
-    # A real owner broadcast is captured and projected without running a provider.
-    send(owner, {:task_progress, "cursor-call", %{}})
+    # A real owner translates a raw text event without running a provider.
+    :ok = LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(c.key))
+    send(owner, {:agent_event, {:message_update, {:text_delta, 0, "native replay"}}})
     Session.get_state(owner)
     assert {:ok, replayed} = SessionsEvents.handle(request, ctx())
     assert [event] = replayed["entries"]
     assert event["cursor"]["seq"] == initial["seq"] + 1
     assert event["eventId"] == initial["streamId"] <> ":" <> to_string(event["cursor"]["seq"])
     live_payload = Map.put(event, "sessionKey", c.key)
-    assert_receive {:event, "session.event", ^live_payload, _versions}, 1_000
+    assert_receive %Event{type: :session_event} = live, 1_000
+    assert {"session.event", ^live_payload} = EventBridge.project(live)
 
     foreign = Map.put(request, "sessionKey", c.key <> "-foreign")
     assert {:ok, %{"status" => "cursor_expired"}} = SessionsEvents.handle(foreign, ctx())

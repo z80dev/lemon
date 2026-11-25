@@ -10,8 +10,7 @@ defmodule LemonWeb.ShellLive do
       in `assets/js/shell.js`); the server ranks and fetches.
     * **Shortcut help** (`?`, `lemon:shortcuts`): every binding registered with
       `window.Lemon.Shortcuts`, grouped, plus palette keys.
-    * **Notifications**: run completions (via `LemonWeb.ShellLive.RunEvents`
-      and the exact `run:<id>` topic) and approval requests (`exec_approvals`)
+    * **Notifications**: run completions (`run_lifecycle`) and approval requests (`exec_approvals`)
       become toasts, a bounded bell history and — when the tab is hidden and
       permission is granted — browser notifications. The session open in the
       foreground is never notified; subagent (`:sub:`) sessions are skipped;
@@ -31,9 +30,9 @@ defmodule LemonWeb.ShellLive do
   alias Phoenix.LiveView.JS
 
   alias LemonControlPlane.EventBridge
-  alias LemonCore.Bus
+  alias LemonCore.{Bus, RunStore}
   alias LemonWeb.Rpc
-  alias LemonWeb.ShellLive.{Palette, RunEvents}
+  alias LemonWeb.ShellLive.Palette
 
   @max_notifications 20
   @max_toasts 3
@@ -42,7 +41,6 @@ defmodule LemonWeb.ShellLive do
   @max_titles 200
   @max_shortcuts 120
   @run_toast_ms 8_000
-  @stop_fallback_ms 1_500
   @min_search_chars 2
   @session_limit 6
   @search_limit 8
@@ -86,8 +84,7 @@ defmodule LemonWeb.ShellLive do
   end
 
   defp subscribe(socket) do
-    RunEvents.attach()
-    Bus.subscribe(RunEvents.topic())
+    Bus.subscribe(Bus.run_lifecycle_topic())
     Bus.subscribe("exec_approvals")
     send(self(), :seed_runs)
     socket
@@ -246,51 +243,27 @@ defmodule LemonWeb.ShellLive do
     {:noreply, socket}
   end
 
-  def handle_info({:lemon_web_run, :started, %{run_id: id, session_key: key}}, socket)
-      when is_binary(key) do
-    {:noreply, track_run(socket, id, key)}
-  end
-
-  def handle_info({:lemon_web_run, :stopped, %{run_id: id} = info}, socket) do
-    cond do
-      id in socket.assigns.seen_runs ->
-        {:noreply, socket}
-
-      Map.has_key?(socket.assigns.runs, id) ->
-        # The projected `run_completed` on `run:<id>` normally follows; this is
-        # the fallback when that event never arrives.
-        Process.send_after(self(), {:stop_fallback, info}, @stop_fallback_ms)
-        {:noreply, socket}
-
-      is_binary(info.session_key) and notifiable_session?(info.session_key) ->
-        {:noreply, complete_run(socket, id, info.session_key, telemetry_outcome(info))}
-
-      true ->
-        {:noreply, socket}
+  def handle_info(%LemonCore.Event{type: :run_started, meta: %{run_id: id}} = event, socket) do
+    case run_session_key(event, socket, id) do
+      key when is_binary(key) -> {:noreply, track_run(socket, id, key)}
+      _ -> {:noreply, socket}
     end
   end
 
-  def handle_info({:lemon_web_run, _phase, _info}, socket), do: {:noreply, socket}
+  def handle_info(%LemonCore.Event{type: :run_failed, meta: %{run_id: id}} = event, socket) do
+    {:noreply, finish_run(socket, event, id, %{status: :error, duration: nil})}
+  end
 
-  def handle_info({:stop_fallback, %{run_id: id} = info}, socket) do
-    case Map.fetch(socket.assigns.runs, id) do
-      {:ok, key} -> {:noreply, complete_run(socket, id, key, telemetry_outcome(info))}
-      :error -> {:noreply, socket}
+  def handle_info(%LemonCore.Event{type: :run_completed, meta: %{run_id: id}} = event, socket) do
+    case safe_project(event) do
+      {"agent", payload} -> {:noreply, finish_run(socket, event, id, outcome(payload))}
+      _ -> {:noreply, socket}
     end
   end
 
   def handle_info(%LemonCore.Event{type: type} = event, socket)
-      when type in [:run_completed, :approval_requested, :approval_resolved] do
+      when type in [:approval_requested, :approval_resolved] do
     case safe_project(event) do
-      {"agent", %{"type" => "completed", "runId" => id} = payload} when is_binary(id) ->
-        key = payload["sessionKey"] || Map.get(socket.assigns.runs, id)
-
-        if is_binary(key) and id not in socket.assigns.seen_runs do
-          {:noreply, complete_run(socket, id, key, outcome(payload))}
-        else
-          {:noreply, untrack_run(socket, id)}
-        end
-
       {"exec.approval.requested", payload} ->
         {:noreply, approval_requested(socket, payload)}
 
@@ -304,6 +277,31 @@ defmodule LemonWeb.ShellLive do
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
+
+  defp finish_run(socket, event, id, outcome) do
+    key = run_session_key(event, socket, id)
+
+    if is_binary(key) and notifiable_session?(key) and id not in socket.assigns.seen_runs do
+      complete_run(socket, id, key, outcome)
+    else
+      untrack_run(socket, id)
+    end
+  end
+
+  defp run_session_key(event, socket, id) do
+    event.meta[:session_key] || tracked_session(socket, id) ||
+      case RunStore.fetch(id) do
+        {:ok, %{summary: %{session_key: key}}} -> key
+        _ -> nil
+      end
+  end
+
+  defp tracked_session(socket, id) do
+    case Map.get(socket.assigns.runs, id) do
+      {key, _order} -> key
+      nil -> nil
+    end
+  end
 
   defp safe_project(event) do
     EventBridge.project(event)
@@ -324,13 +322,11 @@ defmodule LemonWeb.ShellLive do
         socket
 
       true ->
-        Bus.subscribe(Bus.run_topic(id))
-        runs = Map.put(runs, id, key)
+        runs = Map.put(runs, id, {key, System.unique_integer([:monotonic])})
 
         runs =
           if map_size(runs) > @max_tracked_runs do
-            {oldest, _} = Enum.at(runs, 0)
-            Bus.unsubscribe(Bus.run_topic(oldest))
+            {oldest, _} = Enum.min_by(runs, fn {_id, {_key, order}} -> order end)
             Map.delete(runs, oldest)
           else
             runs
@@ -341,7 +337,6 @@ defmodule LemonWeb.ShellLive do
   end
 
   defp untrack_run(socket, id) do
-    if Map.has_key?(socket.assigns.runs, id), do: Bus.unsubscribe(Bus.run_topic(id))
     assign(socket, runs: Map.delete(socket.assigns.runs, id))
   end
 
@@ -385,13 +380,6 @@ defmodule LemonWeb.ShellLive do
       end
 
     %{status: status, duration: run_duration(payload["durationMs"])}
-  end
-
-  defp telemetry_outcome(info) do
-    %{
-      status: if(info.ok == true, do: :ok, else: :error),
-      duration: run_duration(info.duration_ms)
-    }
   end
 
   defp run_duration(ms) when is_integer(ms) and ms > 0, do: "took " <> duration(ms)

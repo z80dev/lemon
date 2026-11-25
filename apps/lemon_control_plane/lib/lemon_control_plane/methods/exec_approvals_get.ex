@@ -2,7 +2,11 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
   @moduledoc """
   Handler for the exec.approvals.get method.
 
-  Gets the current approval policy and active pending requests. Pending actions
+  Gets the remembered global approvals and active pending requests.
+
+  `approvals` lists the grants `exec.approval.resolve` stored with
+  `approve_global` (approval memory, not policy: tool policy lives in
+  `LemonCore.PolicyStore` and agent profiles). Pending actions
   redact credential fields and text. The action's exact `authorization_url` field
   may retain a credential-free HTTP(S) URL so operators can complete OAuth;
   URLs containing userinfo or recognizable credentials remain redacted.
@@ -21,11 +25,8 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
 
   @impl true
   def handle(_params, _ctx) do
-    with {:ok, policy} <- ExecApprovalStore.fetch_global_policy_map(),
-         {:ok, global_policies} <- ExecApprovalStore.fetch_global_policies(),
+    with {:ok, global_policies} <- ExecApprovalStore.fetch_global_policies(),
          {:ok, pending_rows} <- ExecApprovalStore.fetch_pending_list() do
-      policy = policy || %{}
-
       approvals =
         Enum.map(global_policies, fn {{tool, action_hash}, approval} ->
           %{
@@ -47,10 +48,9 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
 
       {:ok,
        %{
-         "policy" => policy,
          "approvals" => approvals,
          "pending" => pending,
-         "summary" => summary(policy, approvals, pending)
+         "summary" => summary(approvals, pending)
        }}
     else
       {:error, _reason} -> {:error, Errors.unavailable("Approval state is unavailable")}
@@ -84,16 +84,14 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))
   end
 
-  defp summary(policy, approvals, pending) do
+  defp summary(approvals, pending) do
     %{
-      "policyCount" => map_size(policy),
       "approvalCount" => length(approvals),
       "pendingCount" => length(pending),
       "pendingToolCounts" => count_by(pending, "tool"),
       "pendingAgentCounts" => count_by(pending, "agentId"),
       "expiredPendingOmitted" => true,
       "cleanup" => %{
-        "includesPolicy" => true,
         "includesApprovalHashes" => true,
         "includesPendingActions" => true,
         "redactsPendingActionSecretKeys" => true,

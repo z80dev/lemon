@@ -106,7 +106,7 @@ defmodule LemonCore.StoreInstanceTest do
       # Casts are async; wait for the write to land in the backend.
       assert :ok = Store.ping(alpha)
 
-      assert %{events: [%{type: :started}]} = Store.get_run(alpha, "run_alpha")
+      assert %{events: [%{type: :started}]} = Store.get_run_with_events(alpha, "run_alpha")
       assert Store.get_run(beta, "run_alpha") == nil
     end
 

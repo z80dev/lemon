@@ -351,6 +351,13 @@ through `RELEASE_COOKIE` or `LEMON_GATEWAY_NODE_COOKIE`; the `--cookie` option
 is removed because its value is visible in process argv. See
 [distribution cookie security](../security/threat-model.md#distribution-cookie).
 
+`./bin/lemon-gateway [runtime options]` is `./bin/lemon start` with the node
+name defaulting to `lemon_gateway` (`LEMON_GATEWAY_NODE_NAME`). It shares the
+health probe and start lock, so it reuses a healthy runtime instead of starting
+a second router and channel adapters. It never fetches dependencies; run
+`mix deps.get` yourself after dependency changes. `bin/lemon-control-plane` is
+removed: use `./bin/lemon start` or `./bin/lemon daemon`.
+
 Both ports must be integers from 1 through 65535. Environment defaults are
 `LEMON_CONTROL_PLANE_PORT=4040` and `LEMON_WEB_PORT=4080`; source `status` and
 `stop` also accept the port flags.
@@ -540,11 +547,22 @@ One-shot commands (`doctor`, `config`, `secrets`, `usage`, `context`, `learn`,
 services in client mode, so running them next to a daemon is safe: they never
 expire the daemon's pending approvals, sweep its store, run its config reloader
 or run history, or install a SIGTERM handler. `doctor`, `config show`/`validate`,
-`usage` and `secrets status`/`list`/`check` also open the store read-only.
-Commands that change stored state, such as `secrets set`, still write the shared
-store directly. Only the first runtime to open a store owns it
-(`<store>.runtime.lock`); a second runtime on the same store, such as a node
-worker, leaves the owner's approvals alone.
+`usage` and `secrets status`/`list`/`check`/`init` also open the store read-only.
+Only the first runtime to open a store owns it (`<store>.runtime.lock`); a
+second runtime on the same store, such as a node worker, leaves the owner's
+approvals alone. While a runtime owns the store, a one-shot command never
+writes it: `secrets set`, `secrets delete`, `secrets import-env` and the bot
+token step of `setup gateway` send the write to that runtime over its control
+plane (`secrets.set` / `secrets.delete`, admin scope; set
+`LEMON_CONTROL_PLANE_OPERATOR_TOKEN` when the runtime requires one). An
+unreachable runtime writes nothing; an unconfirmed write is reported as such,
+so check `lemon secrets list` before retrying. Saving a provider API key with
+`lemon setup`/`lemon model` under the default secret name and config goes to
+the runtime's `providers.management.api_key.set` (and `default.set` when you
+pick a default model), with the same nothing-written versus unconfirmed
+reporting and no retry. Other provider sign-ins, custom secret names or config
+paths have no runtime route and are refused; stop the runtime (`lemon stop`)
+to use them.
 
 ## Help and exit codes
 
@@ -1271,10 +1289,21 @@ lemon sessions delete agent:research:main \
   --confirm agent:research:main
 ```
 
-A mismatch is a usage error and does not mutate state. The lifecycle service
-deletes canonical run history last, verifies all core-owned state is gone, and
-restores recoverable ancillary metadata if final deletion or verification
-fails.
+A mismatch is a usage error and does not mutate state. Deletion removes every
+piece of state kept for the session: chat state, session policy, lifecycle
+metadata, session-scoped approval grants, memory documents (so recall and
+search no longer return the conversation), the session goal, Telegram and
+Discord message indexes and model overrides, the web workspace, router
+compaction and agent-messaging state, and the native session journals with
+their model pins. Canonical run history is deleted last. Success is reported
+only after every store verified its deletion; if any step fails before run
+history is deleted, everything is restored and the session stays intact. A
+store that cannot be read stops the deletion before anything changes.
+
+`sessions.reset` keeps the session and its preferences (model overrides,
+goal, workspace, memory) but revokes its session-scoped approval grants and
+drops message indexes, pending selected resumes and compaction markers that
+would bring the old conversation back.
 
 ## omp delegate sessions
 
@@ -1464,9 +1493,10 @@ lemon model [provider] [options]
 | --- | --- |
 | `--provider NAME` | Provider id |
 | `--token TOKEN` | Provider credential |
-| `--auth oauth\|device\|api_key\|codex-cli` | Authentication mode (import is opt-in) |
+| `--auth oauth\|device\|api_key\|codex-cli\|omp` | Authentication mode (import is opt-in) |
 | `--codex-auth-path PATH` | Auth file for --auth codex-cli only |
-| `--non-interactive` | Require --token, --auth device or --auth codex-cli |
+| `--region china\|global` | Kimi Code deployment (global = kimi.ai accounts) |
+| `--non-interactive` | Require --token, --auth device, --auth codex-cli, or --auth omp |
 | `--secret-name NAME` | Secret to store, inspect, or log out |
 | `--model MODEL` | Default model with --set-default |
 | `--set-default` | Set the provider and model as defaults |
@@ -1541,13 +1571,18 @@ lemon doctor [options]
 | `--bundle [PATH]` | Write a redacted support bundle |
 | `--bundle-path PATH` | Set the support bundle path |
 
-When `LEMON_BOT_PUBLIC_URL` is set, the offline `bot.admission_origins` check
-requires its origin in both `LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` and
-`LEMON_CRON_ADMISSION_ALLOWED_ORIGINS`. Origins match by scheme, case-insensitive
-host, and effective port (so HTTPS port 443 can be omitted). Each environment
+The read-only `bot.admission_origins` check takes the Bot origin from
+`LEMON_BOT_PUBLIC_URL`, or else from the receipt `lemon-bot https enable`
+publishes in `~/.lemon/bot-https.json`, and requires it in both
+`LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS` and
+`LEMON_CRON_ADMISSION_ALLOWED_ORIGINS`. It skips when neither is set. Origins
+match by scheme, case-insensitive host, and effective port (so HTTPS port 443 can
+be omitted). The allowlists are exactly those admission enforces: each environment
 allowlist replaces its app configuration, even when empty; only an absent variable
 uses the app's configured allowlist, including the same-machine loopback default.
-Missing entries fail with the affected variable names, never URL values.
+Missing entries fail with the affected variable names, never URL values. Manage
+the Bot's HTTPS address with `lemon-bot https` (see
+[Lemon Bot getting started](../getting-started/lemon-bot.md#give-lemon-bot-an-https-address)).
 
 ### `lemon config`
 
@@ -2271,7 +2306,14 @@ lemon models [options]
 
 ### `lemon policy`
 
-Manage model policies.
+Manage chat model and thinking defaults.
+
+A default applies to every session of its route: a thread, a peer (chat), an
+account or a whole channel, the same rows Telegram and Discord `/model` (future
+sessions) and `/thinking` write. The most specific row that sets a value wins;
+a session's own model (`/model` for this session or `sessions.patch`) wins over
+all of them. `--peer` without `--account` names the `default` account;
+`--thread` requires `--peer`.
 
 ```text
 lemon policy <list|set|get|clear> [channel] [options]
@@ -2289,9 +2331,9 @@ lemon policy <list|set|get|clear> [channel] [options]
 | `--account ID`, `-a ID` | Channel account |
 | `--peer ID`, `-p ID` | Peer or chat |
 | `--thread ID`, `-t ID` | Thread or topic |
-| `--model MODEL`, `-m MODEL` | Model override |
-| `--thinking LEVEL` | Thinking override |
-| `--reason TEXT`, `-r TEXT` | Policy metadata reason |
+| `--model MODEL`, `-m MODEL` | Model default |
+| `--thinking LEVEL` | Thinking default |
+| `--reason TEXT`, `-r TEXT` | Reason stored with the row |
 | `--all` | Clear all policies for the channel |
 
 ### `lemon skill`

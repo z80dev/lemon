@@ -25,8 +25,8 @@ checkout. To depend on the published Hex packages instead, generate with
 hex lemon_new` replaces the clone, and with no checkout the generator uses
 `--hex` on its own.
 
-The packages declare Elixir 1.15 or later; CI tests them on Elixir 1.20 / OTP 29,
-which is the safest choice. Check with `elixir --version`.
+The packages declare Elixir 1.17 or later; CI tests them on Elixir 1.17 / OTP 26
+and Elixir 1.20 / OTP 29, the safest choice. Check with `elixir --version`.
 
 ## 2. Generate a project
 

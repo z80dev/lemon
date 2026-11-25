@@ -5,13 +5,13 @@ defmodule CodingAgent.Tools.ReadFormats do
   `read/5` returns `{:ok, AgentToolResult}`, `{:error, message}`, or
   `:not_supported` (the caller should continue its ordinary text/image reader).
   Paths are resolved against `cwd`; an existing literal filename always wins
-  over archive-member syntax. Call this before rejecting directories or binary
+  over archive-member syntax. Directories are refused with a pointer to `ls`,
+  the single directory-listing tool. Call this before rejecting binary
   documents, and apply the caller's ordinary untrusted-file result tagging.
   This module does not attest that a trust transform ran or record edit hashes.
 
   ## Paths and parameters
 
-  * A directory delegates to `Ls` with hidden entries and metadata enabled.
   * `bundle.zip`, `bundle.tar`, `bundle.tar.gz`, and `bundle.tgz` list entries.
     `bundle.zip:src/main.ex` reads an exact member; `bundle.zip:src/` lists that
     subtree. Members are immutable virtual sources, never extracted onto disk.
@@ -47,12 +47,9 @@ defmodule CodingAgent.Tools.ReadFormats do
   """
 
   alias CodingAgent.Tools.{
-    Ls,
     PathHelpers,
     ReadArchive,
-    ReadFormatText,
     ReadImage,
-    ReadJson,
     ReadNotebook,
     ReadPdf,
     ReadSqlite,
@@ -62,7 +59,6 @@ defmodule CodingAgent.Tools.ReadFormats do
   alias LemonCore.CredentialPaths
 
   alias LemonAgent.Types.AgentToolResult
-  alias LemonAi.Types.TextContent
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
   @spec read(String.t(), map(), reference() | nil, String.t(), keyword()) ::
@@ -72,20 +68,14 @@ defmodule CodingAgent.Tools.ReadFormats do
          :ok <- validate_params(path, params) do
       resolved = PathHelpers.resolve_path(path, cwd, opts)
 
-      # Selector suffixes (`?q=`, `:table`, `:member`) hide the backing file's
+      # Selector suffixes (`:table`, `:member`, `?q=`) hide the backing file's
       # identity from the whole-path check, so the parsed file is checked again.
       cond do
         File.dir?(resolved) ->
-          read_directory(resolved, params, signal, cwd, opts)
+          {:error, "Path is a directory: #{resolved}. List directories with ls."}
 
         File.regular?(resolved) ->
           dispatch_file(resolved, params, signal, cwd, opts)
-
-        json = ReadJson.split_path(resolved) ->
-          {file, query} = json
-
-          with :ok <- CredentialPaths.check_read(file),
-               do: ReadJson.read(file, query, resolved, params, signal, opts)
 
         sqlite = ReadSqlite.split_path(resolved) ->
           {db, sub_path, query} = sqlite
@@ -161,32 +151,6 @@ defmodule CodingAgent.Tools.ReadFormats do
 
       true ->
         :not_supported
-    end
-  end
-
-  defp read_directory(path, params, signal, cwd, opts) do
-    ls_params = %{
-      "path" => path,
-      "all" => true,
-      "long" => true,
-      "max_entries" => Keyword.get(opts, :directory_max_entries, 100_000)
-    }
-
-    case Ls.execute("read-directory", ls_params, signal, nil, cwd, opts) do
-      %AgentToolResult{content: content, details: details} ->
-        text = Enum.map_join(content, "\n", fn %TextContent{text: text} -> text end)
-
-        ReadFormatText.result(
-          text,
-          path,
-          params,
-          signal,
-          opts,
-          Map.merge(details, %{format: :directory, is_directory: true, immutable: true})
-        )
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 

@@ -145,7 +145,8 @@ defmodule CodingAgent.ExecutionPolicyEntryPointsTest do
     widening = %{
       "profile" => "full_access",
       "allow" => "all",
-      "approvals" => %{"grep" => "never"}
+      "approvals" => %{"grep" => "never"},
+      "workspace_read_exempt" => true
     }
 
     assert {:ok, task} =
@@ -165,11 +166,22 @@ defmodule CodingAgent.ExecutionPolicyEntryPointsTest do
 
     assert {:ok, remote, _opts} = Worker.execution_request(payload, worker(tmp_dir), "invoke")
 
-    for policy <- [task.tool_policy, remote.tool_policy, remote.execution_context.tool_policy] do
+    # The destination re-restricts a tampered top-level wire policy.
+    tampered = Map.put(payload, "toolPolicy", widening)
+    assert {:ok, forged, _opts} = Worker.execution_request(tampered, worker(tmp_dir), "invoke")
+
+    for policy <- [
+          task.tool_policy,
+          remote.tool_policy,
+          remote.execution_context.tool_policy,
+          forged.tool_policy,
+          forged.execution_context.tool_policy
+        ] do
       assert ToolPolicy.allowed?(policy, "read")
       refute ToolPolicy.allowed?(policy, "bash")
       refute ToolPolicy.allowed?(policy, "write")
       assert ToolPolicy.requires_approval?(policy, "grep")
+      refute ToolPolicy.parse!(policy).workspace_read_exempt
       assert ToolPolicy.subset?(policy, parent.tool_policy)
     end
 

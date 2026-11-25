@@ -31,13 +31,14 @@ defmodule LemonCore.RateLimiter do
     profile = Keyword.get(opts, :profile, :outbox)
     table = Keyword.fetch!(opts, :name)
 
-    :ets.new(table, [
-      :named_table,
-      :public,
-      :set,
-      read_concurrency: true,
-      write_concurrency: true
-    ])
+    _ =
+      :ets.new(table, [
+        :named_table,
+        :public,
+        :set,
+        read_concurrency: true,
+        write_concurrency: true
+      ])
 
     clock = Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end)
 
@@ -50,7 +51,7 @@ defmodule LemonCore.RateLimiter do
     }
 
     if profile == :a2a, do: :ets.insert(table, {:policy, clock, state.limit})
-    if profile == :a2a, do: Process.send_after(self(), :sweep, state.idle_ms)
+    _ = if profile == :a2a, do: Process.send_after(self(), :sweep, state.idle_ms)
     {:ok, state}
   end
 

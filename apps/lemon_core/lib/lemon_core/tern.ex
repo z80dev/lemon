@@ -207,7 +207,7 @@ defmodule LemonCore.Tern do
   def handle_call({:request, channel, payload, timeout}, from, state) do
     id = state.next_id
     started = System.monotonic_time(:millisecond)
-    :inet.setopts(state.socket, send_timeout: timeout)
+    _ = :inet.setopts(state.socket, send_timeout: timeout)
 
     case send_frame(state.socket, %{"id" => id, channel => payload}) do
       :ok ->
@@ -232,7 +232,7 @@ defmodule LemonCore.Tern do
   def handle_info({:tcp, socket, bytes}, %{socket: socket} = state) do
     case frames(%{state | buffer: state.buffer <> bytes}) do
       {:ok, state} ->
-        :inet.setopts(socket, active: :once)
+        _ = :inet.setopts(socket, active: :once)
         {:noreply, state}
 
       {:error, reason, state} ->
@@ -266,7 +266,7 @@ defmodule LemonCore.Tern do
 
   @impl true
   def terminate(_, state) do
-    fail_pending(state, {:closed, "Tern connection closed"})
+    _ = fail_pending(state, {:closed, "Tern connection closed"})
     :gen_tcp.close(state.socket)
   end
 
@@ -301,7 +301,7 @@ defmodule LemonCore.Tern do
       {from, channel, timer, _} ->
         case Map.fetch(message, channel) do
           {:ok, answer} ->
-            Process.cancel_timer(timer)
+            _ = Process.cancel_timer(timer)
             GenServer.reply(from, decode_answer(answer))
             {:ok, %{state | pending: Map.delete(state.pending, id)}}
 
@@ -321,10 +321,11 @@ defmodule LemonCore.Tern do
 
   defp close_late_open(%{"id" => id, "browser" => %{"ok" => %{"block" => block}}}, state) do
     if MapSet.member?(state.late_opens, id) do
-      send_frame(state.socket, %{
-        "id" => state.next_id,
-        "browser" => %{"op" => "close", "block" => block}
-      })
+      _ =
+        send_frame(state.socket, %{
+          "id" => state.next_id,
+          "browser" => %{"op" => "close", "block" => block}
+        })
 
       {:ok,
        %{state | late_opens: MapSet.delete(state.late_opens, id), next_id: state.next_id + 1}}
@@ -350,7 +351,7 @@ defmodule LemonCore.Tern do
 
   defp fail_pending(state, reason) do
     Enum.each(state.pending, fn {_, {from, _, timer, _}} ->
-      Process.cancel_timer(timer)
+      _ = Process.cancel_timer(timer)
       GenServer.reply(from, {:error, reason})
     end)
 

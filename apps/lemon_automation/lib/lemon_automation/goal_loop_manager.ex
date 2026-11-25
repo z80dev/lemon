@@ -27,7 +27,7 @@ defmodule LemonAutomation.GoalLoopManager do
   `transition_goal/3` uses the same guard to pause/resume only an idle goal.
   Drift returns `{:error, :stale}`; an old confirmation cannot stop a new loop.
 
-  Work starts only under the goal's recorded `LemonAgent.Workspace.GoalAuthority`.
+  Work starts only under the goal's recorded `LemonAutomation.GoalAuthority`.
   A session or chat start passes its trusted `starter:` authority (a
   `GoalAuthority.new/4` record: session, agent, policy, canonical root). It
   must be the goal's own session and agent and contain the goal target; the
@@ -40,7 +40,7 @@ defmodule LemonAutomation.GoalLoopManager do
   use GenServer
 
   alias LemonAutomation.GoalLoop
-  alias LemonAgent.Workspace.{GoalAuthority, GoalStore}
+  alias LemonAutomation.{GoalAuthority, GoalStore}
   alias LemonCore.RunStore
 
   def start_link(opts \\ []) do
@@ -74,6 +74,14 @@ defmodule LemonAutomation.GoalLoopManager do
 
   def status(session_key) do
     GenServer.call(__MODULE__, {:status, session_key})
+  end
+
+  @doc """
+  `status/1` for up to 100 sessions in one call:
+  `{:ok, %{session_key => status}}` with every requested session present.
+  """
+  def status_many(session_keys) when is_list(session_keys) and length(session_keys) <= 100 do
+    GenServer.call(__MODULE__, {:status_many, session_keys})
   end
 
   @doc "Pause or resume an idle goal after checking an operator control revision."
@@ -298,19 +306,18 @@ defmodule LemonAutomation.GoalLoopManager do
   end
 
   def handle_call({:status, session_key}, _from, state) do
-    state = restore_persisted_reconciliation(state, session_key)
-    state = reconcile_ambiguous_loop(session_key, state)
-    loop = Map.get(state.loops, session_key)
+    {status, state} = loop_status(session_key, state)
+    {:reply, {:ok, status}, state}
+  end
 
-    {:reply,
-     {:ok,
-      %{
-        running: not is_nil(loop),
-        control_revision: control_revision(session_key, state),
-        loop: loop && public_loop(loop),
-        goal: GoalStore.get(session_key),
-        auto: goal_auto(GoalStore.get(session_key))
-      }}, state}
+  def handle_call({:status_many, session_keys}, _from, state) do
+    {statuses, state} =
+      Enum.reduce(session_keys, {%{}, state}, fn key, {acc, state} ->
+        {status, state} = loop_status(key, state)
+        {Map.put(acc, key, status), state}
+      end)
+
+    {:reply, {:ok, statuses}, state}
   end
 
   def handle_call(
@@ -924,6 +931,21 @@ defmodule LemonAutomation.GoalLoopManager do
   end
 
   defp budget_exhausted?(_), do: false
+
+  defp loop_status(session_key, state) do
+    state = restore_persisted_reconciliation(state, session_key)
+    state = reconcile_ambiguous_loop(session_key, state)
+    loop = Map.get(state.loops, session_key)
+    goal = GoalStore.get(session_key)
+
+    {%{
+       running: not is_nil(loop),
+       control_revision: control_revision(session_key, state),
+       loop: loop && public_loop(loop),
+       goal: goal,
+       auto: goal_auto(goal)
+     }, state}
+  end
 
   defp control_revision(session_key, state) do
     loop = Map.get(state.loops, session_key)

@@ -315,12 +315,10 @@ defmodule LemonAgent.Security.ExternalContent do
     |> String.replace(@start_marker_like, "[[MARKER_SANITIZED]]")
   end
 
-  defp normalize_optional_string(value) when is_binary(value) do
+  defp normalize_optional_string(value) do
     trimmed = String.trim(value)
     if trimmed == "", do: nil, else: trimmed
   end
-
-  defp normalize_optional_string(_), do: nil
 
   defp normalize_metadata_string(value) when is_binary(value) do
     value

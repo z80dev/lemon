@@ -14,7 +14,7 @@ declaration metadata only, never environment values or secret stores.
 - **New variables MUST be named `LEMON_<AREA>_<NAME>`** (e.g. `LEMON_GATEWAY_MAX_CONCURRENT_RUNS`). This keeps `LEMON_`-prefixed variables greppable and namespaced away from third-party tooling.
 - **Provider/vendor credentials keep their ecosystem-standard names** and are not renamed to the `LEMON_` scheme -- e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AWS_ACCESS_KEY_ID`, `GOOGLE_APPLICATION_CREDENTIALS`, `TWILIO_ACCOUNT_SID`. Renaming these would break compatibility with the SDKs/CLIs/docs the ecosystem already documents them against.
 - **Standard platform/BEAM release variables are never renamed** -- `HOME`, `SHELL`, `TERM`, `MIX_ENV`, `RELEASE_NAME`, `RELEASE_NODE`, `RELEASE_VSN`, `PHX_SERVER`.
-- Every other pre-existing non-conforming name below is **grandfathered** and listed with its conforming replacement (if one exists) as an `aliases:` entry in its `LemonCore.Env` declaration -- the conforming name is checked first, then the legacy name, so existing deployments keep working. Grandfathered names in this registry: `VOICE_PUBLIC_URL`, `VOICE_RECORDINGS_DIR`, `LEMON_OPENAI_COMPAT_TOKEN` (superseded by `LEMON_OPENAI_COMPAT_API_TOKEN`), `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST` (superseded by `LEMON_OPENAI_COMPAT_IMAGE_URL_ALLOWED_HOSTS`), `LEMON_GATEWAY_COOKIE` (superseded by `LEMON_GATEWAY_NODE_COOKIE`), and the `INTEGRATION_*` / legacy `ANTHROPIC_API_KEY` fallbacks for the `LEMON_EVAL_*` family.
+- Every other pre-existing non-conforming name below is **grandfathered** and listed with its conforming replacement (if one exists) as an `aliases:` entry in its `LemonCore.Env` declaration -- the conforming name is checked first, then the legacy name, so existing deployments keep working. Grandfathered names in this registry: `VOICE_PUBLIC_URL`, `VOICE_RECORDINGS_DIR`, `LEMON_GATEWAY_COOKIE` (superseded by `LEMON_GATEWAY_NODE_COOKIE`), and the `INTEGRATION_*` / legacy `ANTHROPIC_API_KEY` fallbacks for the `LEMON_EVAL_*` family.
 
 ## Secrets
 
@@ -125,19 +125,14 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_A2A_PUBLIC_URL` | string | _(none)_ |  | `lemon_control_plane` | Public A2A JSON-RPC URL advertised in Lemon's Agent Card. |
 | `LEMON_A2A_RATE_LIMIT_PER_MINUTE` | integer | _(none)_ |  | `lemon_control_plane` | Per-peer A2A JSON-RPC request limit per minute. |
 | `LEMON_A2A_REPLY_TIMEOUT_MS` | integer | _(none)_ |  | `lemon_control_plane` | Maximum synchronous wait for an A2A peer run. |
-| `LEMON_ACP_API_TOKEN` | string | _(none)_ | yes | `lemon_control_plane` | Bearer token for the ACP (agent control protocol) HTTP API; defaults to the operator token. |
 | `LEMON_AGENT_PROFILES_CWD` | string | _(none)_ |  | `lemon_router` | Working directory override used to resolve router agent profiles. |
 | `LEMON_CONTROL_PLANE_ALLOWED_ORIGINS` | list (comma-separated) | `[]` |  | `lemon_control_plane` | Extra exact browser origins (scheme://host[:port]) allowed to open /ws and /acp/ws besides the control plane's own and LemonWeb's; their hosts are also accepted as Host from loopback peers. |
-| `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` | boolean | `false` |  | `lemon_control_plane` | Explicitly allow legacy tokenless operator, OpenAI, ACP and A2A access from direct loopback peers. |
+| `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` | boolean | `false` |  | `lemon_control_plane` | Explicitly allow legacy tokenless operator and A2A access from direct loopback peers. |
 | `LEMON_CONTROL_PLANE_BIND_IP` | string | `127.0.0.1` |  | `lemon_control_plane` | Control-plane bind address; non-loopback requires an operator token and disables tokenless compatibility. |
 | `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` | string | _(none)_ | yes | `lemon_control_plane` | Shared operator credential required by control-plane WebSocket operator connections. |
 | `LEMON_CONTROL_PLANE_PORT` | integer | _(none)_ |  | `lemon_control_plane` | Port the control-plane HTTP server listens on. |
-| `LEMON_CONTROL_PLANE_REMOTE_HTTP` | list (comma-separated) | `[]` |  | `lemon_control_plane` | Off-loopback HTTP API opt-in (openai,acp); each enabled API requires its dedicated token. |
 | `LEMON_GATEWAY_ENABLE_A2A` | boolean | `false` |  | `lemon_control_plane` | Enable the A2A peer listener. |
 | `LEMON_GATEWAY_HEALTH_PORT` | integer | _(none)_ |  | `lemon_gateway` | Port the gateway health-check endpoint listens on. |
-| `LEMON_OPENAI_COMPAT_API_TOKEN`<br>_(alias: `LEMON_OPENAI_COMPAT_TOKEN`)_ | string | _(none)_ | yes | `lemon_control_plane` | Bearer token for the OpenAI-compatible HTTP API; defaults to the operator token. |
-| `LEMON_OPENAI_COMPAT_IMAGE_URL_ALLOWED_HOSTS`<br>_(alias: `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST`)_ | list (comma-separated) | `[]` |  | `lemon_control_plane` | Comma-separated hostname allowlist for OpenAI-compat image URL fetch. |
-| `LEMON_OPENAI_COMPAT_IMAGE_URL_FETCH` | boolean | `false` |  | `lemon_control_plane` | Whether the OpenAI-compat endpoint is allowed to fetch image URLs from messages. |
 | `LEMON_ROUTER_HEALTH_PORT` | integer | _(none)_ |  | `lemon_router` | Port the router health-check endpoint listens on. |
 | `LEMON_WEB_BIND_IP` | string | `127.0.0.1` |  | `lemon_web` | LemonWeb bind address; non-loopback requires an operator token and TLS should terminate in front. |
 | `LEMON_WEB_HOST` | string | `localhost` |  | `lemon_web` | Public hostname for the LemonWeb prod endpoint. |
@@ -256,7 +251,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_LOG_FILE` | string | _(none)_ |  | `lemon_core` | Path to the log file (nil disables file logging). |
 | `LEMON_LOG_FILESYNC_REPEAT_INTERVAL` | integer | _(none)_ |  | `lemon_core` | Log file sync interval, in milliseconds. |
 | `LEMON_LOG_LEVEL` | string | _(none)_ |  | `lemon_core` | Global log level override (debug/info/notice/warning/error/critical/alert/emergency). |
-| `LEMON_LOG_MAX_NO_BYTES` | integer | _(none)_ |  | `lemon_core` | Log file rotation size threshold, in bytes. Plain integer only -- unlike LEMON_WASM_DEFAULT_MEMORY_LIMIT, this one does not accept "10MB"-style suffixes. |
+| `LEMON_LOG_MAX_NO_BYTES` | integer | _(none)_ |  | `lemon_core` | Log file rotation size threshold, in bytes. Plain integer only; "10MB"-style suffixes are not accepted. |
 | `LEMON_LOG_MAX_NO_FILES` | integer | _(none)_ |  | `lemon_core` | Number of rotated log files retained. |
 
 ### Omp
@@ -406,21 +401,6 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS` | integer | `2000` |  | `lemon_core` | Token budget for the hidden-tool catalog digest embedded in the tool_search description. |
 | `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate under the selected profile. |
 | `LEMON_TOOL_DISCLOSURE_PROFILE` | string | `auto` |  | `lemon_core` | Tool disclosure profile: auto selects coding for cwd-scoped sessions and legacy for chat; legacy defers the over-budget long tail; coding also defers optional built-ins. |
-
-### Tools wasm
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `LEMON_WASM_AUTO_BUILD` | boolean | `true` |  | `lemon_core` | Whether WASM tools are auto-built from source on load. |
-| `LEMON_WASM_CACHE_COMPILED` | boolean | `true` |  | `lemon_core` | Whether compiled WASM modules are cached on disk. |
-| `LEMON_WASM_CACHE_DIR` | string | `` |  | `lemon_core` | Directory used for the compiled WASM module cache. |
-| `LEMON_WASM_DEFAULT_FUEL_LIMIT` | integer | `10000000` |  | `lemon_core` | Default WASM interpreter fuel (execution-step) limit. |
-| `LEMON_WASM_DEFAULT_MEMORY_LIMIT` | bytes (B/KB/MB/GB) | `10485760` |  | `lemon_core` | Default WASM tool memory limit (accepts B/KB/MB/GB suffixes). |
-| `LEMON_WASM_DEFAULT_TIMEOUT_MS` | integer | `60000` |  | `lemon_core` | Default WASM tool execution timeout, in milliseconds. |
-| `LEMON_WASM_ENABLED` | boolean | `false` |  | `lemon_core` | Whether the WASM tool runtime is enabled. |
-| `LEMON_WASM_MAX_TOOL_INVOKE_DEPTH` | integer | `4` |  | `lemon_core` | Maximum nested WASM tool invocation depth. |
-| `LEMON_WASM_RUNTIME_PATH` | string | `` |  | `lemon_core` | Path to the WASM runtime executable/library. |
-| `LEMON_WASM_TOOL_PATHS` | list (comma-separated) | `[]` |  | `lemon_core` | Comma-separated extra directories to search for WASM tools. |
 
 ### Tools web
 

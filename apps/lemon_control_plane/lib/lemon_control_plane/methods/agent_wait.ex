@@ -5,6 +5,11 @@ defmodule LemonControlPlane.Methods.AgentWait do
   Waits for a run to complete and returns the result. The answer and error text
   are content and need `operator.content`; read-only callers learn completion,
   status, usage and error presence only, and `includeAnswer` is ignored.
+
+  `error` is redacted text, `":<reason>"` for an atom reason, or a structured
+  object `%{"kind", "status", "message"}` (each optional) for any other term:
+  the HTTP status of a provider failure and a bounded, redacted message
+  survive, but no raw runtime term is rendered. A non-text answer is `nil`.
   """
 
   @behaviour LemonControlPlane.Method
@@ -24,8 +29,11 @@ defmodule LemonControlPlane.Methods.AgentWait do
     include_answer = Map.get(params, "includeAnswer", true)
 
     cond do
-      is_nil(run_id) ->
+      not (is_binary(run_id) and run_id != "") ->
         {:error, {:invalid_request, "runId is required", nil}}
+
+      not (is_integer(timeout_ms) and timeout_ms >= 0) ->
+        {:error, {:invalid_request, "timeoutMs must be a nonnegative integer", nil}}
 
       not is_boolean(include_answer) ->
         {:error, {:invalid_request, "includeAnswer must be a boolean", nil}}
@@ -38,41 +46,30 @@ defmodule LemonControlPlane.Methods.AgentWait do
           {:error, :timeout} ->
             {:error, {:timeout, "Run did not complete within timeout", run_id}}
 
-          {:error, reason} ->
-            {:error, {:internal_error, "Failed to wait for run", reason}}
+          {:error, :unavailable} ->
+            {:error, {:unavailable, "Run status is unavailable", nil}}
         end
     end
   end
 
+  # Subscribing before the RunStore check closes the completion race. A run
+  # status that cannot be read is unavailable, never "still running".
   defp wait_for_run(run_id, timeout_ms) do
-    # Subscribe to run events
-    LemonCore.Bus.subscribe("run:#{run_id}")
+    topic = LemonCore.Bus.run_topic(run_id)
+    LemonCore.Bus.subscribe(topic)
 
-    # Check if already completed
-    case check_run_completed(run_id) do
-      {:ok, result} ->
-        LemonCore.Bus.unsubscribe("run:#{run_id}")
-        {:ok, result}
-
-      :running ->
-        wait_loop(run_id, timeout_ms)
-    end
-  rescue
-    e ->
-      LemonCore.Bus.unsubscribe("run:#{run_id}")
-      {:error, Exception.message(e)}
-  end
-
-  defp check_run_completed(run_id) do
-    case LemonCore.RunStore.get(run_id) do
-      %{summary: %{completed: completed}} when not is_nil(completed) ->
+    case LemonCore.RunStore.fetch(run_id) do
+      {:ok, %{summary: %{completed: completed}}} when not is_nil(completed) ->
+        LemonCore.Bus.unsubscribe(topic)
         {:ok, completed}
 
-      _ ->
-        :running
+      {:ok, _running_or_absent} ->
+        wait_loop(run_id, timeout_ms)
+
+      {:error, _reason} ->
+        LemonCore.Bus.unsubscribe(topic)
+        {:error, :unavailable}
     end
-  rescue
-    _ -> :running
   end
 
   defp wait_loop(run_id, timeout_ms) do
@@ -186,11 +183,72 @@ defmodule LemonControlPlane.Methods.AgentWait do
   defp error_kind(error) when is_binary(error), do: "string"
   defp error_kind(_error), do: "other"
 
-  defp format_answer(nil), do: nil
   defp format_answer(answer) when is_binary(answer), do: LemonCore.Redact.text(answer)
-  defp format_answer(answer), do: answer |> inspect() |> LemonCore.Redact.text()
+  defp format_answer(_answer), do: nil
 
   defp format_error(nil), do: nil
   defp format_error(error) when is_binary(error), do: LemonCore.Redact.text(error)
-  defp format_error(error), do: error |> inspect() |> LemonCore.Redact.text()
+  defp format_error(error) when is_atom(error), do: ":" <> Atom.to_string(error)
+
+  defp format_error(error) do
+    %{
+      "kind" => error_kind_label(error) || "error",
+      "status" => error_status(error),
+      "message" => error_message(error)
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  @error_message_bytes 500
+  @status_keys [:status, :status_code, :http_status, "status", "status_code", "statusCode"]
+
+  defp error_kind_label(%{__exception__: true, __struct__: module}),
+    do: module |> Module.split() |> List.last()
+
+  defp error_kind_label(error) when is_tuple(error) and tuple_size(error) > 0,
+    do: label(elem(error, 0))
+
+  defp error_kind_label(error) when is_map(error),
+    do: label(Map.get(error, :reason) || Map.get(error, "reason") || Map.get(error, :type))
+
+  defp error_kind_label(_error), do: nil
+
+  defp label(value) when is_atom(value) and not is_nil(value) and not is_boolean(value),
+    do: Atom.to_string(value)
+
+  defp label(value) when is_binary(value) and byte_size(value) <= 64, do: value
+  defp label(_value), do: nil
+
+  # The first HTTP status among a tuple's elements or a map's status fields.
+  defp error_status(error) when is_tuple(error),
+    do: error |> Tuple.to_list() |> Enum.find_value(&http_status/1)
+
+  defp error_status(error) when is_map(error),
+    do: Enum.find_value(@status_keys, &http_status(Map.get(error, &1)))
+
+  defp error_status(_error), do: nil
+
+  defp http_status(value) when is_integer(value) and value in 100..599, do: value
+  defp http_status(_value), do: nil
+
+  defp error_message(%{__exception__: true} = error),
+    do: error |> Exception.message() |> bounded_message()
+
+  defp error_message(error) when is_tuple(error),
+    do: error |> Tuple.to_list() |> Enum.find(&is_binary/1) |> bounded_message()
+
+  defp error_message(error) when is_map(error),
+    do: bounded_message(Map.get(error, :message) || Map.get(error, "message"))
+
+  defp error_message(_error), do: nil
+
+  defp bounded_message(text) when is_binary(text) and text != "" do
+    text = LemonCore.Redact.text(text)
+
+    if byte_size(text) > @error_message_bytes,
+      do: String.slice(text, 0, @error_message_bytes) <> "...[truncated]",
+      else: text
+  end
+
+  defp bounded_message(_text), do: nil
 end

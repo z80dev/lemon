@@ -18,9 +18,15 @@ output, or server I/O.
 
 `lsp` talks to a real language server. The server is chosen by file extension
 (see the [install guide](#language-server-install-guide)); its workspace root
-is the nearest ancestor of the file, inside the working directory, that holds
-one of the server's root markers (for clangd `compile_commands.json` or
-`compile_flags.txt`), else the working directory.
+comes from `LemonLsp.WorkspaceRoot`. Inside the working directory, the
+outermost ancestor that declares a multi-project workspace for the server's
+markers wins, so every member project shares one server: a Mix umbrella
+(`mix.exs` with `apps_path`), a Cargo `[workspace]`, a `package.json` with
+`workspaces` or a `pnpm-workspace.yaml`, a `go.work`, or a `pyproject.toml`
+with `[tool.uv.workspace]`. Otherwise the nearest ancestor holding one of the
+server's root markers (for clangd `compile_commands.json` or
+`compile_flags.txt`) wins, else the working directory. A file outside the
+working directory uses its nearest marker directory, else its own directory.
 
 | Parameter | Meaning |
 | --- | --- |
@@ -125,6 +131,24 @@ The last release starts an idle grace period: configure
 `[runtime.tools.lsp] idle_timeout_ms = 30000` (the default); `0` stops immediately.
 Reacquisition cancels the timer. `ServerManager.release_session/2` releases one
 lease, whereas `stop_session/1` and the tool's `reload` force a shared restart.
+
+At most eight language servers are live per manager (`max_active_count` in
+`LemonLsp.ServerManager.status/0`, next to `active_count`, and in the doctor's
+`server_manager` section). Acquiring a ninth workspace asks the least-recently-used
+session with no in-flight request to stop; its owners receive
+`{LemonLsp.ServerManager, :server_stopped, session_id}` and reconnect on next use,
+and it appears in `recent_sessions` with status `:evicted`. A session serving a
+request is never evicted. A session that does not answer the stop request within
+1 s is skipped, and its stop request expires, so it never stops later. When all
+eight are busy, or no slot frees within the 4 s admission deadline (inside
+`start_session/2`'s 5 s call), the acquire fails with
+`{:error, :lsp_session_limit}`. The cap bounds memory: one process per root costs
+from 55 MiB peak RSS (clangd after opening a one-file C project) to about
+350 MiB for BEAM-hosted servers (a BEAM with every module of this umbrella and
+its deps loaded peaks at 353 MiB RSS, a floor for ElixirLS, which also compiles
+the project in its VM; measured 2026-11-24 on darwin/arm64). Eight ElixirLS
+servers therefore need at least 2.8 GiB, where one server per `apps/*` root of
+this repository would have started 22 (at least 7.6 GiB).
 
 The manager reads the latest on-disk text during synchronization, owns each URI's
 monotonically increasing version, opens it once and closes it only after its last
@@ -295,6 +319,15 @@ Session status reports request/response counts, notification counts, open and
 known document counts, redacted document URI hashes, diagnostic batch counts,
 and severity counts. It does not expose raw text, raw URIs, workspace paths,
 server logs, or diagnostic messages.
+
+Document text, URIs and language ids must be valid UTF-8 (JSON carries nothing
+else). `sync_file`, `open_document` and `change_document` refuse other text with
+`{:error, :invalid_document_encoding}` before anything reaches the server, and a
+message the transport cannot encode returns `{:error, :invalid_message_encoding}`;
+the shared session keeps serving its other documents. Every session exit during a
+call becomes an error reply: `{:error, {:session_crashed, :timeout | :abnormal_exit}}`
+carries only the exit class, never the raw reason, and its outcome is unknown, so
+the `lsp` tool reports it without retrying or suggesting a retry.
 
 Language-server stderr is discarded by the launcher so log writes can never
 interleave with JSON-RPC frames or leak private workspace paths to the caller

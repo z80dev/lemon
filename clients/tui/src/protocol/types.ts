@@ -26,6 +26,9 @@ export interface SessionEventCursor {
 export interface SessionEventBatch {
 	cursor: SessionEventCursor;
 	eventId?: string;
+	schemaVersion?: 1;
+	attemptId?: string;
+	sequence?: number;
 	/** An empty projection still advances the session sequence. */
 	events: Array<{ event: string; payload: Record<string, unknown> }>;
 }
@@ -138,7 +141,14 @@ export type ChatEvent = ChatDeltaEvent;
 // agent events
 // ---------------------------------------------------------------------------
 
-export interface AgentStartedEvent {
+interface RunLifecycleIdentity {
+	schemaVersion?: 1;
+	eventId?: string;
+	attemptId?: string;
+	sequence?: number;
+}
+
+export interface AgentStartedEvent extends RunLifecycleIdentity {
 	type: "started";
 	runId: string;
 	sessionKey: Nullable<string>;
@@ -171,7 +181,7 @@ export interface RunUsage {
 	costUsd?: Nullable<number>;
 }
 
-export interface AgentCompletedEvent {
+export interface AgentCompletedEvent extends RunLifecycleIdentity {
 	type: "completed";
 	runId: string;
 	sessionKey: Nullable<string>;
@@ -731,11 +741,13 @@ export interface SessionSummary {
 }
 
 /**
- * The `session` block of a `session.detail` reply.
+ * The `session` block of a `session.detail` reply: routing plus the durable
+ * lifecycle row. Run history is not part of it (`chat.history`, `runs.timeline.get`).
  *
  * Unlike a listing row, `model` here is what the session's *next run* resolves to,
  * with `modelSource` naming the layer that supplied it and `modelOverride` carrying
- * the session's own pin (null when it inherits).
+ * the session's own pin (null when it inherits). Lifecycle fields are absent for a
+ * session with no durable row yet.
  */
 export interface SessionRouting {
 	sessionKey?: string;
@@ -744,18 +756,25 @@ export interface SessionRouting {
 	provider?: Nullable<string>;
 	contextWindow?: Nullable<number>;
 	maxOutput?: Nullable<number>;
-	modelSource?: Nullable<"session" | "profile" | "default">;
+	modelSource?: Nullable<"session" | "chat" | "profile" | "default">;
 	modelOverride?: Nullable<string>;
 	thinkingLevel?: Nullable<string>;
 	/** Read-only provenance for the runtime that will execute the next run. */
 	engine?: Nullable<string>;
+	title?: Nullable<string>;
+	pinned?: boolean;
+	archived?: boolean;
+	origin?: string;
+	runCount?: number;
+	createdAtMs?: Nullable<number>;
+	updatedAtMs?: Nullable<number>;
+	metadataUpdatedAtMs?: Nullable<number>;
 	[key: string]: unknown;
 }
 
 export interface SessionDetailResult {
 	sessionKey?: string;
 	session?: SessionRouting;
-	[key: string]: unknown;
 }
 
 export interface SessionsListResult {
@@ -986,13 +1005,36 @@ export interface SessionsDeleteResult {
 	};
 }
 
+/** `sessions.reset` previews (`dryRun: true`) or executes a verified reset (`dryRun: false` + `confirmToken`). */
+export interface SessionsResetParams {
+	sessionKey: string;
+	dryRun?: boolean;
+	confirmToken?: string;
+}
+
+export interface SessionsResetPreview {
+	sessionKey?: string;
+	digest?: string;
+	runHistoryCount?: number;
+	hasChatState?: boolean;
+	hasSessionPolicy?: boolean;
+	hasAcpMetadata?: boolean;
+	hasAcpRunState?: boolean;
+}
+
 /** `sessions.reset` deletes the session's run history, chat state and session policy. */
 export interface SessionsResetResult {
+	dryRun?: boolean;
 	success: boolean;
 	sessionKey: string;
+	confirmToken?: string;
+	digest?: string;
+	preview?: SessionsResetPreview;
 	summary?: {
 		sessionKey?: string;
 		reset?: boolean;
+		verified?: boolean;
+		requiresConfirmation?: boolean;
 		cleanup?: Record<string, unknown>;
 	};
 }
@@ -1057,15 +1099,31 @@ export interface LogsTailParams {
 	[key: string]: unknown;
 }
 
-export interface ConfigGetParams {
-	key?: string;
+/** One file-defined slash command the daemon expands (`commands.list`). */
+export interface DaemonFileCommand {
+	name: string;
+	description: string;
+	argumentHint: string | null;
+}
+
+export interface CommandsListResult {
+	commands: DaemonFileCommand[];
+	truncated: boolean;
+}
+
+/** The palette-relevant part of one `skills.list` entry. */
+export interface SkillsListEntry {
+	key: string;
+	name?: string | null;
+	description?: string | null;
+	enabled?: boolean;
+	activation?: string | null;
 	[key: string]: unknown;
 }
 
-export interface ConfigSetParams {
-	key: string;
-	value: unknown;
-	[key: string]: unknown;
+export interface SkillsListResult {
+	skills: SkillsListEntry[];
+	summary?: { truncated?: boolean; [key: string]: unknown };
 }
 
 // -- process jobs --------------------------------------------------------------

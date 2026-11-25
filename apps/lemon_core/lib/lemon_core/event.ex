@@ -96,6 +96,92 @@ defmodule LemonCore.Event do
   end
 
   @doc """
+  Adds authoritative run identity. Sequence is scoped to the run attempt:
+  1 is start, 2 is durable completion, and 3 is an owner-failure notice.
+  A run removed before execution can have no start. Session replay has its
+  own independent cursor sequence.
+  """
+  def identify_run(%__MODULE__{type: type, meta: meta} = event, run_id, attempt_id \\ nil)
+      when is_binary(run_id) and type in [:run_started, :run_completed, :run_failed] do
+    meta = meta || %{}
+    attempt_id = attempt_id || meta[:attempt_id] || "#{run_id}:attempt:1"
+    seq = %{run_started: 1, run_completed: 2, run_failed: 3}[type]
+
+    %{
+      event
+      | meta:
+          Map.merge(meta, %{
+            schema_version: 1,
+            event_id: "run:#{byte_size(run_id)}:#{run_id}:#{attempt_id}:#{seq}",
+            run_id: run_id,
+            attempt_id: attempt_id,
+            seq: seq
+          })
+    }
+  end
+
+  @doc """
+  Decodes a lifecycle envelope at a package or JSON boundary. Unversioned
+  envelopes are accepted as legacy and assigned the default attempt identity.
+  Versioned identities are checked, not silently reminted.
+  """
+  @spec decode_run_lifecycle(map()) :: {:ok, t()} | {:error, term()}
+  def decode_run_lifecycle(value) when is_map(value) do
+    version = lifecycle_field(lifecycle_field(value, :meta) || %{}, :schema_version)
+
+    if version in [nil, 1],
+      do: decode_run(value, version),
+      else: {:error, {:unsupported_schema_version, version}}
+  end
+
+  def decode_run_lifecycle(_), do: {:error, :invalid_run_lifecycle}
+
+  defp decode_run(value, version) do
+    meta = lifecycle_field(value, :meta) || %{}
+    payload = lifecycle_field(value, :payload)
+
+    with type when not is_nil(type) <- lifecycle_type(lifecycle_field(value, :type)),
+         ts when is_integer(ts) and ts >= 0 <- lifecycle_field(value, :ts_ms),
+         true <- is_map(payload),
+         completed <- lifecycle_field(payload, :completed) || %{},
+         run_id when is_binary(run_id) and run_id != "" <-
+           lifecycle_field(meta, :run_id) || lifecycle_field(payload, :run_id) ||
+             lifecycle_field(completed, :run_id),
+         attempt when is_nil(attempt) or is_binary(attempt) <- lifecycle_field(meta, :attempt_id) do
+      session_key =
+        lifecycle_field(meta, :session_key) || lifecycle_field(payload, :session_key) ||
+          lifecycle_field(completed, :session_key)
+
+      event =
+        new_with_ts(type, ts, LemonCore.Events.coerce(type, payload), %{session_key: session_key})
+
+      event = identify_run(event, run_id, attempt)
+
+      if is_nil(version) or
+           (is_binary(attempt) and attempt != "" and
+              lifecycle_field(meta, :event_id) == event.meta.event_id and
+              lifecycle_field(meta, :seq) == event.meta.seq) do
+        {:ok, event}
+      else
+        {:error, :invalid_run_identity}
+      end
+    else
+      _ -> {:error, :invalid_run_lifecycle}
+    end
+  end
+
+  defp lifecycle_type(type) when type in [:run_started, :run_completed, :run_failed], do: type
+  defp lifecycle_type("run_started"), do: :run_started
+  defp lifecycle_type("run_completed"), do: :run_completed
+  defp lifecycle_type("run_failed"), do: :run_failed
+  defp lifecycle_type(_), do: nil
+
+  defp lifecycle_field(map, key) when is_map(map),
+    do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
+
+  defp lifecycle_field(_, _), do: nil
+
+  @doc """
   Builds a validated engine action event for run-status surfaces.
   """
   @spec engine_action(map(), map()) :: t()

@@ -163,13 +163,8 @@ defmodule LemonComputerUse.LemonOriginTest do
     end
 
     defp policies do
-      [
-        ExecApprovalStore.list_global_policies(),
-        ExecApprovalStore.list_agent_policies(),
-        ExecApprovalStore.list_session_policies(),
-        ExecApprovalStore.list_node_policies()
-      ]
-      |> List.flatten()
+      [:exec_approvals_policy, :exec_approvals_policy_agent, :exec_approvals_policy_session]
+      |> Enum.flat_map(&LemonCore.Store.list/1)
       |> Enum.filter(&(inspect(&1) =~ "computer_use"))
     end
 

@@ -7,7 +7,7 @@ defmodule CodingAgent.SessionAsyncDeliveryTest do
 
   alias CodingAgent.Session
   alias CodingAgent.Tools.Task, as: TaskTool
-  alias CodingAgent.Tools.Task.Runner
+  alias CodingAgent.TaskRuntime.Runner
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{AssistantMessage, TextContent, ToolResultMessage, UserMessage}

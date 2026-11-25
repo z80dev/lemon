@@ -1,41 +1,122 @@
-defmodule LemonAi.ProviderRegistryComprehensiveTest do
-  @moduledoc """
-  Comprehensive tests for the LemonAi.ProviderRegistry module.
-
-  Tests the persistent_term-based registry for LLM provider implementations,
-  including registration, lookup, listing, and edge cases.
-
-  Note: Uses async: false because the registry uses global :persistent_term
-  storage that is shared across all tests.
-  """
+defmodule LemonAi.ProviderRegistryTest do
   use ExUnit.Case, async: false
 
   alias LemonAi.ProviderRegistry
+  alias LemonAi.Providers.{Anthropic, Google, OpenAIResponses}
 
-  # Test modules for registration
-  defmodule TestProvider1 do
-    def provider_id, do: :test_provider_1
-  end
-
-  defmodule TestProvider2 do
-    def provider_id, do: :test_provider_2
-  end
-
-  # ============================================================================
-  # Setup
-  # ============================================================================
+  @registry_key {ProviderRegistry, :providers}
 
   setup do
-    previous_registry = snapshot_registry()
-
-    # Clear the registry before each test to ensure isolation
-    ProviderRegistry.clear()
+    previous = :persistent_term.get(@registry_key, :absent)
 
     on_exit(fn ->
-      restore_registry(previous_registry)
+      case previous do
+        :absent -> :persistent_term.erase(@registry_key)
+        providers -> :persistent_term.put(@registry_key, providers)
+      end
     end)
 
+    :persistent_term.erase(@registry_key)
     :ok
+  end
+
+  test "reads leave an absent registry uninitialized" do
+    refute ProviderRegistry.initialized?()
+    assert_empty_registry()
+    refute ProviderRegistry.initialized?()
+  end
+
+  test "init is repeatable and preserves configured providers" do
+    assert :ok = ProviderRegistry.init()
+    assert :ok = ProviderRegistry.init()
+    assert ProviderRegistry.initialized?()
+    assert_empty_registry()
+
+    assert :ok = ProviderRegistry.register(:anthropic_messages, Anthropic)
+    assert :ok = ProviderRegistry.init()
+    assert ProviderRegistry.list() == [:anthropic_messages]
+    assert {:ok, Anthropic} = ProviderRegistry.get(:anthropic_messages)
+  end
+
+  test "register initializes the registry, resolves providers and replaces a single API binding" do
+    providers = [
+      anthropic_messages: Anthropic,
+      google_generative_ai: Google,
+      openai_responses: OpenAIResponses
+    ]
+
+    for {api, module} <- providers do
+      refute ProviderRegistry.registered?(api)
+      assert :ok = ProviderRegistry.register(api, module)
+      assert ProviderRegistry.registered?(api)
+      assert {:ok, ^module} = ProviderRegistry.get(api)
+      assert ^module = ProviderRegistry.get!(api)
+    end
+
+    assert ProviderRegistry.initialized?()
+    assert Enum.sort(ProviderRegistry.list()) == Keyword.keys(providers)
+
+    assert :ok = ProviderRegistry.register(:openai_responses, Anthropic)
+    assert {:ok, Anthropic} = ProviderRegistry.get(:openai_responses)
+    assert {:ok, Google} = ProviderRegistry.get(:google_generative_ai)
+    assert Enum.sort(ProviderRegistry.list()) == Keyword.keys(providers)
+  end
+
+  test "unregister is idempotent and preserves other API bindings" do
+    assert :ok = ProviderRegistry.register(:api1, Anthropic)
+    assert :ok = ProviderRegistry.register(:api2, Google)
+
+    for api <- [:missing, :api1, :api1] do
+      assert :ok = ProviderRegistry.unregister(api)
+      refute ProviderRegistry.registered?(api)
+      assert {:error, :not_found} = ProviderRegistry.get(api)
+      assert {:ok, Google} = ProviderRegistry.get(:api2)
+    end
+
+    assert ProviderRegistry.list() == [:api2]
+  end
+
+  test "clear leaves an initialized empty registry that accepts new registrations" do
+    for module <- [Anthropic, Google] do
+      assert :ok = ProviderRegistry.clear()
+      assert :ok = ProviderRegistry.clear()
+      assert ProviderRegistry.initialized?()
+      assert_empty_registry()
+
+      assert :ok = ProviderRegistry.init()
+      assert :ok = ProviderRegistry.register(:missing, module)
+      assert :ok = ProviderRegistry.register(:secondary, OpenAIResponses)
+      assert {:ok, ^module} = ProviderRegistry.get(:missing)
+    end
+  end
+
+  test "concurrent writes keep every registration visible to independent readers" do
+    providers =
+      for i <- 1..50 do
+        api = :"concurrent_api_#{i}"
+        module = if rem(i, 2) == 0, do: Anthropic, else: Google
+        {api, module}
+      end
+
+    results =
+      providers
+      |> Enum.map(fn {api, module} ->
+        Task.async(fn -> ProviderRegistry.register(api, module) end)
+      end)
+      |> Task.await_many(10_000)
+
+    assert results == List.duplicate(:ok, length(providers))
+
+    assert MapSet.new(ProviderRegistry.list()) == MapSet.new(Keyword.keys(providers))
+
+    providers
+    |> Enum.map(fn {api, module} ->
+      Task.async(fn ->
+        assert {:ok, ^module} = ProviderRegistry.get(api)
+        assert ProviderRegistry.registered?(api)
+      end)
+    end)
+    |> Task.await_many()
   end
 
   test "contended mutation raises instead of reporting a registration that never happened" do
@@ -46,440 +127,30 @@ defmodule LemonAi.ProviderRegistryComprehensiveTest do
       contender =
         Task.async(fn ->
           assert_raise RuntimeError, "Provider registry lock unavailable", fn ->
-            ProviderRegistry.register(:test_api, TestProvider1)
+            ProviderRegistry.register(:contended, Anthropic)
           end
         end)
 
       Task.await(contender, 10_000)
-      assert ProviderRegistry.get(:test_api) == {:error, :not_found}
+      assert ProviderRegistry.get(:contended) == {:error, :not_found}
     after
       :global.del_lock(lock, [node()])
     end
 
-    assert :ok = ProviderRegistry.register(:test_api, TestProvider1)
+    assert :ok = ProviderRegistry.register(:contended, Anthropic)
+    assert {:ok, Anthropic} = ProviderRegistry.get(:contended)
   end
 
-  defp snapshot_registry do
-    ProviderRegistry.list()
-    |> Enum.reduce(%{}, fn api_id, acc ->
-      case ProviderRegistry.get(api_id) do
-        {:ok, module} -> Map.put(acc, api_id, module)
-        {:error, :not_found} -> acc
+  defp assert_empty_registry do
+    assert ProviderRegistry.list() == []
+
+    for api <- [:missing, :secondary] do
+      assert {:error, :not_found} = ProviderRegistry.get(api)
+      refute ProviderRegistry.registered?(api)
+
+      assert_raise ArgumentError, "Provider not found for API: #{api}", fn ->
+        ProviderRegistry.get!(api)
       end
-    end)
-  end
-
-  defp restore_registry(previous_registry) do
-    ProviderRegistry.clear()
-
-    Enum.each(previous_registry, fn {api_id, module} ->
-      ProviderRegistry.register(api_id, module)
-    end)
-  end
-
-  # ============================================================================
-  # Initialization
-  # ============================================================================
-
-  describe "init/0" do
-    test "initializes an empty registry" do
-      # Clear first to ensure we're testing initialization
-      ProviderRegistry.clear()
-      assert ProviderRegistry.list() == []
-
-      assert :ok = ProviderRegistry.init()
-      assert ProviderRegistry.initialized?()
-      assert ProviderRegistry.list() == []
-    end
-
-    test "is safe to call multiple times" do
-      assert :ok = ProviderRegistry.init()
-      assert :ok = ProviderRegistry.init()
-      assert :ok = ProviderRegistry.init()
-
-      assert ProviderRegistry.initialized?()
-      assert ProviderRegistry.list() == []
-    end
-
-    test "preserves existing registrations when called again" do
-      ProviderRegistry.register(:test_api, TestProvider1)
-      assert ProviderRegistry.list() == [:test_api]
-
-      # Re-initialize should not clear
-      ProviderRegistry.init()
-      assert ProviderRegistry.list() == [:test_api]
-    end
-  end
-
-  # ============================================================================
-  # Registration
-  # ============================================================================
-
-  describe "register/2" do
-    test "registers a provider module" do
-      assert :ok = ProviderRegistry.register(:test_api, TestProvider1)
-      assert {:ok, TestProvider1} = ProviderRegistry.get(:test_api)
-    end
-
-    test "allows multiple registrations" do
-      assert :ok = ProviderRegistry.register(:api1, TestProvider1)
-      assert :ok = ProviderRegistry.register(:api2, TestProvider2)
-
-      assert {:ok, TestProvider1} = ProviderRegistry.get(:api1)
-      assert {:ok, TestProvider2} = ProviderRegistry.get(:api2)
-    end
-
-    test "overwrites existing registration for same api_id" do
-      ProviderRegistry.register(:test_api, TestProvider1)
-      assert {:ok, TestProvider1} = ProviderRegistry.get(:test_api)
-
-      ProviderRegistry.register(:test_api, TestProvider2)
-      assert {:ok, TestProvider2} = ProviderRegistry.get(:test_api)
-    end
-
-    test "accepts atom api_ids" do
-      assert :ok = ProviderRegistry.register(:my_api, TestProvider1)
-      assert {:ok, TestProvider1} = ProviderRegistry.get(:my_api)
-    end
-
-    test "accepts various module names" do
-      defmodule AnotherTestProvider do
-      end
-
-      assert :ok = ProviderRegistry.register(:another, AnotherTestProvider)
-      assert {:ok, AnotherTestProvider} = ProviderRegistry.get(:another)
-    end
-  end
-
-  # ============================================================================
-  # Lookup
-  # ============================================================================
-
-  describe "get/1" do
-    test "returns provider module for registered api_id" do
-      ProviderRegistry.register(:test_api, TestProvider1)
-      assert {:ok, TestProvider1} = ProviderRegistry.get(:test_api)
-    end
-
-    test "returns error for unregistered api_id" do
-      assert {:error, :not_found} = ProviderRegistry.get(:nonexistent)
-    end
-
-    test "returns error for api_id after unregistration" do
-      ProviderRegistry.register(:test_api, TestProvider1)
-      assert {:ok, TestProvider1} = ProviderRegistry.get(:test_api)
-
-      ProviderRegistry.unregister(:test_api)
-      assert {:error, :not_found} = ProviderRegistry.get(:test_api)
-    end
-
-    test "reads a cleared registry without restoring providers" do
-      ProviderRegistry.clear()
-      assert ProviderRegistry.list() == []
-
-      # Clearing is an explicit configuration write; reads leave that map alone.
-      assert {:error, :not_found} = ProviderRegistry.get(:any_api)
-      assert ProviderRegistry.initialized?()
-    end
-  end
-
-  describe "get!/1" do
-    test "returns provider module for registered api_id" do
-      ProviderRegistry.register(:test_api, TestProvider1)
-      assert TestProvider1 = ProviderRegistry.get!(:test_api)
-    end
-
-    test "raises ArgumentError for unregistered api_id" do
-      assert_raise ArgumentError, ~r/Provider not found/, fn ->
-        ProviderRegistry.get!(:nonexistent)
-      end
-    end
-
-    test "error message includes the api_id" do
-      assert_raise ArgumentError, ~r/nonexistent/, fn ->
-        ProviderRegistry.get!(:nonexistent)
-      end
-    end
-  end
-
-  # ============================================================================
-  # Listing
-  # ============================================================================
-
-  describe "list/0" do
-    test "returns empty list for empty registry" do
-      assert ProviderRegistry.list() == []
-    end
-
-    test "returns all registered api_ids" do
-      ProviderRegistry.register(:api1, TestProvider1)
-      ProviderRegistry.register(:api2, TestProvider2)
-      ProviderRegistry.register(:api3, TestProvider1)
-
-      api_ids = ProviderRegistry.list()
-      assert length(api_ids) == 3
-      assert :api1 in api_ids
-      assert :api2 in api_ids
-      assert :api3 in api_ids
-    end
-
-    test "returns list after unregistration" do
-      ProviderRegistry.register(:api1, TestProvider1)
-      ProviderRegistry.register(:api2, TestProvider2)
-
-      assert length(ProviderRegistry.list()) == 2
-
-      ProviderRegistry.unregister(:api1)
-      assert ProviderRegistry.list() == [:api2]
-    end
-
-    test "initializes registry if not already initialized" do
-      ProviderRegistry.clear()
-      assert ProviderRegistry.list() == []
-      assert ProviderRegistry.initialized?()
-    end
-  end
-
-  # ============================================================================
-  # Registration Check
-  # ============================================================================
-
-  describe "registered?/1" do
-    test "returns true for registered api_id" do
-      ProviderRegistry.register(:test_api, TestProvider1)
-      assert ProviderRegistry.registered?(:test_api)
-    end
-
-    test "returns false for unregistered api_id" do
-      refute ProviderRegistry.registered?(:nonexistent)
-    end
-
-    test "returns false after unregistration" do
-      ProviderRegistry.register(:test_api, TestProvider1)
-      assert ProviderRegistry.registered?(:test_api)
-
-      ProviderRegistry.unregister(:test_api)
-      refute ProviderRegistry.registered?(:test_api)
-    end
-
-    test "initializes registry if not already initialized" do
-      ProviderRegistry.clear()
-      refute ProviderRegistry.registered?(:any_api)
-      assert ProviderRegistry.initialized?()
-    end
-  end
-
-  # ============================================================================
-  # Unregistration
-  # ============================================================================
-
-  describe "unregister/1" do
-    test "removes registered provider" do
-      ProviderRegistry.register(:test_api, TestProvider1)
-      assert :ok = ProviderRegistry.unregister(:test_api)
-      assert {:error, :not_found} = ProviderRegistry.get(:test_api)
-    end
-
-    test "returns ok for unregistered api_id" do
-      assert :ok = ProviderRegistry.unregister(:nonexistent)
-    end
-
-    test "is idempotent" do
-      ProviderRegistry.register(:test_api, TestProvider1)
-
-      assert :ok = ProviderRegistry.unregister(:test_api)
-      assert :ok = ProviderRegistry.unregister(:test_api)
-      assert :ok = ProviderRegistry.unregister(:test_api)
-    end
-
-    test "only removes specified api_id" do
-      ProviderRegistry.register(:api1, TestProvider1)
-      ProviderRegistry.register(:api2, TestProvider2)
-
-      ProviderRegistry.unregister(:api1)
-
-      assert {:error, :not_found} = ProviderRegistry.get(:api1)
-      assert {:ok, TestProvider2} = ProviderRegistry.get(:api2)
-    end
-  end
-
-  # ============================================================================
-  # Clear
-  # ============================================================================
-
-  describe "clear/0" do
-    test "removes all registrations" do
-      ProviderRegistry.register(:api1, TestProvider1)
-      ProviderRegistry.register(:api2, TestProvider2)
-
-      assert :ok = ProviderRegistry.clear()
-
-      assert ProviderRegistry.list() == []
-      assert {:error, :not_found} = ProviderRegistry.get(:api1)
-      assert {:error, :not_found} = ProviderRegistry.get(:api2)
-    end
-
-    test "is safe to call on empty registry" do
-      assert :ok = ProviderRegistry.clear()
-      assert :ok = ProviderRegistry.clear()
-      assert ProviderRegistry.list() == []
-    end
-
-    test "allows re-registration after clear" do
-      ProviderRegistry.register(:test_api, TestProvider1)
-      ProviderRegistry.clear()
-
-      ProviderRegistry.register(:test_api, TestProvider2)
-      assert {:ok, TestProvider2} = ProviderRegistry.get(:test_api)
-    end
-  end
-
-  # ============================================================================
-  # Initialization Check
-  # ============================================================================
-
-  describe "initialized?/0" do
-    test "remains initialized after clearing registrations" do
-      ProviderRegistry.clear()
-      assert ProviderRegistry.initialized?()
-    end
-
-    test "returns true after init" do
-      ProviderRegistry.clear()
-      ProviderRegistry.init()
-      assert ProviderRegistry.initialized?()
-    end
-
-    test "returns true after registration" do
-      ProviderRegistry.clear()
-      ProviderRegistry.register(:test, TestProvider1)
-      assert ProviderRegistry.initialized?()
-    end
-  end
-
-  # ============================================================================
-  # Edge Cases
-  # ============================================================================
-
-  describe "edge cases" do
-    test "handles many registrations" do
-      for i <- 1..100 do
-        module_name = Module.concat(__MODULE__, "Provider#{i}")
-        ProviderRegistry.register(String.to_atom("api_#{i}"), module_name)
-      end
-
-      assert length(ProviderRegistry.list()) == 100
-
-      # Verify we can retrieve them all
-      for i <- 1..100 do
-        module_name = Module.concat(__MODULE__, "Provider#{i}")
-        assert {:ok, ^module_name} = ProviderRegistry.get(String.to_atom("api_#{i}"))
-      end
-    end
-
-    test "handles special characters in api_id atoms" do
-      special_ids = [
-        :"api-with-dashes",
-        :api_with_underscores,
-        :"api.with.dots",
-        :api123,
-        :API_UPPERCASE
-      ]
-
-      for {api_id, idx} <- Enum.with_index(special_ids) do
-        module = if rem(idx, 2) == 0, do: TestProvider1, else: TestProvider2
-        ProviderRegistry.register(api_id, module)
-      end
-
-      for api_id <- special_ids do
-        assert {:ok, _} = ProviderRegistry.get(api_id)
-      end
-    end
-
-    test "concurrent reads are safe" do
-      ProviderRegistry.register(:test_api, TestProvider1)
-
-      parent = self()
-
-      pids =
-        for _ <- 1..50 do
-          spawn(fn ->
-            result = ProviderRegistry.get(:test_api)
-            send(parent, {:result, result})
-          end)
-        end
-
-      results =
-        for _ <- pids do
-          receive do
-            {:result, result} -> result
-          after
-            1000 -> :timeout
-          end
-        end
-
-      assert Enum.all?(results, &(&1 == {:ok, TestProvider1}))
-    end
-
-    test "registry survives multiple clear/init cycles" do
-      for _i <- 1..10 do
-        ProviderRegistry.register(:test_api, TestProvider1)
-        assert {:ok, TestProvider1} = ProviderRegistry.get(:test_api)
-
-        ProviderRegistry.clear()
-        assert {:error, :not_found} = ProviderRegistry.get(:test_api)
-
-        ProviderRegistry.init()
-      end
-    end
-  end
-
-  # ============================================================================
-  # Real-world Usage Patterns
-  # ============================================================================
-
-  describe "real-world usage patterns" do
-    test "typical provider registration workflow" do
-      # Simulate application startup
-      ProviderRegistry.init()
-
-      # Register providers
-      ProviderRegistry.register(:anthropic_messages, LemonAi.Providers.Anthropic)
-      ProviderRegistry.register(:openai_responses, LemonAi.Providers.OpenAIResponses)
-      ProviderRegistry.register(:google_generative_ai, LemonAi.Providers.Google)
-
-      # Verify all registered
-      api_ids = ProviderRegistry.list()
-      assert :anthropic_messages in api_ids
-      assert :openai_responses in api_ids
-      assert :google_generative_ai in api_ids
-
-      # Look up providers
-      assert {:ok, LemonAi.Providers.Anthropic} = ProviderRegistry.get(:anthropic_messages)
-      assert {:ok, LemonAi.Providers.OpenAIResponses} = ProviderRegistry.get(:openai_responses)
-      assert {:ok, LemonAi.Providers.Google} = ProviderRegistry.get(:google_generative_ai)
-    end
-
-    test "provider lookup with fallback" do
-      ProviderRegistry.register(:primary, TestProvider1)
-
-      # Lookup with fallback
-      provider =
-        case ProviderRegistry.get(:primary) do
-          {:ok, mod} -> mod
-          {:error, :not_found} -> TestProvider2
-        end
-
-      assert provider == TestProvider1
-
-      # Non-existent with fallback
-      provider =
-        case ProviderRegistry.get(:nonexistent) do
-          {:ok, mod} -> mod
-          {:error, :not_found} -> TestProvider2
-        end
-
-      assert provider == TestProvider2
     end
   end
 end

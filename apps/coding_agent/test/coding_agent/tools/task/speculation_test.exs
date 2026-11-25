@@ -343,7 +343,7 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
     assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
     refute_received {:started, _, _}
 
-    CodingAgent.Tools.Task.Control.cancel_parent(session)
+    CodingAgent.TaskRuntime.Control.cancel_parent(session)
     assert_receive {:aborted, ^first}, 2_000
     assert_receive {:aborted, ^second}, 2_000
   end

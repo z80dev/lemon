@@ -2587,7 +2587,7 @@ defmodule LemonRouter.RunProcessTest do
              end)
     end
 
-    test "marks pending compaction before overflow when input_tokens approaches threshold" do
+    test "marks pending compaction before overflow when context_tokens approaches threshold" do
       run_id = "run_#{System.unique_integer([:positive])}"
 
       session_key =
@@ -2639,7 +2639,7 @@ defmodule LemonRouter.RunProcessTest do
             completed: %{
               ok: true,
               answer: "done",
-              usage: %{input_tokens: 950, output_tokens: 50}
+              usage: %{input: 900, output: 50, context_tokens: 950}
             }
           },
           %{run_id: run_id, session_key: session_key}
@@ -2667,7 +2667,7 @@ defmodule LemonRouter.RunProcessTest do
              end)
     end
 
-    test "marks pending compaction before overflow when usage input is reported as :input" do
+    test "marks pending compaction before overflow when the last call's input approaches threshold" do
       run_id = "run_#{System.unique_integer([:positive])}"
 
       session_key =
@@ -2719,7 +2719,13 @@ defmodule LemonRouter.RunProcessTest do
             completed: %{
               ok: true,
               answer: "done",
-              usage: %{input: 950, output: 50}
+              usage: %{
+                input: 950,
+                output: 50,
+                occurrences: [
+                  %{usage: %{input: 950, cache_read: 0, cache_write: 0, output: 50}}
+                ]
+              }
             }
           },
           %{run_id: run_id, session_key: session_key}
@@ -2747,7 +2753,7 @@ defmodule LemonRouter.RunProcessTest do
              end)
     end
 
-    test "counts cached input tokens toward preemptive compaction threshold" do
+    test "counts the last call's cached input toward preemptive compaction threshold" do
       run_id = "run_#{System.unique_integer([:positive])}"
 
       session_key =
@@ -2799,7 +2805,20 @@ defmodule LemonRouter.RunProcessTest do
             completed: %{
               ok: true,
               answer: "done",
-              usage: %{input_tokens: 200, cached_input_tokens: 750, output_tokens: 50}
+              usage: %{
+                "input" => 200,
+                "output" => 50,
+                "occurrences" => [
+                  %{
+                    "usage" => %{
+                      "input" => 200,
+                      "cache_read" => 750,
+                      "cache_write" => 0,
+                      "output" => 50
+                    }
+                  }
+                ]
+              }
             }
           },
           %{run_id: run_id, session_key: session_key}

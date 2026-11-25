@@ -136,7 +136,7 @@ defmodule LemonCore.Store.ReadCache do
 
   This bypasses the GenServer entirely for O(1) ETS lookup.
   """
-  @spec get(store() | tables(), atom(), term()) :: term() | nil
+  @spec get(store() | tables() | pid(), atom(), term()) :: term() | nil
   def get(store \\ @default_store, domain, key)
 
   def get(store, domain, key) do
@@ -153,7 +153,7 @@ defmodule LemonCore.Store.ReadCache do
   when it does but has no entry for `key`, and `{:ok, value}` on a hit. Callers
   use this to decide whether a cache miss is worth populating.
   """
-  @spec fetch(store() | tables(), atom(), term()) :: {:ok, term()} | :miss | :uncached
+  @spec fetch(store() | tables() | pid(), atom(), term()) :: {:ok, term()} | :miss | :uncached
   def fetch(store \\ @default_store, domain, key) do
     case resolve(store, domain) do
       nil ->
@@ -205,13 +205,14 @@ defmodule LemonCore.Store.ReadCache do
 
   @doc "Applies the backend's expiry predicate to the mirrored rows without clearing live entries."
   def sweep(store, domain, field, cutoff) do
-    case resolve(store, domain) do
-      nil ->
-        :ok
+    _ =
+      case resolve(store, domain) do
+        nil ->
+          :ok
 
-      table ->
-        :ets.select_delete(table, LemonCore.Store.EtsBackend.sweep_match_spec(field, cutoff))
-    end
+        table ->
+          :ets.select_delete(table, LemonCore.Store.EtsBackend.sweep_match_spec(field, cutoff))
+      end
 
     :ok
   end
@@ -240,12 +241,36 @@ defmodule LemonCore.Store.ReadCache do
   def list(store \\ @default_store, domain)
 
   def list(store, domain) do
+    case fetch_all(store, domain) do
+      {:ok, entries} -> entries
+      :uncached -> []
+    end
+  end
+
+  @doc """
+  All cached entries for a domain, or `:uncached` when this store has no live
+  mirror for it (never mirrored, or its table died with a previous store
+  process). Unlike `list/2`, a missing mirror is not reported as an empty one.
+  """
+  @spec fetch_all(store() | tables(), atom()) :: {:ok, [{term(), term()}]} | :uncached
+  def fetch_all(store \\ @default_store, domain) do
     case resolve(store, domain) do
-      nil -> []
-      table -> :ets.tab2list(table)
+      nil -> :uncached
+      table -> {:ok, :ets.tab2list(table)}
     end
   rescue
-    ArgumentError -> []
+    ArgumentError -> :uncached
+  end
+
+  @doc "Every cached key of a domain; `:uncached` as in `fetch_all/2`."
+  @spec fetch_keys(store() | tables(), atom()) :: {:ok, [term()]} | :uncached
+  def fetch_keys(store \\ @default_store, domain) do
+    case resolve(store, domain) do
+      nil -> :uncached
+      table -> {:ok, :ets.select(table, [{{:"$1", :_}, [], [:"$1"]}])}
+    end
+  rescue
+    ArgumentError -> :uncached
   end
 
   # -- Internals -----------------------------------------------------------

@@ -1,8 +1,8 @@
 defmodule LemonAutomation.CronManagerForwardingTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.Workspace.GoalStore
-  alias LemonAgent.Workspace.KanbanStore
+  alias LemonAutomation.GoalStore
+  alias LemonAutomation.KanbanStore
   alias LemonAutomation.{CronManager, CronRun, CronStore}
   alias LemonCore.{Bus, Event, RunHistoryStore, Store}
 
@@ -61,7 +61,7 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     {:ok, goal} =
       GoalStore.set(session, "Check result",
         meta: %{"deliverTo" => "telegram:-100777:12"},
-        authority: LemonAgent.Workspace.GoalAuthority.operator()
+        authority: LemonAutomation.GoalAuthority.operator()
       )
 
     on_exit(fn -> GoalStore.clear(session) end)

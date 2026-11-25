@@ -475,7 +475,8 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
     assert ExecApprovalStore.get_global_policy("computer", fresh_hash) == nil
 
     refute Enum.any?(
-             ExecApprovalStore.list_session_policies() ++ ExecApprovalStore.list_agent_policies(),
+             LemonCore.Store.list(:exec_approvals_policy_session) ++
+               LemonCore.Store.list(:exec_approvals_policy_agent),
              fn {{_scope, tool, hash}, _} -> tool == "computer" and hash == fresh_hash end
            )
 

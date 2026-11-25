@@ -228,7 +228,8 @@ defmodule LemonControlPlane.Methods.RegistryTest do
     ctx = ctx_with_scopes([:admin, :read, :write, :approvals, :pairing])
 
     for removed <- ~w(kanban.board.list tts.status wizard.start device.pair.request
-                      lsp.server.start checkpoint.diff secrets.list proofs.status send) do
+                      lsp.server.start checkpoint.diff secrets.list proofs.status send
+                      config.get config.set) do
       assert {:error, {:method_not_found, "Unknown method: " <> ^removed}} =
                Registry.dispatch(removed, %{}, ctx)
     end

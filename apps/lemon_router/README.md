@@ -82,7 +82,7 @@ failures are isolated from the conversation subtree and from each other.
 | `LemonRouter.ConversationKey` | Canonical conversation-key selection from structured resume or session key |
 | `LemonRouter.ResumeResolver` | Structured resume resolution before runtime submission |
 | `LemonRouter.RunProcess` | `gen_statem` and sole owner of a live run, its executor, claim, and permit |
-| `LemonRouter.RunCompletion` | Sole terminal writer for `:runs`; commits before terminal notification |
+| `LemonRouter.RunCompletion` | Router's terminal commit entry point; hands off the persisted attempt to `LemonCore.TerminalOutbox` for notification and replay |
 | `LemonRouter.Slots` | Global FIFO permits, including permit lending for blocked delegation |
 | `LemonRouter.Health` | Router health, including execution-slot counters |
 | `LemonRouter.MediaJobRecorder` | Records generated final-answer files into redacted media job metadata before channel delivery |
@@ -131,8 +131,8 @@ attachment policy.
   the bridge. These commands do not wait for synchronous application by every
   target run process.
 - Top-level runs always use the native executor; model validation belongs to `LemonAi`, and default cwd resolution should use `LemonCore.Cwd` (channel-origin runs default to the assistant home, not `$HOME`).
-- `LemonChannels.RunRequestBuilder.from_inbound/1` derives `meta.channel_context` and `meta.channel_identity` from the transport-normalized message (caller meta cannot supply them), so `channel_policies` rows apply and group chats require approval for every `bash`, `write`, `edit`, `patch`, and `hashline_edit` call.
-- Channel policy follows provenance, not origin: whenever a request carries `meta.channel_context`, `Policy` applies that channel's `channel_policies` row and, for any peer kind but `:dm`, the group approval floor. Webhook ingress (`:webhook`) and A2A ingress (`meta.a2a`) derive `webhook`/`a2a` provenance from the authenticated integration or peer, classified `peer_kind: :automation` (so the floor applies) unless the operator's global config marks that integration or peer `trusted_automation = true` (then `:dm`); the A2A peer allow-list still intersects as the request override.
+- `LemonChannels.RunRequestBuilder.from_inbound/1` derives `meta.channel_context` and `meta.channel_identity` from the transport-normalized message (caller meta cannot supply them), so group chats require approval for every `bash`, `write`, `edit`, `patch`, and `hashline_edit` call.
+- The approval floor follows provenance, not origin: whenever a request carries `meta.channel_context` with any peer kind but `:dm`, `Policy` applies the group approval floor. The only stored policy layer is the `LemonCore.PolicyStore` session row, read once per admission and shared by model, thinking-level and tool-policy resolution. Webhook ingress (`:webhook`) and A2A ingress (`meta.a2a`) derive `webhook`/`a2a` provenance from the authenticated integration or peer, classified `peer_kind: :automation` (so the floor applies) unless the operator's global config marks that integration or peer `trusted_automation = true` (then `:dm`); the A2A peer allow-list still intersects as the request override.
 - `SubmissionBuilder` refuses a channel-origin request without that provenance, and a webhook or A2A request without provenance naming its own channel (`{:error, :missing_channel_provenance}`). Graceful restart carryover counts it as rejected and crash recovery abandons it; work persisted before provenance existed is never run unrestricted.
 - `SessionKey.channel_peer/1` writes a routing component containing `:` as a colon-free `~sha256-` digest and never decodes components. `DeliveryRouteResolver` takes the delivery target for a hashed component from the run's transport `meta.peer`, and only when it hashes back to the key.
 - Router emits `LemonCore.DeliveryIntent`, not `LemonChannels.OutboundPayload`.

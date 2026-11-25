@@ -28,10 +28,10 @@ classifies each platform tool's approval tier and its `:dangerous`,
 `:external` and `:delegation` capabilities. Restricted profiles fail closed: a
 tool the catalogue does not classify is denied. That includes satellite tools
 registered through `LemonAgent.ToolRegistry` (`omp`, `cua_js`, `cua_js_reset`,
-`honcho_*`) and every MCP, extension and WASM tool; full-access, orchestrator
+`honcho_*`) and every MCP and extension tool; full-access, orchestrator
 and custom policies grant them by name. A new built-in tool must be added to
 the catalogue to appear in a restricted profile. Satellites cannot register a
-catalogued name, and a WASM, extension or MCP tool that uses one is dropped, so
+catalogued name, and an extension or MCP tool that uses one is dropped, so
 no contribution inherits a platform tool's classification. Tool policy is not
 operating-system isolation, and invalid custom policies and unknown profiles
 still need their own validation.
@@ -161,8 +161,8 @@ own installed dependencies, such as Peekaboo.
 ## Operator State
 
 Model-driven file mutations never write Lemon operator state
-(`CodingAgent.Tools.OperatorState`). `write` (including archive and SQLite
-members), `edit` (text and anchored), `patch`, `ast_grep` rewrites, LSP
+(`CodingAgent.Tools.OperatorState`). `write`, `edit` (text and anchored),
+`patch`, `ast_grep` rewrites, LSP
 workspace edits, ACP-client writes/deletes/renames, `fs_checkpoint` restore,
 browser downloads/screenshots/analysis captures (default directories included)
 and media artifacts (image, speech, video, transcription, analysis) refuse a
@@ -190,7 +190,7 @@ workspace, `.lemon/skill(s)`, `.lemon/extensions` and `.lemon/config.toml` stay
 protected). Lemon's own writers get narrow grants that keep the hard-link
 refusal: a cron run may update only its exact `cron_memory/<job>.md`, the plan
 writer only direct children of its session plan directory, and
-`write local://…`/`report_issue` only the session's own scratch files. Media
+`write local://…` only the session's own scratch files. Media
 artifacts are written to a temporary file renamed into place, so an existing
 symlink or hard link at the name is replaced rather than written through.
 `remember` refuses hard-linked preference files. `skill_manage` with

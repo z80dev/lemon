@@ -2,7 +2,8 @@ defmodule CodingAgent.Tools.Task.WaitTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.{ParentQuestions, RunGraph, TaskStore}
-  alias CodingAgent.Tools.Task.{Control, Wait}
+  alias CodingAgent.TaskRuntime.Control
+  alias CodingAgent.Tools.Task.Wait
   alias LemonAgent.AbortSignal
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -105,8 +106,9 @@ defmodule CodingAgent.Tools.Task.WaitTest do
     assert Enum.all?(rows, &(is_binary(&1.error) and &1.error != ""))
     assert observed?(failed_id)
     assert observed?(cancelled_id)
-    refute TaskStore.auto_followup_suppressed?(failed_id)
-    refute TaskStore.auto_followup_suppressed?(cancelled_id)
+    # A returned result, whatever its status, does not wake the parent again.
+    assert TaskStore.auto_followup_suppressed?(failed_id)
+    assert TaskStore.auto_followup_suppressed?(cancelled_id)
     assert {:error, @no_tasks} = Wait.execute(%{}, nil, @opts)
   end
 

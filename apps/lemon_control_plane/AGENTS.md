@@ -55,8 +55,9 @@ another session store, scheduler or agent runtime. See [README](README.md).
   retains the caller-generated run ID and returns a bounded uncertain receipt
   with `retrySafe: false`. Never inspect raw failure terms into wire responses.
 - Sessions use `LemonCore.SessionLifecycle`: bounded/redacted reads, exact-key
-  delete confirmation, and prune previews bound to the exact candidate set and
-  millisecond cutoff. Do not manipulate raw run/index tables in handlers.
+  delete confirmation, reset previews bound to a single-use token and the
+  session's live state digest, and prune previews bound to the exact candidate
+  set and millisecond cutoff. Do not manipulate raw run/index tables in handlers.
   `sessions.reset`, `sessions.delete` and each confirmed `sessions.prune`
   deletion run inside `LemonRouter.with_session_lifecycle_fence/3` and pass its
   generation to the mutation (`fence_generation:`, required by the core): they
@@ -88,7 +89,7 @@ another session store, scheduler or agent runtime. See [README](README.md).
   across peers; never submit a second run for a replay.
 - Inbound runs carry `a2a` channel provenance (`meta.channel_context`) derived
   from the authenticated peer and context, naming the same conversation as the
-  session key. The router applies the `a2a` channel policy from it whatever the
+  session key. The router applies the approval floor from it whatever the
   submission origin, intersected with the peer allow-list, and refuses an A2A
   request without it. The provenance is `peer_kind: :automation` (group
   approval floor) unless the operator's global config sets a literal

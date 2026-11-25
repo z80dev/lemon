@@ -207,97 +207,114 @@ defmodule LemonRouter.RoutingFeedbackStoreTest do
     end
   end
 
-  describe "best_model_for_context/1" do
-    defp best_model(pid, context_key) do
-      GenServer.call(pid, {:best_model_for_context, context_key})
+  describe "best_model_for_context/2" do
+    defp best_model(pid, context_key, default_model \\ nil) do
+      GenServer.call(pid, {:best_model_for_context, context_key, default_model})
     end
 
-    test "returns :insufficient_data when no data exists", %{pid: pid} do
-      assert {:insufficient_data, 0} = best_model(pid, "code|-|-")
+    defp record_n(pid, key, outcome, n), do: for(_ <- 1..n, do: record(pid, key, outcome))
+
+    test "keeps the default when no data exists", %{pid: pid} do
+      assert :keep_default = best_model(pid, "code|-|-")
     end
 
-    test "returns :insufficient_data when below min_sample_size", %{pid: pid} do
+    test "keeps the default below min_sample_size", %{pid: pid} do
       # 4 records < default min_sample_size of 5
-      for _ <- 1..4, do: record(pid, "code|-|-|anthropic|claude-sonnet", :success)
-      assert {:insufficient_data, 0} = best_model(pid, "code|-|-")
+      record_n(pid, "code|-|-|anthropic|claude-sonnet", :success, 4)
+      assert :keep_default = best_model(pid, "code|-|-")
     end
 
-    test "returns best model when threshold is met", %{pid: pid} do
+    test "suggests a qualified model when no default is configured", %{pid: pid} do
       context = "code|-|/srv/app"
-
-      # claude-sonnet: 5 successes
-      for _ <- 1..5, do: record(pid, "#{context}|anthropic|claude-sonnet", :success)
+      record_n(pid, "#{context}|anthropic|claude-sonnet", :success, 5)
 
       assert {:ok, "claude-sonnet"} = best_model(pid, context)
     end
 
     test "picks model with highest success rate when multiple models qualify", %{pid: pid} do
       context = "query|-|-"
-
-      # model-a: 5 successes, 0 failures → 100%
-      for _ <- 1..5, do: record(pid, "#{context}|p|model-a", :success)
-
-      # model-b: 5 successes, 5 failures → 50%
-      for _ <- 1..5, do: record(pid, "#{context}|p|model-b", :success)
-      for _ <- 1..5, do: record(pid, "#{context}|p|model-b", :failure)
+      record_n(pid, "#{context}|p|model-a", :success, 5)
+      record_n(pid, "#{context}|p|model-b", :success, 9)
+      record_n(pid, "#{context}|p|model-b", :failure, 1)
 
       assert {:ok, "model-a"} = best_model(pid, context)
+    end
+
+    test "never suggests a model below the success-rate floor", %{pid: pid} do
+      context = "query|-|/floor"
+      # A model that has since died: plenty of samples, mostly failures.
+      record_n(pid, "#{context}|p|dead-model", :success, 5)
+      record_n(pid, "#{context}|p|dead-model", :failure, 20)
+
+      assert :keep_default = best_model(pid, context)
+      assert :keep_default = best_model(pid, context, "p:other-model")
+    end
+
+    test "keeps a default that has no samples in this context", %{pid: pid} do
+      context = "code|-|/changed-default"
+      record_n(pid, "#{context}|openai|model-a", :success, 5)
+
+      assert :keep_default = best_model(pid, context, "openai:model-b")
+    end
+
+    test "keeps a default that is itself the best model", %{pid: pid} do
+      context = "code|-|/default-best"
+      record_n(pid, "#{context}|openai|model-a", :success, 5)
+
+      for default <- ["model-a", "openai:model-a", "openai/model-a"] do
+        assert :keep_default = best_model(pid, context, default)
+      end
+    end
+
+    test "suggests a model only when the measured default did worse", %{pid: pid} do
+      context = "code|-|/default-worse"
+      record_n(pid, "#{context}|openai|model-b", :success, 4)
+      record_n(pid, "#{context}|openai|model-b", :failure, 1)
+      record_n(pid, "#{context}|openai|model-c", :success, 5)
+
+      assert {:ok, "model-c"} = best_model(pid, context, "openai:model-b")
+
+      record_n(pid, "#{context}|openai|model-c", :failure, 1)
+      record_n(pid, "#{context}|openai|model-b", :success, 1)
+      assert :keep_default = best_model(pid, context, "openai:model-b")
     end
 
     test "aggregates across providers for the same model name", %{pid: pid} do
       context = "file_ops|-|-"
 
       # Same model name, two providers — combined: 10 records, 8 successes
-      for _ <- 1..5, do: record(pid, "#{context}|provider-a|shared-model", :success)
-      for _ <- 1..3, do: record(pid, "#{context}|provider-b|shared-model", :success)
-      for _ <- 1..2, do: record(pid, "#{context}|provider-b|shared-model", :failure)
+      record_n(pid, "#{context}|provider-a|shared-model", :success, 5)
+      record_n(pid, "#{context}|provider-b|shared-model", :success, 3)
+      record_n(pid, "#{context}|provider-b|shared-model", :failure, 2)
 
       assert {:ok, "shared-model"} = best_model(pid, context)
     end
 
     test "does not match fingerprints outside the context prefix", %{pid: pid} do
-      # Records for a different context
-      for _ <- 1..5, do: record(pid, "chat|-|-|p|gpt-4o", :success)
+      record_n(pid, "chat|-|-|p|gpt-4o", :success, 5)
+      record_n(pid, "code|-|-x|p|gpt-4o", :success, 5)
 
-      # Querying for a different context should return no match
-      assert {:insufficient_data, 0} = best_model(pid, "code|-|-")
+      assert :keep_default = best_model(pid, "code|-|-")
     end
 
     test "ignores model '-' (unknown model) even if it has enough records", %{pid: pid} do
       context = "code|-|-"
-      for _ <- 1..5, do: record(pid, "#{context}|-|-", :success)
+      record_n(pid, "#{context}|-|-", :success, 5)
+      record_n(pid, "#{context}|p|known", :success, 4)
+      record_n(pid, "#{context}|p|known", :failure, 1)
 
-      assert {:insufficient_data, 0} = best_model(pid, context)
+      assert {:ok, "known"} = best_model(pid, context)
     end
 
-    test "J1: LIKE metachar % in lookup context_key must not cross-match other workspaces", %{
-      pid: pid
-    } do
-      # Seed data for workspace /project_foo (no metacharacters in path)
-      for _ <- 1..5, do: record(pid, "code|-|/project_foo|p|model-a", :success)
+    test "LIKE metacharacters in the context key match only literally", %{pid: pid} do
+      record_n(pid, "code|-|/project_foo|p|model-a", :success, 5)
+      record_n(pid, "code|-|/tmp/doneXnow|p|model-b", :success, 5)
 
-      # Without escaping, LIKE 'code|-|/proj%|%' matches 'code|-|/project_foo|p|model-a'
-      # because % swallows 'ect_foo'. After the fix, % must be escaped so no cross-match.
-      assert {:insufficient_data, 0} = best_model(pid, "code|-|/proj%")
-    end
+      assert :keep_default = best_model(pid, "code|-|/proj%")
+      assert :keep_default = best_model(pid, "code|-|/tmp/done_now")
 
-    test "J1: LIKE metachar _ in lookup context_key must not cross-match other workspaces", %{
-      pid: pid
-    } do
-      # Seed data for workspace /tmp/doneXnow (X is a literal character)
-      for _ <- 1..5, do: record(pid, "code|-|/tmp/doneXnow|p|model-b", :success)
-
-      # Without escaping, LIKE 'code|-|/tmp/done_now|%' matches 'code|-|/tmp/doneXnow|...'
-      # because _ is a single-char wildcard matching X. After the fix, _ must be escaped.
-      assert {:insufficient_data, 0} = best_model(pid, "code|-|/tmp/done_now")
-    end
-
-    test "J1: workspace with % returns its own model correctly", %{pid: pid} do
       context = "code|-|/tmp/100%_done"
-
-      for _ <- 1..5, do: record(pid, "#{context}|p|model-pct", :success)
-
-      # Must find its OWN model when queried with the exact same context (% and _ escaped)
+      record_n(pid, "#{context}|p|model-pct", :success, 5)
       assert {:ok, "model-pct"} = best_model(pid, context)
     end
   end

@@ -19,7 +19,13 @@ defmodule LemonCore.Runtime.Health do
       # Report local readiness
       LemonCore.Runtime.Health.status()
       # => %{status: :ok, apps: [...], missing: []}
+
+      # Liveness of this runtime, as served by the control plane's /healthz
+      LemonCore.Runtime.Health.runtime_status()
+      # => %{ok: true, profile: :runtime_full, missing: []}
   """
+
+  alias LemonCore.Runtime.Profile
 
   @default_timeout_ms 2_000
   @healthz_path "/healthz"
@@ -38,13 +44,25 @@ defmodule LemonCore.Runtime.Health do
   """
   @spec running?(pos_integer(), keyword()) :: boolean()
   def running?(port, opts \\ []) when is_integer(port) and port > 0 do
+    check(port, opts) == {:ok, :healthy}
+  end
+
+  @doc """
+  Probes the runtime's health endpoint on `port`.
+
+  Returns `{:ok, :healthy}` for HTTP 200 with Lemon's `{"ok": true}` body,
+  `{:error, {:unhealthy, missing}}` when a Lemon runtime answers 503 and names
+  the expected applications it is not running, `{:error, :unreachable}` when
+  nothing answers and `{:error, :bad_response}` for any other answer. Accepts
+  the same options as `running?/2`.
+  """
+  @spec check(pos_integer(), keyword()) ::
+          {:ok, :healthy}
+          | {:error, {:unhealthy, [String.t()]} | :unreachable | :bad_response}
+  def check(port, opts \\ []) when is_integer(port) and port > 0 do
     timeout = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
     path = Keyword.get(opts, :path, @healthz_path)
-
-    case probe(port, path, timeout) do
-      {:ok, 200} -> true
-      _ -> false
-    end
+    probe(port, path, timeout)
   end
 
   @doc """
@@ -97,6 +115,48 @@ defmodule LemonCore.Runtime.Health do
     %{status: overall, apps: started, missing: missing}
   end
 
+  @doc """
+  Returns whether this node runs every application its runtime profile expects.
+
+  The profile is `LemonCore.Runtime.Profile.current/0` (or the `:profile`
+  option, a `Profile.current/0` result). A runtime is healthy only while every
+  `:permanent` application of its profile is started, so an application that
+  stopped — for example after exhausting its supervisor's restart budget —
+  makes it unhealthy. A node that runs no profile (`:none`) has no expected
+  set and is healthy; an unknown configured profile is unhealthy.
+
+  The `:apps` option names the expected applications directly instead of a
+  profile, for a node that embeds the control plane without a Lemon runtime
+  profile.
+
+  ## Return shape
+
+      %{ok: boolean(), profile: atom() | nil, missing: [atom()]}
+
+  plus `error: :unknown_profile` when the configured profile is unknown.
+  """
+  @spec runtime_status(keyword()) :: map()
+  def runtime_status(opts \\ []) do
+    case Keyword.fetch(opts, :apps) do
+      {:ok, apps} ->
+        %{missing: missing} = status(apps: apps)
+        %{ok: missing == [], profile: nil, missing: missing}
+
+      :error ->
+        profile_status(Keyword.get_lazy(opts, :profile, &Profile.current/0))
+    end
+  end
+
+  defp profile_status({:ok, name}) do
+    %{missing: missing} = status(apps: Profile.running_apps(name))
+    %{ok: missing == [], profile: name, missing: missing}
+  end
+
+  defp profile_status(:none), do: %{ok: true, profile: nil, missing: []}
+
+  defp profile_status({:error, :unknown_profile}),
+    do: %{ok: false, profile: nil, missing: [], error: :unknown_profile}
+
   # ──────────────────────────────────────────────────────────────────────────
   # Private helpers
   # ──────────────────────────────────────────────────────────────────────────
@@ -108,7 +168,7 @@ defmodule LemonCore.Runtime.Health do
       {:error, :timeout}
     else
       case probe(port, path, min(@poll_interval_ms, deadline - now)) do
-        {:ok, 200} ->
+        {:ok, :healthy} ->
           {:ok, :healthy}
 
         _ ->
@@ -165,11 +225,25 @@ defmodule LemonCore.Runtime.Health do
   defp parse_response(response) do
     with ["HTTP/" <> _ = headers, body] <- String.split(response, "\r\n\r\n", parts: 2),
          [status | _] <- String.split(headers, "\r\n", parts: 2),
-         true <- Regex.match?(~r/^HTTP\/1\.[01] 200(?: |$)/, status),
-         {:ok, %{"ok" => true}} <- Jason.decode(body) do
-      {:ok, 200}
+         [_, code] <- Regex.run(~r/^HTTP\/1\.[01] (200|503)(?: |$)/, status),
+         {:ok, %{"ok" => ok} = payload} <- Jason.decode(body) do
+      health_result(code, ok, payload)
     else
       _ -> {:error, :bad_response}
     end
   end
+
+  defp health_result("200", true, _payload), do: {:ok, :healthy}
+
+  defp health_result("503", false, %{"missing" => missing}) when is_list(missing) do
+    if missing != [] and Enum.all?(missing, &app_name?/1) do
+      {:error, {:unhealthy, Enum.take(missing, 64)}}
+    else
+      {:error, :bad_response}
+    end
+  end
+
+  defp health_result(_code, _ok, _payload), do: {:error, :bad_response}
+
+  defp app_name?(name), do: is_binary(name) and Regex.match?(~r/\A[a-z][a-z0-9_]{0,63}\z/, name)
 end

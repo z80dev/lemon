@@ -31,9 +31,8 @@ def environment(root, samples, turns, hibernate_after_ms):
     env = {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL') if key in os.environ}
     for key, directory in (('MIX_HOME', '.mix'), ('HEX_HOME', '.hex')):
         env[key] = str(Path(os.environ.get(key, original_home / directory)).expanduser().resolve())
-    for directory in ('home/.lemon', 'cwd', 'tmp'):
+    for directory in ('home', 'cwd', 'tmp'):
         (root / directory).mkdir(parents=True, mode=0o700)
-    (root / 'home/.lemon/config.toml').write_text('[runtime.tools.wasm]\nenabled = false\n')
     # This also applies before dependencies loaded by Mix can start tzdata.
     (root / 'offline.config').write_text('[{tzdata, [{autoupdate, disabled}]}].\n')
     env.update(HOME=str(root / 'home'), TMPDIR=str(root / 'tmp'), MIX_ENV='dev',

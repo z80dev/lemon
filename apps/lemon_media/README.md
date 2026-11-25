@@ -14,9 +14,10 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 | `LemonMedia.MediaJobs` | The job record store: `record/2`, `recent/1`, `summary/1`, `cleanup/1` |
 | `LemonMedia.MediaJobSupervisor` | Bounded task supervisor; `run_job/2` runs one job synchronously against a deadline, `status/0` reports activity |
 | `LemonMedia.MediaJobWorker` | Job body that records `queued → running → completed`/`failed` |
-| `LemonMedia.Providers` | `run/1`: the single entry point to every provider driver (image, speech, video, vision, transcription) |
+| `LemonMedia.Providers` | `run/1`: the single entry point for finite media jobs (image, speech, video, vision, transcription) |
 | `LemonMedia.Providers.Http` | The one retry/timeout/redacted-error helper the drivers share |
 | `LemonMedia.Providers.SpeechStream` | Streaming OpenAI speech client used by channel voice replies |
+| `LemonMedia.Providers.DeepgramStream` | Streaming STT for gateway calls; gateway owns the per-call socket lifecycle |
 | `LemonMedia.GoogleAuth` | Google service-account access tokens, cached until shortly before expiry |
 | `LemonMedia.Artifact` | Alias-safe artifact writes |
 
@@ -26,7 +27,7 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 
 `lemon_media` is an app in the Lemon umbrella, not a Hex package: it ships as part
 of the reference runtime and is consumed in-repo by `lemon_router`,
-`lemon_channels` and `lemon_skills`. See `docs/platform-split.md` for the
+`lemon_channels`, `lemon_gateway` and `lemon_skills`. See `docs/platform-split.md` for the
 published package set.
 
 ## Recording a job
@@ -53,9 +54,9 @@ Or run it under the job supervisor and wait for the outcome:
 `run_job/2` waits against one monotonic deadline; unrelated mailbox messages
 are neither consumed nor extend it. A job never outlives its caller: on
 timeout (`{:error, {:cancelled, :timeout, job}}`), abort
-(`{:error, {:cancelled, :aborted, job}}`) or caller exit the job process is
-killed, which cancels any in-flight provider request, and the record ends
-`:cancelled`. A job that crashes or is killed by someone else ends `:failed`
+(`{:error, {:cancelled, :aborted, job}}`) or caller exit, the supervised job
+owner kills the provider task before recording `:cancelled`.
+A job that crashes or is killed by someone else ends `:failed`
 (`{:error, {:failed, job}}`); runner errors also end `:failed`. Jobs are never
 restarted or retried.
 

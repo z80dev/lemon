@@ -6,6 +6,17 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Changed
+
+- Writable client stores (`defer_to_runtime: true`) write only while the
+  client's supervised `RuntimeOwner` (`client: true`) holds
+  `<db>.client.lock` and the runtime lock for the VM's lifetime; beside a
+  running runtime they refuse every mutation with `{:error, :runtime_owned}`,
+  and a runtime booting while a client holds them waits its lock deadline,
+  then refuses to start (`:store_held_by_client`) instead of writing.
+  `Store.write_access/1` reports it. `Secrets.list/1` on a client store hides
+  expired rows without pruning them (#667).
+
 ### Removed
 
 - **Breaking:** removed `LemonCore.EngineRuntime`. The router calls the native
@@ -17,9 +28,92 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   and its registry entry), `LemonCore.RunPhase` and `LemonCore.RunPhaseGraph`. The
   event had no subscriber; every publication was a broadcast plus an `EventBridge`
   unmapped-type warning (#710).
+- **Breaking:** retired WASM tool support (#707): `LemonCore.Config.Tools`
+  has no `wasm` field and no longer reads `[runtime.tools.wasm]`, the
+  `LEMON_WASM_*` declarations and the `:tools_wasm` area are gone, extension
+  manifests reject a `wasm` host type, doctor diagnostics report no `wasm`
+  host, `tool_auth` is no longer a catalogued tool, and the optional
+  `AgentRuntime.Provider.wasm_sidecar_running?/0` callback is removed.
+- `LemonCore.Store` no longer sweeps the `:openai_compat_run_owners` table; its
+  only owner, the control plane's OpenAI-compatible API, was removed (#711).
+- **Breaking:** the `feature_progress/1` agent-runtime provider callback and the
+  `report_issue`, `todoread` and `todowrite` tool-catalogue entries (#706).
+
+- **Breaking:** the `mix lemon.secrets.*` tasks; `lemon secrets` is the only
+  secrets command-line interface (#717).
+- **Breaking:** `LemonCore.PolicyStore` agent, channel and runtime scopes
+  (`fetch_agent/1`, `put_agent/2`, `fetch_channel/1`, `put_channel/2`,
+  `fetch_runtime/0`, `put_runtime/1`, `delete_runtime/0`): they had no writer.
+  `LemonCore.ExecApprovalStore` node grants (`get_node_policy/3`,
+  `put_node_policy/4`), the policy maps (`fetch_global_policy_map/0`,
+  `put_global_policy_map/1`, `get_node_policy_map/1`, `put_node_policy_map/2`)
+  and the `list_global_policies/0`, `list_agent_policies/0`,
+  `list_session_policies/0`, `list_node_policies/0` helpers; `ExecApprovals.request/1`
+  ignores `:node_id`. The remaining approval rows are documented as approval
+  memory, not policy (#709).
+- **Breaking:** the `controller` and `hybrid` ids from
+  `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
+- **Breaking:** `LemonCore.Context`, `LemonCore.Context.Document` and
+  `LemonCore.Context.URLFetcher` no longer ship in `lemon_core`. Their only
+  consumers were the `lemon context` command and `LemonSkills.Learn`, so they
+  moved unchanged to `lemon_skills` as `LemonSkills.Context`,
+  `LemonSkills.Context.Document` and `LemonSkills.Context.URLFetcher`. URL
+  references still fetch through `LemonCore.Net.HTTP` (#724).
 
 ### Changed
 
+- Dialyzer-clean (#734): `Lemon.Reload` no longer reports a successful
+  code change as an error; extension manifests that are valid JSON but not an
+  object are rejected as such instead of as oversized; several public typespecs
+  (exec-approval store writes, `Update.Remote` check results, archive
+  preflight) now match the values returned. The crash-report stand-in
+  exception is named `LemonCore.StatusRedaction.RedactedCrashError` (#499).
+- `LemonCore.Config.Features`: `routing_feedback` now defaults to `:off`
+  (`%Features{}` and `resolve/1` with no setting); enable it with `"on"` (#647).
+- **Breaking:** requires Elixir 1.17 (was `~> 1.15`, which the package did not
+  meet: it calls `String.replace_invalid/1`, Elixir 1.16, and its optional
+  exqlite 0.43 requires 1.17). CI proves the floor on Elixir 1.17.3 / OTP 26.2,
+  and `LemonCore.ConfinedFS.Stat` moved to its own file so the package compiles
+  there (#730).
+- **Breaking:** the test harness (`LemonCore.Testing`, `Testing.Case`,
+  `Testing.HermeticEnv`, `Testing.AsyncHelpers`, `Testing.FileServerTap`) is no
+  longer shipped in the Hex package; it serves the lemon repository's own
+  suites. `use LemonCore.Testing.Case, with_store: true` now starts
+  `LemonCore.Store` (the option was ignored), and
+  `HermeticEnv.credential_env_vars/0`, `scrub_unit_credentials!/1` and the
+  `:test_credential_env_vars` setting are removed: `scripts/test` holds the one
+  credential scrub list (#713).
+- **Breaking (0.3.0):** `LemonCore.AgentRuntime.query/3` and `mutate/2` replace
+  `call/3`, and provider callback groups are required. Failed reads are explicit
+  errors; runtime and credential mutations whose callback failed after dispatch
+  return `{:error, :outcome_unknown}` and must be reconciled before retry (#626).
+- `[skills.learning_nudge]` (with operator-only `background_review`) is a
+  validated `config.toml` table, resolved as `config.skills.learning_nudge`; a
+  project layer may only set `enabled = false` or raise the reminder intervals
+  (#655).
+- **Breaking:** `LemonCore.Events.Completion.usage` is a typed
+  `LemonCore.Events.Usage` (nested payload; `Completion.from_map/1` coerces a
+  map) with canonical, nullable counters, `context_tokens`, `context_budget`,
+  `turns`, `tool_errors` and per-call `occurrences`.
+  `Usage.context_tokens/1` reads the latest call's context, never the
+  cumulative counters. `LemonCore.UsageLedger` reads only the canonical names:
+  `input_tokens`/`prompt_tokens`/`completion_tokens` and the
+  `cache_*_input_tokens` spellings are no longer usage (#669).
+- The packaged doctor works: `LemonCore.Doctor.Checks.Runtime` called
+  `LemonCore.Update.Version.describe/0`, a module the package excludes, and
+  failed on any Elixir below 1.20.5 although the package declares `~> 1.15`.
+  The build identity now lives in `LemonCore.BuildInfo.version/0`,
+  `identity/0` and `describe/0`, and the runtime check no longer judges the
+  toolchain (`lemon doctor` reports the Lemon application's Elixir floor from
+  lemon_cli). `scripts/verify_packages` runs the packaged doctor (#730).
+- **Breaking:** `mix lemon.store.migrate_jsonl_to_sqlite` is removed with the
+  JSONL backend it migrated from; migrate with `lemon_core` 0.2.x before
+  upgrading (#730).
+- `LemonCore.PolicyStore` gains chat rows (`:chat_policies`) for channel model
+  and thinking defaults: `chat_route/1`, `chat_route?/1`, `route_chain/1`,
+  `fetch_chat/1`, `fetch_chats/0`, `update_chat/2`, `delete_chat/1` and
+  `resolve_chat/1` (most specific row per field, fail closed). `lemon policy`
+  is now `LemonCore.PolicyStore.CLI` with its `mix lemon.policy` task (#714).
 - `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
   fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
   instead of launching a browser (#660).
@@ -40,6 +134,30 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   retried like runtime unavailability, and the documented cancellation reasons
   are `:run_idle_watchdog_timeout` (was `:run_watchdog_timeout`),
   `:user_requested`, `:runtime_restart` and `:run_process_terminated` (#643).
+- **Breaking (0.3.0):** `LemonCore.Store` bounds `:runs` (#682). Events are
+  buffered per run (first 200 + latest, 2,000 in all; `:events_dropped`) and
+  attached on explicit `get_run_with_events/2` reads. Finalization freezes
+  the buffer and writes summary metadata only; both are evicted after
+  `:runs_retention_ms` (default 24 h), leaving a durable terminal marker
+  in `:run_terminals`.
+  `fetch_run/2` returns `{:error, :evicted}` for a finalized, evicted run;
+  events for finalized runs are dropped. `list/2`, `fetch_all/2`,
+  `fetch_keys/2` and `fetch_range/5` raise `ArgumentError` for `:runs`;
+  `UsageStore.fetch_runs/1` is removed and `UsageRecords` reads only
+  occurrences (`UsageStore.fetch_occurrences_between/3`).
+- `LemonCore.Store` whole-table reads (`fetch_all/2`, `list/2`,
+  `list_introspection_events/2`, new `fetch_keys/2` and `fetch_range/5`) run in
+  the caller through the new optional `Store.Backend` callbacks `reader/1`,
+  `read_list/2`, `read_range/5` and `read_recent/3` (implemented by the ETS and
+  SQLite backends; SQLite adds an indexed `at_ms` column). Introspection listing
+  errors are now `{:error, :store_unavailable}` (#682).
+- `LemonCore.ToolPolicy.restrict/2` keeps a merged per-tool `never` approval
+  only when neither side gates that tool at any tier, and no longer lets the
+  requested side enable `workspace_read_exempt` the parent lacks. The new
+  `LemonCore.ToolPolicy.layer/2` intersects trusted operator layers with the
+  previous neutral handling of an unset exemption; `intersect/2` uses it.
+  `subset?/2` compares approval gates per tier, so `dangerous` and `always`
+  are equivalent (#71, #72, #73).
 - `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
   OS processes (#586).
 - **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,
@@ -75,6 +193,17 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   only for Darwin full-sync of file contents (#561).
 
 - Removed unused `RunPhaseEvent`, `Retry.exponential_backoff/3`, and `Telemetry.span/3` APIs.
+- **Breaking (0.3.0):** `LemonCore.SessionLifecycle.reset/2` now defaults to a
+  non-mutating dry-run preview (`dry_run: true`) returning a state digest and
+  single-use server-side `:confirm_token`; execution requires `dry_run: false`
+  (or `:confirm_token`) with a matching live digest and `:fence_generation`
+  (#615).
+- Added `LemonCore.RunHistoryStore.fetch_count/1,2`,
+  `LemonCore.RunStore.fetch_history_count/1`, and ACP metadata helpers on
+  `LemonCore.SessionMetadataStore` (`fetch_acp/1`, `fetch_acp_by_id/1`,
+  `list_acp/0`, `put_acp/2`, `clear_acp_run_state/1`) so ACP metadata shares the
+  canonical session lifecycle store; ACP reads fail closed with
+  `{:error, :store_unavailable}`, never an empty list (#615, #652).
 - Consolidated Mix task startup and simplified service identity matching.
 - Fixed task projection fallback action IDs to include their action kind.
 
@@ -120,6 +249,45 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   large session snapshots, event projections and memory writes no longer stall.
 
 ### Added
+
+- Service groups: `config :lemon_core, :services` selects `:core` (always),
+  `:runtime_control` and `:run_history` (`LemonCore.Application.service_groups/0`);
+  unset starts every group as before. A library consumer that selects
+  `[:core]` starts the Store, Bus, config and secrets services but none of the
+  assistant runtime's control processes (#92).
+- `config :lemon_core, :required_capabilities` (`LemonCore.Capabilities`:
+  `:durable_store`, `:run_history`, `:runtime_control`): in the `:runtime` boot
+  mode lemon_core refuses to start with `{:missing_capability, capability}` and
+  logs the fix when a required capability is unavailable. Optional
+  `LemonCore.Store.Backend.durable?/0` (true for `SqliteBackend` with exqlite)
+  and `LemonCore.Store.configured_backend/0` back the `:durable_store` check
+  (#92).
+- `LemonCore.Runtime.Profile` is compiled from `priv/runtime_profiles.exs`, the
+  file the umbrella builds its releases from; profiles carry per-application
+  start types (the `applications` field, `running_apps/1`, `release_name/1`,
+  `current/0`). `Runtime.Boot` starts `:permanent` applications permanently,
+  `Runtime.Health.check/2` and `runtime_status/1` report a runtime missing
+  expected applications, and the doctor's `runtime.apps` check names them
+  (#726).
+- `LemonCore.AutomationCommands`: the runtime seam channel transports use for
+  `/goal`, `/kanban`, `/remind`, `/reminders` and `/unremind`. The automation
+  runtime registers its provider at boot; an absent provider answers a fixed
+  unavailable reply and a failing one an outcome-unknown reply, never a retry.
+  `ToolCatalog` marks `goal` and `kanban` as registry-provided platform tools
+  (#721).
+- `LemonCore.SessionLifecycle.Participant`: a behaviour (`snapshot/2`,
+  `delete/3`, `verify_deleted/3`, `restore/3`, optional `commit/3`) and
+  `register/3` registry through which owning apps take part in
+  `SessionLifecycle.delete/2` and `reset/2`. Delete reports `verified: true`
+  only when every registered participant verified; a participant whose store
+  is unreadable stops the operation before any mutation
+  (`{:error, {:participant_unavailable, name}}`), and a failed delete or
+  verification restores every participant and the core stores
+  (`{:error, {:participant_delete_failed, name}}`). Session-scoped exec-approval
+  grants are a built-in participant of delete and reset.
+  `LemonCore.SessionLifecycle.StoreRows` covers owners whose state is generic
+  Store rows; `ExecApprovalStore.fetch_session_grants/1`,
+  `delete_session_grant/1` and `restore_session_grant/2` are new (#692).
 
 - `LemonCore.Service` supervises an `omp-broker` role: `omp auth-broker serve
   --bind 127.0.0.1:8765` with omp's config-root selectors forwarded and broker
@@ -242,6 +410,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `SqliteBackend` no longer warns "struct Exqlite.Error is undefined" when
+  compiled without the optional `:exqlite` (#92).
+- The boot warning without `:exqlite` no longer claims run-history reads return
+  empty: `RunHistoryStore.fetch/2` returns `{:error, :unavailable}` (#92).
 - `config :lemon_core, :boot_mode` (`:runtime` default, `:client`,
   `:read_only_client`; `LemonCore.Application.boot_mode/0`) selects a client
   tree for one-shot commands without approval recovery, Store sweeps,
@@ -286,6 +458,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `LemonCore.LoopbackListener` share the cached uid, and
   `Identity.boot_check/0` (run at application start) logs an error when `ps`
   is unavailable (#684).
+- `LemonCore.Store` publishes a cached table only after its warm-up read
+  succeeded and clears the published list on start and stop, so a failed warm
+  no longer turns `list/2` into `[]`; `ReadCache.fetch_all/2` returns
+  `:uncached` for a missing mirror. `SqliteBackend.list/2` decodes past bad rows
+  and its `:sqlite_corrupt_data` context carries `:corrupt_rows` (#618).
+- `RouterBridge.run_receipt/1` documents definite `:rejected` and `:terminal`
+  outcomes separately from an ambiguous submission (#81).
 - `Durable.sync_file` no longer leaks a stray port `EXIT` message to its caller
   (#555).
 - Credential redaction classifies trailing separator-delimited and camelCase
@@ -385,6 +564,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   10 MiB/file, 50 MiB aggregate, 10,000 entries, depth 128 per capture.
 
 ### Removed
+
+- **Breaking:** the `controller` and `hybrid` ids from
+  `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
 
 - **Breaking (0.3.0):** `[gateway.queue]` (`Config.Gateway` `:queue`,
   `Validator.validate_queue_config/2`); the section is ignored with a
