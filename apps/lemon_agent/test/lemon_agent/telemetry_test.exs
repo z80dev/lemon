@@ -23,16 +23,19 @@ defmodule LemonAgent.TelemetryTest do
   end
 
   defp attach_telemetry(event_names, handler_id, collector) do
-    :telemetry.attach_many(
-      "test-handler-#{handler_id}",
-      event_names,
-      fn event_name, measurements, metadata, _config ->
-        Agent.update(collector, fn events ->
-          [{event_name, measurements, metadata} | events]
-        end)
-      end,
-      nil
-    )
+    :ok =
+      :telemetry.attach_many(
+        "test-handler-#{handler_id}",
+        event_names,
+        fn event_name, measurements, metadata, _config ->
+          Agent.update(collector, fn events ->
+            [{event_name, measurements, metadata} | events]
+          end)
+        end,
+        nil
+      )
+
+    on_exit(fn -> detach_telemetry(handler_id) end)
   end
 
   defp detach_telemetry(handler_id) do

@@ -2,6 +2,7 @@ defmodule LemonGateway.HealthTest do
   use ExUnit.Case, async: false
 
   import Plug.Test
+  import LemonGateway.Test.AppIsolation
 
   defmodule XmtpMissingStatusStub do
   end
@@ -23,7 +24,13 @@ defmodule LemonGateway.HealthTest do
   end
 
   setup do
-    Application.stop(:lemon_gateway)
+    isolate_gateway([
+      LemonGateway.Config,
+      :transports,
+      :commands,
+      :health_checks,
+      :xmtp_transport_module
+    ])
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 1,
@@ -34,12 +41,6 @@ defmodule LemonGateway.HealthTest do
     Application.put_env(:lemon_gateway, :commands, [])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-    on_exit(fn ->
-      Application.stop(:lemon_gateway)
-      Application.delete_env(:lemon_gateway, :health_checks)
-      Application.delete_env(:lemon_gateway, :xmtp_transport_module)
-    end)
 
     :ok
   end

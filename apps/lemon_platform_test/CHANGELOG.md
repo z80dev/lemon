@@ -6,6 +6,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Added
+
+- `LemonPlatformTest.AppRestart` restores the original OTP app lifecycle and declared application env, OS env, and telemetry ownership after a non-async test (#736).
+
 ### Removed
 
 - **Breaking:** `ProviderCase` no longer probes `search/2` (the callback left `LemonMemory.Provider`); `hostile_queries/0`, the `:queries` option and the registry fan-out search test are removed. The suite checks the behaviour declaration, `put/2` and registration (#656).

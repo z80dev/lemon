@@ -449,9 +449,7 @@ defmodule CodingAgent.RulesTest do
     # controller. With yamerl (and yaml_elixir) stopped, parsing must work and
     # leave them stopped, proving no Application.start/1 is in the path.
     test "parses .mdc frontmatter without starting yamerl", %{repo: repo} do
-      on_exit(fn -> {:ok, _} = Application.ensure_all_started(:yaml_elixir) end)
-      :ok = Application.stop(:yaml_elixir)
-      :ok = Application.stop(:yamerl)
+      LemonPlatformTest.AppRestart.setup_app_restart([:yaml_elixir, :yamerl], [])
 
       write!(
         Path.join(repo, ".cursor/rules/ts.mdc"),

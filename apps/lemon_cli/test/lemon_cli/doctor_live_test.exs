@@ -671,13 +671,17 @@ defmodule LemonCli.DoctorLiveProviderCLITest do
   @moduletag :tmp_dir
 
   setup %{tmp_dir: tmp_dir} do
-    previous = Application.get_env(:lemon_core, :doctor_checks)
+    previous = Application.fetch_env(:lemon_core, :doctor_checks)
     Application.put_env(:lemon_core, :doctor_checks, [SelectionProbe])
     original_home = System.get_env("HOME")
     System.put_env("HOME", tmp_dir)
 
     on_exit(fn ->
-      Application.put_env(:lemon_core, :doctor_checks, previous)
+      case previous do
+        {:ok, checks} -> Application.put_env(:lemon_core, :doctor_checks, checks)
+        :error -> Application.delete_env(:lemon_core, :doctor_checks)
+      end
+
       if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
     end)
 

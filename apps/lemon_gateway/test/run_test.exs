@@ -227,17 +227,7 @@ defmodule LemonGateway.RunTest do
   # ============================================================================
 
   setup do
-    previous_executor = Application.fetch_env(:lemon_gateway, :executor)
-
-    on_exit(fn ->
-      case previous_executor do
-        {:ok, executor} -> Application.put_env(:lemon_gateway, :executor, executor)
-        :error -> Application.delete_env(:lemon_gateway, :executor)
-      end
-    end)
-
-    # Stop and restart the application with the configured executor fixture.
-    _ = Application.stop(:lemon_gateway)
+    LemonGateway.Test.AppIsolation.isolate_gateway([LemonGateway.Config, :executor])
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 10,
@@ -1072,22 +1062,6 @@ defmodule LemonGateway.RunTest do
   # ============================================================================
 
   describe "claim acquisition and release" do
-    setup do
-      # Enable engine claim for these tests
-      _ = Application.stop(:lemon_gateway)
-
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 10,
-        enable_telegram: false
-      })
-
-      Application.put_env(:lemon_gateway, :executor, RunFixtureExecutor)
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      :ok
-    end
-
     test "claims its engine session before execution" do
       scope = make_scope()
       request = make_request(scope)
@@ -2027,18 +2001,6 @@ defmodule LemonGateway.RunTest do
     end
 
     test "cancel releases claim" do
-      # Setup with claim enabled
-      _ = Application.stop(:lemon_gateway)
-
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 10,
-        enable_telegram: false
-      })
-
-      Application.put_env(:lemon_gateway, :executor, RunFixtureExecutor)
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
       scope = make_scope()
 
       request1 =
@@ -2250,18 +2212,6 @@ defmodule LemonGateway.RunTest do
 
     test "resume token value is used for claim key" do
       # This tests that two jobs with same resume token share the same claim
-      # Setup with claim enabled and short timeout
-      _ = Application.stop(:lemon_gateway)
-
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 10,
-        enable_telegram: false
-      })
-
-      Application.put_env(:lemon_gateway, :executor, RunFixtureExecutor)
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
       # Different scopes but same resume token
       scope1 = make_scope()
       scope2 = make_scope()
@@ -2416,6 +2366,12 @@ defmodule LemonGateway.RunTest do
   # 20. Telemetry Events
   # ============================================================================
 
+  defp attach_telemetry(event, handler) do
+    id = make_ref()
+    :ok = :telemetry.attach(id, event, handler, nil)
+    on_exit(fn -> :telemetry.detach(id) end)
+  end
+
   describe "telemetry events" do
     test "emits run_start telemetry on run initialization" do
       scope = make_scope()
@@ -2423,16 +2379,10 @@ defmodule LemonGateway.RunTest do
 
       # Attach telemetry handler
       test_pid = self()
-      ref = make_ref()
 
-      :telemetry.attach(
-        "test-run-start-#{inspect(ref)}",
-        [:lemon, :run, :start],
-        fn _event, measurements, metadata, _config ->
-          send(test_pid, {:telemetry_start, measurements, metadata})
-        end,
-        nil
-      )
+      attach_telemetry([:lemon, :run, :start], fn _, measurements, metadata, _ ->
+        send(test_pid, {:telemetry_start, measurements, metadata})
+      end)
 
       {:ok, _pid} = start_run_direct(request)
 
@@ -2445,8 +2395,6 @@ defmodule LemonGateway.RunTest do
       # Wait for completion
       assert_receive {:lemon_gateway_run_completed, ^request, %{__event__: :completed, ok: true}},
                      2000
-
-      :telemetry.detach("test-run-start-#{inspect(ref)}")
     end
 
     test "emits run_stop telemetry on completion" do
@@ -2455,16 +2403,10 @@ defmodule LemonGateway.RunTest do
 
       # Attach telemetry handler
       test_pid = self()
-      ref = make_ref()
 
-      :telemetry.attach(
-        "test-run-stop-#{inspect(ref)}",
-        [:lemon, :run, :stop],
-        fn _event, measurements, metadata, _config ->
-          send(test_pid, {:telemetry_stop, measurements, metadata})
-        end,
-        nil
-      )
+      attach_telemetry([:lemon, :run, :stop], fn _, measurements, metadata, _ ->
+        send(test_pid, {:telemetry_stop, measurements, metadata})
+      end)
 
       {:ok, _pid} = start_run_direct(request)
 
@@ -2477,8 +2419,6 @@ defmodule LemonGateway.RunTest do
       assert measurements.duration_ms >= 0
       assert measurements.ok == true
       assert is_binary(metadata.run_id)
-
-      :telemetry.detach("test-run-stop-#{inspect(ref)}")
     end
 
     test "emits run_stop with ok: false on error completion" do
@@ -2489,16 +2429,10 @@ defmodule LemonGateway.RunTest do
 
       # Attach telemetry handler
       test_pid = self()
-      ref = make_ref()
 
-      :telemetry.attach(
-        "test-run-stop-error-#{inspect(ref)}",
-        [:lemon, :run, :stop],
-        fn _event, measurements, metadata, _config ->
-          send(test_pid, {:telemetry_stop, measurements, metadata})
-        end,
-        nil
-      )
+      attach_telemetry([:lemon, :run, :stop], fn _, measurements, metadata, _ ->
+        send(test_pid, {:telemetry_stop, measurements, metadata})
+      end)
 
       {:ok, _pid} = start_run_direct(request)
 
@@ -2509,8 +2443,6 @@ defmodule LemonGateway.RunTest do
       # Should receive telemetry event with ok: false
       assert_receive {:telemetry_stop, measurements, _metadata}, 2000
       assert measurements.ok == false
-
-      :telemetry.detach("test-run-stop-error-#{inspect(ref)}")
     end
 
     test "run_stop duration_ms reflects actual execution time" do
@@ -2524,16 +2456,10 @@ defmodule LemonGateway.RunTest do
 
       # Attach telemetry handler
       test_pid = self()
-      ref = make_ref()
 
-      :telemetry.attach(
-        "test-run-duration-#{inspect(ref)}",
-        [:lemon, :run, :stop],
-        fn _event, measurements, _metadata, _config ->
-          send(test_pid, {:telemetry_stop_duration, measurements.duration_ms})
-        end,
-        nil
-      )
+      attach_telemetry([:lemon, :run, :stop], fn _, measurements, _, _ ->
+        send(test_pid, {:telemetry_stop_duration, measurements.duration_ms})
+      end)
 
       {:ok, pid} = start_run_direct(request)
 
@@ -2550,8 +2476,6 @@ defmodule LemonGateway.RunTest do
       # Duration should be at least 100ms
       assert_receive {:telemetry_stop_duration, duration_ms}, 2000
       assert duration_ms >= 100
-
-      :telemetry.detach("test-run-duration-#{inspect(ref)}")
     end
 
     test "emits first_token telemetry on first delta" do
@@ -2565,16 +2489,10 @@ defmodule LemonGateway.RunTest do
 
       # Attach telemetry handler
       test_pid = self()
-      ref = make_ref()
 
-      :telemetry.attach(
-        "test-first-token-#{inspect(ref)}",
-        [:lemon, :run, :first_token],
-        fn _event, measurements, metadata, _config ->
-          send(test_pid, {:telemetry_first_token, measurements, metadata})
-        end,
-        nil
-      )
+      attach_telemetry([:lemon, :run, :first_token], fn _, measurements, metadata, _ ->
+        send(test_pid, {:telemetry_first_token, measurements, metadata})
+      end)
 
       {:ok, _pid} = start_run_direct(request)
 
@@ -2586,8 +2504,6 @@ defmodule LemonGateway.RunTest do
       assert is_integer(measurements.latency_ms)
       assert measurements.latency_ms >= 0
       assert is_binary(metadata.run_id)
-
-      :telemetry.detach("test-first-token-#{inspect(ref)}")
     end
 
     test "first_token telemetry is only emitted once" do
@@ -2601,16 +2517,10 @@ defmodule LemonGateway.RunTest do
 
       # Attach telemetry handler that counts calls
       test_pid = self()
-      ref = make_ref()
 
-      :telemetry.attach(
-        "test-first-token-once-#{inspect(ref)}",
-        [:lemon, :run, :first_token],
-        fn _event, _measurements, _metadata, _config ->
-          send(test_pid, :first_token_emitted)
-        end,
-        nil
-      )
+      attach_telemetry([:lemon, :run, :first_token], fn _, _, _, _ ->
+        send(test_pid, :first_token_emitted)
+      end)
 
       {:ok, _pid} = start_run_direct(request)
 
@@ -2620,8 +2530,6 @@ defmodule LemonGateway.RunTest do
       # Should only receive one first_token event despite multiple deltas
       assert_receive :first_token_emitted, 1000
       refute_receive :first_token_emitted, 200
-
-      :telemetry.detach("test-first-token-once-#{inspect(ref)}")
     end
 
     test "accumulated text from deltas appears in final answer" do

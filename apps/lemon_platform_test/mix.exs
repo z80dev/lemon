@@ -112,13 +112,13 @@ defmodule LemonPlatformTest.MixProject do
       #   EventsCase         -> lemon_core     FakeLLM      -> ai + agent
       #   PluginCase         -> lemon_channels (umbrella only)
       #
-      # The kit is a leaf: nothing in the platform depends on it, so these edges
-      # cannot create a cycle. In the umbrella all siblings are present, so the
-      # self-validation suites in test/compliance still compile and pass.
+      # Product apps only consume the kit in tests. In the umbrella all
+      # siblings are present for the self-validation suites in test/compliance.
       {:lemon_core, in_umbrella: true, optional: true},
       {:lemon_memory, in_umbrella: true, optional: true},
       {:lemon_ai, in_umbrella: true, optional: true},
       {:lemon_agent, in_umbrella: true, optional: true},
+      {:telemetry, "~> 1.0", optional: true},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]) ++ channels
   end

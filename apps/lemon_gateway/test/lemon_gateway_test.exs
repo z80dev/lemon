@@ -1,6 +1,8 @@
 defmodule LemonGatewayTest do
   alias Elixir.LemonGateway, as: LemonGateway
-  use ExUnit.Case
+  use ExUnit.Case, async: false
+
+  import LemonGateway.Test.AppIsolation
 
   alias Elixir.LemonGateway.ExecutionRequest
 
@@ -9,12 +11,10 @@ defmodule LemonGatewayTest do
     lock_dir =
       Path.join(System.tmp_dir!(), "lemon_test_locks_#{System.unique_integer([:positive])}")
 
-    System.put_env("LEMON_LOCK_DIR", lock_dir)
+    on_exit(fn -> File.rm_rf(lock_dir) end)
+    isolate_gateway([LemonGateway.Config, :executor], system_env: ["LEMON_LOCK_DIR"])
 
-    on_exit(fn ->
-      System.delete_env("LEMON_LOCK_DIR")
-      _ = File.rm_rf(lock_dir)
-    end)
+    System.put_env("LEMON_LOCK_DIR", lock_dir)
 
     :ok
   end
@@ -286,8 +286,6 @@ defmodule LemonGatewayTest do
   end
 
   setup do
-    _ = Application.stop(:lemon_gateway)
-
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 1,
       enable_telegram: false
@@ -295,11 +293,6 @@ defmodule LemonGatewayTest do
 
     Application.put_env(:lemon_gateway, :executor, GatewayFixtureExecutor)
 
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-    :ok
-  end
-
-  setup do
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     :ok
   end

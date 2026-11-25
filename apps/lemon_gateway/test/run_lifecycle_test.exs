@@ -35,19 +35,8 @@ defmodule LemonGateway.RunLifecycleTest do
   end
 
   setup do
-    running? = Enum.any?(Application.started_applications(), &(elem(&1, 0) == :lemon_gateway))
-    previous = Application.fetch_env(:lemon_gateway, :executor)
-    Application.stop(:lemon_gateway)
+    LemonGateway.Test.AppIsolation.isolate_gateway([:executor])
     Application.put_env(:lemon_gateway, :executor, GatedExecutor)
-
-    on_exit(fn ->
-      case previous do
-        {:ok, executor} -> Application.put_env(:lemon_gateway, :executor, executor)
-        :error -> Application.delete_env(:lemon_gateway, :executor)
-      end
-
-      if running?, do: Application.ensure_all_started(:lemon_gateway)
-    end)
 
     start_supervised!({Registry, keys: :unique, name: LemonGateway.RunRegistry})
     slots = start_supervised!(Supervisor.child_spec({Slots, max: 1}, restart: :temporary))

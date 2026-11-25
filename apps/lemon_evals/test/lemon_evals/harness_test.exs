@@ -6,6 +6,7 @@ defmodule LemonEvals.HarnessTest do
   test "eval harness passes all baseline checks" do
     report = Harness.run(cwd: File.cwd!(), iterations: 10)
 
-    assert report.summary.failed == 0
+    failed = for result <- report.results, result.status == :fail, do: result.name
+    assert report.summary.failed == 0, "failed eval checks: #{Enum.join(failed, ", ")}"
   end
 end

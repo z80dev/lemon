@@ -82,8 +82,8 @@ separate from user-facing channel rendering.
 ## Verification
 
 From the umbrella root: `mix test apps/lemon_gateway/test`.
-Tests stopping runtime applications restore exactly the original running set
-with `Application.ensure_all_started/1`. Gateway transport tests may own gateway/
-channels but must not stop unrelated consumers such as the control plane.
+Tests stopping runtime applications use `LemonPlatformTest.AppRestart` to restore
+the original running set and env. Stop only apps the test owns, not unrelated
+consumers such as the control plane.
 Exercise FIFO admission, owner death, cancellation races, restart and replay-store
 failure, not just happy-path submission.

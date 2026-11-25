@@ -2,6 +2,7 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Secrets
+  alias LemonCore.Testing.HermeticEnv
 
   @env_keys ~w(
     OPENAI_API_KEY
@@ -12,6 +13,9 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
     CLAUDE_CODE_OAUTH_TOKEN
     OPENCODE_API_KEY
     GITHUB_COPILOT_API_KEY
+    COPILOT_SELECTED_LOGIN
+    POOL_KEY_TWO
+    RAW_REF_KEY
     GOOGLE_GEMINI_CLI_API_KEY
     GOOGLE_GENERATIVE_AI_API_KEY
     GOOGLE_API_KEY
@@ -47,7 +51,8 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
     File.mkdir_p!(home_dir)
 
     master_key = :crypto.strong_rand_bytes(32) |> Base.encode64()
-    original_home = System.get_env("HOME")
+    env = HermeticEnv.snapshot_env(["HOME", "LEMON_SECRETS_MASTER_KEY" | @env_keys])
+    original_resolver = Application.fetch_env(:lemon_agent, :oauth_secret_resolver_module)
     System.put_env("LEMON_SECRETS_MASTER_KEY", master_key)
     System.put_env("HOME", home_dir)
     Enum.each(@env_keys, &System.delete_env/1)
@@ -55,10 +60,13 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
 
     on_exit(fn ->
       clear_secrets_table()
-      System.delete_env("LEMON_SECRETS_MASTER_KEY")
-      if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
-      Enum.each(@env_keys, &System.delete_env/1)
-      Application.delete_env(:lemon_agent, :oauth_secret_resolver_module)
+      HermeticEnv.restore_env(env)
+
+      case original_resolver do
+        {:ok, module} -> Application.put_env(:lemon_agent, :oauth_secret_resolver_module, module)
+        :error -> Application.delete_env(:lemon_agent, :oauth_secret_resolver_module)
+      end
+
       File.rm_rf!(tmp_dir)
     end)
 
@@ -735,7 +743,6 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
     test "a missing explicitly selected OAuth login never falls back to another account or env" do
       System.put_env("GITHUB_COPILOT_API_KEY", "ambient-key")
       System.put_env("COPILOT_SELECTED_LOGIN", "secret-name-env-key")
-      on_exit(fn -> System.delete_env("COPILOT_SELECTED_LOGIN") end)
       assert {:ok, _} = Secrets.set("llm_github_copilot_api_key", "other-account-key")
 
       config = %{

@@ -10,21 +10,11 @@ defmodule LemonGateway.Sms.AvailabilityTest do
   @env_vars ~w(TWILIO_AUTH_TOKEN LEMON_SMS_WEBHOOK_ENABLED LEMON_SMS_WEBHOOK_PORT)
 
   setup do
-    _ = Application.stop(:lemon_gateway)
-    saved = Map.new(@env_vars, &{&1, System.get_env(&1)})
+    LemonGateway.Test.AppIsolation.isolate_gateway([:gateway_ingress_enabled],
+      system_env: @env_vars
+    )
+
     Enum.each(@env_vars, &System.delete_env/1)
-
-    on_exit(fn ->
-      Application.stop(:lemon_gateway)
-      Application.delete_env(:lemon_gateway, :gateway_ingress_enabled)
-
-      Enum.each(saved, fn
-        {k, nil} -> System.delete_env(k)
-        {k, v} -> System.put_env(k, v)
-      end)
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-    end)
 
     :ok
   end

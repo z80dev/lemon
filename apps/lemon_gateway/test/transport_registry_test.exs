@@ -178,7 +178,12 @@ defmodule LemonGateway.TransportRegistryTest do
   end
 
   setup do
-    _ = Application.stop(:lemon_gateway)
+    LemonGateway.Test.AppIsolation.isolate_gateway([
+      LemonGateway.Config,
+      :commands,
+      :transports,
+      :gateway_ingress_enabled
+    ])
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 1,
@@ -192,12 +197,6 @@ defmodule LemonGateway.TransportRegistryTest do
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = restart_registry()
-
-    on_exit(fn ->
-      Application.stop(:lemon_gateway)
-      Application.delete_env(:lemon_gateway, :gateway_ingress_enabled)
-      Application.delete_env(:lemon_gateway, :transports)
-    end)
 
     :ok
   end

@@ -41,15 +41,28 @@ defmodule LemonChannels.StartupTest do
   @gateway_config_key :"Elixir.LemonGateway.Config"
 
   setup do
-    _ = Application.stop(:lemon_channels)
-    _ = Application.stop(:lemon_router)
-    _ = Application.stop(:lemon_gateway)
-
     lock_dir =
       Path.join([
         System.tmp_dir!(),
         "lemon_channels_test_locks_#{System.unique_integer([:positive])}"
       ])
+
+    env = LemonCore.Testing.HermeticEnv.snapshot_env(["LEMON_LOCK_DIR"])
+    gateway = Application.fetch_env(:lemon_gateway, @gateway_config_key)
+    adapters = Application.fetch_env(:lemon_channels, :adapters)
+    running? = List.keymember?(Application.started_applications(), :lemon_channels, 0)
+
+    on_exit(fn ->
+      Application.stop(:lemon_channels)
+      StartupMockTelegramAPI.stop()
+      restore_env(:lemon_gateway, @gateway_config_key, gateway)
+      restore_env(:lemon_channels, :adapters, adapters)
+      LemonCore.Testing.HermeticEnv.restore_env(env)
+      File.rm_rf!(lock_dir)
+      if running?, do: :ok = Application.start(:lemon_channels)
+    end)
+
+    if running?, do: :ok = Application.stop(:lemon_channels)
 
     _ = File.mkdir_p(lock_dir)
     System.put_env("LEMON_LOCK_DIR", lock_dir)
@@ -72,35 +85,6 @@ defmodule LemonChannels.StartupTest do
 
     Application.put_env(:lemon_channels, :adapters, [LemonChannels.Adapters.Telegram])
 
-    on_exit(fn ->
-      StartupMockTelegramAPI.stop()
-      _ = Application.stop(:lemon_channels)
-      _ = Application.stop(:lemon_router)
-      _ = Application.stop(:lemon_gateway)
-
-      # Restore a baseline for the rest of the lemon_channels suite. This module
-      # intentionally stops applications as part of boot validation.
-      Application.put_env(:lemon_gateway, @gateway_config_key, %{
-        enable_telegram: false,
-        enable_discord: false,
-        enable_xmtp: false,
-        max_concurrent_runs: 1,
-        telegram: %{
-          bot_token: nil,
-          allowed_chat_ids: nil,
-          deny_unbound_chats: false,
-          drop_pending_updates: false,
-          files: %{}
-        },
-        xmtp: %{},
-        discord: %{bot_token: nil}
-      })
-
-      Application.put_env(:lemon_channels, :adapters, [])
-
-      _ = Application.ensure_all_started(:lemon_channels)
-    end)
-
     :ok
   end
 
@@ -113,6 +97,9 @@ defmodule LemonChannels.StartupTest do
     # Ensure we did not also start the legacy gateway transport supervisor.
     assert Process.whereis(LemonGateway.TransportSupervisor) == nil
   end
+
+  defp restore_env(app, key, {:ok, value}), do: Application.put_env(app, key, value)
+  defp restore_env(app, key, :error), do: Application.delete_env(app, key)
 
   defp wait_for_pid(name, timeout_ms) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms

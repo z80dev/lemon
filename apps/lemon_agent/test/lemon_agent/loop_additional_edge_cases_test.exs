@@ -12,7 +12,7 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
   - Message ordering invariants
   - Stop reason propagation
   """
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonAgent.AbortSignal
   alias LemonAgent.EventStream
@@ -550,28 +550,39 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
   # Telemetry Events
   # ============================================================================
 
+  setup_all do
+    event = [:lemon_agent, :loop, :start]
+    baseline = length(:telemetry.list_handlers(event))
+    on_exit(fn -> assert length(:telemetry.list_handlers(event)) == baseline end)
+    :ok
+  end
+
   describe "telemetry" do
     setup do
-      # Attach telemetry handlers
       test_pid = self()
+      handler_id = {:test_loop_telemetry, make_ref()}
+      event = [:lemon_agent, :loop, :start]
+      baseline = length(:telemetry.list_handlers(event))
 
-      :telemetry.attach_many(
-        "test-loop-telemetry-#{inspect(self())}",
-        [
-          [:lemon_agent, :loop, :start],
-          [:lemon_agent, :loop, :end],
-          [:lemon_agent, :tool_task, :start],
-          [:lemon_agent, :tool_task, :end],
-          [:lemon_agent, :tool_task, :error]
-        ],
-        fn event_name, measurements, metadata, _config ->
-          send(test_pid, {:telemetry, event_name, measurements, metadata})
-        end,
-        nil
-      )
+      assert :ok =
+               :telemetry.attach_many(
+                 handler_id,
+                 [
+                   [:lemon_agent, :loop, :start],
+                   [:lemon_agent, :loop, :end],
+                   [:lemon_agent, :tool_task, :start],
+                   [:lemon_agent, :tool_task, :end],
+                   [:lemon_agent, :tool_task, :error]
+                 ],
+                 fn event_name, measurements, metadata, _config ->
+                   send(test_pid, {:telemetry, event_name, measurements, metadata})
+                 end,
+                 nil
+               )
 
       on_exit(fn ->
-        :telemetry.detach("test-loop-telemetry-#{inspect(self())}")
+        assert :ok = :telemetry.detach(handler_id)
+        assert length(:telemetry.list_handlers(event)) == baseline
       end)
 
       :ok

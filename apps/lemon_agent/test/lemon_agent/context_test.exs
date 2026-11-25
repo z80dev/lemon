@@ -19,20 +19,21 @@ defmodule LemonAgent.ContextTest do
   end
 
   defp attach_telemetry(event_names, handler_id, collector) do
-    :telemetry.attach_many(
-      "context-test-handler-#{handler_id}",
-      event_names,
-      fn event_name, measurements, metadata, _config ->
-        Agent.update(collector, fn events ->
-          [{event_name, measurements, metadata} | events]
-        end)
-      end,
-      nil
-    )
-  end
+    owner = self()
 
-  defp detach_telemetry(handler_id) do
-    :telemetry.detach("context-test-handler-#{handler_id}")
+    :ok =
+      :telemetry.attach_many(
+        "context-test-handler-#{handler_id}",
+        event_names,
+        fn event_name, measurements, metadata, _config ->
+          if self() == owner do
+            Agent.update(collector, &[{event_name, measurements, metadata} | &1])
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach("context-test-handler-#{handler_id}") end)
   end
 
   defp get_events(collector) do
@@ -97,7 +98,6 @@ defmodule LemonAgent.ContextTest do
       Context.estimate_size(messages, "System")
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       assert events != []
 
@@ -208,7 +208,6 @@ defmodule LemonAgent.ContextTest do
       )
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       assert events != []
 
@@ -231,7 +230,6 @@ defmodule LemonAgent.ContextTest do
       )
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       assert events != []
 
@@ -421,7 +419,6 @@ defmodule LemonAgent.ContextTest do
       {_truncated, dropped} = Context.truncate(messages, max_messages: 5)
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       if dropped > 0 do
         assert events != []
@@ -1511,7 +1508,6 @@ defmodule LemonAgent.ContextTest do
       Context.estimate_size(messages, "System")
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       expected_chars = 4_000 + 3_771 + String.length("System")
 
@@ -1536,7 +1532,6 @@ defmodule LemonAgent.ContextTest do
       Context.estimate_size(messages, nil)
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       assert {_event_name, _measurements, metadata} =
                Enum.find(events, fn {_name, m, _meta} ->
@@ -1556,7 +1551,6 @@ defmodule LemonAgent.ContextTest do
       Context.check_size(messages, nil, warning_threshold: 3, critical_threshold: 100, log: false)
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       # Filter for warning events only
       warning_events =
@@ -1580,7 +1574,6 @@ defmodule LemonAgent.ContextTest do
       Context.check_size(messages, nil, warning_threshold: 3, critical_threshold: 5, log: false)
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       warning_events =
         Enum.filter(events, fn {name, _, _} -> name == [:lemon_agent, :context, :warning] end)
@@ -1608,7 +1601,6 @@ defmodule LemonAgent.ContextTest do
       )
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       warning_events =
         Enum.filter(events, fn {name, _, _} -> name == [:lemon_agent, :context, :warning] end)
@@ -1630,7 +1622,6 @@ defmodule LemonAgent.ContextTest do
       {_truncated, dropped} = Context.truncate(messages, max_messages: 3)
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       if dropped > 0 do
         truncated_events =
@@ -1655,7 +1646,6 @@ defmodule LemonAgent.ContextTest do
       {_truncated, dropped} = Context.truncate(messages, max_messages: 100)
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       assert dropped == 0
 
@@ -1679,7 +1669,6 @@ defmodule LemonAgent.ContextTest do
       Context.truncate(messages, max_messages: 4, strategy: :keep_bookends)
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       truncated_events =
         Enum.filter(events, fn {name, _, _} -> name == [:lemon_agent, :context, :truncated] end)
@@ -1703,7 +1692,6 @@ defmodule LemonAgent.ContextTest do
       Context.estimate_size(messages, nil)
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       size_events =
         Enum.filter(events, fn {name, _, _} -> name == [:lemon_agent, :context, :size] end)
@@ -1729,7 +1717,6 @@ defmodule LemonAgent.ContextTest do
       Context.stats(messages, "System")
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       # stats calls estimate_size internally
       size_events =
@@ -1748,7 +1735,6 @@ defmodule LemonAgent.ContextTest do
       Context.large_context?(messages, nil)
 
       events = get_events(collector)
-      detach_telemetry(handler_id)
 
       size_events =
         Enum.filter(events, fn {name, _, _} -> name == [:lemon_agent, :context, :size] end)
