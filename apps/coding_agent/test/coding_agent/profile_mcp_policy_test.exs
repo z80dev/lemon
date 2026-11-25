@@ -67,7 +67,7 @@ defmodule CodingAgent.ProfileMcpPolicyTest do
   alias CodingAgent.Executor.SessionRunner
   alias CodingAgent.{Session, SettingsManager, ToolPolicy, ToolRegistry}
   alias LemonCore.ProfileStore
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
   alias LemonSkills.{McpDiscovery, McpSession, McpSource}
 
   @moduletag :tmp_dir
@@ -263,7 +263,7 @@ defmodule CodingAgent.ProfileMcpPolicyTest do
   end
 
   defp execution_policy(ctx, incoming) do
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: ctx.id,
       prompt: "Check destination MCP policy",
       session_key: "agent:#{ctx.profile_id}:main",

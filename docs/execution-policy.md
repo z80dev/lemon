@@ -2,7 +2,7 @@
 
 Lemon resolves authorization before an execution reaches tools. The canonical
 types live in `lemon_core` so direct sessions, routed runs, delegated children,
-gateway execution, and named nodes use the same fail-closed semantics.
+and named nodes use the same fail-closed semantics.
 
 ## Validated tool policies
 

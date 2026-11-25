@@ -21,6 +21,15 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 - `mix lemon.update` moved to lemon_skills, which owns the bundled-skill sync
   it runs (#725).
+- **Breaking:** removed `LemonCore.EngineRuntime`. The router calls the native
+  executor directly; integrations submit through `LemonCore.RouterBridge`
+  (#728).
+- **Breaking:** the `controller` and `hybrid` ids from
+  `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
+- **Breaking:** the `:run_phase_changed` bus event (`LemonCore.Events.RunPhaseChanged`
+  and its registry entry), `LemonCore.RunPhase` and `LemonCore.RunPhaseGraph`. The
+  event had no subscriber; every publication was a broadcast plus an `EventBridge`
+  unmapped-type warning (#710).
 - **Breaking:** retired WASM tool support (#707): `LemonCore.Config.Tools`
   has no `wasm` field and no longer reads `[runtime.tools.wasm]`, the
   `LEMON_WASM_*` declarations and the `:tools_wasm` area are gone, extension

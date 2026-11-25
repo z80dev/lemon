@@ -114,7 +114,7 @@ the dependency policy above, not these source-level rules:
 - `lemon_router` may emit semantic `LemonCore.DeliveryIntent` values, but it may not construct `LemonChannels.OutboundPayload` values or reference Telegram renderer helpers directly.
 - Automation binds supervision targets and submits terminal facts through the registered `LemonCore.ChannelSupervision` capability. Channels owns its implementation, durable admission, rendering and Outbox delivery. No consumer resolves a channels namespace or constructs platform payloads across this boundary.
 - `lemon_channels` owns channel rendering and presentation state. It must not mutate inbound prompts for pending-compaction behavior.
-- `lemon_gateway` owns execution slots and the native execution lifecycle. Router-owned queue semantics, chat-state readback for automatic-resume request mutation, and conversation-key selection must not move back into gateway. Router hands pre-resolved, engine-less `LemonCore.ExecutionCommand` values to `LemonCore.EngineRuntime`; gateway adapts them to its private `LemonGateway.ExecutionRequest` and invokes the fixed native executor. `LemonGateway.Runtime.submit/1` must not be reintroduced as a compatibility path. Default gateway startup is execution-only; gateway-native webhook, SMS, and voice listeners require explicit `[gateway.ingress]` opt-in. Those surfaces are gateway-owned by design rather than pending migration — SMS, webhook, and voice do not fit `LemonChannels.Plugin`.
+- `lemon_router` owns native run lifecycle and execution permits. Its `RunProcess` starts and controls the fixed native executor directly through `CodingAgent.Executor.Behaviour` using `LemonCore.ExecutionCommand`. The bus serves observers, not executor-to-owner relays. `lemon_gateway` is an optional ingress app, not an execution dependency or an alternate submission path. Its webhook, SMS and voice listeners require the operator's `[gateway.ingress]` opt-in and per-surface enablement.
 - Gateway-owned transports submit through `LemonCore.RouterBridge` when they need router normalization. They must not take a compile-time dependency on `LemonRouter.RunOrchestrator`.
 - Router-owned active session state is only exposed through `LemonRouter.Router` and `LemonCore.RouterBridge`. External apps must not reference `LemonRouter.SessionRegistry` directly.
 - Top-level requests and execution commands never validate or carry a runner identity. `engine: "lemon"` remains fixed run provenance in events and stores. `ResumeToken.engine` and historical `ChatState.last_engine` remain persisted discriminators; only native tokens may resume a top-level run, while non-native historical values are retained and quarantined from resume. Subagents execute natively in-process (`CodingAgent.Session` via the task lifecycle); there is no external CLI runner registry. `LemonCore.Cwd` is the only default-cwd resolver.
@@ -145,9 +145,8 @@ one retry budget even when more than one provider layer is involved.
 `LemonCore.RuntimeSeam` implements optional-consumer configuration, validation
 and protected dispatch. `AgentRuntime`, `ChannelSupervision`, `AgentMessaging`,
 `RouterBridge`, `EventBridge` and `EngineInfoBridge` retain only their domain
-contracts, acknowledgement checks and failure policies; `EngineRuntime` retains
-its execution behaviour and delegates implementation validation to the same
-seam. These domain APIs are not interchangeable registries. Missing consumers
+contracts, acknowledgement checks and failure policies. These domain APIs are
+not interchangeable registries. Missing consumers
 retain their documented degradation; reached mutation failures remain
 `:outcome_unknown` and queries never masquerade as successful empty state.
 

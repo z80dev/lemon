@@ -1,37 +1,14 @@
 # LemonGateway contributor guide
 
-Gateway owns execution slots, launch isolation, native run lifecycle, cancellation
-and resume. Router owns collect/follow-up/steer/interrupt semantics. Channels owns
-messaging adapters; gateway-native SMS/voice/webhook ingress remains opt-in through
-`[gateway.ingress]`. See [README](README.md).
-
-## Executor and lifecycle
-
-- Gateway has one configured singleton executor, `CodingAgent.Executor`, validated
-  by `LemonGateway.Executor`. Native runs carry fixed `engine: "lemon"` provenance;
-  subagent identity never selects or replaces gateway execution.
-- Do not restore engine registries, selectable/custom engines, vendor CLI runners
-  or engine-selection config. Add model providers in `lemon_ai`, native tools in
-  `coding_agent`, and delegation through the existing `task`/`agent` tools.
-- The public submission boundary is
-  `LemonGateway.Runtime.submit_execution(%LemonCore.ExecutionCommand{})`.
-  Gateway constructs its private `ExecutionRequest`; consumers do not.
-- `Runtime` starts `Run` directly; `Slots` is the sole global permit authority,
-  with live Runs as FIFO waiters. Router `SessionCoordinator` alone orders conversations.
-- Claim the engine session through `EngineSessionClaim` before requesting a
-  permit. Contention is `:session_in_use`, not a wait while holding capacity.
-- Check the durable terminal fence before admission and recheck terminal/cancel
-  state after grant. Release permits and claims idempotently; owner death cleans up.
-- Completion persists its receipt before notifying observers. Cancel by exact
-  run ID, including waiting Runs; top-level resume accepts native tokens only.
-- Direct execution callers bypass router backlog/process limits. See the
-  [admission inventory](../../docs/architecture/admission-gates.md) for bounds.
+Gateway owns optional SMS, voice and webhook ingress, enabled explicitly through
+`[gateway.ingress]`. Router owns execution; channels owns messaging adapters.
+See [README](README.md).
 
 ## Ingress and idempotency
 
 Prefer `lemon_channels` for new messaging platforms. Gateway ingress submits
 `LemonCore.RunRequest` through `RouterBridge`, with stable session and run IDs.
-Disabled ingress returns `:ignore` from startup; use shared binding resolution.
+When disabled, the application starts an empty supervisor; use shared binding resolution.
 
 Webhook mutation boundaries are deliberately conservative:
 
@@ -63,27 +40,12 @@ Webhook mutation boundaries are deliberately conservative:
   `LemonCore.Net.HTTP`, which re-authorizes and pins the address on every
   attempt and never follows a redirect. Do not post callbacks with httpc/Req.
 
-## Operations
-
-For stuck execution, inspect Slots counters, live Run children and router
-conversation backlogs. For an unready executor, call
-`LemonGateway.Executor.validate_configured/0`, not an engine registry lookup.
-Resume state lives in `LemonCore.ChatStateStore` and the native session.
-
-```elixir
-LemonGateway.Slots.stats()
-DynamicSupervisor.which_children(LemonGateway.RunSupervisor)
-```
-
-Bus events use `run:<run_id>`. `meta.notify_pid` may receive
-`{:lemon_gateway_run_completed, request, completed}`. Keep these runtime contracts
-separate from user-facing channel rendering.
-
 ## Verification
 
 From the umbrella root: `mix test apps/lemon_gateway/test`.
 Tests stopping runtime applications use `LemonPlatformTest.AppRestart` to restore
 the original running set and env. Stop only apps the test owns, not unrelated
 consumers such as the control plane.
-Exercise FIFO admission, owner death, cancellation races, restart and replay-store
-failure, not just happy-path submission.
+Exercise authenticated ingress, replay-store failure and unknown-outcome
+handling, not just happy-path submission. Router execution tests live in
+`apps/lemon_router/test`.

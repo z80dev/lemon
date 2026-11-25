@@ -6,12 +6,12 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
   alias LemonControlPlane.Methods.{ConnectChallenge, NodePairInvite}
   alias LemonControlPlane.NodeStore
   alias LemonCore.ExecutionContext
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   defmodule NamedNodeWireExecutor do
     @moduledoc false
 
-    def start_run(%ExecutionRequest{} = request, opts, sink_pid) do
+    def start_run(%ExecutionCommand{} = request, opts, sink_pid) do
       owner = Process.whereis(__MODULE__)
       run_ref = make_ref()
       runner_pid = spawn_link(fn -> receive do: (:stop -> :ok) end)
@@ -43,7 +43,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
 
     alias CodingAgent.Executor
     alias LemonAi.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, Usage}
-    alias LemonGateway.ExecutionRequest
+    alias LemonCore.ExecutionCommand
 
     @probe_key {__MODULE__, :probe}
 
@@ -55,7 +55,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
       :persistent_term.erase(@probe_key)
     end
 
-    def start_run(%ExecutionRequest{} = request, opts, sink_pid) do
+    def start_run(%ExecutionCommand{} = request, opts, sink_pid) do
       {owner, _counter} = probe()
 
       request = %{
@@ -200,19 +200,6 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
   end
 
   setup do
-    # Gateway unit suites can leave a local fixture executor in application env.
-    # The controller side must use the real executor that routes :node metadata;
-    # only the destination worker is replaced with the probe executor.
-    previous_executor = Application.fetch_env(:lemon_gateway, :executor)
-    Application.put_env(:lemon_gateway, :executor, CodingAgent.Executor)
-
-    on_exit(fn ->
-      case previous_executor do
-        {:ok, executor} -> Application.put_env(:lemon_gateway, :executor, executor)
-        :error -> Application.delete_env(:lemon_gateway, :executor)
-      end
-    end)
-
     true = Process.register(self(), NamedNodeWireExecutor)
     :ok
   end
@@ -369,7 +356,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
 
     send(context.runner_pid, :stop)
 
-    # Run the controller's real executor/gateway/router forwarding path, not
+    # Run the controller's real executor/router forwarding path, not
     # merely the broker recipient. Session observers see live work before final.
     stream_run_id = "wire-stream-#{suffix}"
     session_key = "agent:default:wire-stream-#{suffix}"
@@ -381,7 +368,8 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
       session_key: session_key,
       prompt: "live remote work",
       conversation_key: {:session, session_key},
-      meta: %{node: node_name}
+      cwd: tmp_dir,
+      meta: %{node: node_name, agent_id: "default"}
     }
 
     {:ok, route_pid} =
@@ -389,23 +377,9 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
         run_id: stream_run_id,
         session_key: session_key,
         execution_request: route_request,
-        submit_to_gateway?: false
+        executor: CodingAgent.Executor
       })
 
-    {:ok, gateway_pid} =
-      LemonGateway.Run.start_link(%{
-        execution_request: %ExecutionRequest{
-          run_id: stream_run_id,
-          session_key: session_key,
-          prompt: "live remote work",
-          cwd: tmp_dir,
-          meta: %{node: node_name, agent_id: "default"}
-        },
-        slot_ref: make_ref(),
-        worker_pid: self()
-      })
-
-    gateway_ref = Process.monitor(gateway_pid)
     route_ref = Process.monitor(route_pid)
 
     assert_receive {:fake_executor_started, _request, _opts, ^worker, live_ref, live_context},
@@ -428,15 +402,16 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
                    },
                    3_000
 
-    assert Process.alive?(gateway_pid)
+    assert Process.alive?(route_pid)
 
     send(
       worker,
       {:engine_event, live_ref,
-       LemonGateway.Event.action_event(%{
+       CodingAgent.Executor.Event.action_event(%{
          engine: "lemon",
          phase: :started,
-         action: LemonGateway.Event.action(%{id: "tool-1", kind: "bash", title: "Run command"})
+         action:
+           CodingAgent.Executor.Event.action(%{id: "tool-1", kind: "bash", title: "Run command"})
        })}
     )
 
@@ -499,7 +474,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     send(
       worker,
       {:engine_event, live_ref,
-       LemonGateway.Event.completed(%{
+       CodingAgent.Executor.Event.completed(%{
          engine: "lemon",
          ok: true,
          answer: "first second"
@@ -513,7 +488,6 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
                    },
                    3_000
 
-    assert_receive {:DOWN, ^gateway_ref, :process, ^gateway_pid, :normal}, 3_000
     assert_receive {:DOWN, ^route_ref, :process, ^route_pid, :normal}, 3_000
     send(live_context.runner_pid, :stop)
 
@@ -628,7 +602,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
 
     run_id = "native-wire-run-#{suffix}"
 
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: run_id,
       session_key: "test:native-wire:#{suffix}",
       prompt: "start the native destination run",

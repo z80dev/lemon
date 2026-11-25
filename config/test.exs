@@ -208,12 +208,6 @@ config :lemon_core, :gateway_test_config,
   bindings: [],
   projects: %{}
 
-# Keep executor validation deterministic without introducing a test-only
-# operator-selectable implementation. CodingAgent.Executor is loaded from the
-# umbrella code path and is structurally valid even when coding_agent is not
-# started by a particular suite.
-config :lemon_gateway, :executor, CodingAgent.Executor
-
 config :lemon_gateway, :telegram, nil
 
 # ConnTest requests name www.example.com, so the endpoint names it as its host.

@@ -32,7 +32,6 @@ defmodule CodingAgent.MixProject do
       {:lemon_ai, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
-      {:lemon_gateway, in_umbrella: true},
       {:lemon_memory, in_umbrella: true},
       {:lemon_browser, in_umbrella: true},
       {:lemon_lsp, in_umbrella: true},

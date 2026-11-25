@@ -20,19 +20,36 @@ defmodule LemonRouter.AgentMessagingRecoveryTest do
 
   # Keep native recovery, identity lookup, durable admission and the real router
   # queue in the loop. Only the final executor is controlled; no provider runs.
-  defmodule ControlledRuntime do
-    @behaviour LemonCore.EngineRuntime
-    def available?, do: true
-    def run_pid(_), do: nil
-    def cancel_by_run_id(_, _), do: :ok
+  defmodule ControlledExecutor do
+    @behaviour CodingAgent.Executor.Behaviour
 
-    def submit_execution(command) do
+    def cancel(%{runner_pid: pid}),
+      do:
+        (
+          send(pid, :cancel)
+          :ok
+        )
+
+    def steer(_ctx, _prompt), do: {:error, :unsupported}
+    def redirect(_ctx, _prompt), do: {:error, :unsupported}
+
+    def start_run(%LemonCore.ExecutionCommand{} = command, _opts, sink) do
+      runner =
+        spawn(fn ->
+          monitor = Process.monitor(sink)
+
+          receive do
+            :cancel -> :ok
+            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+          end
+        end)
+
       send(
         Application.fetch_env!(:lemon_router, :named_agent_recovery_test_pid),
         {:recovery_execution, command}
       )
 
-      :ok
+      {:ok, make_ref(), %{runner_pid: runner}}
     end
   end
 
@@ -41,18 +58,18 @@ defmodule LemonRouter.AgentMessagingRecoveryTest do
   setup %{tmp_dir: root} do
     suffix = Integer.to_string(System.unique_integer([:positive]))
     original_agent_dir = System.get_env("LEMON_AGENT_DIR")
-    original_runtime = Application.get_env(:lemon_router, :engine_runtime)
+    original_runtime = Application.get_env(:lemon_router, :test_executor)
     original_pid = Application.get_env(:lemon_router, :named_agent_recovery_test_pid)
     original_provider = Application.get_env(:lemon_core, :agent_runtime_provider)
     System.put_env("LEMON_AGENT_DIR", Path.join(root, "agent"))
-    Application.put_env(:lemon_router, :engine_runtime, ControlledRuntime)
+    Application.put_env(:lemon_router, :test_executor, ControlledExecutor)
     Application.put_env(:lemon_router, :named_agent_recovery_test_pid, self())
     Application.put_env(:lemon_core, :agent_runtime_provider, ControlPlaneProvider)
     cwd = Path.join(root, "original-workspace")
     File.mkdir_p!(cwd)
 
     on_exit(fn ->
-      restore_env(:lemon_router, :engine_runtime, original_runtime)
+      restore_env(:lemon_router, :test_executor, original_runtime)
       restore_env(:lemon_router, :named_agent_recovery_test_pid, original_pid)
       restore_env(:lemon_core, :agent_runtime_provider, original_provider)
 

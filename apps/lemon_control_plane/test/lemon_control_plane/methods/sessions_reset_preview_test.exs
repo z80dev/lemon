@@ -18,7 +18,6 @@ defmodule LemonControlPlane.Methods.SessionsResetPreviewTest do
   alias LemonCore.{
     ChatState,
     ChatStateStore,
-    Event,
     ExecutionCommand,
     PolicyStore,
     RunHistoryStore,
@@ -29,22 +28,29 @@ defmodule LemonControlPlane.Methods.SessionsResetPreviewTest do
     Store
   }
 
-  alias LemonRouter.RunCompletion
+  defmodule ControlledExecutor do
+    @behaviour CodingAgent.Executor.Behaviour
 
-  defmodule ControlledRuntime do
-    @behaviour LemonCore.EngineRuntime
-    def available?, do: true
-    def run_pid(_), do: nil
-    def cancel_by_run_id(_, _), do: :ok
+    @impl true
+    def start_run(command, _opts, sink) do
+      ref = make_ref()
 
-    def submit_execution(command) do
       send(
         Application.fetch_env!(:lemon_router, :sessions_reset_preview_test_pid),
-        {:execution, command}
+        {:execution, command, sink, ref}
       )
 
-      :ok
+      {:ok, ref, nil}
     end
+
+    @impl true
+    def cancel(_), do: :ok
+
+    @impl true
+    def steer(_, _), do: {:error, :unsupported}
+
+    @impl true
+    def redirect(_, _), do: {:error, :unsupported}
   end
 
   defmodule PolicyDeleteFailingBackend do
@@ -81,16 +87,16 @@ defmodule LemonControlPlane.Methods.SessionsResetPreviewTest do
   setup do
     suffix = Integer.to_string(System.unique_integer([:positive]))
     key = "agent:default:tui:local:main:reset-preview-#{suffix}"
-    previous_runtime = Application.get_env(:lemon_router, :engine_runtime)
+    previous_executor = Application.get_env(:lemon_router, :test_executor)
     previous_pid = Application.get_env(:lemon_router, :sessions_reset_preview_test_pid)
     previous_submitter = Application.get_env(:lemon_control_plane, :acp_submitter)
 
-    Application.put_env(:lemon_router, :engine_runtime, ControlledRuntime)
+    Application.put_env(:lemon_router, :test_executor, ControlledExecutor)
     Application.put_env(:lemon_router, :sessions_reset_preview_test_pid, self())
 
     on_exit(fn ->
       LemonRouter.abort(key)
-      restore_env(:lemon_router, :engine_runtime, previous_runtime)
+      restore_env(:lemon_router, :test_executor, previous_executor)
       restore_env(:lemon_router, :sessions_reset_preview_test_pid, previous_pid)
       restore_env(:lemon_control_plane, :acp_submitter, previous_submitter)
       RunStore.delete_session(key)
@@ -376,8 +382,14 @@ defmodule LemonControlPlane.Methods.SessionsResetPreviewTest do
 
   defp seed_session(key) do
     assert {:ok, run_id} = LemonRouter.submit(request(key, "earlier work"))
-    assert_receive {:execution, %ExecutionCommand{run_id: ^run_id} = command}, 2_000
-    finish(command)
+    assert_receive {:execution, %ExecutionCommand{run_id: ^run_id}, sink, ref}, 2_000
+
+    send(
+      sink,
+      {:engine_event, ref,
+       CodingAgent.Executor.Event.completed(%{engine: "lemon", ok: true, answer: "done"})}
+    )
+
     await(fn -> match?({:ok, [_ | _]}, RunHistoryStore.fetch(key, limit: 1)) end)
 
     await(fn ->
@@ -396,20 +408,6 @@ defmodule LemonControlPlane.Methods.SessionsResetPreviewTest do
       cwd: File.cwd!(),
       model: "test-model"
     }
-  end
-
-  defp finish(command) do
-    completed = LemonCore.Events.Completion.new(%{engine: "lemon", ok: true, answer: "done"})
-
-    event =
-      Event.new(
-        :run_completed,
-        LemonCore.Events.RunCompleted.new(%{completed: completed, duration_ms: 1}),
-        %{run_id: command.run_id, session_key: command.session_key}
-      )
-
-    :ok = RunCompletion.publish(command, event)
-    await(fn -> not LemonRouter.run_active?(command.run_id) end)
   end
 
   defp await(fun, attempts \\ 200)

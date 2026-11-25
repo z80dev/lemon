@@ -13,10 +13,9 @@ Telegram / Discord / other adapters → lemon_channels ─┐
 TUI / one-shot CLI → lemon_control_plane ──────────────┤
 Phoenix assistant UI → lemon_web ─────────────────────┤
 Cron / goal / kanban work → lemon_automation ──────────┤
+Webhook / SMS / voice → opt-in lemon_gateway ──────────┤
                                                      ↓
                                                 lemon_router
-                                                     ↓
-                                                lemon_gateway
                                                      ↓
                                            CodingAgent.Executor
                                                      ↓
@@ -29,17 +28,17 @@ Cron / goal / kanban work → lemon_automation ──────────┤
    is an unknown outcome, not permission to retry a possible side effect.
 2. Router resolves session, policy, model, cwd and native resume state.
    `SessionCoordinator` serializes a conversation and owns collect/follow-up/
-   steer/interrupt semantics. Gateway does not implement a second conversation
-   queue policy.
-3. Router submits `LemonCore.ExecutionCommand` through `LemonCore.EngineRuntime`.
-   Gateway adapts it to private `ExecutionRequest`, grants a concurrency slot and
-   owns worker/run/launch-lock lifecycle.
-4. The configured `CodingAgent.Executor` starts/resumes a native session. The
+   steer/interrupt semantics.
+3. The router's `RunProcess` owns the run. It claims the engine session,
+   checks the durable terminal fence, acquires a FIFO permit, and passes
+   `LemonCore.ExecutionCommand` directly to `CodingAgent.Executor`.
+4. The executor starts or resumes a native session. The
    session composes bounded context and tools, the agent loop coordinates tool
    tasks/model turns, and `lemon_ai` handles provider protocols and streaming.
-5. Gateway events flow through `LemonCore.Bus` to router and interested clients.
-   Router coalesces semantic `DeliveryIntent` output; channels choose send/edit,
-   truncation, buttons, media batching and platform message IDs through the outbox.
+5. The executor streams directly to the run owner, which publishes run-topic
+   events for interested clients. Router coalesces semantic `DeliveryIntent`
+   output; channels choose send/edit, truncation, buttons, media batching and
+   platform message IDs through the outbox.
 6. Completion persists history/resume state, releases owned resources and advances
    queued work. Public management projections are bounded/redacted, not raw events.
 
@@ -78,8 +77,8 @@ operator sockets. See [A2A](../user-guide/a2a-peers.md).
 | `lemon_core` | Bus/events, Store, config/secrets and shared contracts; no umbrella deps |
 | `lemon_agent` | Agent/tool loop, model runtime/credentials, workspace goal/kanban state |
 | `coding_agent` | Native coding sessions, JSONL history, tools, compaction and delegation |
-| `lemon_router` | Conversation queues, run orchestration and semantic delivery |
-| `lemon_gateway` | Native execution lifecycle/slots and opt-in SMS/voice/webhook ingress |
+| `lemon_router` | Conversation queues, native run lifecycle and slots, semantic delivery |
+| `lemon_gateway` | Opt-in SMS/voice/webhook ingress |
 | `lemon_channels` | Messaging adapters, platform authorization/rendering and outbox |
 | `lemon_control_plane` | Authenticated client API, named-node transport and A2A listener |
 | `lemon_cli` | Shared source/release command dispatch, setup and operator workflows |

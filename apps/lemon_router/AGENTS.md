@@ -1,15 +1,13 @@
 # LemonRouter contributor guide
 
-Router owns conversation semantics: request normalization, model/policy/resume
-resolution, queues, active runs, compaction and semantic delivery. It does not
-parse platform protocols, allocate gateway slots or own message IDs.
+Router owns conversation semantics, run execution, compaction and semantic
+delivery. It does not parse platform protocols or own platform message IDs.
 See [README](README.md) and [architecture](../../docs/architecture/overview.md).
 
 ## Submission and queue ownership
 
 - `RunOrchestrator` builds router `Submission` values wrapping core
-  `ExecutionCommand`; submit through configured `LemonCore.EngineRuntime`, not
-  `LemonGateway.Runtime` or gateway-private request structs.
+  `ExecutionCommand`; the run owner passes it directly to `CodingAgent.Executor`.
 - The orchestrator mailbox serializes admission state only. Callers fix the run
   ID before calling; the server never allocates one. Submit, abort, native
   follow-up, lifecycle-fence and presence calls share one 20 s window, longer
@@ -78,14 +76,14 @@ revision alongside results; timings are host/filesystem-specific.
   fence. Only a definite pre-enqueue rejection permits rollback.
 - Permanent admission rows retain only state/semantic identity; bounded cleanup
   compacts legacy rows and sanitizes reasons without discarding replay protection.
-- A run that never binds to a live executor must still terminalize exactly once
-  so its coordinator releases the conversation. Retry only runtime unavailability,
-  bounded by the pre-start deadline; definite rejection terminalizes once.
+- Claim the engine session before requesting a permit and check the durable
+  terminal fence before admission. Recheck cancellation and terminal state
+  after grant. Never wait for a busy session while holding capacity.
 - Queued start failure emits one structured completion and advances the queue.
   Adopt an ambiguously started child already in the registry rather than emit a
   second synthetic completion.
-- On lost gateway process, allow the bounded completion grace window for a real
-  late bus event to win before synthesizing failure. Idle timeout `0` explicitly
+- `RunCompletion` is the sole terminal writer; persist before notifying.
+  Owner death must terminalize the run once. Idle timeout `0` explicitly
   disables the watchdog; cancellation still works.
 - Restart drain (`RestartCarryover`, a `LemonCore.Drain` participant): while
   draining, coordinators keep queued work queued; after sealing they refuse new
@@ -136,8 +134,8 @@ revision alongside results; timings are host/filesystem-specific.
 Config supplies model/thinking defaults; `LemonCore.PolicyStore` owns effective
 session/route/chat policy. Do not read app-env default models or policies as a
 second runtime plane. Model selectors resolve through `LemonAgent.ModelRuntime.ModelResolver`.
-Validate configured runtime wiring while preserving router-only startup and
-explicit unavailable-runtime behavior.
+Tests exercising public submission may set `:lemon_router, :test_executor`;
+do not ship that setting.
 
 From the umbrella root: `mix test apps/lemon_router/test`.
 Exercise concurrent fixed-ID submit/abort, unknown outcomes, queued start failure,

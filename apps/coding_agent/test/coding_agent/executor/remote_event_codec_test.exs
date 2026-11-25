@@ -2,7 +2,7 @@ defmodule CodingAgent.Executor.RemoteEventCodecTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Executor.RemoteEventCodec
-  alias LemonGateway.Event
+  alias CodingAgent.Executor.Event
 
   test "live lifecycle fields are allowlisted and round-trip without credentials or runtime state" do
     event =

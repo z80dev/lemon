@@ -15,10 +15,9 @@ defmodule CodingAgent.Tools.Agent do
 
   ## Bounds
 
-  - Slots: a synchronous run or join lends the calling run's gateway permit
-    (`LemonGateway.Slots.suspend/2`) while it blocks and takes it back at the
-    front of the queue afterwards, so parents waiting on children (or a
-    delegation chain) never hold the capacity their children need.
+  - Slots: a synchronous run or join uses the run owner's slot lender when
+    available. It lends the calling run's permit while blocked and takes it
+    back at the front of the queue, freeing capacity for children.
   - Deadline: synchronous runs and joins wait at most `timeout_ms` (default
     120000). A synchronous run that times out is aborted.
   - Budget: `CodingAgent.BudgetEnforcer` refuses a delegation when the
@@ -302,17 +301,17 @@ defmodule CodingAgent.Tools.Agent do
     end
   end
 
-  # A blocked parent lends its gateway permit so the children it waits on (and
+  # A blocked parent lends its run permit so the children it waits on (and
   # their own delegations) can be admitted under the global cap. Abort paths
   # re-queue without waiting so cancellation is never held behind admission.
   defp with_parent_slot_lent(opts, signal, fun) do
     case lend_parent_slot(opts) do
-      {:ok, server, token} ->
+      {:ok, lender, token} ->
         try do
           fun.()
         after
           mode = if AbortSignal.aborted?(signal), do: :nowait, else: :wait
-          resume_parent_slot(server, token, mode)
+          resume_parent_slot(lender, token, mode)
         end
 
       :none ->
@@ -321,12 +320,10 @@ defmodule CodingAgent.Tools.Agent do
   end
 
   defp lend_parent_slot(opts) do
-    server = Keyword.get(opts, :slots, LemonGateway.Slots)
-
-    with run_id when is_binary(run_id) <- Keyword.get(opts, :run_id),
-         pid when is_pid(pid) <- GenServer.whereis(server),
-         {:ok, token} <- LemonGateway.Slots.suspend(run_id, pid) do
-      {:ok, pid, token}
+    with lender when not is_nil(lender) <- Keyword.get(opts, :slot_lender),
+         run_id when is_binary(run_id) <- Keyword.get(opts, :run_id),
+         {:ok, token} <- lender.lend(run_id) do
+      {:ok, lender, token}
     else
       _ -> :none
     end
@@ -334,8 +331,8 @@ defmodule CodingAgent.Tools.Agent do
     :exit, _reason -> :none
   end
 
-  defp resume_parent_slot(server, token, mode) do
-    LemonGateway.Slots.resume(token, mode, server)
+  defp resume_parent_slot(lender, token, mode) do
+    lender.return(token, mode)
   catch
     :exit, _reason -> :ok
   end

@@ -12,6 +12,7 @@ defmodule LemonCore.ServiceCompositionTest do
     LemonCore.ACPClientBridge,
     LemonCore.NodeRegistry,
     LemonCore.RuntimeOwner,
+    LemonCore.TerminalOutbox,
     LemonCore.SessionActivity,
     LemonCore.UsageLedger,
     LemonCore.ExecApprovalExpiry,

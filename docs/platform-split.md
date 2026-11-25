@@ -79,7 +79,7 @@ D19, and nothing beyond the five packages is published under D18).
 | # | Date | Decision |
 |---|---|---|
 | D1 | 08-09 | No merged `lemon_runtime` package; router, gateway and channels stay separate apps. |
-| D2 | 08-10 | *Amended (#698).* Email moved to a `LemonChannels.Plugin`; webhook, SMS and voice remain gateway-owned for synchronous webhook responses, a receive-only SMS inbox and bidirectional voice streams. All three ship opt-in via global `[gateway.ingress] enabled = true` plus a per-surface enable flag; default gateway startup remains execution-only. See [Gateway ingress](config.md#gateway-ingress). |
+| D2 | 08-10 | *Amended (#698, #728).* Email moved to a `LemonChannels.Plugin`; webhook, SMS and voice stay gateway-owned for synchronous webhook responses, a receive-only SMS inbox and bidirectional voice. All three ship opt-in via global `[gateway.ingress] enabled = true` plus a per-surface flag. Native execution and permits moved to `lemon_router`; default gateway startup opens no listener. See [Gateway ingress](config.md#gateway-ingress). |
 | D3 | 08-09 | Bench stays inside `lemon_sim`. |
 | D4 | 08-09 | `lemon_memory` split out of `lemon_core` as its own app. |
 | D5 | 08-09 | Goal, kanban and heartbeat stores moved to `lemon_agent` as `LemonAgent.Workspace.*`. |
@@ -124,13 +124,13 @@ tarballs so this class of break fails CI.
 - **`lemon_core` is still broader than a core.** The plan's store moves were
   re-measured against real consumers; a module moves only when every non-test
   consumer is the target app or already depends on it, with no new mix edge or
-  bridge. Moved: `ProgressStore` → `LemonGateway.ProgressStore` (gateway also
-  registers the `:progress` read cache), the memory doctor check →
-  `LemonMemory.Doctor.Checks.Memory`, and the skills doctor check →
+  bridge. The former progress index was removed with the gateway execution
+  runtime. The memory doctor check moved to `LemonMemory.Doctor.Checks.Memory`
+  and the skills doctor check to
   `LemonSkills.Doctor.Checks.Skills` (both via `:doctor_checks`). Staying, with
   the consumer that blocks each move:
   - Router targets: `RunStore` (core `SessionLifecycle`/`SessionMetadataStore`,
-    gateway `Run` (execution permits are owned by `LemonGateway.Slots`), channels Telegram transport,
+    channels Telegram transport,
     `coding_agent` `SideQuery`/`ControlPlaneProvider`); `RunHistoryStore` (core
     `RunStore.history/2` and its supervision child); `ChatState`/`ChatStateStore`
     (core `SessionLifecycle`, channels Discord/Telegram transports,

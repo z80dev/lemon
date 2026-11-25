@@ -24,8 +24,8 @@ defmodule LemonCore.Telemetry do
   - `[:lemon, :run, :first_token]` - measurements: `%{latency_ms: ...}` meta: `%{run_id}`
   - `[:lemon, :run, :stop]` - measurements: `%{duration_ms: ..., ok: boolean()}` meta: `%{run_id}`
 
-  `:start` / `:first_token` / `:stop` are emitted directly from the gateway run process
-  (`LemonGateway.Run`).
+  `:start` / `:first_token` are emitted by the run's owner (`LemonRouter.RunProcess`);
+  `:stop` by its terminal writer (`LemonRouter.RunCompletion`).
 
   ### Channels
   - `[:lemon, :channels, :dispatch]` - measurements: `%{count: 1, duration: native}` meta:

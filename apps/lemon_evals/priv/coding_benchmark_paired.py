@@ -86,7 +86,7 @@ def isolated_environment(root, config, variant, credentials, ports):
                 'LEMON_EVAL_PROCESS_STORE': str(root / 'processes.dets'),
                 'TMPDIR': str(root / 'tmp'),
                 'LEMON_CONTROL_PLANE_PORT': str(ports[0]), 'LEMON_WEB_PORT': str(ports[1]),
-                'LEMON_GATEWAY_HEALTH_PORT': '0', 'LEMON_ROUTER_HEALTH_PORT': '0',
+                'LEMON_ROUTER_HEALTH_PORT': '0',
                 'LEMON_CONTROL_PLANE_OPERATOR_TOKEN': secrets.token_hex(32),
                 'LEMON_TOOL_DISCLOSURE_PROFILE': 'legacy' if variant == 'baseline' else 'coding',
                 'LEMON_SECRETS_MASTER_KEY': secrets.token_hex(32), 'MIX_ENV': 'dev'})
@@ -623,10 +623,8 @@ RUNTIME_EXPRESSION = (
     'File.cd!(System.fetch_env!("LEMON_AGENT_PROFILES_CWD")); '
     'LemonEvals.PairedCleanup.configure!(); '
     'Application.put_env(:lemon_control_plane, :ip, {127, 0, 0, 1}); '
-    'for {app, variable} <- [{:lemon_gateway, "LEMON_GATEWAY_HEALTH_PORT"}, '
-    '{:lemon_router, "LEMON_ROUTER_HEALTH_PORT"}] do '
-    'Application.put_env(app, :health_ip, :loopback); '
-    'Application.put_env(app, :health_port, String.to_integer(System.fetch_env!(variable))) end; '
+    'Application.put_env(:lemon_router, :health_ip, :loopback); '
+    'Application.put_env(:lemon_router, :health_port, String.to_integer(System.fetch_env!("LEMON_ROUTER_HEALTH_PORT"))); '
     'LemonCore.Runtime.Boot.start!(:runtime_full); '
     'LemonEvals.PairedCleanup.verify!(); '
     'unless Process.whereis(LemonControlPlane.Supervisor), '

@@ -78,9 +78,7 @@ defmodule CodingAgent.FollowupMergeExecutorTest do
     end
 
     assert {:ok, _run_ref, %{runner_pid: runner}} =
-             command
-             |> LemonGateway.ExecutionRequest.from_command()
-             |> CodingAgent.Executor.start_run(%{stream_fn: stream_fn}, self())
+             CodingAgent.Executor.start_run(command, [stream_fn: stream_fn], self())
 
     on_exit(fn -> CodingAgent.Session.Presentation.safe_stop_session(runner) end)
 

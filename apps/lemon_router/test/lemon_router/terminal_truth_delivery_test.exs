@@ -21,20 +21,10 @@ defmodule LemonRouter.TerminalTruthDeliveryTest do
     assert event.payload.completed.ok == false
     assert {:ok, %{summary: %{completed: %{ok: false, run_id: ^run_id}}}} = read
 
-    # A later contradictory terminal reconciles its caller from the durable
-    # result and publishes nothing: subscribers see exactly one terminal.
-    publisher =
-      Task.async(fn ->
-        :ok = RunCompletion.publish(command, completion_event(run_id, ok: true))
-
-        receive do
-          %Event{type: :run_completed} = reconciled -> reconciled
-        after
-          1_000 -> :missing
-        end
-      end)
-
-    assert %Event{payload: %RunCompleted{completed: %{ok: false}}} = Task.await(publisher)
+    # A later contradictory terminal returns the durable result to its caller
+    # and publishes nothing: subscribers see exactly one terminal.
+    assert {:already_finalized, %Event{payload: %RunCompleted{completed: %{ok: false}}}} =
+             RunCompletion.finalize(command, completion_event(run_id, ok: true))
 
     Bus.broadcast(Bus.run_topic(run_id), :barrier)
     assert_receive {:observed, :barrier, _read}, 1_000

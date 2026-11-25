@@ -51,13 +51,9 @@ defmodule LemonGateway.M6IntegrationTest do
       File.mkdir_p!(config_dir)
       toml_path = Path.join(config_dir, "config.toml")
       File.write!(toml_path, toml_content)
-      Application.put_env(:lemon_gateway, :config_path, toml_path)
 
       LemonCore.ConfigCache.clear()
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      # The running gateway's execution limit comes from the file.
-      assert {:ok, %{max: 8}} = LemonGateway.Slots.stats()
+      assert GatewayConfig.get(:max_concurrent_runs) == 8
       refute Map.has_key?(GatewayConfig.load(), :default_engine)
       refute Map.has_key?(GatewayConfig.load(), :engines)
 
@@ -96,9 +92,7 @@ defmodule LemonGateway.M6IntegrationTest do
       queue_mode = "collect"
       """)
 
-      Application.put_env(:lemon_gateway, :config_path, toml_path)
       LemonCore.ConfigCache.clear()
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       scope = %ChatScope{transport: :telegram, chat_id: 555}
 
@@ -146,9 +140,7 @@ defmodule LemonGateway.M6IntegrationTest do
       queue_mode = "interrupt"
       """)
 
-      Application.put_env(:lemon_gateway, :config_path, toml_path)
       LemonCore.ConfigCache.clear()
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       chat_scope = %ChatScope{transport: :telegram, chat_id: 777}
       topic_scope = %ChatScope{transport: :telegram, chat_id: 777, topic_id: 123}
@@ -159,17 +151,15 @@ defmodule LemonGateway.M6IntegrationTest do
       assert BindingResolver.resolve_queue_mode(topic_scope, resolver_opts()) == :interrupt
     end
 
-    test "chat state persistence works", %{test_toml_dir: _test_toml_dir} do
-      Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
+    test "chat state persistence works" do
       chat_id = System.unique_integer([:positive, :monotonic]) + System.system_time(:millisecond)
       scope = %ChatScope{transport: :telegram, chat_id: chat_id}
 
       # Initially no chat state
       assert ChatStateStore.get(scope) == nil
 
-      # Store chat state (simulating what Run does after completion)
+      on_exit(fn -> ChatStateStore.delete(scope) end)
+
       chat_state = %ChatState{
         last_engine: "test_engine",
         last_resume_token: "test_token_123",

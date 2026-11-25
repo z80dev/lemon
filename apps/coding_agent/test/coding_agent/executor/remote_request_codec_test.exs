@@ -3,7 +3,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
 
   alias CodingAgent.Executor.RemoteRequestCodec
   alias LemonCore.ExecutionContext
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   test "protected metadata detects canonical and JSON aliases by presence" do
     for key <- [
@@ -35,7 +35,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
   @tag :tmp_dir
   test "project-memory capture stays false across named-node transport", %{tmp_dir: cwd} do
     for meta <- [%{project_memory_capture: false}, %{"project_memory_capture" => false}] do
-      request = %ExecutionRequest{
+      request = %ExecutionCommand{
         run_id: "placement",
         session_key: "agent:placement:main",
         prompt: "hello",
@@ -68,7 +68,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
 
   test "controller pane bindings never cross a named-node boundary" do
     for meta <- [%{tern_pane: 42}, %{"tern_pane" => 42}] do
-      request = %ExecutionRequest{
+      request = %ExecutionCommand{
         run_id: "placement",
         session_key: "agent:placement:main",
         prompt: "hello",
@@ -86,7 +86,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
           %{remote_cwd_mode: "profile_files", profile_id: "writer"},
           %{"remote_cwd_mode" => "profile_files", "profile_id" => "writer"}
         ] do
-      request = %ExecutionRequest{
+      request = %ExecutionCommand{
         run_id: "placement",
         session_key: "agent:placement:main",
         prompt: "hello",
@@ -108,7 +108,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
           %{remote_cwd_explicit: false, remote_cwd: "/controller/unused"},
           %{"remote_cwd_explicit" => false, "remote_cwd" => "/controller/unused"}
         ] do
-      request = %ExecutionRequest{
+      request = %ExecutionCommand{
         run_id: "placement",
         session_key: "agent:placement:main",
         prompt: "hello",
@@ -126,7 +126,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
   end
 
   test "explicit destination paths survive JSON placement metadata" do
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "placement",
       session_key: "agent:placement:main",
       prompt: "hello",
@@ -152,7 +152,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
       }
     ]
 
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "placement",
       session_key: "agent:writer:task-1",
       prompt: "hello",
@@ -200,7 +200,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
           %{model: "@fast", model_explicit: explicit},
           %{"model" => "@fast", "model_explicit" => explicit}
         ] do
-      request = %ExecutionRequest{
+      request = %ExecutionCommand{
         run_id: "placement",
         session_key: "agent:placement:main",
         prompt: "hello",
@@ -240,7 +240,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
   end
 
   test "callbacks cannot cross the execution boundary" do
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "placement",
       session_key: "agent:placement:main",
       prompt: "hello",
@@ -261,7 +261,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
                limits: %{max_steps: 7}
              )
 
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "placement",
       session_key: "agent:placement:main",
       prompt: "bounded work",
@@ -290,7 +290,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
   end
 
   test "missing, forged, mismatched and malformed authority fail before encoding" do
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "placement",
       session_key: "agent:placement:main",
       prompt: "must not cross"

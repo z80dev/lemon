@@ -8,12 +8,12 @@ defmodule CodingAgent.Executor do
   destination because executor options are never serialized to that node.
   """
 
-  @behaviour LemonGateway.Executor
+  @behaviour CodingAgent.Executor.Behaviour
 
   alias CodingAgent.Executor.{RemoteSessionRunner, SessionRunner}
   alias LemonCore.{ExecutionContext, ResumeToken, ToolPolicy}
-  alias LemonGateway.Event
-  alias LemonGateway.ExecutionRequest
+  alias CodingAgent.Executor.Event
+  alias LemonCore.ExecutionCommand
 
   @session_module CodingAgent.Session
   @engine "lemon"
@@ -34,7 +34,7 @@ defmodule CodingAgent.Executor do
     do: Application.delete_env(:coding_agent, :executor_stream_options_hook)
 
   @impl true
-  def start_run(%ExecutionRequest{} = request, opts, sink_pid) when is_pid(sink_pid) do
+  def start_run(%ExecutionCommand{} = request, opts, sink_pid) when is_pid(sink_pid) do
     # An entrypoint may boot only a subset of applications, so make sure the
     # agent's own supervision tree (provider registries, session supervisor) is
     # running before starting a session.
@@ -120,7 +120,7 @@ defmodule CodingAgent.Executor do
     case RemoteSessionRunner.start_link(
            node: node,
            request: request,
-           opts: opts,
+           opts: drop_slot_lender(opts),
            sink_pid: sink_pid,
            run_ref: run_ref
          ) do
@@ -133,6 +133,10 @@ defmodule CodingAgent.Executor do
         {:error, reason}
     end
   end
+
+  defp drop_slot_lender(opts) when is_map(opts), do: Map.delete(opts, :slot_lender)
+  defp drop_slot_lender(opts) when is_list(opts), do: Keyword.delete(opts, :slot_lender)
+  defp drop_slot_lender(opts), do: opts
 
   @doc false
   def normalize_resume(%ResumeToken{engine: @engine} = token), do: token
@@ -174,7 +178,7 @@ defmodule CodingAgent.Executor do
     end
   end
 
-  defp validate_execution_request(%ExecutionRequest{} = request, opts) do
+  defp validate_execution_request(%ExecutionCommand{} = request, opts) do
     cwd = request.cwd || get_opt(opts, :cwd) || File.cwd!()
 
     request = %{
@@ -202,7 +206,7 @@ defmodule CodingAgent.Executor do
     end
   end
 
-  defp resolve_execution_context(%ExecutionRequest{execution_context: nil} = request, cwd) do
+  defp resolve_execution_context(%ExecutionCommand{execution_context: nil} = request, cwd) do
     meta = request.meta || %{}
 
     ExecutionContext.new(
@@ -215,7 +219,7 @@ defmodule CodingAgent.Executor do
   end
 
   defp resolve_execution_context(
-         %ExecutionRequest{execution_context: %ExecutionContext{} = context},
+         %ExecutionCommand{execution_context: %ExecutionContext{} = context},
          _cwd
        ),
        do: ExecutionContext.validate(context)

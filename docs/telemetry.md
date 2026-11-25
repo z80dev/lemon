@@ -23,8 +23,8 @@ Two layers coexist and are easy to confuse:
 ## Safe runtime diagnostics
 
 Production diagnostics use owner-published snapshots and explicit summary APIs,
-not `:sys.get_state`. Gateway health reads scheduler counters without waiting
-for the scheduler mailbox. Async task surface bindings are immutable Registry
+not `:sys.get_state`. Router health reads execution-slot counters without waiting
+for the permit server mailbox. Async task surface bindings are immutable Registry
 values: answer finalization never asks a subscriber for its private state.
 Long-lived admission, stream, process-store, LSP, channel-registry and task-control
 servers expose redacted `format_status/1` summaries. These hooks also remove
@@ -107,7 +107,7 @@ resolution, execution-context writes and later agent initialization remain
 outside these four stage durations.
 
 The [offline latency lane](benchmarks/latency-sla.md) consumes these events and
-the existing gateway run `:start`, `:first_token` and `:stop` events. Consumers
+the existing run `:start`, `:first_token` and `:stop` events. Consumers
 must keep synchronous handlers cheap; the benchmark only sends bounded timing
 messages to its owner and retains no session content.
 
@@ -263,7 +263,7 @@ repeats once per tool-calling turn.
 sequenceDiagram
     participant Ch as Channel adapter
     participant R as LemonRouter
-    participant S as Gateway Run / Slots
+    participant S as Router RunProcess / Slots
     participant L as LemonAgent.Loop
     participant P as LemonAi.CallDispatcher
     participant M as LemonMemory.Ingest
@@ -284,23 +284,19 @@ sequenceDiagram
     end
 
     Note over L: [:lemon_agent, :loop, :end]
-    L->>S: release slot
-    L->>M: finalize run
+    L->>S: executor completion; owner finalizes and releases slot
+    S->>M: completed run
     Note over M: [:lemon, :memory, :ingest, :ok] or :failure
     R->>O: enqueue reply
     Note over O: [:lemon, :channels, :outbox, :queue]<br/>[:lemon, :channels, :deliver, :start]<br/>[:lemon, :channels, :deliver, :stop]
     O->>Ch: delivered
 ```
 
-**The end-to-end run span is emitted from the gateway run process.**
-`[:lemon, :run, :start]`, `[:lemon, :run, :first_token]`, and `[:lemon, :run, :stop]` all
-fire from `LemonGateway.Run` through the matching `LemonCore.Telemetry`
-helpers. `[:lemon, :run, :stop]` carries
-`duration_ms` and an `ok` boolean, so whole-run latency and success/failure are both readable
-from telemetry alone. A run the router terminalizes before an executor owns it emits its
-`:stop` from `LemonRouter.RunCompletion` instead. The introspection layer's
-`:run_started` / `:run_completed` records remain available as a persisted, queryable
-alternative.
+`LemonRouter.RunProcess` emits run start and first-token telemetry.
+`LemonRouter.RunCompletion` emits `[:lemon, :run, :stop]` after persisting the
+terminal record, including for runs dropped before execution. Its `duration_ms`
+and `ok` fields report run latency and outcome. The introspection layer's
+persisted `:run_started` and `:run_completed` records are also queryable.
 
 ## Event catalog
 
@@ -309,9 +305,9 @@ alternative.
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
 | `[:lemon, :run, :submit]` | `count: 1` | `session_key`, `origin`, `engine` | [`LemonCore.Telemetry.run_submit/3`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called from [`LemonRouter.RunOrchestrator`](../apps/lemon_router/lib/lemon_router/run_orchestrator.ex) when a submission is accepted |
-| `[:lemon, :run, :start]` | `ts_ms` | `run_id`, `session_key`, `engine`, `origin` | [`LemonCore.Telemetry.run_start/2`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called from [`LemonGateway.Run`](../apps/lemon_gateway/lib/lemon_gateway/run.ex) when the gateway starts the engine run |
-| `[:lemon, :run, :first_token]` | `latency_ms` | `run_id` | [`LemonCore.Telemetry.run_first_token/2`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called from [`LemonGateway.Run`](../apps/lemon_gateway/lib/lemon_gateway/run.ex) on the first engine delta of the run |
-| `[:lemon, :run, :stop]` | `duration_ms`, `ok` (boolean) | `run_id`; plus `session_key` and `engine` from the router path | [`LemonCore.Telemetry.run_stop/3`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called from [`LemonGateway.Run`](../apps/lemon_gateway/lib/lemon_gateway/run.ex) at finalize; `ok` distinguishes success from `{:error, _}`. Not emitted if the run process crashes before finalize. Runs terminalized before an executor owns them emit it from [`LemonRouter.RunCompletion.publish/2`](../apps/lemon_router/lib/lemon_router/run_completion.ex) |
+| `[:lemon, :run, :start]` | `ts_ms` | `run_id`, `session_key`, `engine`, `origin` | [`LemonCore.Telemetry.run_start/2`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called by [`LemonRouter.RunProcess`](../apps/lemon_router/lib/lemon_router/run_process.ex) when starting the executor |
+| `[:lemon, :run, :first_token]` | `latency_ms` | `run_id` | [`LemonCore.Telemetry.run_first_token/2`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called by [`LemonRouter.RunProcess`](../apps/lemon_router/lib/lemon_router/run_process.ex) on the first executor delta |
+| `[:lemon, :run, :stop]` | `duration_ms`, `ok` (boolean) | `run_id`, `session_key`, `engine` | [`LemonRouter.RunCompletion.finalize/3`](../apps/lemon_router/lib/lemon_router/run_completion.ex) after writing the terminal record, including synthetic completions |
 | `[:lemon, :router, :run_abort_tombstone, :registered]` | `count: 1` | bounded `reason` label | [`emit_abort_tombstone_telemetry/2`](../apps/lemon_router/lib/lemon_router/run_orchestrator.ex) in `LemonRouter.RunOrchestrator`, when a fixed run ID is marked aborted at the serialized submission boundary |
 | `[:lemon, :router, :run_abort_tombstone, :submission_rejected]` | `count: 1` | bounded `reason` label | [`emit_abort_tombstone_telemetry/2`](../apps/lemon_router/lib/lemon_router/run_orchestrator.ex), when a later submission is rejected by that tombstone |
 
@@ -447,9 +443,9 @@ the per-action keep/move/delete decisions in #604 remain operator/user work.
 | `[:lemon, :channels, :deliver, :stop]` | `duration` (native) | delivery meta plus `ok` (boolean) | [`do_deliver/1`](../apps/lemon_channels/lib/lemon_channels/outbox.ex); fires for both success and `{:error, _}` — check `ok` |
 | `[:lemon, :channels, :deliver, :exception]` | `duration` (native) | delivery meta plus `kind: :exception`, `reason`, `stacktrace` | [`do_deliver/1`](../apps/lemon_channels/lib/lemon_channels/outbox.ex), only when the plugin raises |
 
-### Gateway execution permits
+### Router execution permits
 
-`LemonGateway.Slots.stats/0` reads an ETS snapshot containing `in_flight`,
+`LemonRouter.Slots.stats/0` reads an ETS snapshot containing `in_flight`,
 `waitq`, and `max`, or returns `{:error, :not_running}`. Health and status can
 read it without calling a busy permit server. `waitq > 0` indicates saturation.
 The removed scheduler's `:slot_queued`, `:slot_granted`, and `:slot_released`
@@ -790,7 +786,7 @@ import Telemetry.Metrics
 
 def metrics do
   [
-    # Outbox overload; gateway permit pressure is sampled separately via Slots.stats/0.
+    # Outbox overload; permit pressure is sampled separately via LemonRouter.Slots.stats/0.
     counter("lemon.channels.outbox.rejected.count", tags: [:channel_id, :reason]),
 
     # Provider health.
@@ -844,7 +840,7 @@ event. The known values are listed in the catalog above.
 
 **Measurement gaps.** `[:lemon_agent, :loop, :end]`
 reports `duration: nil` when the process-dictionary start time is missing.
-Gateway slot statistics are aggregate snapshots, not per-run wait spans.
+Router slot statistics are aggregate snapshots, not per-run wait spans.
 
 **Coverage gaps.** There is no telemetry on the store, the Bus, or the router's
 session-coordinator queue transitions.

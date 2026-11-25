@@ -59,7 +59,7 @@ defmodule LemonRouter.FacadeTest do
            run_id: run_id,
            session_key: session_key,
            execution_request: command,
-           submit_to_gateway?: false}
+           executor: LemonRouter.TestExecutor}
         )
 
       ref = Process.monitor(pid)
@@ -97,7 +97,7 @@ defmodule LemonRouter.FacadeTest do
            run_id: run_id,
            session_key: session_key,
            execution_request: command,
-           submit_to_gateway?: false}
+           executor: LemonRouter.TestExecutor}
         )
 
       :ok = :sys.suspend(pid)

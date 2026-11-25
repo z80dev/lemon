@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
   @moduledoc """
   The `agent` tool bounds delegated children: a blocked parent lends its
-  gateway permit, children inherit and enforce the parent's budget, and an
+  run permit, children inherit and enforce the parent's budget, and an
   aborted or timed-out parent aborts its children.
   """
   use ExUnit.Case, async: false
@@ -11,15 +11,74 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
   alias LemonCore.{Bus, Event, RunRequest, Store}
-  alias LemonGateway.Slots
   alias LemonPlatformTest.EventsFixtures
 
-  @slots __MODULE__.Slots
+  defmodule Slots do
+    @moduledoc false
+    use GenServer
+
+    def start_link({max, test}),
+      do: GenServer.start_link(__MODULE__, {max, test}, name: __MODULE__)
+
+    def acquire(run_id), do: GenServer.call(__MODULE__, {:acquire, run_id}, :infinity)
+    def release(run_id), do: GenServer.call(__MODULE__, {:release, run_id})
+    def lend(run_id), do: GenServer.call(__MODULE__, {:lend, run_id})
+    def return(run_id, mode), do: GenServer.call(__MODULE__, {:return, run_id, mode}, :infinity)
+    def stats, do: GenServer.call(__MODULE__, :stats)
+
+    @impl true
+    def init({max, test}),
+      do: {:ok, %{max: max, test: test, active: MapSet.new(), waiting: :queue.new()}}
+
+    @impl true
+    def handle_call({:acquire, run_id}, from, state) do
+      {:noreply, admit(%{state | waiting: :queue.in({run_id, from}, state.waiting)})}
+    end
+
+    def handle_call({:release, run_id}, _from, state) do
+      waiting = :queue.filter(fn {id, _} -> id != run_id end, state.waiting)
+
+      {:reply, :ok,
+       admit(%{state | active: MapSet.delete(state.active, run_id), waiting: waiting})}
+    end
+
+    def handle_call({:lend, run_id}, _from, state) do
+      if MapSet.member?(state.active, run_id) do
+        send(state.test, {:slot_lent, run_id})
+        {:reply, {:ok, run_id}, admit(%{state | active: MapSet.delete(state.active, run_id)})}
+      else
+        {:reply, :none, state}
+      end
+    end
+
+    def handle_call({:return, run_id, mode}, from, state) do
+      send(state.test, {:slot_returned, run_id, mode})
+      waiter = if mode == :wait, do: from, else: nil
+      state = admit(%{state | waiting: :queue.in_r({run_id, waiter}, state.waiting)})
+      if waiter, do: {:noreply, state}, else: {:reply, :ok, state}
+    end
+
+    def handle_call(:stats, _from, state) do
+      {:reply,
+       {:ok,
+        %{in_flight: MapSet.size(state.active), waitq: :queue.len(state.waiting), max: state.max}},
+       state}
+    end
+
+    defp admit(state) do
+      with true <- MapSet.size(state.active) < state.max,
+           {{:value, {id, waiter}}, waiting} <- :queue.out(state.waiting) do
+        if waiter, do: GenServer.reply(waiter, :ok)
+        admit(%{state | active: MapSet.put(state.active, id), waiting: waiting})
+      else
+        _ -> state
+      end
+    end
+  end
 
   defmodule FakeGateway do
     @moduledoc false
-    # Each submitted request becomes a Run process that must be admitted by
-    # the test Slots authority before it executes, like a gateway Run.
+    # Each submitted request must acquire a permit before executing.
     use Agent
 
     alias CodingAgent.Tools.AgentDelegationBoundsTest, as: Test
@@ -48,8 +107,7 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
     end
 
     defp run(%RunRequest{run_id: run_id, prompt: prompt}, test) do
-      GenServer.cast(Test.slots(), {:acquire, run_id, self()})
-      permit = receive do: ({:slot_granted, permit} -> permit)
+      :ok = Slots.acquire(run_id)
       send(test, {:admitted, run_id})
 
       {ok, answer, error} =
@@ -87,12 +145,10 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
         Event.new(:run_completed, EventsFixtures.run_completed(completed: completed))
       )
 
-      GenServer.cast(Test.slots(), {:release, permit})
+      :ok = Slots.release(run_id)
       send(test, {:terminal, run_id, ok})
     end
   end
-
-  def slots, do: @slots
 
   def params(prompt, overrides \\ %{}) do
     Map.merge(
@@ -108,7 +164,7 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
         session_key: "agent:main:#{run_id}",
         agent_id: "main",
         run_orchestrator: FakeGateway,
-        slots: @slots,
+        slot_lender: Slots,
         agent_tool_abort_grace_ms: 2_000
       ],
       extra
@@ -122,17 +178,16 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
     :ok
   end
 
-  defp start_slots(max), do: start_supervised!({Slots, name: @slots, max: max})
+  defp start_slots(max), do: start_supervised!({Slots, {max, self()}})
 
   # A parent Run admitted by Slots that runs one `agent` call.
   defp parent_run(run_id, params, extra \\ []) do
     test = self()
 
     spawn_link(fn ->
-      GenServer.cast(@slots, {:acquire, run_id, self()})
-      permit = receive do: ({:slot_granted, permit} -> permit)
+      :ok = Slots.acquire(run_id)
       result = AgentTool.execute("call", params, extra[:signal], nil, "/tmp", opts(run_id, extra))
-      GenServer.cast(@slots, {:release, permit})
+      :ok = Slots.release(run_id)
       send(test, {:parent_result, run_id, result})
     end)
   end
@@ -146,7 +201,7 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
     assert_receive {:parent_result, "parent-b", %AgentToolResult{} = b}, 5_000
     assert LemonAgent.get_text(a) == "done:a"
     assert LemonAgent.get_text(b) == "done:b"
-    assert eventually(fn -> Slots.stats(@slots) == {:ok, %{in_flight: 0, waitq: 0, max: 2}} end)
+    assert eventually(fn -> Slots.stats() == {:ok, %{in_flight: 0, waitq: 0, max: 2}} end)
   end
 
   test "depth-2 delegation does not deadlock, even under cap 1" do
@@ -155,7 +210,9 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
 
     assert_receive {:parent_result, "root", %AgentToolResult{} = result}, 5_000
     assert LemonAgent.get_text(result) == "nested(done:leaf)"
-    assert eventually(fn -> Slots.stats(@slots) == {:ok, %{in_flight: 0, waitq: 0, max: 1}} end)
+    assert_receive {:slot_lent, "root"}
+    assert_receive {:slot_returned, "root", :wait}
+    assert eventually(fn -> Slots.stats() == {:ok, %{in_flight: 0, waitq: 0, max: 1}} end)
   end
 
   test "aborting a parent aborts its sync child, which emits a terminal event" do
@@ -172,6 +229,7 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
     assert_receive {:terminal, ^child, false}, 2_000
     assert_receive %Event{type: :run_completed}, 2_000
     assert_receive {:parent_result, "parent", {:error, message}}, 2_000
+    assert_receive {:slot_returned, "parent", :nowait}
     assert message =~ "aborted"
     assert {:ok, %{status: :error}} = RunGraph.get(child)
   end
@@ -214,8 +272,7 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
     test = self()
 
     spawn_link(fn ->
-      GenServer.cast(@slots, {:acquire, "joiner", self()})
-      permit = receive do: ({:slot_granted, permit} -> permit)
+      :ok = Slots.acquire("joiner")
 
       %AgentToolResult{details: %{task_id: task_id}} =
         AgentTool.execute(
@@ -237,7 +294,7 @@ defmodule CodingAgent.Tools.AgentDelegationBoundsTest do
           opts("joiner")
         )
 
-      GenServer.cast(@slots, {:release, permit})
+      :ok = Slots.release("joiner")
       send(test, {:joined, result})
     end)
 

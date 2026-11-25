@@ -13,42 +13,47 @@ defmodule LemonAutomation.GoalAuthorityTest do
   alias LemonCore.ToolPolicy
   alias LemonAutomation.Tools.Goal
 
-  defmodule Runtime do
-    def available?, do: true
-    def run_pid(_run_id), do: nil
-    def cancel_by_run_id(_run_id, _reason), do: :ok
+  defmodule Executor do
+    @behaviour CodingAgent.Executor.Behaviour
 
-    def submit_execution(%LemonCore.ExecutionCommand{} = command) do
+    def cancel(%{runner_pid: pid}),
+      do:
+        (
+          send(pid, :cancel)
+          :ok
+        )
+
+    def steer(_ctx, _prompt), do: {:error, :unsupported}
+    def redirect(_ctx, _prompt), do: {:error, :unsupported}
+
+    def start_run(%LemonCore.ExecutionCommand{} = command, _opts, sink) do
       send(:persistent_term.get({__MODULE__, :test_pid}), {:execution, command})
       judge? = command.meta[:goal_judge] == true
+      ref = make_ref()
       hold? = not judge? and :persistent_term.get({__MODULE__, :hold}, false)
 
-      unless hold?, do: complete(command, judge?)
-      :ok
-    end
+      runner =
+        spawn(fn ->
+          monitor = Process.monitor(sink)
 
-    defp complete(command, judge?) do
-      spawn(fn ->
-        Process.sleep(10)
+          unless hold? do
+            output =
+              if judge?, do: ~s({"action":"continue","reason":"work remains"}), else: "done"
 
-        output =
-          if judge?, do: ~s({"action":"continue","reason":"work remains"}), else: "done"
+            send(
+              sink,
+              {:engine_event, ref,
+               CodingAgent.Executor.Event.completed(%{engine: "lemon", ok: true, answer: output})}
+            )
+          end
 
-        topic = LemonCore.Bus.run_topic(command.run_id)
-        meta = %{run_id: command.run_id, session_key: command.session_key}
+          receive do
+            :cancel -> :ok
+            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+          end
+        end)
 
-        LemonCore.Bus.broadcast(
-          topic,
-          LemonCore.Event.new(:run_started, %{run_id: command.run_id, engine: "lemon"}, meta)
-        )
-
-        LemonCore.Bus.broadcast(
-          topic,
-          LemonCore.Event.new(:run_completed, %{completed: %{ok: true, answer: output}}, meta)
-        )
-      end)
-
-      :ok
+      {:ok, ref, %{runner_pid: runner}}
     end
   end
 
@@ -56,9 +61,9 @@ defmodule LemonAutomation.GoalAuthorityTest do
   @restricted %{blocked_tools: ["bash", "grep"], approvals: %{"write" => :always}}
 
   setup do
-    original_runtime = Application.get_env(:lemon_router, :engine_runtime)
+    original_runtime = Application.get_env(:lemon_router, :test_executor)
     original_judge = Application.get_env(:lemon_automation, :goal_judge_runner)
-    Application.put_env(:lemon_router, :engine_runtime, Runtime)
+    Application.put_env(:lemon_router, :test_executor, Executor)
 
     Application.put_env(
       :lemon_automation,
@@ -66,7 +71,7 @@ defmodule LemonAutomation.GoalAuthorityTest do
       LemonAutomation.GoalJudge.RouterRunner
     )
 
-    :persistent_term.put({Runtime, :test_pid}, self())
+    :persistent_term.put({Executor, :test_pid}, self())
     {:ok, _} = Application.ensure_all_started(:lemon_router)
     {:ok, _} = Application.ensure_all_started(:lemon_automation)
 
@@ -87,10 +92,10 @@ defmodule LemonAutomation.GoalAuthorityTest do
       GoalLoopManager.stop_loop(key)
       GoalStore.clear(key)
       File.rm_rf!(base)
-      restore(:lemon_router, :engine_runtime, original_runtime)
+      restore(:lemon_router, :test_executor, original_runtime)
       restore(:lemon_automation, :goal_judge_runner, original_judge)
-      :persistent_term.erase({Runtime, :test_pid})
-      :persistent_term.erase({Runtime, :hold})
+      :persistent_term.erase({Executor, :test_pid})
+      :persistent_term.erase({Executor, :hold})
     end)
 
     %{tool: tool, key: key, root: root, outside: outside}
@@ -168,7 +173,7 @@ defmodule LemonAutomation.GoalAuthorityTest do
     root: root,
     outside: outside
   } do
-    :persistent_term.put({Runtime, :hold}, true)
+    :persistent_term.put({Executor, :hold}, true)
 
     assert %AgentToolResult{} =
              tool.execute.(
@@ -293,7 +298,7 @@ defmodule LemonAutomation.GoalAuthorityTest do
 
   test "a policy-bound starter cannot join or auto-restart a loop running under broader authority",
        %{key: key, root: root} do
-    :persistent_term.put({Runtime, :hold}, true)
+    :persistent_term.put({Executor, :hold}, true)
 
     assert {:ok, _goal} =
              GoalLoopManager.set_goal(key, "Operator goal",

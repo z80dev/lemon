@@ -252,10 +252,9 @@ auto_approve = true
                                  'legacy' if variant == 'baseline' else 'coding')
                 self.assertEqual(env['LEMON_CONTROL_PLANE_PORT'], str(4200 + index))
                 self.assertEqual(env['LEMON_WEB_PORT'], str(4300 + index))
-                self.assertEqual(env['LEMON_GATEWAY_HEALTH_PORT'], '0')
                 self.assertEqual(env['LEMON_ROUTER_HEALTH_PORT'], '0')
                 self.assertEqual(env['BENCHMARK_PROVIDER_API_KEY'], credentials['BENCHMARK_PROVIDER_API_KEY'])
-                for key in ['OPENAI_API_KEY', 'HTTPS_PROXY', 'BASH_ENV']:
+                for key in ['OPENAI_API_KEY', 'HTTPS_PROXY', 'BASH_ENV', 'LEMON_GATEWAY_HEALTH_PORT']:
                     self.assertNotIn(key, env)
                 self.assertNotIn('ambient-operator-secret', env.values())
                 self.assertNotIn('ambient-master-secret', env.values())

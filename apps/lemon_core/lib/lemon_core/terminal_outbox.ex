@@ -2,7 +2,8 @@ defmodule LemonCore.TerminalOutbox do
   @moduledoc """
   Bounded replay of committed run completions. Notification and projections
   have independent acknowledgements; no acknowledgement can rewrite a decision.
-  Bus publication is at-least-once. Consumers can deduplicate by `meta.event_id`.
+  Normal publication is serialized and happens once. A crash between broadcast
+  and its durable acknowledgement can cause replay with the same `meta.event_id`.
   """
   use GenServer
 
@@ -113,6 +114,12 @@ defmodule LemonCore.TerminalOutbox do
           end
         end)
 
+      {:ok, %{}} ->
+        # Session-less completions still serialize live notification with replay.
+        session_lock(server, {:run, run_id}, fn ->
+          with {:ok, row} <- pending(server, run_id), do: fun.(row)
+        end)
+
       {:ok, row} ->
         fun.(row)
 
@@ -183,30 +190,51 @@ defmodule LemonCore.TerminalOutbox do
   end
 
   @doc false
-  def publish(server \\ Store, run_id, %Event{} = event) do
+  def publish(server \\ Store, run_id, %Event{type: :run_completed, ts_ms: ts_ms}) do
+    with_pending(server, run_id, &publish_pending(server, run_id, &1, ts_ms))
+  end
+
+  defp publish_pending(
+         server,
+         run_id,
+         %{notification: status, record: %{summary: summary}},
+         ts_ms
+       )
+       when status != :done do
     with {:ok, %{attempt_id: attempt_id}} <- decision(server, run_id),
+         event = completion_event(run_id, summary, ts_ms),
          :ok <- Bus.publish_run_lifecycle(Event.identify_run(event, run_id, attempt_id)) do
-      # Publishing succeeded; if acknowledging fails replay can duplicate it.
       _ = ack(server, run_id, :notification)
       :ok
     end
   end
 
+  defp publish_pending(_server, _run_id, _row, _ts_ms), do: :ok
+
   @doc false
   def event(run_id, %{completed: completed} = summary) when is_map(completed) do
-    Event.new(
-      :run_completed,
-      Events.RunCompleted.new(%{
-        completed: Events.Completion.from_map(completed),
-        duration_ms: summary[:duration_ms]
-      }),
-      %{
+    run_id
+    |> completion_event(summary, Event.now_ms())
+    |> Event.identify_run(run_id, summary[:attempt_id])
+  end
+
+  defp completion_event(run_id, summary, ts_ms) do
+    meta =
+      Map.merge(summary[:terminal_event_meta] || %{}, %{
         run_id: run_id,
         session_key: summary[:session_key],
         engine: summary[:engine]
-      }
+      })
+
+    Event.new_with_ts(
+      :run_completed,
+      summary[:completed_at_ms] || ts_ms,
+      Events.RunCompleted.new(%{
+        completed: Events.Completion.from_map(summary.completed),
+        duration_ms: summary[:duration_ms]
+      }),
+      meta
     )
-    |> Event.identify_run(run_id, summary[:attempt_id])
   end
 
   @impl true
@@ -244,9 +272,7 @@ defmodule LemonCore.TerminalOutbox do
            decision(server, run_id) do
       with_pending(server, run_id, fn
         %{digest: ^digest} = row ->
-          if row.notification != :done do
-            publish(server, run_id, event(run_id, row.record.summary))
-          end
+          publish_pending(server, run_id, row, Event.now_ms())
 
           if retryable?(row, :projections), do: repair_projections(server, run_id, row)
           if retryable?(row, :presentation), do: repair_presentation(server, run_id, row.record)

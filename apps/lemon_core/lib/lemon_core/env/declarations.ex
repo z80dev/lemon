@@ -1309,11 +1309,11 @@ defmodule LemonCore.Env.Declarations do
       aliases: [],
       type: :integer,
       default: 2,
-      doc: "Maximum concurrent agent runs the gateway will schedule.",
+      doc: "Maximum concurrent agent runs the router will execute.",
       secret?: false,
       required?: false,
       area: :gateway,
-      apps: [:lemon_core, :lemon_gateway]
+      apps: [:lemon_core, :lemon_router]
     },
     %{
       name: :lemon_web_cache_max_entries,

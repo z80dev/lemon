@@ -27,16 +27,36 @@ defmodule LemonRouter.NativeLineageTest do
     end
   end
 
-  defmodule RuntimeObserver do
-    def available?, do: true
+  defmodule ExecutorObserver do
+    @behaviour CodingAgent.Executor.Behaviour
 
-    def submit_execution(command) do
+    def cancel(%{runner_pid: pid}),
+      do:
+        (
+          send(pid, :cancel)
+          :ok
+        )
+
+    def steer(_ctx, _prompt), do: {:error, :unsupported}
+    def redirect(_ctx, _prompt), do: {:error, :unsupported}
+
+    def start_run(%LemonCore.ExecutionCommand{} = command, _opts, sink) do
+      runner =
+        spawn(fn ->
+          monitor = Process.monitor(sink)
+
+          receive do
+            :cancel -> :ok
+            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+          end
+        end)
+
       send(
         Application.fetch_env!(:lemon_router, :native_lineage_test_pid),
         {:native_runtime_payload, command}
       )
 
-      :ok
+      {:ok, make_ref(), %{runner_pid: runner}}
     end
   end
 
@@ -77,8 +97,10 @@ defmodule LemonRouter.NativeLineageTest do
     # unique_integer restarts with every VM: a random part keeps the fixture's
     # root (and the profiles persisted in its config) from colliding with a
     # directory an interrupted earlier run left behind.
-    prefix =
-      "lineage-" <> suffix <> "-" <> Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
+    # Keep the salt decimal: the TOML lexer can mistake a hex substring such
+    # as 0b101 for a binary literal in the bare profile key.
+    <<salt::32>> = :crypto.strong_rand_bytes(4)
+    prefix = "lineage-#{suffix}-#{salt}"
 
     root = Path.join(System.tmp_dir!(), prefix)
     File.mkdir_p!(root)
@@ -613,7 +635,10 @@ defmodule LemonRouter.NativeLineageTest do
     Application.put_env(:lemon_router, :session_coordinator, LemonRouter.SessionCoordinator)
 
     :sys.replace_state(ctx.server, fn state ->
-      %{state | run_process_opts: Map.put(state.run_process_opts, :submit_to_gateway?, false)}
+      %{
+        state
+        | run_process_opts: Map.put(state.run_process_opts, :executor, LemonRouter.TestExecutor)
+      }
     end)
 
     fresh_ids = Enum.map(["dependent-active", "dependent-queued"], &(ctx.prefix <> "-" <> &1))
@@ -1304,7 +1329,10 @@ defmodule LemonRouter.NativeLineageTest do
     Application.put_env(:lemon_router, :session_coordinator, LemonRouter.SessionCoordinator)
 
     :sys.replace_state(ctx.server, fn state ->
-      %{state | run_process_opts: Map.put(state.run_process_opts, :submit_to_gateway?, false)}
+      %{
+        state
+        | run_process_opts: Map.put(state.run_process_opts, :executor, LemonRouter.TestExecutor)
+      }
     end)
 
     on_exit(fn ->
@@ -1438,8 +1466,7 @@ defmodule LemonRouter.NativeLineageTest do
                run_id: id,
                session_key: submission.session_key,
                execution_request: submission.execution_request,
-               submit_to_gateway?: true,
-               engine_runtime: RuntimeObserver
+               executor: ExecutorObserver
              })
 
     on_exit(fn ->

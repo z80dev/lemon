@@ -18,7 +18,7 @@ defmodule CodingAgent.ExecutorTest do
   alias CodingAgent.Tools.AskParent
   alias LemonAgent.Types.AgentToolResult
   alias LemonCore.{ExecutionContext, NodeRegistry, ResumeToken, ToolPolicy}
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   defmodule QuestionDeliveryBarrier do
     def deliver_parent_question(observer, text) do
@@ -1643,7 +1643,7 @@ defmodule CodingAgent.ExecutorTest do
   end
 
   defp request(tmp_dir, opts) do
-    %ExecutionRequest{
+    %ExecutionCommand{
       run_id: Keyword.fetch!(opts, :run_id),
       session_key: "test:lemon:#{System.unique_integer([:positive])}",
       prompt: Keyword.fetch!(opts, :prompt),

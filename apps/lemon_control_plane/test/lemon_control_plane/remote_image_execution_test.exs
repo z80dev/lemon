@@ -6,7 +6,7 @@ defmodule LemonControlPlane.RemoteImageExecutionTest do
   alias LemonAi.Types.{ImageContent, TextContent}
   alias LemonAi.ImageInputs
   alias LemonCore.ExecutionContext
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   @tag :tmp_dir
   test "RPC image blocks become native content and survive remote image-only execution", %{
@@ -16,7 +16,7 @@ defmodule LemonControlPlane.RemoteImageExecutionTest do
     assert {:ok, [%ImageContent{}] = images} = ImageInputs.validate(wire)
     assert {:ok, context} = ExecutionContext.new(run_id: "image-only")
 
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "image-only",
       session_key: "agent:vision:main",
       prompt: "",
@@ -88,7 +88,7 @@ defmodule LemonControlPlane.RemoteImageExecutionTest do
           [%{"type" => "image", "mime_type" => "image/png", "data" => png()}],
           false
         ] do
-      request = %ExecutionRequest{
+      request = %ExecutionCommand{
         run_id: "image-invalid",
         session_key: "agent:vision:main",
         prompt: "hello",

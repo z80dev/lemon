@@ -1,12 +1,13 @@
-defmodule LemonGateway.Event do
+defmodule CodingAgent.Executor.Event do
   @moduledoc """
-  Event types for LemonGateway run lifecycle.
+  Lifecycle events an executor sends to its run owner's sink.
 
   Events are plain tagged maps (not structs) identified by an `__event__` key.
   Constructor functions normalise the shape; defguards let callers pattern-match.
 
-  These events are emitted during run execution and can be subscribed to
-  via the LemonCore.Bus on the "run:<run_id>" topic.
+  Executors send them as `{:engine_event, run_ref, event}`; streamed text is
+  `{:engine_delta, run_ref, text}`. The run owner (`LemonRouter.RunProcess`)
+  persists them and publishes bus payloads on `run:<run_id>`.
   """
 
   @type phase :: :started | :updated | :completed

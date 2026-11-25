@@ -113,16 +113,4 @@ defmodule LemonCore.ContractTest do
                {:error, {:not_a_behaviour, behaviour}}
     end
   end
-
-  test "EngineRuntime.validate/1 reports its complete required surface" do
-    assert {:error, {:missing_callbacks, IncompleteImplementation, missing_callbacks}} =
-             LemonCore.EngineRuntime.validate(IncompleteImplementation)
-
-    assert Enum.sort(missing_callbacks) == [
-             available?: 0,
-             cancel_by_run_id: 2,
-             run_pid: 1,
-             submit_execution: 1
-           ]
-  end
 end

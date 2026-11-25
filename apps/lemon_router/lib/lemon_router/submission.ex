@@ -10,7 +10,7 @@ defmodule LemonRouter.Submission do
   interrupted work across a restart (`LemonRouter.RestartCarryover`).
   """
 
-  alias LemonCore.{ExecutionCommand, MapHelpers, RunPhase, RunRequest}
+  alias LemonCore.{ExecutionCommand, MapHelpers, RunRequest}
 
   @enforce_keys [:run_id, :session_key, :conversation_key, :queue_mode, :execution_request]
   defstruct [
@@ -24,7 +24,6 @@ defmodule LemonRouter.Submission do
     run_process_opts: %{},
     pending_compaction_marker: nil,
     meta: %{},
-    current_phase: nil,
     request: nil
   ]
 
@@ -39,15 +38,14 @@ defmodule LemonRouter.Submission do
           run_process_opts: map(),
           pending_compaction_marker: map() | nil,
           meta: map(),
-          current_phase: RunPhase.t() | nil,
           request: RunRequest.t() | nil
         }
 
   @doc """
   Build a submission, or `{:error, :invalid_submission}` when it lacks an
-  execution request, a non-empty run ID or session key, a conversation key, or
-  carries an invalid phase. Admission uses this so bad input is a definite
-  rejection rather than an exception.
+  execution request, a non-empty run ID or session key, or a conversation key.
+  Admission uses this so bad input is a definite rejection rather than an
+  exception.
   """
   @spec new(t() | map() | keyword()) :: {:ok, t()} | {:error, :invalid_submission}
   def new(%__MODULE__{} = submission), do: submission |> Map.from_struct() |> new()
@@ -66,8 +64,7 @@ defmodule LemonRouter.Submission do
          session_key when is_binary(session_key) and session_key != "" <-
            MapHelpers.get_key(attrs, :session_key) || execution_request.session_key,
          conversation_key when not is_nil(conversation_key) <-
-           MapHelpers.get_key(attrs, :conversation_key) || execution_request.conversation_key,
-         {:ok, current_phase} <- current_phase(MapHelpers.get_key(attrs, :current_phase)) do
+           MapHelpers.get_key(attrs, :conversation_key) || execution_request.conversation_key do
       {:ok,
        %__MODULE__{
          run_id: run_id,
@@ -82,7 +79,6 @@ defmodule LemonRouter.Submission do
            normalize_run_process_opts(MapHelpers.get_key(attrs, :run_process_opts)),
          pending_compaction_marker: MapHelpers.get_key(attrs, :pending_compaction_marker),
          meta: normalize_meta(MapHelpers.get_key(attrs, :meta)),
-         current_phase: current_phase,
          request: normalize_request(MapHelpers.get_key(attrs, :request))
        }}
     else
@@ -101,15 +97,6 @@ defmodule LemonRouter.Submission do
     end
   end
 
-  @spec put_phase(t(), RunPhase.t()) :: t()
-  def put_phase(%__MODULE__{} = submission, phase) do
-    if RunPhase.valid?(phase) do
-      %{submission | current_phase: phase}
-    else
-      raise ArgumentError, "invalid run phase: #{inspect(phase)}"
-    end
-  end
-
   defp normalize_run_process_opts(opts) when is_map(opts), do: opts
   defp normalize_run_process_opts(opts) when is_list(opts), do: Map.new(opts)
   defp normalize_run_process_opts(_), do: %{}
@@ -119,10 +106,4 @@ defmodule LemonRouter.Submission do
 
   defp normalize_request(%RunRequest{} = request), do: request
   defp normalize_request(_), do: nil
-
-  defp current_phase(nil), do: {:ok, nil}
-
-  defp current_phase(phase) do
-    if RunPhase.valid?(phase), do: {:ok, phase}, else: {:error, :invalid_phase}
-  end
 end

@@ -1,53 +1,36 @@
 defmodule LemonGateway.Application do
   @moduledoc """
-  OTP application for LemonGateway.
+  OTP application for LemonGateway, an opt-in ingress satellite.
 
-  Starts the execution supervision tree: the singleton executor, execution
-  permits, run supervisors, and the health check server. Gateway settings are
-  read live from `LemonCore.GatewayConfig`; there is no config process.
-
-  Gateway-owned ingress (webhook, SMS, voice) is off by default and
-  starts only when `[gateway.ingress] enabled` is true. See
-  `LemonGateway.IngressSupervisor`.
+  `LemonRouter.RunProcess` owns execution, permits and the executor. Gateway
+  starts its webhook, SMS and voice ingress only when `[gateway.ingress] enabled`
+  is true, along with the voice task supervisor and optional health listener.
+  Otherwise it starts an empty supervisor and opens no listener. Settings are
+  read live through `LemonCore.GatewayConfig`.
   """
 
   use Application
 
   @impl true
   def start(_type, _args) do
-    with :ok <- validate_configured_executor() do
-      children =
-        [
-          # A lost permit authority or registry must stop its Runs before admitting
-          # new work; otherwise a restarted counter could oversubscribe execution.
-          LemonCore.Supervision.subtree(LemonGateway.ExecutionSupervisor, [
-            {Registry, keys: :unique, name: LemonGateway.RunRegistry},
-            LemonGateway.Slots,
-            LemonGateway.RunSupervisor
-          ]),
-          # Bounded owner for voice-call LLM/TTS operations (#588).
-          {LemonCore.TaskSupervisor, name: LemonGateway.TaskSupervisor}
-          # Channels and the control plane are started by their consumers, not
-          # orchestrated as sibling applications by the gateway.
-        ] ++ maybe_health_server_child() ++ maybe_gateway_ingress_children()
+    # Channels and the control plane ask core for transport/config facts rather
+    # than reaching into this app; register ourselves as the implementation.
+    LemonCore.EngineInfoBridge.configure(
+      transport_registry: LemonGateway.TransportRegistry,
+      sms_inbox: LemonGateway.Sms.Inbox
+    )
 
-      # Channels and the control plane ask core for transport/config facts rather
-      # than reaching into this app; register ourselves as the implementation.
-      LemonCore.EngineInfoBridge.configure(
-        transport_registry: LemonGateway.TransportRegistry,
-        sms_inbox: LemonGateway.Sms.Inbox
-      )
+    children =
+      if gateway_ingress_enabled?() do
+        # Bounded owner for voice-call LLM/TTS operations (#588).
+        [{LemonCore.TaskSupervisor, name: LemonGateway.TaskSupervisor}] ++
+          maybe_health_server_child() ++ [LemonGateway.IngressSupervisor]
+      else
+        []
+      end
 
-      # Gateway owns the progress-message index; the store does not know it
-      # exists, so ask it to mirror the table into its read cache.
-      LemonCore.Store.register_cached_table(LemonGateway.ProgressStore.table())
-
-      opts = [strategy: :one_for_one, name: LemonGateway.Supervisor]
-      Supervisor.start_link(children, opts)
-    end
+    Supervisor.start_link(children, strategy: :one_for_one, name: LemonGateway.Supervisor)
   end
-
-  defp validate_configured_executor, do: LemonGateway.Executor.validate_configured()
 
   defp maybe_health_server_child do
     if health_enabled?() do
@@ -72,14 +55,6 @@ defmodule LemonGateway.Application do
 
   defp health_enabled? do
     Application.get_env(:lemon_gateway, :health_enabled, true)
-  end
-
-  defp maybe_gateway_ingress_children do
-    if gateway_ingress_enabled?() do
-      [LemonGateway.IngressSupervisor]
-    else
-      []
-    end
   end
 
   defp gateway_ingress_enabled? do

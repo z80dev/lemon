@@ -59,7 +59,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   alias CodingAgent.StatePaths
   alias LemonAgent.AbortSignal
   alias LemonCore.{Bus, ExecApprovals, ExecutionContext, ToolPolicy}
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
   alias LemonMemory.{ContextScope, Document, Ingest, Project}
 
   @protocol_version 1
@@ -1750,7 +1750,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   @doc false
   @spec execution_request(map(), struct(), String.t()) ::
-          {:ok, ExecutionRequest.t(), map()} | {:error, term()}
+          {:ok, ExecutionCommand.t(), map()} | {:error, term()}
   def execution_request(args, state, invoke_id) when is_map(args) do
     version = value(args, "version")
     prompt = value(args, "prompt")
@@ -1785,7 +1785,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
          {:ok, policy} <- ToolPolicy.restrict(execution_context.tool_policy, requested_policy),
          {:ok, execution_context} <-
            ExecutionContext.validate(%{execution_context | tool_policy: policy}) do
-      request = %ExecutionRequest{
+      request = %ExecutionCommand{
         run_id: run_id,
         session_key: session_key,
         prompt: prompt,
@@ -1851,7 +1851,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   # Only original admitted request ownership can stamp destination-local memory.
   # Provider/completion metadata and MCP configuration are never part of this snapshot.
-  defp memory_snapshot(%ExecutionRequest{} = request) do
+  defp memory_snapshot(%ExecutionCommand{} = request) do
     meta =
       Map.take(
         request.meta || %{},

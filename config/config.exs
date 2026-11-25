@@ -48,14 +48,7 @@ config :coding_agent, :lane_caps, background_exec: 8
 
 config :coding_agent, :async_followups, default_queue_mode: :followup
 
-# The native executor is owned by coding_agent. The gateway looks this up
-# dynamically through LemonGateway.Executor, so this wiring creates no gateway
-# dependency on the agent product.
-config :lemon_gateway, :executor, CodingAgent.Executor
-
-# Composition-root bindings between apps that do not depend on each other.
-# LemonCore.Quality.ArchitecturePolicy lists them so they stay acyclic.
-config :lemon_router, :engine_runtime, LemonGateway.Runtime
+# Opt-in gateway health uses the channel adapter through the composition root.
 config :lemon_gateway, :xmtp_transport_module, LemonChannels.Adapters.Xmtp.Transport
 
 # `lemon-bot` on this machine serves http://127.0.0.1:4100 by default. Trust that one

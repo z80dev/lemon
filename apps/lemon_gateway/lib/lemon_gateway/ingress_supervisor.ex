@@ -2,7 +2,7 @@ defmodule LemonGateway.IngressSupervisor do
   @moduledoc """
   Supervisor for gateway-owned ingress children.
 
-  Default `LemonGateway.Application` startup is execution-only; this supervisor
+  Default `LemonGateway.Application` startup is empty; this supervisor
   starts only when `[gateway.ingress] enabled` is true. Each surface also has
   its own enable flag.
 

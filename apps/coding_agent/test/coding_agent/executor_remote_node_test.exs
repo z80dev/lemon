@@ -4,7 +4,7 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
   alias CodingAgent.Executor
   alias CodingAgent.Executor.RemoteSessionRunner
   alias LemonCore.NodeRegistry
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   setup do
     for node <- NodeRegistry.list() do
@@ -34,7 +34,12 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
     {:ok, run_ref, %{runner_module: RemoteSessionRunner}} =
       Executor.start_run(
         request,
-        %{stream_fn: fn -> :source_only end, api_key: "source-secret", cwd: "/source/default"},
+        %{
+          stream_fn: fn -> :source_only end,
+          api_key: "source-secret",
+          cwd: "/source/default",
+          slot_lender: SourceOnlySlotLender
+        },
         self()
       )
 
@@ -58,6 +63,7 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
     assert payload["meta"]["model"] == "openai:gpt-5"
     refute Map.has_key?(payload, "api_key")
     refute inspect(payload) =~ "source-secret"
+    refute inspect(payload) =~ "SourceOnlySlotLender"
     assert {:ok, _json} = Jason.encode(payload)
 
     assert_receive {:engine_event, ^run_ref,
@@ -99,7 +105,7 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
                meta: %{node: "forged", profile_id: "forged"}
              )
 
-    execution = %ExecutionRequest{
+    execution = %ExecutionCommand{
       run_id: "profile-node-route",
       session_key: canonical.session_key,
       prompt: canonical.prompt,
@@ -146,7 +152,7 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
              })
   end
 
-  test "maps a remote error to a failed gateway completion" do
+  test "maps a remote error to a failed executor completion" do
     assert :ok = NodeRegistry.register("node-1", "newphy", self(), privacy_capabilities())
     assert {:ok, run_ref, _ctx} = Executor.start_run(request(%{node: "newphy"}), %{}, self())
     assert_receive {:node_event, "node.invoke.request", invocation}
@@ -680,7 +686,7 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
     }
 
   defp request(meta) do
-    %ExecutionRequest{
+    %ExecutionCommand{
       run_id: "remote-run-#{System.unique_integer([:positive])}",
       session_key: "agent:oracle:main",
       prompt: "do remote work",

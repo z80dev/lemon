@@ -571,7 +571,7 @@ if you intentionally want to continue an exhausted session.
 
 ## Native Execution and Subagents
 
-Lemon uses its native executor for every top-level TUI and gateway run. Configure
+Lemon uses its native executor for every top-level run. Configure
 its provider, model, and thinking defaults in `[defaults]`; no engine selection
 key is supported.
 
@@ -3374,7 +3374,7 @@ Top-level `[gateway]` keys (defaults from `LemonCore.Config.Gateway`):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `max_concurrent_runs` | `2` | Positive gateway-wide execution permit limit (`LEMON_GATEWAY_MAX_CONCURRENT_RUNS`), owned by `LemonGateway.Slots`. |
+| `max_concurrent_runs` | `2` | Positive global execution permit limit (`LEMON_GATEWAY_MAX_CONCURRENT_RUNS`), enforced by `LemonRouter.Slots` even without gateway ingress. |
 | `default_cwd` | unset | Fallback working directory for unbound chats (`LEMON_GATEWAY_DEFAULT_CWD`). |
 | `auto_resume` | `false` | Resume interrupted sessions on start. |
 | `enable_telegram`, `enable_discord`, `enable_xmtp`, `enable_a2a` | `false` | Enable the named channel (`LEMON_GATEWAY_ENABLE_<ID>` overrides it). |
@@ -3384,25 +3384,24 @@ Top-level `[gateway]` keys (defaults from `LemonCore.Config.Gateway`):
 startup; there is no fallback to 10. Engine-session ownership is always a
 fail-fast claim, not a configurable lock or timeout.
 
-The gateway reads `[gateway]` live from the canonical config; there is no
-second, boot-time copy. A config reload applies `max_concurrent_runs` to the
-running gateway (a lower limit stops new grants until running work drains) and
-is visible to every gateway and channel reader without a restart. A config that
+`[gateway]` is read live from canonical config. On reload, router slots apply
+`max_concurrent_runs` without a restart; lowering the limit stops new grants
+until running work drains below it. A config that
 cannot be loaded at startup fails startup instead of starting with every
 channel disabled. `[gateway.queue]` was never read and has been removed: it is
 ignored with a warning (`lemon config validate`, `lemon doctor`).
 
-This execution cap does not bound queued Runs or coordinator population.
+This execution cap does not bound conversation backlogs or coordinator population.
 Router's `config :lemon_router, run_process_limit: 500` bounds live router
-RunProcesses, including those waiting for gateway permits. It is independent of
+RunProcesses, including those waiting for permits. It is independent of
 `max_concurrent_runs`. See the canonical
 [admission inventory](architecture/admission-gates.md) for every gate and
 saturation behavior.
 
 ## Gateway ingress
 
-Gateway startup runs execution only by default. In the operator's global
-`~/.lemon/config.toml`, set:
+Gateway opens no listeners by default and is not required for native execution.
+In the operator's global `~/.lemon/config.toml`, set:
 
 ```toml
 [gateway.ingress]

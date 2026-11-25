@@ -170,6 +170,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   browser provider; the test-only gateway replacement key is
   `config :lemon_core, :gateway_test_config`; `mix lemon.update` moved to
   `lemon_skills` (#725).
+- **Breaking:** `LemonRouter.RunProcess` is now the only live run owner. It
+  claims the session, takes a router permit, drives `CodingAgent.Executor`
+  directly, and handles run output and termination. Native runs no longer
+  need a separate gateway process or a bus hop per token. `lemon_gateway`
+  starts only opt-in ingress services; `[gateway].max_concurrent_runs` still
+  controls execution capacity. Use `LemonCore.RouterBridge` to submit runs
+  (#728).
 - **Breaking:** `[features] routing_feedback` now defaults to `"off"`; set it to
   `"on"` in the global config to record and use routing history. When enabled,
   history no longer outranks `[defaults] model`: it is consulted only for
@@ -1005,6 +1012,25 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** removed `LemonGateway.Run`, `LemonGateway.Runtime`,
+  `LemonGateway.RunSupervisor`, `LemonGateway.RunRegistry`,
+  `LemonGateway.submit/1`, `LemonGateway.ProgressStore`, and
+  `LemonGateway.Renderers.Basic`. Permits moved from `LemonGateway.Slots` to
+  `LemonRouter.Slots`. `CodingAgent.Executor.Behaviour` and
+  `CodingAgent.Executor.Event` replace `LemonGateway.Executor` and
+  `LemonGateway.Event`; `LemonGateway.Event.Delta` has no replacement.
+  Executors take `LemonCore.ExecutionCommand` instead of
+  `LemonGateway.ExecutionRequest`. Removed `LemonCore.EngineRuntime`,
+  `LemonRouter.EngineRuntimeConfiguration`, `config :lemon_gateway, :executor`,
+  and `config :lemon_router, :engine_runtime` (#728).
+  `TerminalOutbox` delivers the canonical completion once with the committed
+  attempt ID; crash replay retains that identity. Gateway opens no listeners
+  unless the operator enables `[gateway.ingress]`.
+- **Breaking:** the write-only run-phase pipeline: `LemonRouter.PhasePublisher`, the
+  `:run_phase_changed` bus event (`LemonCore.Events.RunPhaseChanged`),
+  `LemonCore.RunPhase`, `LemonCore.RunPhaseGraph`, the router's per-submission phase
+  broadcasts and the gateway's phase tracking. Nothing subscribed to the event, so the
+  control-plane `EventBridge` no longer logs an unmapped-type warning for it (#710).
 - **Breaking:** the disabled-by-default WASM tool stack and the `tool_auth` tool
   are retired (#707). Decision: epic #543 kept comparable surfaces opt-in
   (#598, #600, #604); this one is retired instead because it had no consumer.

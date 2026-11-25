@@ -1,10 +1,11 @@
 defmodule LemonGateway.Health do
   @moduledoc """
-  Health check system for the gateway.
+  Health check system for gateway ingress.
 
-  Runs built-in checks (supervisor, slots, executor, run_supervisor,
-  run_registry) and optional custom checks configured via `:health_checks`
-  application env.
+  Runs built-in checks (supervisor, ingress supervisor, and the XMTP transport
+  when enabled) and optional custom checks configured via `:health_checks`
+  application env. Execution health (permits, run supervisor) is
+  `LemonRouter.Health`'s.
   Returns a structured health status map consumed by `Health.Router`.
   """
 
@@ -35,10 +36,7 @@ defmodule LemonGateway.Health do
   defp built_in_checks do
     checks = [
       {"supervisor", fn -> process_alive_check(LemonGateway.Supervisor) end},
-      {"slots", fn -> slots_check() end},
-      {"executor", fn -> executor_check() end},
-      {"run_supervisor", fn -> dynamic_supervisor_check(LemonGateway.RunSupervisor) end},
-      {"run_registry", fn -> process_alive_check(LemonGateway.RunRegistry) end}
+      {"ingress", fn -> process_alive_check(LemonGateway.IngressSupervisor) end}
     ]
 
     if xmtp_enabled?() do
@@ -114,39 +112,6 @@ defmodule LemonGateway.Health do
       pid when is_pid(pid) -> {:ok, %{pid: inspect(pid)}}
       _ -> {:error, :not_running}
     end
-  end
-
-  defp dynamic_supervisor_check(name) do
-    case Process.whereis(name) do
-      pid when is_pid(pid) ->
-        {:ok, DynamicSupervisor.count_children(name)}
-
-      _ ->
-        {:error, :not_running}
-    end
-  rescue
-    error ->
-      {:error, error}
-  end
-
-  defp slots_check do
-    LemonGateway.Slots.stats()
-  rescue
-    error ->
-      {:error, error}
-  end
-
-  defp executor_check do
-    case LemonGateway.Executor.validate_configured() do
-      :ok ->
-        {:ok, %{module: inspect(Application.get_env(:lemon_gateway, :executor))}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  rescue
-    error ->
-      {:error, error}
   end
 
   defp xmtp_transport_check do

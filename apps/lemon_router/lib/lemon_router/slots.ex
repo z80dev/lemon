@@ -1,6 +1,6 @@
-defmodule LemonGateway.Slots do
+defmodule LemonRouter.Slots do
   @moduledoc """
-  Global FIFO execution permits owned by live Run processes.
+  Global FIFO execution permits owned by live `LemonRouter.RunProcess` owners.
 
   Acquisition is asynchronous: the owner receives `{:slot_granted, permit_ref}`.
   Cancellation removes waiting admission, but a running owner retains its permit
@@ -70,6 +70,29 @@ defmodule LemonGateway.Slots do
 
   def resume(token, :nowait, server) when is_reference(token),
     do: GenServer.cast(server, {:resume, token})
+
+  @doc """
+  Slot lender for the executor's `:slot_lender` run option: lend `run_id`'s
+  permit while the calling tool process blocks, or `:none` when it holds none
+  here or the permit authority is gone.
+  """
+  @spec lend(String.t()) :: {:ok, reference()} | :none
+  def lend(run_id) when is_binary(run_id) do
+    case suspend(run_id) do
+      {:ok, token} -> {:ok, token}
+      {:error, _reason} -> :none
+    end
+  catch
+    :exit, _reason -> :none
+  end
+
+  @doc "Ends a `lend/1` suspension (see `resume/3`); a lost authority is a no-op."
+  @spec return(reference(), :wait | :nowait) :: :ok
+  def return(token, mode) when is_reference(token) and mode in [:wait, :nowait] do
+    resume(token, mode)
+  catch
+    :exit, _reason -> :ok
+  end
 
   def stats(table \\ __MODULE__) do
     case :ets.lookup(table, :stats) do

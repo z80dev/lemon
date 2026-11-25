@@ -58,7 +58,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
 
   # Satellites implement platform contracts and register on the way up, and
   # product entrypoints sit on top of the graph; nothing may depend on them.
-  @satellites [:lemon_cli, :lemon_computer_use, :lemon_evals, :lemon_honcho, :lemon_web]
+  @satellites [:lemon_cli, :lemon_computer_use, :lemon_evals, :lemon_gateway, :lemon_honcho, :lemon_web]
 
   # Contract-test kits back test suites only; a lib edge would ship test code.
   @test_kits [:lemon_platform_test]
@@ -80,10 +80,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_core: [:lemon_ai],
     # Gateway health reports the XMTP channel transport when XMTP is enabled
     # (`config :lemon_gateway, :xmtp_transport_module`).
-    lemon_gateway: [:lemon_channels],
-    # The router submits ExecutionCommands to the gateway's EngineRuntime
-    # implementation (`config :lemon_router, :engine_runtime`).
-    lemon_router: [:lemon_gateway]
+    lemon_gateway: [:lemon_channels]
   }
 
   @doc "Namespace prefixes owned by each umbrella app."

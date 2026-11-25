@@ -129,11 +129,12 @@ defmodule LemonCore.ToolCatalog do
     {"media_transcribe_audio", :exec, [:dangerous, :external], []},
     {"media_analyze_image", :exec, [:dangerous, :external], []},
     {"media_generate_video", :exec, [:dangerous, :external], []},
+    # SMS inbox tools, registered by gateway ingress while its inbox runs.
+    {"sms_get_inbox_number", :exec, [:external], [registry: true]},
+    {"sms_wait_for_code", :exec, [:external], [registry: true]},
+    {"sms_list_messages", :exec, [:external], [registry: true]},
+    {"sms_claim_message", :exec, [:dangerous, :external], [registry: true]},
     # Executor extra tools for channel sessions.
-    {"sms_get_inbox_number", :exec, [:external], []},
-    {"sms_wait_for_code", :exec, [:external], []},
-    {"sms_list_messages", :exec, [:external], []},
-    {"sms_claim_message", :exec, [:dangerous, :external], []},
     {"telegram_send_image", :exec, [:dangerous, :external], []},
     {"discord_send_file", :exec, [:dangerous, :external], []}
   ]

@@ -1,6 +1,6 @@
 defmodule LemonRouter.RunCompletionTest do
   @moduledoc """
-  Router-owned terminalization (pre-executor removal, gateway-down and abort
+  Router-owned terminalization (executor exit and abort
   synthesis) commits the terminal decision before anyone can observe it
   (#74), and never publishes an outcome that contradicts an earlier committed
   decision (#75).
@@ -51,7 +51,8 @@ defmodule LemonRouter.RunCompletionTest do
       run_id: run_id,
       session_key: session_key,
       conversation_key: {:session, session_key},
-      prompt: "hello"
+      prompt: "hello",
+      meta: %{test_pid: self()}
     }
 
     :ok = Bus.subscribe(Bus.run_topic(run_id))
@@ -61,11 +62,12 @@ defmodule LemonRouter.RunCompletionTest do
                execution_request: command,
                run_id: run_id,
                session_key: session_key,
-               submit_to_gateway?: false
+               executor: LemonRouter.TestExecutor
              })
 
     Process.unlink(owner)
     monitor = Process.monitor(owner)
+    assert_receive {:test_executor_started, ^run_id, _runner, ^owner}
     completed = %{ok: true, answer: "committed"}
 
     summary = %{
@@ -160,44 +162,41 @@ defmodule LemonRouter.RunCompletionTest do
   test "an earlier committed decision wins and reaches the owner instead of the synthetic one" do
     {command, synthetic} = synthetic_failure()
     run_id = command.run_id
-    :ok = Bus.subscribe(Bus.run_topic(run_id))
+    :ok = Bus.subscribe(Bus.run_done_topic(run_id))
+    attempt_id = "#{run_id}:committed"
 
     committed = %{
       run_id: run_id,
       session_key: command.session_key,
-      completed: %{run_id: run_id, ok: true, answer: "late gateway completion"}
+      attempt_id: attempt_id,
+      completed: %{run_id: run_id, ok: true, answer: "earlier committed completion"}
     }
 
     assert :ok = RunStore.finalize(run_id, committed)
 
-    owner =
-      Task.async(fn ->
-        :ok = RunCompletion.publish(command, synthetic)
+    contender = Task.async(fn -> LemonCore.TerminalOutbox.publish(run_id, synthetic) end)
 
-        receive do
-          %Event{type: :run_completed} = reconciled -> reconciled
-        after
-          1_000 -> :no_reconciliation
-        end
-      end)
+    assert {:already_finalized,
+            %Event{payload: %RunCompleted{completed: %{ok: true} = completed}}} =
+             RunCompletion.finalize(command, synthetic, [])
 
-    assert %Event{payload: %RunCompleted{completed: %{ok: true} = completed}} =
-             Task.await(owner)
-
-    assert completed.answer == "late gateway completion"
+    assert completed.answer == "earlier committed completion"
 
     assert_receive %Event{
       type: :run_completed,
-      meta: %{event_id: event_id},
+      meta: %{event_id: event_id, attempt_id: ^attempt_id},
       payload: %{completed: %{ok: true}}
     }
 
-    assert event_id == "run:#{byte_size(run_id)}:#{run_id}:#{run_id}:attempt:1:2"
-    refute_receive %Event{type: :run_completed, payload: %{completed: %{ok: false}}}, 200
+    assert event_id == "run:#{byte_size(run_id)}:#{run_id}:#{attempt_id}:2"
+
+    assert :ok = Task.await(contender)
+    assert :ok = RunCompletion.publish(command, synthetic)
+    refute_receive %Event{type: :run_completed}, 200
     assert {:ok, %{summary: ^committed}} = RunStore.fetch(run_id)
   end
 
-  test "a gateway that committed but died before publishing still delivers its committed outcome" do
+  test "an owner adopts a durable outcome before it starts the executor" do
     run_id = "run-completion-#{System.unique_integer([:positive])}"
     session_key = LemonCore.SessionKey.main("completion-test")
 
@@ -206,10 +205,10 @@ defmodule LemonRouter.RunCompletionTest do
       session_key: nil,
       prompt: "test",
       conversation_key: {:session, "completion-test:#{run_id}"},
-      meta: %{}
+      meta: %{test_pid: self()}
     }
 
-    # The gateway committed this decision and died before its broadcast.
+    # The earlier writer committed this decision but did not broadcast it.
     committed = %{
       run_id: run_id,
       session_key: session_key,
@@ -224,16 +223,10 @@ defmodule LemonRouter.RunCompletionTest do
                run_id: run_id,
                session_key: session_key,
                execution_request: command,
-               submit_to_gateway?: false
+               executor: LemonRouter.TestExecutor
              })
 
     ref = Process.monitor(pid)
-
-    :ok =
-      Bus.broadcast(
-        Bus.run_topic(run_id),
-        Event.new(:run_started, %{run_id: run_id}, %{run_id: run_id, session_key: session_key})
-      )
 
     assert_receive %Event{
                      type: :run_completed,
@@ -241,8 +234,9 @@ defmodule LemonRouter.RunCompletionTest do
                    },
                    2_500
 
-    refute_receive %Event{type: :run_completed, payload: %{completed: %{ok: false}}}, 200
     assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2_000
+    refute_receive %Event{type: :run_completed}
+    refute_received {:test_executor_started, ^run_id, _, _}
     assert {:ok, %{summary: ^committed}} = RunStore.fetch(run_id)
   end
 
@@ -254,7 +248,8 @@ defmodule LemonRouter.RunCompletionTest do
       Event.new(
         :run_completed,
         RunCompleted.new(%{
-          completed: Completion.new(%{ok: false, error: {:gateway_run_down, :killed}}),
+          completed:
+            Completion.new(%{ok: false, error: %{type: :executor_down, reason: :killed}}),
           duration_ms: nil
         }),
         %{run_id: run_id, synthetic: true}

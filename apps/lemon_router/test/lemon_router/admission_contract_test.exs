@@ -7,11 +7,11 @@ defmodule LemonRouter.AdmissionContractTest do
     * any number of concurrent submissions of one fixed ID start at most one
       execution, and a different command under that ID is a conflict (#79);
     * cancelling accepted work that is still waiting, either in its
-      conversation backlog or for a gateway execution permit, means it never
+      conversation backlog or for a router execution permit, means it never
       starts later, and a replay of it never resurrects it (#80).
 
   The cancellation proofs run the real router admission path (orchestrator,
-  coordinator, RunProcess) against the real gateway runtime and permit
+  coordinator, RunProcess) against the real router permit
   authority. Only the native executor is replaced, so the test observes every
   execution start.
   """
@@ -19,36 +19,7 @@ defmodule LemonRouter.AdmissionContractTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.{RouterBridge, RunRequest, RunStore, Store}
-  alias LemonGateway.Slots
-  alias LemonRouter.{RunOrchestrator, SessionCoordinator}
-
-  @test_pid_key :admission_contract_test_pid
-
-  defmodule GatedExecutor do
-    @moduledoc false
-    @behaviour LemonGateway.Executor
-
-    @impl true
-    def start_run(request, _opts, sink) do
-      ref = make_ref()
-
-      case Application.get_env(:lemon_router, :admission_contract_test_pid) do
-        pid when is_pid(pid) -> send(pid, {:executor_started, request.run_id, sink, ref})
-        _ -> :ok
-      end
-
-      {:ok, ref, %{}}
-    end
-
-    @impl true
-    def cancel(_context), do: :ok
-
-    @impl true
-    def steer(_context, _text), do: {:error, :unsupported}
-
-    @impl true
-    def redirect(_context, _text), do: {:error, :unsupported}
-  end
+  alias LemonRouter.{RunOrchestrator, RunProcess, SessionCoordinator, Slots, TestExecutor}
 
   defmodule RecordingRunProcess do
     @moduledoc false
@@ -299,15 +270,13 @@ defmodule LemonRouter.AdmissionContractTest do
     setup do
       previous =
         for {app, key} <- [
-              {:lemon_gateway, :executor},
-              {:lemon_router, :engine_runtime},
-              {:lemon_router, @test_pid_key}
+              {:lemon_router, :test_executor},
+              {:lemon_router, :test_executor_owner}
             ],
             do: {app, key, Application.fetch_env(app, key)}
 
-      Application.put_env(:lemon_gateway, :executor, GatedExecutor)
-      Application.put_env(:lemon_router, :engine_runtime, LemonGateway.Runtime)
-      Application.put_env(:lemon_router, @test_pid_key, self())
+      Application.put_env(:lemon_router, :test_executor, TestExecutor)
+      Application.put_env(:lemon_router, :test_executor_owner, self())
 
       on_exit(fn ->
         Enum.each(previous, fn
@@ -329,7 +298,7 @@ defmodule LemonRouter.AdmissionContractTest do
       assert {:ok, ^id} = RouterBridge.submit_run(waiting)
 
       assert eventually(fn ->
-               is_pid(LemonGateway.Runtime.run_pid(id)) and
+               is_pid(RunProcess.whereis(id)) and
                  match?({:ok, %{waitq: waitq}} when waitq >= 1, Slots.stats())
              end)
 
@@ -343,23 +312,22 @@ defmodule LemonRouter.AdmissionContractTest do
                      2_000
 
       assert eventually(fn ->
-               LemonGateway.Runtime.run_pid(id) == nil and not LemonRouter.run_active?(id)
+               RunProcess.whereis(id) == nil and not LemonRouter.run_active?(id)
              end)
 
       release_permits(holders)
-      refute_receive {:executor_started, ^id, _sink, _ref}, 300
+      refute_receive {:test_executor_started, ^id, _sink, _ref}, 300
       assert %{summary: %{completed: %{ok: false}}} = RunStore.get(id)
 
       # A late replay of the cancelled intent is acknowledged, never re-executed.
       assert {:ok, ^id} = RouterBridge.submit_run(waiting)
       assert {:ok, %{run_id: ^id, state: :accepted}} = RouterBridge.run_receipt(id)
-      refute_receive {:executor_started, ^id, _sink, _ref}, 300
+      refute_receive {:test_executor_started, ^id, _sink, _ref}, 300
       refute LemonRouter.run_active?(id)
     end
 
-    for cancel <- [:cast, :tombstone] do
+    for {cancel, complete_first?} <- [cast: false, tombstone: true] do
       test "work cancelled by #{cancel} in its conversation backlog never starts" do
-        cancel = unquote(cancel)
         session_key = "agent:default:test:admission-backlog:#{System.unique_integer([:positive])}"
 
         active = %{
@@ -382,30 +350,15 @@ defmodule LemonRouter.AdmissionContractTest do
         end)
 
         assert {:ok, ^active_id} = RouterBridge.submit_run(active)
-        assert_receive {:executor_started, ^active_id, sink, ref}, 2_000
+        assert_receive {:test_executor_started, ^active_id, runner, _sink}, 2_000
 
         assert {:ok, ^queued_id} = RouterBridge.submit_run(queued)
 
         assert {:ok, %{state: :accepted, effective_mode: :queued}} =
                  RouterBridge.run_receipt(queued_id)
 
-        case cancel do
-          :cast ->
-            assert :ok = RouterBridge.abort_run(queued_id, :user_requested)
-
-          :tombstone ->
-            # The fence is durable but the recipient never got its cancellation cast.
-            assert :ok =
-                     Store.put(
-                       Store,
-                       RunOrchestrator.abort_tombstone_table(),
-                       queued_id,
-                       %{state: "aborted", reason_code: :user_requested},
-                       durable: true
-                     )
-
-            send(sink, {:engine_event, ref, completed_event()})
-        end
+        :ok = cancel_queued(unquote(cancel), queued_id)
+        if unquote(complete_first?), do: TestExecutor.complete(runner, %{answer: "done"})
 
         assert_receive %LemonCore.Event{
                          type: :run_completed,
@@ -414,7 +367,7 @@ defmodule LemonRouter.AdmissionContractTest do
                        },
                        2_000
 
-        if cancel == :cast, do: send(sink, {:engine_event, ref, completed_event()})
+        unless unquote(complete_first?), do: TestExecutor.complete(runner, %{answer: "done"})
 
         assert eventually(fn ->
                  not LemonRouter.run_active?(active_id) and
@@ -424,15 +377,28 @@ defmodule LemonRouter.AdmissionContractTest do
                    )
                end)
 
-        refute_receive {:executor_started, ^queued_id, _sink, _ref}, 300
+        refute_receive {:test_executor_started, ^queued_id, _, _}, 300
         refute LemonRouter.run_active?(queued_id)
         assert %{summary: %{completed: %{ok: false}}} = RunStore.get(queued_id)
 
         assert {:ok, ^queued_id} = RouterBridge.submit_run(queued)
-        refute_receive {:executor_started, ^queued_id, _sink, _ref}, 300
+        refute_receive {:test_executor_started, ^queued_id, _, _}, 300
         refute LemonRouter.run_active?(queued_id)
       end
     end
+  end
+
+  defp cancel_queued(:cast, run_id), do: RouterBridge.abort_run(run_id, :user_requested)
+
+  defp cancel_queued(:tombstone, run_id) do
+    # The fence is durable but the recipient never got its cancellation cast.
+    Store.put(
+      Store,
+      RunOrchestrator.abort_tombstone_table(),
+      run_id,
+      %{state: "aborted", reason_code: :user_requested},
+      durable: true
+    )
   end
 
   defp intent(run_id, prompt) do
@@ -449,9 +415,6 @@ defmodule LemonRouter.AdmissionContractTest do
   end
 
   defp unique_id(label), do: "run_#{label}_#{System.unique_integer([:positive])}"
-
-  defp completed_event,
-    do: LemonGateway.Event.completed(%{engine: "lemon", ok: true, answer: "done"})
 
   # Hold every global execution permit from processes this test owns.
   defp occupy_all_permits do
@@ -482,7 +445,12 @@ defmodule LemonRouter.AdmissionContractTest do
 
   defp cleanup_run(run_id, session_key) do
     # A failed assertion must not leave a run holding the global permit.
-    LemonGateway.Runtime.cancel_by_run_id(run_id, :test_cleanup)
+    if pid = RunProcess.whereis(run_id) do
+      ref = Process.monitor(pid)
+      RunProcess.abort(pid, :test_cleanup)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 2_000
+    end
+
     LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id)
     LemonCore.Store.delete(RunOrchestrator.abort_tombstone_table(), run_id)
     LemonCore.Store.delete(:run_receipts, run_id)

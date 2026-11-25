@@ -12,7 +12,7 @@ defmodule CodingAgent.Executor.RemoteEventCodec do
   import Bitwise, only: [&&&: 2]
 
   alias LemonCore.JSONPayload
-  alias LemonGateway.Event
+  alias CodingAgent.Executor.Event
 
   @max_bytes 64 * 1_024
   @checkpoints %{

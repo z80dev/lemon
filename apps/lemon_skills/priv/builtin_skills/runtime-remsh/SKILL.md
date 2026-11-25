@@ -78,7 +78,7 @@ Application.started_applications() |> Enum.map(&elem(&1, 0))
 If needed, force reload a module:
 
 ```elixir
-r(LemonGateway.Run)
+r(LemonRouter.RunProcess)
 ```
 
 ## Execute arbitrary Elixir code in the live runtime
@@ -86,8 +86,8 @@ r(LemonGateway.Run)
 Interactive (`--remsh`) examples:
 
 ```elixir
-LemonGateway.Config.get()
-LemonGateway.Config.get(:default_engine)
+LemonRouter.Slots.stats()
+DynamicSupervisor.which_children(LemonRouter.RunSupervisor)
 ```
 
 Non-interactive one-off (`--rpc-eval`) example:
@@ -95,7 +95,7 @@ Non-interactive one-off (`--rpc-eval`) example:
 ```bash
 elixir --erl "-dist_listen false -nocookie" --sname lemon_probe \
   -e 'Node.set_cookie(String.to_atom(System.fetch_env!("RELEASE_COOKIE")))' \
-  --rpc-eval "lemon_gateway@$(hostname -s)" "IO.inspect(LemonGateway.Config.get(:default_engine))"
+  --rpc-eval "lemon_gateway@$(hostname -s)" "IO.inspect(LemonRouter.Slots.stats())"
 ```
 
 Long-name one-off:

@@ -33,7 +33,8 @@ defmodule LemonGateway.HealthTest do
 
     Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 1,
-      enable_telegram: false
+      enable_telegram: false,
+      ingress: %{enabled: true}
     })
 
     Application.put_env(:lemon_gateway, :transports, [])
@@ -51,7 +52,22 @@ defmodule LemonGateway.HealthTest do
 
     body = Jason.decode!(conn.resp_body)
     assert body["ok"] == true
-    assert is_list(body["checks"])
+
+    assert Enum.map(body["checks"], &{&1["name"], &1["ok"]}) ==
+             [{"supervisor", true}, {"ingress", true}]
+  end
+
+  test "health reports missing ingress when the satellite is disabled" do
+    Application.stop(:lemon_gateway)
+    Application.put_env(:lemon_core, :gateway_test_config, %{ingress: %{enabled: false}})
+    assert {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+    conn = conn(:get, "/healthz") |> LemonGateway.Health.Router.call([])
+    assert conn.status == 503
+    body = Jason.decode!(conn.resp_body)
+
+    assert Enum.map(body["checks"], &{&1["name"], &1["ok"]}) ==
+             [{"supervisor", true}, {"ingress", false}]
   end
 
   test "custom health checks are supported and can fail readiness" do
@@ -78,6 +94,7 @@ defmodule LemonGateway.HealthTest do
       max_concurrent_runs: 1,
       enable_telegram: false,
       enable_xmtp: true,
+      ingress: %{enabled: true},
       xmtp: %{
         require_live: true,
         mock_mode: true,
@@ -146,6 +163,7 @@ defmodule LemonGateway.HealthTest do
     Application.put_env(:lemon_core, :gateway_test_config, %{
       max_concurrent_runs: 1,
       enable_telegram: false,
+      ingress: %{enabled: true},
       enable_xmtp: true
     })
 

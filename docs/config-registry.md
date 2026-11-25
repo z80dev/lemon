@@ -184,7 +184,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_GATEWAY_ENABLE_TELEGRAM` | boolean | `false` |  | `lemon_channels` | Whether the Telegram transport is enabled. |
 | `LEMON_GATEWAY_ENABLE_WEBHOOK` | boolean | `false` |  | `lemon_core`, `lemon_gateway` | Whether the generic webhook transport is enabled. |
 | `LEMON_GATEWAY_ENABLE_XMTP` | boolean | `false` |  | `lemon_channels` | Whether the XMTP transport is enabled. |
-| `LEMON_GATEWAY_MAX_CONCURRENT_RUNS` | integer | `2` |  | `lemon_core`, `lemon_gateway` | Maximum concurrent agent runs the gateway will schedule. |
+| `LEMON_GATEWAY_MAX_CONCURRENT_RUNS` | integer | `2` |  | `lemon_core`, `lemon_router` | Maximum concurrent agent runs the router will execute. |
 | `LEMON_LOCK_DIR` | string | _(none)_ |  | `lemon_channels` | Directory used for gateway/channel file locks. |
 | `LEMON_TELEGRAM_COMPACTION_CONTEXT_WINDOW` | integer | `400000` |  | `lemon_channels` | Context window size (tokens) used for Telegram compaction triggers. |
 | `LEMON_TELEGRAM_COMPACTION_ENABLED` | boolean | `true` |  | `lemon_channels` | Whether Telegram session transcripts are auto-compacted. |

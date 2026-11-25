@@ -2,7 +2,7 @@ defmodule CodingAgent.Executor.RemotePrivateMetaTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Executor.RemoteRequestCodec
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   @private_fields [
     {:invocation_context_key, "invocationContextKey"},
@@ -262,7 +262,7 @@ defmodule CodingAgent.Executor.RemotePrivateMetaTest do
   defp encode(meta) do
     {:ok, context} = LemonCore.ExecutionContext.new(run_id: "private-boundary")
 
-    RemoteRequestCodec.encode(%ExecutionRequest{
+    RemoteRequestCodec.encode(%ExecutionCommand{
       run_id: "private-boundary",
       session_key: "agent:private:main",
       prompt: "hello",

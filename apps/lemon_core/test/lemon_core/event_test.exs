@@ -5,6 +5,10 @@ defmodule LemonCore.EventTest do
   alias LemonCore.Events.Action
   alias LemonCore.Events.EngineAction
 
+  test "run phase changes are not a registered event type (#710)" do
+    refute LemonCore.Events.registered?(:run_phase_changed)
+  end
+
   describe "now_ms/0" do
     test "returns current time in milliseconds" do
       before = System.system_time(:millisecond)

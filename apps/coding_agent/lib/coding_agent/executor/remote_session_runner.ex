@@ -1,10 +1,10 @@
 defmodule CodingAgent.Executor.RemoteSessionRunner do
   @moduledoc """
-  Bridges one gateway execution to a live named node.
+  Bridges one native execution to a live named node.
 
-  The source owns gateway lifecycle signaling while `LemonCore.NodeRegistry`
+  The run owner handles lifecycle signaling while `LemonCore.NodeRegistry`
   owns targeting, timeout, disconnect, and cancellation of the remote
-  invocation. Live events traverse the normal gateway sink (and therefore the
+  invocation. Live events traverse the normal executor sink (and therefore the
   run/session Bus topics); terminal results remain a separate final outcome.
 
   A session-bound run is dispatched with `session_lifecycle_admission: true`:
@@ -23,7 +23,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
 
   alias CodingAgent.Executor.{RemoteEventCodec, RemoteRequestCodec}
   alias LemonCore.NodeRegistry
-  alias LemonGateway.Event
+  alias CodingAgent.Executor.Event
 
   @engine "lemon"
   @method "coding_agent.run"
@@ -49,7 +49,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-  # A cast: the gateway Run that requests cancellation never waits on this
+  # A cast: the run owner that requests cancellation never waits on this
   # runner; it holds its permit until the runner exits or its drain deadline.
   def cancel(pid, reason \\ :user_requested) do
     GenServer.cast(pid, {:cancel, reason})
@@ -261,7 +261,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
         {:noreply, state}
 
       {:ok, {:engine, %{__event__: :started}}} ->
-        # The controller already emitted the gateway started event on dispatch.
+        # The controller already emitted the executor started event on dispatch.
         {:noreply, state}
 
       {:ok, {:engine, event}} ->

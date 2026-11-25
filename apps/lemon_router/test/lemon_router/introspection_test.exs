@@ -44,19 +44,20 @@ defmodule LemonRouter.IntrospectionTest do
   defp unique_token, do: System.unique_integer([:positive, :monotonic])
 
   describe "RunProcess introspection events" do
-    test "run_started event is recorded during RunProcess init" do
+    test "run_started event is recorded when RunProcess starts execution" do
       token = unique_token()
       run_id = "introspection_run_#{token}"
       session_key = "agent:introspection_test:#{token}:main"
 
-      execution_request = make_test_request(run_id, session_key, %{origin: :test})
+      execution_request =
+        make_test_request(run_id, session_key, %{origin: :test, test_pid: self()})
 
       {:ok, pid} =
         LemonRouter.RunProcess.start_link(
           run_id: run_id,
           session_key: session_key,
           execution_request: execution_request,
-          submit_to_gateway?: false
+          executor: LemonRouter.TestExecutor
         )
 
       started_events = await_events(run_id, :run_started)
@@ -77,25 +78,19 @@ defmodule LemonRouter.IntrospectionTest do
       run_id = "introspection_complete_#{token}"
       session_key = "agent:introspection_complete:#{token}:main"
 
-      execution_request = make_test_request(run_id, session_key, %{origin: :test})
+      execution_request =
+        make_test_request(run_id, session_key, %{origin: :test, test_pid: self()})
 
       {:ok, pid} =
         LemonRouter.RunProcess.start_link(
           run_id: run_id,
           session_key: session_key,
           execution_request: execution_request,
-          submit_to_gateway?: false
+          executor: LemonRouter.TestExecutor
         )
 
-      # Simulate a run_completed event via Bus
-      event =
-        LemonCore.Event.new(
-          :run_completed,
-          %{completed: %{ok: true, answer: "done", error: nil}},
-          %{run_id: run_id, session_key: session_key}
-        )
-
-      LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), event)
+      assert_receive {:test_executor_started, ^run_id, runner, ^pid}
+      LemonRouter.TestExecutor.complete(runner, %{answer: "done"})
 
       # Wait for the event to be processed and process to terminate
       assert_process_dead(pid)
@@ -137,7 +132,7 @@ defmodule LemonRouter.IntrospectionTest do
 
           # Clean up: abort the run and wait until it has left the run
           # supervisor, so later tests never count it as active. The abort
-          # settles only once the gateway reports the cancelled execution.
+          # settles only once the executor reports the cancelled execution.
           assert_eventually(fn -> Registry.lookup(LemonRouter.RunRegistry, run_id) != [] end)
           [{run_pid, _}] = Registry.lookup(LemonRouter.RunRegistry, run_id)
           LemonRouter.RunProcess.abort(run_pid, :test_cleanup)

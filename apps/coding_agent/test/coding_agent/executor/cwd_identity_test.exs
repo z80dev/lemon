@@ -9,7 +9,7 @@ defmodule CodingAgent.Executor.CwdIdentityTest do
 
   alias CodingAgent.Executor.SessionRunner
   alias LemonAi.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, ToolCall, Usage}
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   @moduletag :tmp_dir
 
@@ -497,7 +497,7 @@ defmodule CodingAgent.Executor.CwdIdentityTest do
   end
 
   defp request(cwd, meta, tool_policy \\ nil) do
-    %ExecutionRequest{
+    %ExecutionCommand{
       run_id: "run-cwd-identity-#{System.unique_integer([:positive])}",
       session_key: "test:lemon:#{System.unique_integer([:positive])}",
       prompt: "hello",

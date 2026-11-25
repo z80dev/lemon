@@ -66,10 +66,6 @@ defmodule LemonRouter.RunLifecycleContractTest do
     {:ok, pid} = start_run(run_id, session_key)
     ref = Process.monitor(pid)
 
-    # No executor is bound, so the abort grace synthesizes a failed completion.
-    # The committed outcome must win over that later decision.
-    :ok = RunProcess.abort(pid, :user_requested)
-
     assert_receive %Event{
                      type: :run_completed,
                      meta: %{run_id: ^run_id},
@@ -104,28 +100,20 @@ defmodule LemonRouter.RunLifecycleContractTest do
         peer_id: Integer.to_string(System.unique_integer([:positive]))
       })
 
-    committed = %{ok: true, answer: "final answer", run_id: run_id, session_key: session_key}
-
-    :ok =
-      RunStore.finalize(run_id, %{
-        run_id: run_id,
-        session_key: session_key,
-        completed: committed,
-        engine: "lemon"
-      })
-
     :ok = Bus.subscribe(Bus.run_topic(run_id))
     {:ok, pid} = start_run(run_id, session_key)
     ref = Process.monitor(pid)
+    assert_receive {:test_executor_started, ^run_id, runner, ^pid}
+    LemonRouter.TestExecutor.complete(runner, %{answer: "final answer"})
 
-    :ok =
-      Bus.broadcast(
-        Bus.run_topic(run_id),
-        Event.new(:run_completed, %{completed: committed, duration_ms: 5}, %{
-          run_id: run_id,
-          session_key: session_key
-        })
-      )
+    assert_receive %Event{
+      type: :run_completed,
+      payload: %{
+        completed:
+          %{ok: true, answer: "final answer", run_id: ^run_id, session_key: ^session_key} =
+            committed
+      }
+    }
 
     # Delivery was attempted and rejected, and the run still ends normally.
     assert_receive {:dispatch_rejected, :final_text, ^run_id}, 2_000
@@ -211,14 +199,14 @@ defmodule LemonRouter.RunLifecycleContractTest do
       session_key: session_key,
       prompt: "lifecycle contract",
       conversation_key: {:session, session_key},
-      meta: %{}
+      meta: %{test_pid: self()}
     }
 
     RunProcess.start_link(%{
       run_id: run_id,
       session_key: session_key,
       execution_request: request,
-      submit_to_gateway?: false
+      executor: LemonRouter.TestExecutor
     })
   end
 end

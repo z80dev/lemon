@@ -9,7 +9,7 @@ defmodule CodingAgent.Session.PersistenceTest do
   alias CodingAgent.Session.Persistence
   alias CodingAgent.SessionManager
   alias CodingAgent.Executor
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   test "persist_message appends supported message types" do
     session_manager = SessionManager.new("/tmp")
@@ -276,7 +276,7 @@ defmodule CodingAgent.Session.PersistenceTest do
       }
     ]
 
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "run-123",
       session_key: "agent:test:main",
       prompt: "[task task-123] delegated work completed",

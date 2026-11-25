@@ -8,6 +8,8 @@ defmodule LemonRouter.SupervisionTest do
          LemonRouter.RunRegistry,
          LemonRouter.SessionRegistry,
          LemonRouter.ConversationRegistry,
+         LemonRouter.EngineSessionRegistry,
+         LemonRouter.Slots,
          LemonRouter.RunSupervisor,
          LemonRouter.SessionCoordinatorSupervisor,
          LemonRouter.RunCountTracker,

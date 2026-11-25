@@ -8,7 +8,7 @@ defmodule CodingAgent.ToolPolicyFloorTest do
 
   @moduletag :tmp_dir
 
-  @channel_names ~w(sms_get_inbox_number sms_wait_for_code sms_list_messages sms_claim_message sms_release_inbox send_file)
+  @channel_names ~w(send_file)
   @extension_tool "floor_extension_tool"
   @mcp_tool "floor_mcp_tool"
 
@@ -58,12 +58,7 @@ defmodule CodingAgent.ToolPolicyFloorTest do
     key = "agent:floor:telegram:dm:1"
 
     [
-      CodingAgent.Tools.SendFile.tool(cwd, session_key: key, workspace_dir: cwd),
-      LemonGateway.Tools.SmsGetInboxNumber.tool(cwd, session_key: key),
-      LemonGateway.Tools.SmsWaitForCode.tool(cwd, session_key: key),
-      LemonGateway.Tools.SmsListMessages.tool(cwd, session_key: key),
-      LemonGateway.Tools.SmsClaimMessage.tool(cwd, session_key: key),
-      LemonGateway.Tools.SmsReleaseInbox.tool(cwd, session_key: key)
+      CodingAgent.Tools.SendFile.tool(cwd, session_key: key, workspace_dir: cwd)
     ]
   end
 
@@ -115,7 +110,7 @@ defmodule CodingAgent.ToolPolicyFloorTest do
     }
   end
 
-  test "a read-only executor session receives no channel, SMS or extension tool", ctx do
+  test "a read-only executor session receives no channel or extension tool", ctx do
     for policy <- [ToolPolicy.from_profile(:read_only), ToolPolicy.custom(allow: [])] do
       {_session, names} =
         session_tools(ctx, tool_policy: policy, extra_tools: executor_extras(ctx.tmp_dir))

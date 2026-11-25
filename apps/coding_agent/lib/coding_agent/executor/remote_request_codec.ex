@@ -10,7 +10,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
   """
 
   alias LemonCore.{ExecutionContext, ResumeToken, ToolPolicy}
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   @version 2
 
@@ -83,10 +83,10 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
        else: {:error, {:invalid_request_payload, :invalid_project_memory_capture}}
   end
 
-  @spec encode(ExecutionRequest.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  @spec encode(ExecutionCommand.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def encode(request, opts \\ [])
 
-  def encode(%ExecutionRequest{} = request, opts) do
+  def encode(%ExecutionCommand{} = request, opts) do
     cwd = remote_cwd(request)
     native_images = if is_nil(request.images), do: [], else: request.images
 
@@ -258,7 +258,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
 
   def decode_result(_), do: {:error, :invalid_remote_result}
 
-  defp remote_cwd(%ExecutionRequest{meta: meta, cwd: cwd}) when is_map(meta) do
+  defp remote_cwd(%ExecutionCommand{meta: meta, cwd: cwd}) when is_map(meta) do
     case field(meta, "remote_cwd_explicit") do
       true -> field(meta, "remote_cwd")
       false -> nil
@@ -266,7 +266,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
     end
   end
 
-  defp remote_cwd(%ExecutionRequest{cwd: cwd}), do: cwd
+  defp remote_cwd(%ExecutionCommand{cwd: cwd}), do: cwd
 
   defp encode_resume(%ResumeToken{engine: engine, value: value}),
     do: %{"engine" => engine, "value" => value}

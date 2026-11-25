@@ -2,7 +2,7 @@ defmodule CodingAgent.Executor.RemotePolicyPayloadTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Executor.RemoteRequestCodec
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   test "full native policy arrays cross JSON without truncation" do
     names = Enum.map(1..16_384, &"mcp_tool_#{&1}")
@@ -13,7 +13,7 @@ defmodule CodingAgent.Executor.RemotePolicyPayloadTest do
                tool_policy: %{"require_approval" => names}
              )
 
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "dense-policy",
       session_key: "agent:dense:main",
       prompt: "Use only admitted tools",

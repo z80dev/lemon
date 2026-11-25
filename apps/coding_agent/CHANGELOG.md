@@ -236,6 +236,11 @@
   makes it distinct). `PromptJournal.attach/2` is replaced by
   `PromptJournal.append_reply/3`; version 1 inline snapshots are still read (#676).
 
+- Native executor calls now receive `LemonCore.ExecutionCommand` directly.
+  Local runs borrow execution capacity through the run owner's slot lender;
+  named nodes never receive it. SMS tools are registered by the ingress app
+  rather than attached by the native executor (#728).
+
 ### Removed
 
 - **Breaking:** the WASM sidecar stack (`CodingAgent.Wasm.*`,
@@ -277,6 +282,85 @@
   (`inherited_execution_context/2`, `restrict_to_parent/3`,
   `child_execution_context/3`, `parent_session_state/1`). No aliases remain
   (#634).
+
+### Fixed
+
+- The `agent` tool lends the calling run's permit while a sync run or
+  join waits, bounds joins by `timeout_ms`, applies `BudgetEnforcer` (refusal,
+  child reservation, `meta.delegated_budget` limits enforced by the child
+  session via the new `:delegated_budget` session option, usage charged back)
+  and aborts children when the delegating run aborts or a sync wait times out.
+  New `BudgetEnforcer.delegated_limits/1` and `apply_delegated_limits/2`. (#668)
+- Durable store owners get an ETS heir (`CodingAgent.RuntimeTables`): a crashed
+  owner's restart reclaims the live table, and restart normalization applies only
+  at boot. RunGraph normalizes `:queued` as well as `:running` runs at boot,
+  persists the outcome, and marks stale queued/running runs `:lost`
+  (`:run_graph_stale_ttl_seconds`). **Breaking:** `ProcessStoreServer.transaction/2`
+  is removed; `ProcessStore` mutations send data-only requests and may return
+  `{:error, :store_unavailable}`. `ProcessManager` now starts before
+  `ProcessStoreServer`. (#677)
+- A child whose session shutdown blocks no longer stalls other children's cancel,
+  message or completion. The worker persists its outcome and sends its followup
+  before its owner observes the turn end, and exactly one of worker and owner
+  finalizes each turn. A crashed owner adopts its live worker and session from
+  its journal; a second crash terminalizes the child. Terminal owners exit after
+  `:task_terminal_retention_ms` (default five minutes); broadcasts reserve every
+  recipient's capacity before delivering to any (#634).
+- `CodingAgent.SessionSupervisor.start_session/1` validates options and loads
+  the journal in the caller; `CodingAgent.Session.init/1` only admits journal
+  ownership and the rest of initialization (settings, extensions, WASM, profile
+  MCP) runs in `handle_continue/2`. `start_link/1` and `start_session/1` still
+  return after initialization, with `{:error, reason}` and no linked exit on
+  failure. `RootLifecycle` no longer calls a session while holding its lock,
+  and `SessionMaintenance.plan/1` takes no root lock (#632).
+- `bash` uses the code-mode stream relay only when `CodeMode.enabled?/1`
+  holds; `BashExecutor` returns `{:error, :python3_unavailable}` instead of
+  raising when the relay lacks `python3` (#674).
+- Archive member reads and in-place archive writes bound decompression while
+  inflating (declared size, `:format_max_member_bytes`,
+  `:format_max_decoded_bytes`, `:format_max_archive_entries`) instead of
+  checking sizes after whole-archive extraction (#678).
+- Named-node workers no longer abort runs on event size, delta count or delta
+  rate. `RemoteEventCodec` elides oversized action/checkpoint display data to
+  the event budget and splits deltas at UTF-8 boundaries (`take_delta/2`); the
+  `encode_*` functions take an optional byte budget. Deltas queued behind an
+  outstanding acknowledgement coalesce (bounded by bytes), and the worker
+  reports the run's own completed answer instead of accumulating deltas (#635).
+- `ExecutionNode.ProcessService` retires terminal receipts 24 hours after they
+  finish and counts only unresolved (`running`/`outcome_unknown`) receipts
+  against its 1,000 admission limit (20,000 retained in total), keeping a
+  durable per-node generation floor so superseded generations stay refused.
+  Provable pre-exec failures (the helper now reports `started:false`) are
+  recorded as `failed`. New preview-first `prune/2` removes receipts only with a
+  single-use confirmation token (#679).
+- `ResourceLoader`, `AtImports` and `Rules` read through the new bounded,
+  stat-validated per-session cache `ResourceLoader.SourceReader`, with
+  per-file and total limits (instructions 64/256 KiB, rules 64 KiB per file,
+  128 KiB always-apply, 256 files, 300-character descriptions), truncation
+  markers naming the path, and `[:coding_agent, :prompt_sources, :read |
+  :load]` telemetry. A turn with unchanged files performs no instruction or
+  rule file read (#693).
+- `Workspace.seed_workspace/1` seeds a workspace once (marker
+  `.lemon-workspace-seeded`); sessions call it only when they read bootstrap
+  files and never raise on an unwritable workspace. Deleted templates such as
+  `BOOTSTRAP.md` are not re-created; `ensure_workspace/1` (`mix lemon.workspace
+  init`) still restores missing templates explicitly. Templates are written via
+  temp file and rename (#672).
+- `CodingAgent.Rules` parses frontmatter through `LemonSkills.Frontmatter`
+  instead of `YamlElixir.read_from_string`, which started `:yamerl` on every read
+  inside session init. Repeated keys (also kebab/camel spellings of one key) and
+  frontmatter over 16 KiB reject the rule with a warning; it still shadows
+  lower-priority namesakes (#671).
+- `CodingAgent.Executor.cancel/1` (and the local and remote session runners'
+  `cancel/2`) is an asynchronous cast that returns `:ok` at once, so a gateway
+  Run never blocks on a busy session while cancelling (#643).
+- **Breaking:** removed the compaction-only `CodingAgent.Messages` structs
+  (`UserMessage`, `AssistantMessage`, `ToolResultMessage`, `BashExecutionMessage`,
+  `CompactionSummaryMessage`, `TextContent`, `ImageContent`, `ThinkingContent`,
+  `ToolCall`, `Usage`) and `Messages.get_text/1`, `get_tool_calls/1` and
+  `total_tokens/1`. Use the `LemonAi.Types` structs; `CustomMessage` and
+  `BranchSummaryMessage` remain. `Messages.to_llm/1` reads journal maps through
+  `MessageSerialization.deserialize_message/1` and drops unknown roles.
 
 ### Fixed
 

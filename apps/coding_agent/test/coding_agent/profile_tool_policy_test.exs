@@ -4,7 +4,7 @@ defmodule CodingAgent.ProfileToolPolicyTest do
   alias CodingAgent.Executor.SessionRunner
   alias CodingAgent.{ToolPolicy, ToolRegistry}
   alias LemonCore.ProfileStore
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   @tag :tmp_dir
   test "fresh runtime floor removes a real denied registry tool and retains approval gates", %{
@@ -30,7 +30,7 @@ defmodule CodingAgent.ProfileToolPolicyTest do
                }
              })
 
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "runtime-policy-test",
       prompt: "Check destination policy",
       session_key: "agent:runtime-policy:main",
@@ -105,7 +105,7 @@ defmodule CodingAgent.ProfileToolPolicyTest do
         else: Application.delete_env(:lemon_core, :paths)
     end)
 
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "legacy-policy-test",
       prompt: "Check legacy policy",
       session_key: "agent:legacy:main",
@@ -139,7 +139,7 @@ defmodule CodingAgent.ProfileToolPolicyTest do
         else: Application.delete_env(:lemon_core, :paths)
     end)
 
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "corrupt-policy-test",
       prompt: "Check unavailable policy",
       session_key: "agent:corrupt:main",
