@@ -73,6 +73,11 @@ apps; optional consumers register at runtime. See [README](README.md),
   the preview's exact candidate token and millisecond cutoff. Reset and delete
   require a lifecycle fence generation (`fence_generation:`); prune deletes only
   through the caller's `:fenced_delete`.
+- Every store keyed by a session key belongs to an owner that registers a
+  `SessionLifecycle.Participant` for delete (and reset, when the state would
+  resume the old conversation or carry its authority). Adding session-keyed
+  state means adding it to its owner's participant, with strict snapshot,
+  verified delete and idempotent restore.
 - Distinguish strict persistence failures from absence when enforcing durable
   uniqueness, replay fences or destructive confirmation. A missing-looking
   compatibility read is not evidence that a mutation is safe to repeat.

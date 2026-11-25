@@ -29,6 +29,8 @@ defmodule LemonCore.SessionLifecycle do
     SessionMetadataStore
   }
 
+  alias LemonCore.SessionLifecycle.Participant
+
   @default_limit 100
   @max_limit 500
   @default_history_limit 50
@@ -375,8 +377,9 @@ defmodule LemonCore.SessionLifecycle do
   def maintenance(opts) when is_list(opts), do: LemonCore.SessionMaintenance.maintenance(opts)
 
   @doc """
-  Reset a session's conversation: delete its run history, chat state and
-  session policy, keeping its index and lifecycle metadata.
+  Reset a session's conversation: delete its run history, chat state,
+  session policy and `:reset` participants' state, keeping its index and
+  lifecycle metadata.
 
   Callers must hold the router's admission fence for the session (see
   `LemonRouter.with_session_lifecycle_fence/3`) and pass the fence's
@@ -384,11 +387,13 @@ defmodule LemonCore.SessionLifecycle do
   `{:error, :fence_generation_required}` is returned. This function does not
   check for running work. The generation is checked before the first mutation
   (`{:error, :fence_lost}`, nothing changed) and again before run history is
-  deleted. Chat state and
-  policy are deleted and verified first and are restored on failure, returning
-  a definite `{:error, reason}`. Run history cannot be restored, so it is
-  deleted last and verified by its owner. `{:error, :outcome_unknown}` means
-  the reset may have partially applied: reconcile, never retry automatically.
+  deleted. Chat state, policy and every `:reset` participant (see
+  `LemonCore.SessionLifecycle.Participant`, e.g. session-scope exec-approval
+  grants) are deleted and verified first and are restored on failure,
+  returning a definite `{:error, reason}`. Run history cannot be restored, so
+  it is deleted last and verified by its owner. `{:error, :outcome_unknown}`
+  means the reset may have partially applied: reconcile, never retry
+  automatically.
   """
   @spec reset(String.t(), keyword()) ::
           {:ok, %{session_key: String.t(), verified: true}} | {:error, term()}
@@ -398,10 +403,12 @@ defmodule LemonCore.SessionLifecycle do
     with :ok <- fence_held(session_key, opts),
          {:ok, chat} <- strict_fetch(ChatStateStore.fetch(session_key)),
          {:ok, policy} <- strict_fetch(PolicyStore.fetch_session(session_key)),
-         snapshots = %{chat: chat, policy: policy, metadata: nil},
+         {:ok, participants} <- Participant.snapshot_all(session_key, :reset),
+         snapshots = %{chat: chat, policy: policy, metadata: nil, participants: participants},
          :ok <- reset_ancillary(session_key, snapshots),
          :ok <- fence_still_held(session_key, opts),
-         :ok <- reset_history(session_key) do
+         :ok <- reset_history(session_key),
+         :ok <- commit_participants(session_key, participants) do
       {:ok, %{session_key: session_key, verified: true}}
     else
       {:error, :fence_lost_mid_operation} -> {:error, :outcome_unknown}
@@ -442,13 +449,9 @@ defmodule LemonCore.SessionLifecycle do
   defp reset_ancillary(session_key, snapshots) do
     result =
       with :ok <- normalize_delete_result(ChatStateStore.delete(session_key)),
-           :ok <- normalize_delete_result(PolicyStore.delete_session(session_key)) do
-        with {:ok, nil} <- ChatStateStore.fetch(session_key),
-             {:ok, nil} <- PolicyStore.fetch_session(session_key) do
-          :ok
-        else
-          _remaining_or_unreadable -> {:error, :ancillary_deletion_not_verified}
-        end
+           :ok <- normalize_delete_result(PolicyStore.delete_session(session_key)),
+           :ok <- verify_reset_ancillary(session_key) do
+        Participant.delete_all(session_key, snapshots.participants)
       end
 
     with {:error, reason} <- result do
@@ -456,6 +459,24 @@ defmodule LemonCore.SessionLifecycle do
         :ok -> {:error, reason}
         {:error, _} -> {:error, :outcome_unknown}
       end
+    end
+  end
+
+  defp verify_reset_ancillary(session_key) do
+    with {:ok, nil} <- ChatStateStore.fetch(session_key),
+         {:ok, nil} <- PolicyStore.fetch_session(session_key) do
+      :ok
+    else
+      _remaining_or_unreadable -> {:error, :ancillary_deletion_not_verified}
+    end
+  end
+
+  # Participants staged their deletion before the canonical commit; discarding
+  # the staged data can no longer be undone or reported as a definite failure.
+  defp commit_participants(session_key, participants) do
+    case Participant.commit_all(session_key, participants) do
+      :ok -> :ok
+      {:error, _} -> {:error, :outcome_unknown}
     end
   end
 
@@ -471,14 +492,24 @@ defmodule LemonCore.SessionLifecycle do
   end
 
   @doc """
-  Delete core-owned state and release only the deleted session incarnation's identity.
+  Delete a session and every piece of session-keyed state, then release only
+  the deleted session incarnation's identity.
+
+  Besides chat state, policy, lifecycle metadata, the session index and run
+  history, every participant registered for `:delete` (see
+  `LemonCore.SessionLifecycle.Participant`: memory documents, goals, channel
+  indexes, web workspace, native journals, model pins, approval grants, …)
+  is snapshotted strictly before the first mutation, deleted and verified
+  before the canonical commit. `verified: true` means every one of them
+  verified its deletion.
 
   Callers must hold the router's admission fence for the session (see
   `LemonRouter.with_session_lifecycle_fence/3`) and pass the fence's
   `:fence_generation`, which is checked before the first mutation and again
   before the canonical commit; without it nothing is changed and
-  `{:error, :fence_generation_required}` is returned. A failure before the
-  canonical commit restores chat state, policy and metadata and returns a
+  `{:error, :fence_generation_required}` is returned. An unreadable store
+  returns an error before any mutation. A failure before the canonical commit
+  restores chat state, policy, metadata and every participant and returns a
   definite `{:error, reason}`. A failure after it, a lost fence mid-operation,
   or a failed restore, returns `{:error, :outcome_unknown}`: reconcile, never
   retry automatically.
@@ -500,17 +531,22 @@ defmodule LemonCore.SessionLifecycle do
     # delete before any mutation rather than be recorded as absent and lost.
     with :ok <- fence_held(session_key, opts),
          {:ok, snapshots} <- ancillary_snapshots(session_key),
-         :ok <- delete_guard(snapshots.metadata, opts) do
+         :ok <- delete_guard(snapshots.metadata, opts),
+         {:ok, participants} <- Participant.snapshot_all(session_key, :delete) do
+      snapshots = Map.put(snapshots, :participants, participants)
+
       result =
         with :ok <- normalize_delete_result(ChatStateStore.delete(session_key)),
              :ok <- normalize_delete_result(PolicyStore.delete_session(session_key)),
              :ok <- normalize_delete_result(SessionMetadataStore.delete(session_key)),
              :ok <- verify_ancillary_deleted(session_key),
+             :ok <- Participant.delete_all(session_key, participants),
              :ok <- fence_still_held(session_key, opts),
              :ok <- normalize_delete_result(run_delete_fun.(session_key)) do
           # The canonical commit was accepted: any later failure leaves it applied.
           with :ok <- canonical_verify_fun.(session_key),
-               :ok <- release_agent_identity(session_key, incarnation) do
+               :ok <- release_agent_identity(session_key, incarnation),
+               :ok <- Participant.commit_all(session_key, participants) do
             {:ok, %{session_key: session_key, existed: existed, verified: true}}
           else
             _ -> {:error, :outcome_unknown}
@@ -1177,6 +1213,7 @@ defmodule LemonCore.SessionLifecycle do
 
   defp restore_ancillary_state(session_key, snapshots) do
     results = [
+      Participant.restore_all(session_key, snapshots.participants),
       if(snapshots.chat, do: ChatStateStore.put(session_key, snapshots.chat), else: :ok),
       if(snapshots.policy, do: PolicyStore.put_session(session_key, snapshots.policy), else: :ok),
       if(snapshots.metadata, do: SessionMetadataStore.restore(snapshots.metadata), else: :ok)

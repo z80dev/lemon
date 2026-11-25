@@ -339,6 +339,11 @@ defmodule LemonAgent.Workspace.GoalStore do
     end
   end
 
+  @doc false
+  # The goal row of a session, for `LemonAgent.SessionParticipant`.
+  @spec lifecycle_tables() :: [atom()]
+  def lifecycle_tables, do: [@table]
+
   @spec clear(binary(), keyword()) :: :ok | {:error, term()}
   def clear(session_key, opts \\ []) when is_binary(session_key),
     do: clear(session_key, opts, @cas_attempts)

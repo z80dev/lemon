@@ -8,6 +8,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking:** `LemonMemory.Store.delete_by_session/1,2` is synchronous and
+  transactional and returns `:ok | {:error, :memory_unavailable}` (it was a
+  cast). New `fetch_session_documents/2` (strict) and `restore_documents/2`
+  back `LemonMemory.SessionParticipant`, which deletes a session's documents
+  when the session is deleted (#692).
 - **Breaking:** `LemonMemory.Provider` is write-only: the `search/2` callback, `Providers.search/2` and `SessionSearch.search/2` are removed. `Project.search_history/4` also serves legacy contexts (no ownership claim), filtering owner, home, history kind and repository in SQL before the limit; unproven or partial claims stay `{:error, :unproven_context}` (#656).
 - Remove unused `ContextScope.private_metadata/1` and atom-key provider specifications' unused label field.
 - Consolidate byte-budget text clipping while preserving session-search grapheme boundaries.

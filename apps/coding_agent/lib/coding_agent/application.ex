@@ -97,6 +97,13 @@ defmodule CodingAgent.Application do
       {:ok, _supervisor} = ok ->
         CodingAgent.Search.Registry.init()
         register_control_plane_provider()
+
+        :ok =
+          LemonCore.SessionLifecycle.Participant.register(
+            :native_sessions,
+            CodingAgent.SessionParticipant
+          )
+
         maybe_start_primary_session()
         ok
 

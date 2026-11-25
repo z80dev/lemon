@@ -114,6 +114,20 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonCore.SessionLifecycle.Participant`: a behaviour (`snapshot/2`,
+  `delete/3`, `verify_deleted/3`, `restore/3`, optional `commit/3`) and
+  `register/3` registry through which owning apps take part in
+  `SessionLifecycle.delete/2` and `reset/2`. Delete reports `verified: true`
+  only when every registered participant verified; a participant whose store
+  is unreadable stops the operation before any mutation
+  (`{:error, {:participant_unavailable, name}}`), and a failed delete or
+  verification restores every participant and the core stores
+  (`{:error, {:participant_delete_failed, name}}`). Session-scoped exec-approval
+  grants are a built-in participant of delete and reset.
+  `LemonCore.SessionLifecycle.StoreRows` covers owners whose state is generic
+  Store rows; `ExecApprovalStore.fetch_session_grants/1`,
+  `delete_session_grant/1` and `restore_session_grant/2` are new (#692).
+
 - `LemonCore.Service` supervises an `omp-broker` role: `omp auth-broker serve
   --bind 127.0.0.1:8765` with omp's config-root selectors forwarded and broker
   client settings never forwarded, ready when the broker's health probe answers

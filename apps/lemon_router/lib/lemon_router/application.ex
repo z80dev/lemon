@@ -61,6 +61,12 @@ defmodule LemonRouter.Application do
         configure_router_bridge()
         :ok = LemonCore.AgentMessaging.configure(LemonRouter.AgentMessaging)
         :ok = LemonCore.Drain.register(:router, LemonRouter.RestartCarryover, order: 50)
+
+        :ok =
+          LemonCore.SessionLifecycle.Participant.register(:router, LemonRouter.SessionParticipant,
+            operations: [:delete, :reset]
+          )
+
         {:ok, pid}
 
       other ->

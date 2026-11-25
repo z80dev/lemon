@@ -89,6 +89,35 @@ defmodule LemonCore.ExecApprovalStore do
   @spec list_session_policies() :: list()
   def list_session_policies, do: Store.list(@session_policy_table)
 
+  @doc """
+  Strictly read every session-scope grant of `session_key`, including grants
+  isolated by an invocation context of that session.
+  """
+  @spec fetch_session_grants(binary()) :: {:ok, [{term(), map()}]} | {:error, :store_unavailable}
+  def fetch_session_grants(session_key) when is_binary(session_key) do
+    with {:ok, entries} <- Store.fetch_all(@session_policy_table) do
+      {:ok, Enum.filter(entries, fn {key, _grant} -> session_grant_key?(key, session_key) end)}
+    end
+  end
+
+  @doc "Delete one session-scope grant by its exact policy key."
+  @spec delete_session_grant(term()) :: :ok | {:error, term()}
+  def delete_session_grant(key), do: Store.delete(@session_policy_table, key)
+
+  @doc "Write back one session-scope grant read by `fetch_session_grants/1`."
+  @spec restore_session_grant(term(), map()) :: :ok | {:error, term()}
+  def restore_session_grant(key, grant), do: Store.put(@session_policy_table, key, grant)
+
+  defp session_grant_key?({session_key, _tool, _hash}, session_key), do: true
+
+  defp session_grant_key?(
+         {{:invocation_context, session_key, _context}, _tool, _hash},
+         session_key
+       ),
+       do: true
+
+  defp session_grant_key?(_key, _session_key), do: false
+
   @spec get_node_policy(binary(), term(), term()) :: map() | nil
   def get_node_policy(node_id, tool, action_hash),
     do: Store.get(@node_policy_table, {node_id, tool, action_hash})

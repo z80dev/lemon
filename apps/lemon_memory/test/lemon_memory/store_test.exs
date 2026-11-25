@@ -275,22 +275,34 @@ defmodule LemonMemory.StoreTest do
     refute Enum.any?(results, &(&1.doc_id == other_doc.doc_id))
   end
 
-  test "delete_by_session removes matching documents", %{store_pid: pid} do
+  test "delete_by_session synchronously removes the session's documents and search rows",
+       %{store_pid: pid} do
     session = "agent:del_test:main"
-    doc = make_doc(session_key: session)
-    Store.put(pid, doc)
+    doc = make_doc(session_key: session, prompt: "quixotic lighthouse")
+    other = make_doc(session_key: "agent:del_keep:main", prompt: "quixotic harbor")
+    assert :ok = Store.put_sync(pid, doc)
+    assert :ok = Store.put_sync(pid, other)
+    assert {:ok, [%Document{doc_id: doc_id}]} = Store.fetch_session_documents(pid, session)
+    assert doc_id == doc.doc_id
 
-    assert eventually(fn ->
-             results = Store.get_by_session(pid, session, limit: 10)
-             Enum.any?(results, &(&1.doc_id == doc.doc_id))
-           end)
+    assert :ok = Store.delete_by_session(pid, session)
 
-    Store.delete_by_session(pid, session)
+    assert Store.get_by_session(pid, session, limit: 10) == []
+    assert {:ok, []} = Store.fetch_session_documents(pid, session)
+    assert [%Document{doc_id: kept}] = Store.search(pid, "quixotic", scope: :all, limit: 10)
+    assert kept == other.doc_id
 
-    assert eventually(fn ->
-             results = Store.get_by_session(pid, session, limit: 10)
-             Enum.empty?(results)
-           end)
+    assert :ok = Store.restore_documents(pid, [doc])
+    assert {:ok, [%Document{}]} = Store.fetch_session_documents(pid, session)
+    assert length(Store.search(pid, "quixotic", scope: :all, limit: 10)) == 2
+  end
+
+  test "session operations report an unavailable store as an error" do
+    dead = spawn(fn -> :ok end)
+    Process.sleep(10)
+    assert {:error, :memory_unavailable} = Store.delete_by_session(dead, "agent:x:main")
+    assert {:error, :memory_unavailable} = Store.fetch_session_documents(dead, "agent:x:main")
+    assert {:error, :memory_unavailable} = Store.restore_documents(dead, [])
   end
 
   test "stats returns total count", %{store_pid: pid} do
