@@ -1,4 +1,4 @@
-defmodule LemonCore.Context do
+defmodule LemonSkills.Context do
   @moduledoc """
   Canonical, client-independent context-reference preview and resolution.
 
@@ -8,7 +8,7 @@ defmodule LemonCore.Context do
   traversal and symlinks, and never use a shell. `@git-diff` runs through
   `LemonCore.SafeGit`, so the repository's configuration cannot make it run a
   program (no external diff, textconv, filter or fsmonitor). Document bytes are
-  delegated to `LemonCore.Context.Document`, which sniffs PDF, DOCX, XLSX,
+  delegated to `LemonSkills.Context.Document`, which sniffs PDF, DOCX, XLSX,
   PPTX, ipynb, and plain text.
 
   `preview/2` performs the same bounded selection as `resolve/2` but removes
@@ -16,7 +16,7 @@ defmodule LemonCore.Context do
   and item counts, redaction state, and structured omissions.
   """
 
-  alias LemonCore.Context.{Document, URLFetcher}
+  alias LemonSkills.Context.{Document, URLFetcher}
   alias LemonCore.{SafeGit, SessionLifecycle}
 
   @version 1

@@ -17,6 +17,7 @@ Usage: lemon-bot [--choose-lemon] [--no-open] | --version | --help
        lemon-bot setup [--print-origin] [--same-machine]
        lemon-bot connect iphone --backend ORIGIN [--origin HTTPS_ORIGIN]
        lemon-bot readdress --status [--json] | --all [--json]
+       lemon-bot https enable --tailscale | --url HTTPS_ORIGIN | status | disable
 
 In a terminal, plain lemon-bot sets up background services, enrolls this machine,
 opens the web app already signed in (see open), and exits. --choose-lemon asks
@@ -42,6 +43,13 @@ development/release smoke, not physical-phone readiness.
 readdress --status reads saved per-Bot admission state without signing in.
 --all reports owner-only browser actions; it never sends readdress mutations.
 --json emits one bounded, sanitized object; pending/unknown work is read-only.
+
+https gives this machine's Bot an HTTPS address: --tailscale adds a tailnet-only
+Tailscale Serve route, --url registers your own reverse proxy's origin. It
+updates the controller callback allowlists in ~/.lemon/env and this backend's
+first-party MCP approval, restarts the controller and backend through the
+installed lemon launcher and verifies them. disable reverts only what enable
+changed; status is read-only.
 Environment: LEMON_BOT_CONTROL_URL, LEMON_BOT_OPERATOR_TOKEN, LEMON_BOT_PUBLIC_URL,
 LEMON_BOT_DATA_DIR, LEMON_BOT_HOST, LEMON_BOT_PORT, LEMON_BOT_RUNTIME_LAUNCHER.
 Never share the controller operator token with clients.
@@ -57,10 +65,10 @@ Never share the controller operator token with clients.
   // Native SQLite/private-state imports must stay lazy so help/version remain portable.
   const { runReaddressCli } = await import('./cli/readdress');
   process.exitCode = await runReaddressCli(args.slice(1));
-} else if (args[0] === 'https-policy') {
+} else if (args[0] === 'https') {
   // Transitive native SQLite/platform modules cannot load on every help/version host.
-  const { runHttpsPolicyCli } = await import('./cli/https-policy');
-  process.exitCode = await runHttpsPolicyCli(args.slice(1));
+  const { runHttpsCli } = await import('./cli/https');
+  process.exitCode = await runHttpsCli(args.slice(1));
 } else if (args[0] === 'setup') {
   // Private-state and platform imports must remain lazy for help/version.
   const { runSetupCli } = await import('./setup-cli');

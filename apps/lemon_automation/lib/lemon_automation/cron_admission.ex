@@ -395,7 +395,14 @@ defmodule LemonAutomation.CronAdmission do
     end
   end
 
-  defp allowed_origins do
+  @doc """
+  The effective callback-origin allowlist, exactly as admission enforces it.
+
+  Diagnostics read it through `:doctor_runtime` (`:cron_admission`) instead of
+  reimplementing the environment and configuration fallback.
+  """
+  @spec allowed_origins() :: [String.t()]
+  def allowed_origins do
     case Env.get(:lemon_cron_admission_allowed_origins) do
       nil ->
         case System.get_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS") do

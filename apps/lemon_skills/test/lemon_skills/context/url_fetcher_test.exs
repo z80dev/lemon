@@ -1,7 +1,7 @@
-defmodule LemonCore.Context.URLFetcherTest do
+defmodule LemonSkills.Context.URLFetcherTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.Context.URLFetcher
+  alias LemonSkills.Context.URLFetcher
 
   @public {93, 184, 216, 34}
 

@@ -12,6 +12,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   only owner, the control plane's OpenAI-compatible API, was removed (#711).
 - **Breaking:** the `controller` and `hybrid` ids from
   `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
+- **Breaking:** `LemonCore.Context`, `LemonCore.Context.Document` and
+  `LemonCore.Context.URLFetcher` no longer ship in `lemon_core`. Their only
+  consumers were the `lemon context` command and `LemonSkills.Learn`, so they
+  moved unchanged to `lemon_skills` as `LemonSkills.Context`,
+  `LemonSkills.Context.Document` and `LemonSkills.Context.URLFetcher`. URL
+  references still fetch through `LemonCore.Net.HTTP` (#724).
 
 ### Changed
 

@@ -1,4 +1,4 @@
-defmodule LemonCore.Context.URLFetcher do
+defmodule LemonSkills.Context.URLFetcher do
   @moduledoc """
   Bounded public-HTTP fetches for context references.
 

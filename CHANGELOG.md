@@ -167,6 +167,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   names `LemonAutomation.GoalStore`/`KanbanStore`; the
   `:goal_loop_module`, `:kanban_dispatcher_module` and `:reminder_cron_module`
   lemon_channels settings are gone (#721, #729).
+- Bot HTTPS moved from the core CLI to the Lemon Bot CLI: run
+  `lemon-bot https enable --tailscale|--url HTTPS_ORIGIN`, `status` and
+  `disable` instead of `lemon bot https`. Existing `~/.lemon/bot-https.json`
+  receipts keep working. A failure after settings changed now says so instead of
+  reporting "locked; no concurrent changes". `lemon setup` no longer offers an
+  HTTPS step. `lemon doctor`'s read-only `bot.admission_origins` check also uses
+  the origin `lemon-bot https` published and the allowlists the admission owners
+  actually enforce (#723).
+- `LemonCore.Context` moved to `lemon_skills` as `LemonSkills.Context`; it no
+  longer ships in the published `lemon_core` package. `lemon context` and
+  `lemon learn` are unchanged (#724).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
@@ -879,6 +890,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   known external client used them and support policy made no compatibility
   commitment. Editors use `lemon acp` over the unchanged loopback `/acp/ws`;
   off-loopback peers reach only `/ws` and `/healthz` (#711).
+- **Breaking:** `lemon bot https`; use `lemon-bot https` (#723).
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.

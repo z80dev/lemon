@@ -4,11 +4,6 @@
 
 Foundational shared library for the Lemon umbrella project. All other apps depend on `lemon_core` -- it provides configuration management, configured-implementation contract validation, encrypted secrets, pluggable storage, an event bus, live named-node invocation routing, session routing primitives, idempotency, execution approvals, telemetry, and quality tooling.
 
-`LemonCore.Context` is the shared versioned preview/resolve boundary for
-root-confined file and folder references, shell-free git diffs, SSRF-guarded
-public URLs, redacted session exports, and format-sniffed document text. See
-[`docs/user-guide/context-references.md`](../../docs/user-guide/context-references.md).
-
 This app has **zero dependencies on other umbrella apps** and must remain that way.
 
 `LemonCore.Rpc.Client` is the shared `gen_statem` for RPC request ownership:

@@ -1,7 +1,7 @@
-defmodule LemonCore.Context.DocumentTest do
+defmodule LemonSkills.Context.DocumentTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.Context.Document
+  alias LemonSkills.Context.Document
 
   test "sniffs and extracts DOCX text independent of extension" do
     binary =

@@ -103,6 +103,14 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Changed
 
+- **Breaking:** `lemon bot https` and the setup wizard's Lemon Bot HTTPS step are
+  removed; Bot HTTPS is `lemon-bot https enable|status|disable` in the Lemon Bot
+  CLI. `LemonCli.Doctor.BotAdmission` stays read-only: it checks the explicit
+  origin, `LEMON_BOT_PUBLIC_URL` or the origin published in
+  `~/.lemon/bot-https.json`, and reads the effective allowlists from
+  `LemonRouter.NativeFollowupAdmission.allowed_origins/0` and
+  `LemonAutomation.CronAdmission.allowed_origins/0` through `:doctor_runtime`
+  instead of their application configuration (#723).
 - Consolidate onboarding prompt handling, runtime port resolution, and setup/doctor
   provider recovery text. Doctor providers now register live checks without an
   empty offline adapter.
