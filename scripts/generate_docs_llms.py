@@ -55,7 +55,6 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("tools/media.md", "Media generation and artifact workflows."),
             ("tools/lsp.md", "Language-server diagnostics."),
             ("tools/acp.md", "ACP-shaped editor integration."),
-            ("tools/openai-compatible-api.md", "OpenAI-compatible API surface."),
             ("extensions.md", "MCP, native, and WASM extension boundaries."),
             ("skills.md", "Skill format, discovery, trust, and lifecycle reference."),
         ),

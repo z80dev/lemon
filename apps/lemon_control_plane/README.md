@@ -22,19 +22,10 @@ Listeners default to `127.0.0.1`: control plane **4040**, node gateway **4044**,
 and LemonWeb **4080**. Use `LEMON_CONTROL_PLANE_BIND_IP` to opt into a different
 main bind; a non-loopback main bind requires an operator token, rejects tokenless
 compatibility, and serves only `GET /ws` and `GET /healthz` to remote peers.
-OpenAI/ACP HTTP APIs require bearer authentication even locally (their dedicated
-token, or the operator token when unset). Remote HTTP additionally requires
-`LEMON_CONTROL_PLANE_REMOTE_HTTP=openai,acp` and each enabled API's dedicated token.
-Dedicated tokens are resolved through `LemonCore.Env`: `LEMON_OPENAI_COMPAT_API_TOKEN`
-(with `LEMON_OPENAI_COMPAT_TOKEN` as an alias) and `LEMON_ACP_API_TOKEN`.
-Each dedicated token is its own principal with read/write scopes only
-(`Authorize.authenticate_api/3`): no admin, approvals or pairing. The OpenAI
-token sees only its own runs, session namespace and workspace (see
-`docs/tools/openai-compatible-api.md`). The ACP token's `POST /acp` sessions are
-recorded with their owner: it can only load, resume, fork, prompt, configure,
-list or close sessions it created, `session/new` `cwd` must resolve inside the
-API workspace (`LemonControlPlane.APIWorkspace`), and it cannot set
-`approval=auto` (`/acp/ws` requires the operator approvals scope).
+The loopback-only `GET /acp/ws` serves `lemon acp` and requires the operator
+token (or explicit tokenless loopback compatibility) with the read, write,
+approvals and content scopes. There is no OpenAI-compatible `/v1` API and no
+single-shot `POST /acp` endpoint.
 RPC image arrays are validated directly by `LemonAi.ImageInputs`; usage records
 and summaries are owned by `LemonCore.UsageStore`.
 
@@ -1617,14 +1608,10 @@ See [attaching a bot machine](../../docs/user-guide/attaching-a-bot-machine.md).
 ## Other HTTP surfaces
 
 - `/healthz`: local service health; it does not prove a provider-backed turn.
-- `/v1/*`: [OpenAI-compatible preview](../../docs/tools/openai-compatible-api.md),
-  including model metadata, chat/responses, retrieval and cancellation. Configure
-  `LEMON_OPENAI_COMPAT_API_TOKEN` (or `LEMON_OPENAI_COMPAT_TOKEN`) for bearer/
-  `x-api-key` auth. Generation reuses the router; queued/wait/SSE modes and safe
-  image input limits are described in the linked guide.
-- `/acp`: [ACP editor adapter](../../docs/tools/acp.md); configure
-  `LEMON_ACP_API_TOKEN` for HTTP bearer/`x-api-key` auth. The guide also describes
-  the line-oriented stdio bridge and client filesystem/permission callbacks.
+- `/acp/ws`: loopback-only duplex transport for the
+  [ACP editor adapter](../../docs/tools/acp.md) (`lemon acp`), authenticated with
+  the operator token. The guide describes the stdio bridge and client
+  filesystem/permission callbacks.
 - Optional [A2A](../../docs/user-guide/a2a-peers.md) uses a separate listener
   (default 9901) enabled by `[gateway] enable_a2a = true`. Peers are independent
   principals. Task access is peer-scoped and message IDs durably replay the

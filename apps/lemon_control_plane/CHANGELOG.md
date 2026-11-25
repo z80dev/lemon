@@ -4,6 +4,16 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** the OpenAI-compatible `/v1` HTTP API, the single-shot
+  `POST /acp` endpoint, their dedicated API-token principals
+  (`Authorize.authenticate_api/3`, `LEMON_ACP_API_TOKEN` and the OpenAI-compat
+  token and image-fetch variables), the `LEMON_CONTROL_PLANE_REMOTE_HTTP`
+  opt-in and the ACP API-workspace confinement they required. The loopback
+  `/acp/ws` transport behind `lemon acp` is unchanged; remote peers reach only
+  `/ws` and `/healthz` (#711).
+
 ### Fixed
 
 - `agent.wait` reports `UNAVAILABLE` when the run store cannot be read instead

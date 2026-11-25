@@ -43,21 +43,20 @@ cryptographic, network, and boundary machinery those docs assume.
 
 **Breaking change:** LAN clients that relied on wildcard binds must explicitly
 opt in and restart. The [configuration reference](../config.md#listener-exposure-breaking-default-change)
-owns bind variables and remote HTTP API opt-ins; the
+owns bind variables; the
 [November upgrade notes](../release/upgrade-2026-11.md) cover migration.
 
-Off-loopback control-plane peers get only `GET /ws` and `GET /healthz` by
-default. OpenAI-compatible and ACP HTTP endpoints need explicit remote opt-in
-and their dedicated API tokens. Main and LemonWeb non-loopback binds require
-an operator token and reject tokenless-loopback compatibility. Put TLS in front
-of browser login. Lemon Bot's separate backend requires a configured public
-origin and HTTPS, or an explicitly trusted encrypted overlay, for remote use.
+Off-loopback control-plane peers get only `GET /ws` and `GET /healthz`; Lemon
+serves no OpenAI-compatible or single-shot ACP HTTP API. Main and LemonWeb
+non-loopback binds require an operator token and reject tokenless-loopback
+compatibility. Put TLS in front of browser login. Lemon Bot's separate backend
+requires a configured public origin and HTTPS, or an explicitly trusted
+encrypted overlay, for remote use.
 
-OpenAI-compatible and ACP APIs require bearer authentication **on loopback too**;
-without a dedicated token they use the operator token. A2A requires peer tokens.
-The legacy tokenless-local compatibility flag is default-off, only applies
-when no token is configured, and must never be enabled behind a reverse proxy.
-It is not the passwordless Lemon Bot sign-in mechanism.
+The loopback `/acp/ws` transport behind `lemon acp` requires the operator token.
+A2A requires peer tokens. The legacy tokenless-local compatibility flag is
+default-off, only applies when no token is configured, and must never be enabled
+behind a reverse proxy. It is not the passwordless Lemon Bot sign-in mechanism.
 
 ### Remote workers: expose the node gateway, not the controller
 

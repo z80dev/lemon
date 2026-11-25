@@ -675,6 +675,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** the OpenAI-compatible `/v1` API (`/v1/models`,
+  `/v1/chat/completions`, `/v1/responses`, `/v1/runs`), the single-shot HTTP
+  `POST /acp` endpoint, `LEMON_OPENAI_COMPAT_API_TOKEN` (and its
+  `LEMON_OPENAI_COMPAT_TOKEN` alias), `LEMON_OPENAI_COMPAT_IMAGE_URL_*`,
+  `LEMON_ACP_API_TOKEN` and `LEMON_CONTROL_PLANE_REMOTE_HTTP`. No in-repo or
+  known external client used them and support policy made no compatibility
+  commitment. Editors use `lemon acp` over the unchanged loopback `/acp/ws`;
+  off-loopback peers reach only `/ws` and `/healthz` (#711).
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.

@@ -8,6 +8,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Removed
 
+- `LemonCore.Store` no longer sweeps the `:openai_compat_run_owners` table; its
+  only owner, the control plane's OpenAI-compatible API, was removed (#711).
 - **Breaking:** the `controller` and `hybrid` ids from
   `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
 

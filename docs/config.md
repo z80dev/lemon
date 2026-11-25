@@ -124,7 +124,6 @@ Existing LAN clients must explicitly opt in and restart:
 | `LEMON_WEB_BIND_IP` | `127.0.0.1` | Operator browser interface |
 | `LEMON_CONTROL_PLANE_NODE_BIND_IP` | `127.0.0.1` | Node-only gateway |
 | `LEMON_CONTROL_PLANE_NODE_PORT` | `4044` | Node-only port; `0` disables it |
-| `LEMON_CONTROL_PLANE_REMOTE_HTTP` | empty | Comma-separated subset of `openai,acp` |
 | `LEMON_CONTROL_PLANE_ALLOWED_ORIGINS` | empty | Comma-separated exact browser origins allowed on `/ws` and `/acp/ws` |
 
 Loopback peers of the main and A2A listeners must send a `Host` of `localhost`,
@@ -145,15 +144,14 @@ binds require `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` and refuse
 `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true`. Put TLS in front of
 LemonWeb: an operator login over plaintext LAN HTTP exposes the credential.
 Remote peers on the main listener get only `GET /ws` and `GET /healthz`;
-everything else is 404 unless the corresponding HTTP API is explicitly enabled
-with `LEMON_CONTROL_PLANE_REMOTE_HTTP` and its dedicated
-`LEMON_OPENAI_COMPAT_API_TOKEN` / `LEMON_ACP_API_TOKEN`.
+everything else, including `/acp/ws`, is 404. Lemon has no OpenAI-compatible
+`/v1` API or single-shot `POST /acp` endpoint, and no remote HTTP API opt-in.
 
-OpenAI and ACP require authentication locally too. If their dedicated token is
-unset they accept the operator token, including the launcher's private
+`/acp/ws` requires the operator token, including the launcher's private
 `~/.lemon/run/control-plane-<port>.token` file. The explicit default-off loopback
-compatibility flag permits tokenless local APIs only when no token is configured;
-it also gates tokenless local A2A. Never enable it behind a local reverse proxy.
+compatibility flag permits tokenless local operator access only when no token is
+configured; it also gates tokenless local A2A. Never enable it behind a local
+reverse proxy.
 
 Forward node traffic only to **4044**: its `/ws` accepts node and enrollment
 credentials, never operator or tokenless clients; `/healthz` identifies
@@ -1084,8 +1082,8 @@ Environment variables override file values. Common overrides:
   started by `./bin/lemon-tui` is stopped with the TUI. Start a persistent
   source runtime with `./bin/lemon daemon`, then attach with the same token.
 - `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` — explicit legacy
-  compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator,
-  OpenAI/ACP HTTP and A2A access from direct loopback peers. Defaults to `false`; never enable it
+  compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator
+  (including `/acp/ws`) and A2A access from direct loopback peers. Defaults to `false`; never enable it
   for a reverse-proxied control plane.
 
 The browser monitoring client intentionally has no build-time or URL-based

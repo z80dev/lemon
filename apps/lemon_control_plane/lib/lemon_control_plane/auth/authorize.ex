@@ -49,12 +49,10 @@ defmodule LemonControlPlane.Auth.Authorize do
   """
 
   alias LemonControlPlane.Auth.TokenStore
-  alias LemonControlPlane.ListenerPolicy
 
   @operator_scopes [:admin, :read, :write, :approvals, :pairing, :content]
-  @api_scopes [:read, :write]
 
-  @type role :: :operator | :node | :enrollment | :api
+  @type role :: :operator | :node | :enrollment
   @type scope ::
           :admin
           | :read
@@ -209,59 +207,6 @@ defmodule LemonControlPlane.Auth.Authorize do
     (Application.get_env(:lemon_control_plane, :operator_token) ||
        System.get_env("LEMON_CONTROL_PLANE_OPERATOR_TOKEN"))
     |> normalize_token()
-  end
-
-  @doc """
-  Authenticates a remote HTTP API request (`:openai` for `/v1`, `:acp` for
-  `POST /acp`) and returns the principal the credential maps to.
-
-  - The API's own token (`LEMON_OPENAI_COMPAT_API_TOKEN` /
-    `LEMON_ACP_API_TOKEN`) is an `:api` principal holding only read and write
-    scopes: no admin, approvals or pairing authority.
-  - When that API token is unset, the operator token (or explicit tokenless
-    loopback with no operator token) authenticates as the full operator.
-  """
-  @spec authenticate_api(:openai | :acp, String.t() | nil, :inet.ip_address() | nil) ::
-          {:ok, auth_context()} | {:error, :missing | :invalid}
-  def authenticate_api(api, presented, peer) when api in [:openai, :acp] do
-    api_token = ListenerPolicy.api_token(api)
-    operator_token = if is_nil(api_token), do: configured_operator_token()
-
-    cond do
-      secure_token_match?(presented, api_token) ->
-        {:ok, api_context(api)}
-
-      secure_token_match?(presented, operator_token) ->
-        operator_context(%{})
-
-      is_nil(api_token) and is_nil(operator_token) and is_nil(presented) and
-          tokenless_loopback_allowed?(peer) ->
-        operator_context(%{})
-
-      is_nil(presented) or (is_nil(api_token) and is_nil(operator_token)) ->
-        {:error, :missing}
-
-      true ->
-        {:error, :invalid}
-    end
-  end
-
-  @doc """
-  Stable owner id for resources an API principal creates (runs, ACP sessions):
-  `api:openai` / `api:acp` for API tokens, else the context's client id or role.
-  """
-  @spec principal_id(auth_context()) :: String.t()
-  def principal_id(%{client_id: client_id}) when is_binary(client_id), do: client_id
-  def principal_id(%{role: role}), do: Atom.to_string(role)
-
-  defp api_context(api) do
-    %{
-      role: :api,
-      scopes: @api_scopes,
-      token: nil,
-      client_id: "api:#{api}",
-      identity: %{"type" => "api", "api" => Atom.to_string(api)}
-    }
   end
 
   @doc """
