@@ -90,7 +90,7 @@ defmodule LemonCli.CLITest do
     Mix.start()
     Mix.env(:test)
     Application.put_all_env(Config.Reader.read!("config/config.exs", env: :test, target: :host))
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env])
+    Application.put_env(:lemon_core, :secrets, key_providers: [:env])
 
     # config/test.exs gives this VM its own HOME.
     path = LemonCore.Config.Modular.global_path()
@@ -103,7 +103,8 @@ defmodule LemonCli.CLITest do
     true = is_pid(Process.whereis(LemonCore.Store))
     :client = LemonCore.Application.boot_mode()
     %{configured: true, source: :env} = LemonCore.Secrets.status()
-    nil = Process.whereis(LemonCore.RuntimeOwner)
+    false = LemonCore.RuntimeOwner.owner?()
+    nil = Process.whereis(LemonCore.ConfigReloader)
     nil = Process.whereis(LemonAgent.Supervisor)
     nil = Process.whereis(LemonGateway.Supervisor)
     nil = Process.whereis(LemonRouter.Supervisor)
