@@ -24,15 +24,24 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
 
   alias LemonRouter.RunCompletion
 
-  defmodule ControlledRuntime do
-    @behaviour LemonCore.EngineRuntime
-    def available?, do: true
-    def run_pid(_), do: nil
-    def cancel_by_run_id(_, _), do: :ok
+  defmodule ControlledExecutor do
+    @behaviour CodingAgent.Executor.Behaviour
 
-    def submit_execution(command) do
+    def cancel(%{runner_pid: pid}), do: (send(pid, :cancel); :ok)
+    def steer(_ctx, _prompt), do: {:error, :unsupported}
+    def redirect(_ctx, _prompt), do: {:error, :unsupported}
+
+    def start_run(%LemonCore.ExecutionCommand{} = command, _opts, sink) do
+      runner = spawn(fn ->
+        monitor = Process.monitor(sink)
+
+        receive do
+          :cancel -> :ok
+          {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+        end
+      end)
       send(Application.fetch_env!(:lemon_router, :sessions_reset_test_pid), {:execution, command})
-      :ok
+      {:ok, make_ref(), %{runner_pid: runner}}
     end
   end
 
@@ -80,15 +89,15 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
   setup do
     suffix = Integer.to_string(System.unique_integer([:positive]))
     key = "agent:default:tui:local:main:reset-#{suffix}"
-    previous_runtime = Application.get_env(:lemon_router, :engine_runtime)
+    previous_runtime = Application.get_env(:lemon_router, :test_executor)
     previous_pid = Application.get_env(:lemon_router, :sessions_reset_test_pid)
-    Application.put_env(:lemon_router, :engine_runtime, ControlledRuntime)
+    Application.put_env(:lemon_router, :test_executor, ControlledExecutor)
     Application.put_env(:lemon_router, :sessions_reset_test_pid, self())
 
     on_exit(fn ->
       if pid = Process.whereis(RunHistoryStore), do: :sys.resume(pid)
       LemonRouter.abort(key)
-      restore_env(:engine_runtime, previous_runtime)
+      restore_env(:test_executor, previous_runtime)
       restore_env(:sessions_reset_test_pid, previous_pid)
       RunStore.delete_session(key)
       ChatStateStore.delete(key)
@@ -847,7 +856,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
       Process.exit(node_pid, :kill)
     end)
 
-    execution = %LemonGateway.ExecutionRequest{
+    execution = %LemonCore.ExecutionCommand{
       run_id: run_id,
       session_key: key,
       prompt: "remote work",

@@ -1,4 +1,4 @@
-defmodule CodingAgent.NativeFollowupContextTest do
+defmodule LemonRouter.NativeFollowupContextTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.Agent, as: AgentTool
@@ -44,8 +44,8 @@ defmodule CodingAgent.NativeFollowupContextTest do
             "invocationContextKey" => "renewed-actor",
             "memoryContextKey" => "renewed-audience",
             "invocationToolPolicy" => %{"allow" => ["read"]},
-            "invocationMcpServers" => CodingAgent.NativeFollowupContextTest.servers(id),
-            "invocationProof" => CodingAgent.NativeFollowupContextTest.proof(id),
+            "invocationMcpServers" => LemonRouter.NativeFollowupContextTest.servers(id),
+            "invocationProof" => LemonRouter.NativeFollowupContextTest.proof(id),
             "sharedMemoryGrant" => false
           }
         })
@@ -607,7 +607,7 @@ defmodule CodingAgent.NativeFollowupContextTest do
                generation: destination.generation + 1
              })
 
-    request = LemonGateway.ExecutionRequest.from_command(sealed.execution_request)
+    request = sealed.execution_request
     assert {:ok, _ref, remote} = CodingAgent.Executor.start_run(request, %{}, self())
     assert_receive {:native_issuer, fresh_id, %{"runId" => fresh_id}, {:ok, lineage}}, 3000
     assert lineage["sourceRootRunId"] == id

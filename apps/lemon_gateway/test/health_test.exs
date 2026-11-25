@@ -23,23 +23,33 @@ defmodule LemonGateway.HealthTest do
   end
 
   setup do
-    Application.stop(:lemon_gateway)
+    keys = [
+      LemonGateway.Config,
+      :gateway_ingress_enabled,
+      :health_checks,
+      :xmtp_transport_module
+    ]
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
-      max_concurrent_runs: 1,
-      enable_telegram: false
-    })
-
-    Application.put_env(:lemon_gateway, :transports, [])
-    Application.put_env(:lemon_gateway, :commands, [])
-
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    previous = Map.new(keys, &{&1, Application.fetch_env(:lemon_gateway, &1)})
+    was_running? = is_pid(Process.whereis(LemonGateway.Supervisor))
 
     on_exit(fn ->
       Application.stop(:lemon_gateway)
-      Application.delete_env(:lemon_gateway, :health_checks)
-      Application.delete_env(:lemon_gateway, :xmtp_transport_module)
+
+      Enum.each(previous, fn
+        {key, {:ok, value}} -> Application.put_env(:lemon_gateway, key, value)
+        {key, :error} -> Application.delete_env(:lemon_gateway, key)
+      end)
+
+      if was_running?, do: Application.ensure_all_started(:lemon_gateway)
     end)
+
+    Application.stop(:lemon_gateway)
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{enable_xmtp: false})
+    Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
+    Application.delete_env(:lemon_gateway, :health_checks)
+    Application.delete_env(:lemon_gateway, :xmtp_transport_module)
+    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
     :ok
   end
@@ -51,7 +61,21 @@ defmodule LemonGateway.HealthTest do
 
     body = Jason.decode!(conn.resp_body)
     assert body["ok"] == true
-    assert is_list(body["checks"])
+    assert Enum.map(body["checks"], &{&1["name"], &1["ok"]}) ==
+             [{"supervisor", true}, {"ingress", true}]
+  end
+
+  test "health reports missing ingress when the satellite is disabled" do
+    Application.stop(:lemon_gateway)
+    Application.delete_env(:lemon_gateway, :gateway_ingress_enabled)
+    assert {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+    conn = conn(:get, "/healthz") |> LemonGateway.Health.Router.call([])
+    assert conn.status == 503
+    body = Jason.decode!(conn.resp_body)
+
+    assert Enum.map(body["checks"], &{&1["name"], &1["ok"]}) ==
+             [{"supervisor", true}, {"ingress", false}]
   end
 
   test "custom health checks are supported and can fail readiness" do

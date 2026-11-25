@@ -112,7 +112,7 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
       {:ok, stream}
     end
 
-    request = %LemonGateway.ExecutionRequest{
+    request = %LemonCore.ExecutionCommand{
       run_id: "print-memory-test",
       session_key: state.session_key,
       prompt: "What is the build command?",

@@ -65,14 +65,8 @@ defmodule LemonRouter.RunProcess.RetryHandler do
     "The model returned an error. Try again; if it keeps happening, run `lemon doctor`."
   end
 
-  def format_run_error({:gateway_run_down, {%module{} = exception, _stack}}) when is_atom(module),
-    do: format_exception_message(exception)
-
-  def format_run_error({:gateway_run_down, %module{} = exception}) when is_atom(module),
-    do: format_exception_message(exception)
-
-  def format_run_error({:gateway_run_down, reason}),
-    do: "gateway run exited: #{format_run_error(reason)}"
+  def format_run_error(%{type: :executor_down, reason: reason}),
+    do: "executor exited: #{format_run_error(reason)}"
 
   def format_run_error({%module{} = exception, _stack}) when is_atom(module),
     do: format_exception_message(exception)

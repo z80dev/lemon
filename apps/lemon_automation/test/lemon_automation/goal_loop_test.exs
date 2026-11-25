@@ -88,20 +88,30 @@ defmodule LemonAutomation.GoalLoopTest do
     end
   end
 
-  defmodule BlockingGoalRuntime do
+  defmodule BlockingGoalExecutor do
     @moduledoc false
 
-    def available?, do: true
-    def run_pid(_run_id), do: nil
+    @behaviour CodingAgent.Executor.Behaviour
 
-    def submit_execution(%LemonCore.ExecutionCommand{} = command) do
-      send(:persistent_term.get({__MODULE__, :test_pid}), {:blocking_goal_execution, command})
+    def cancel(%{runner_pid: pid, run_id: run_id}) do
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:blocking_goal_cancel, run_id})
+      send(pid, :cancel)
       :ok
     end
+    def steer(_ctx, _prompt), do: {:error, :unsupported}
+    def redirect(_ctx, _prompt), do: {:error, :unsupported}
 
-    def cancel_by_run_id(run_id, reason) do
-      send(:persistent_term.get({__MODULE__, :test_pid}), {:blocking_goal_cancel, run_id, reason})
-      :ok
+    def start_run(%LemonCore.ExecutionCommand{} = command, _opts, sink) do
+      runner = spawn(fn ->
+        monitor = Process.monitor(sink)
+
+        receive do
+          :cancel -> :ok
+          {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+        end
+      end)
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:blocking_goal_execution, command})
+      {:ok, make_ref(), %{runner_pid: runner, run_id: command.run_id}}
     end
   end
 
@@ -206,43 +216,32 @@ defmodule LemonAutomation.GoalLoopTest do
     end
   end
 
-  defmodule LiveJudgeRuntime do
+  defmodule LiveJudgeExecutor do
     @moduledoc false
 
-    def available?, do: true
-    def run_pid(_run_id), do: nil
-    def cancel_by_run_id(_run_id, _reason), do: :ok
+    @behaviour CodingAgent.Executor.Behaviour
 
-    def submit_execution(%LemonCore.ExecutionCommand{} = command) do
+    def cancel(%{runner_pid: pid}), do: (send(pid, :cancel); :ok)
+    def steer(_ctx, _prompt), do: {:error, :unsupported}
+    def redirect(_ctx, _prompt), do: {:error, :unsupported}
+
+    def start_run(%LemonCore.ExecutionCommand{} = command, _opts, sink) do
       test_pid = :persistent_term.get({__MODULE__, :test_pid}, nil)
       if is_pid(test_pid), do: send(test_pid, {:live_judge_execution, command})
+      ref = make_ref()
 
-      spawn(fn ->
-        Process.sleep(25)
+      runner = spawn(fn ->
+        monitor = Process.monitor(sink)
+          output = ~s({"action":"done","reason":"live router proof"})
+          send(sink, {:engine_event, ref, CodingAgent.Executor.Event.completed(%{ok: true, answer: output})})
 
-        run_id = command.run_id
-        session_key = command.session_key
-
-        LemonCore.Bus.broadcast(
-          LemonCore.Bus.run_topic(run_id),
-          LemonCore.Event.new(
-            :run_started,
-            %{run_id: run_id, engine: "lemon"},
-            %{run_id: run_id, session_key: session_key}
-          )
-        )
-
-        LemonCore.Bus.broadcast(
-          LemonCore.Bus.run_topic(run_id),
-          LemonCore.Event.new(
-            :run_completed,
-            %{completed: %{ok: true, answer: ~s({"action":"done","reason":"live router proof"})}},
-            %{run_id: run_id, session_key: session_key}
-          )
-        )
+          receive do
+            :cancel -> :ok
+            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+          end
       end)
 
-      :ok
+      {:ok, ref, %{runner_pid: runner}}
     end
   end
 
@@ -324,7 +323,7 @@ defmodule LemonAutomation.GoalLoopTest do
     :persistent_term.put({AmbiguousLoopRouter, :test_pid}, self())
     :persistent_term.put({AmbiguousLoopRouter, :abort_result}, :ok)
     :persistent_term.put({CrashDuringAbortRouter, :test_pid}, self())
-    :persistent_term.put({BlockingGoalRuntime, :test_pid}, self())
+    :persistent_term.put({BlockingGoalExecutor, :test_pid}, self())
 
     on_exit(fn ->
       GoalStore.clear(session_key)
@@ -333,7 +332,7 @@ defmodule LemonAutomation.GoalLoopTest do
       :persistent_term.erase({AmbiguousLoopRouter, :test_pid})
       :persistent_term.erase({AmbiguousLoopRouter, :abort_result})
       :persistent_term.erase({CrashDuringAbortRouter, :test_pid})
-      :persistent_term.erase({BlockingGoalRuntime, :test_pid})
+      :persistent_term.erase({BlockingGoalExecutor, :test_pid})
     end)
 
     {:ok, session_key: session_key}
@@ -516,13 +515,13 @@ defmodule LemonAutomation.GoalLoopTest do
   test "router judge runner completes through LemonRouter and RunCompletionWaiter", %{
     session_key: session_key
   } do
-    original_runtime = Application.get_env(:lemon_router, :engine_runtime)
-    Application.put_env(:lemon_router, :engine_runtime, LiveJudgeRuntime)
-    :persistent_term.put({LiveJudgeRuntime, :test_pid}, self())
+    original_runtime = Application.get_env(:lemon_router, :test_executor)
+    Application.put_env(:lemon_router, :test_executor, LiveJudgeExecutor)
+    :persistent_term.put({LiveJudgeExecutor, :test_pid}, self())
 
     on_exit(fn ->
-      restore_router_env(:engine_runtime, original_runtime)
-      :persistent_term.erase({LiveJudgeRuntime, :test_pid})
+      restore_router_env(:test_executor, original_runtime)
+      :persistent_term.erase({LiveJudgeExecutor, :test_pid})
     end)
 
     {:ok, _apps} = Application.ensure_all_started(:lemon_router)
@@ -870,10 +869,10 @@ defmodule LemonAutomation.GoalLoopTest do
   test "manager scheduler runs persisted auto goal through the router judge path", %{
     session_key: session_key
   } do
-    original_runtime = Application.get_env(:lemon_router, :engine_runtime)
+    original_runtime = Application.get_env(:lemon_router, :test_executor)
     original_runner = Application.get_env(:lemon_automation, :goal_judge_runner)
 
-    Application.put_env(:lemon_router, :engine_runtime, LiveJudgeRuntime)
+    Application.put_env(:lemon_router, :test_executor, LiveJudgeExecutor)
 
     Application.put_env(
       :lemon_automation,
@@ -881,12 +880,12 @@ defmodule LemonAutomation.GoalLoopTest do
       LemonAutomation.GoalJudge.RouterRunner
     )
 
-    :persistent_term.put({LiveJudgeRuntime, :test_pid}, self())
+    :persistent_term.put({LiveJudgeExecutor, :test_pid}, self())
 
     on_exit(fn ->
-      restore_router_env(:engine_runtime, original_runtime)
+      restore_router_env(:test_executor, original_runtime)
       restore_env(:goal_judge_runner, original_runner)
-      :persistent_term.erase({LiveJudgeRuntime, :test_pid})
+      :persistent_term.erase({LiveJudgeExecutor, :test_pid})
     end)
 
     {:ok, _apps} = Application.ensure_all_started(:lemon_router)
@@ -1131,10 +1130,10 @@ defmodule LemonAutomation.GoalLoopTest do
   test "hard stop owns and aborts a run accepted before submit returns", %{
     session_key: session_key
   } do
-    original_runtime = Application.get_env(:lemon_router, :engine_runtime)
-    Application.put_env(:lemon_router, :engine_runtime, BlockingGoalRuntime)
+    original_runtime = Application.get_env(:lemon_router, :test_executor)
+    Application.put_env(:lemon_router, :test_executor, BlockingGoalExecutor)
     {:ok, _apps} = Application.ensure_all_started(:lemon_router)
-    on_exit(fn -> restore_router_env(:engine_runtime, original_runtime) end)
+    on_exit(fn -> restore_router_env(:test_executor, original_runtime) end)
 
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Stop inside the acceptance window",
@@ -1187,7 +1186,7 @@ defmodule LemonAutomation.GoalLoopTest do
              GenServer.call(manager, {:stop_loop, session_key, :hard})
 
     assert_receive {:accepted_window_abort, ^run_id, :goal_loop_hard_stop}, 1_000
-    assert_receive {:blocking_goal_cancel, ^run_id, :goal_loop_hard_stop}, 1_000
+    assert_receive {:blocking_goal_cancel, ^run_id}, 1_000
     eventually(fn -> refute Process.alive?(loop_pid) end)
 
     assert_receive %LemonCore.Event{

@@ -66,10 +66,6 @@ defmodule LemonRouter.RunLifecycleContractTest do
     {:ok, pid} = start_run(run_id, session_key)
     ref = Process.monitor(pid)
 
-    # No executor is bound, so the abort grace synthesizes a failed completion.
-    # The committed outcome must win over that later decision.
-    :ok = RunProcess.abort(pid, :user_requested)
-
     assert_receive %Event{
                      type: :run_completed,
                      meta: %{run_id: ^run_id},
@@ -164,7 +160,7 @@ defmodule LemonRouter.RunLifecycleContractTest do
       meta: %{node: "worker-east"}
     }
 
-    :ok = CrashRecovery.capture(%{request: request, execution_request: command})
+    :ok = CrashRecovery.capture(%{request: request, execution_request: command}, true)
 
     assert {:ok, %{state: :unresumable, reason: :remote_invocation}} =
              Store.fetch(CrashRecovery.table(), run_id)
@@ -218,7 +214,7 @@ defmodule LemonRouter.RunLifecycleContractTest do
       run_id: run_id,
       session_key: session_key,
       execution_request: request,
-      submit_to_gateway?: false
+      executor: LemonRouter.TestExecutor
     })
   end
 end

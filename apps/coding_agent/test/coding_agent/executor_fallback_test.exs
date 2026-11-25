@@ -3,7 +3,7 @@ defmodule CodingAgent.ExecutorFallbackTest do
 
   alias CodingAgent.Executor
   alias LemonAi.Types.{AssistantMessage, TextContent, Usage}
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   @moduletag :tmp_dir
 
@@ -28,7 +28,7 @@ defmodule CodingAgent.ExecutorFallbackTest do
       end
     end
 
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "run_fallback_#{System.unique_integer([:positive])}",
       session_key: "test:lemon:#{System.unique_integer([:positive])}",
       prompt: "hello",

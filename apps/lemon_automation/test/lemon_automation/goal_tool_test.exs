@@ -6,51 +6,49 @@ defmodule LemonAutomation.GoalToolTest do
   alias LemonAutomation.GoalLoopManager
   alias LemonSkills.Tools.Goal
 
-  defmodule Runtime do
-    def available?, do: true
-    def run_pid(_run_id), do: nil
+  defmodule Executor do
+    @behaviour CodingAgent.Executor.Behaviour
 
-    def cancel_by_run_id(run_id, reason) do
-      send(:persistent_term.get({__MODULE__, :test_pid}), {:cancelled, run_id, reason})
+    def cancel(%{runner_pid: pid, run_id: run_id}) do
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:cancelled, run_id})
+      send(pid, :cancel)
       :ok
     end
+    def steer(_ctx, _prompt), do: {:error, :unsupported}
+    def redirect(_ctx, _prompt), do: {:error, :unsupported}
 
-    def submit_execution(%LemonCore.ExecutionCommand{} = command) do
+    def start_run(%LemonCore.ExecutionCommand{} = command, _opts, sink) do
       send(:persistent_term.get({__MODULE__, :test_pid}), {:execution, command})
       judge? = command.meta[:goal_judge] == true
+      ref = make_ref()
+      hold? = not judge? and not :persistent_term.get({__MODULE__, :complete}, true)
 
-      if judge? or :persistent_term.get({__MODULE__, :complete}, true) do
-        spawn(fn ->
-          Process.sleep(25)
+      runner = spawn(fn ->
+        monitor = Process.monitor(sink)
+        if hold? do
+          receive do
+            :cancel -> :ok
+            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+          end
+        else
+          output = if judge?, do: ~s({"action":"continue","reason":"work remains"}), else: "coding result"
+          send(sink, {:engine_event, ref, CodingAgent.Executor.Event.completed(%{ok: true, answer: output})})
 
-          output =
-            if judge?,
-              do: ~s({"action":"continue","reason":"work remains"}),
-              else: "coding result"
+          receive do
+            :cancel -> :ok
+            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+          end
+        end
+      end)
 
-          topic = LemonCore.Bus.run_topic(command.run_id)
-          meta = %{run_id: command.run_id, session_key: command.session_key}
-
-          LemonCore.Bus.broadcast(
-            topic,
-            LemonCore.Event.new(:run_started, %{run_id: command.run_id, engine: "lemon"}, meta)
-          )
-
-          LemonCore.Bus.broadcast(
-            topic,
-            LemonCore.Event.new(:run_completed, %{completed: %{ok: true, answer: output}}, meta)
-          )
-        end)
-      end
-
-      :ok
+      {:ok, ref, %{runner_pid: runner, run_id: command.run_id}}
     end
   end
 
   setup do
-    original_runtime = Application.get_env(:lemon_router, :engine_runtime)
+    original_runtime = Application.get_env(:lemon_router, :test_executor)
     original_judge = Application.get_env(:lemon_automation, :goal_judge_runner)
-    Application.put_env(:lemon_router, :engine_runtime, Runtime)
+    Application.put_env(:lemon_router, :test_executor, Executor)
 
     Application.put_env(
       :lemon_automation,
@@ -58,8 +56,8 @@ defmodule LemonAutomation.GoalToolTest do
       LemonAutomation.GoalJudge.RouterRunner
     )
 
-    :persistent_term.put({Runtime, :test_pid}, self())
-    :persistent_term.put({Runtime, :complete}, true)
+    :persistent_term.put({Executor, :test_pid}, self())
+    :persistent_term.put({Executor, :complete}, true)
     {:ok, _} = Application.ensure_all_started(:lemon_router)
     {:ok, _} = Application.ensure_all_started(:lemon_automation)
     key = "agent:default:goal-tool-#{System.unique_integer([:positive])}"
@@ -68,10 +66,10 @@ defmodule LemonAutomation.GoalToolTest do
     on_exit(fn ->
       GoalLoopManager.stop_loop(key)
       GoalStore.clear(key)
-      restore(:lemon_router, :engine_runtime, original_runtime)
+      restore(:lemon_router, :test_executor, original_runtime)
       restore(:lemon_automation, :goal_judge_runner, original_judge)
-      :persistent_term.erase({Runtime, :test_pid})
-      :persistent_term.erase({Runtime, :complete})
+      :persistent_term.erase({Executor, :test_pid})
+      :persistent_term.erase({Executor, :complete})
     end)
 
     %{tool: tool, key: key}
@@ -126,7 +124,7 @@ defmodule LemonAutomation.GoalToolTest do
     tool: tool,
     key: key
   } do
-    :persistent_term.put({Runtime, :complete}, false)
+    :persistent_term.put({Executor, :complete}, false)
 
     assert %AgentToolResult{} =
              tool.execute.("set", %{"action" => "set", "objective" => "Wait for pause"}, nil, nil)
@@ -143,7 +141,7 @@ defmodule LemonAutomation.GoalToolTest do
     assert paused.status == "paused"
     assert paused.meta["goalLoop"]["auto"]["enabled"] == false
     run_id = worker.run_id
-    assert_receive {:cancelled, ^run_id, _}, 2_000
+    assert_receive {:cancelled, ^run_id}, 2_000
 
     assert {:error, "goal is paused; resume before starting"} =
              tool.execute.("start", %{"action" => "start"}, nil, nil)

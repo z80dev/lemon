@@ -1,7 +1,7 @@
 defmodule CodingAgent.ExecutionPolicyEntryPointsTest do
   @moduledoc """
   Every native execution entry point applies the same validated tool-policy
-  semantics (#72): direct sessions, the gateway executor, task delegation, and
+  semantics (#72): direct sessions, the native executor, task delegation, and
   both sides of a named-node hop reject malformed supplied policy before any
   session starts, and resolve a valid policy to identical authority.
   """
@@ -14,7 +14,7 @@ defmodule CodingAgent.ExecutionPolicyEntryPointsTest do
   alias CodingAgent.Session
   alias CodingAgent.Tools.Task.Params
   alias LemonCore.{ExecutionContext, ToolPolicy}
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   @tools ~w(read grep write edit bash task agent webfetch zz_unclassified_tool)
 
@@ -154,7 +154,7 @@ defmodule CodingAgent.ExecutionPolicyEntryPointsTest do
              )
 
     assert {:ok, payload} =
-             RemoteRequestCodec.encode(%ExecutionRequest{
+             RemoteRequestCodec.encode(%ExecutionCommand{
                run_id: "bounded-parent",
                session_key: "agent:bounded:main",
                prompt: "work",
@@ -193,7 +193,7 @@ defmodule CodingAgent.ExecutionPolicyEntryPointsTest do
   end
 
   defp executor_request(cwd, policy, context) do
-    %ExecutionRequest{
+    %ExecutionCommand{
       run_id: (context && context.run_id) || "entry-#{System.unique_integer([:positive])}",
       session_key: "agent:entry-points:#{System.unique_integer([:positive])}",
       prompt: "must not start",
@@ -207,7 +207,7 @@ defmodule CodingAgent.ExecutionPolicyEntryPointsTest do
   defp remote_payload(cwd, policy) do
     context = root_context(cwd, "remote-#{System.unique_integer([:positive])}")
 
-    RemoteRequestCodec.encode(%ExecutionRequest{
+    RemoteRequestCodec.encode(%ExecutionCommand{
       run_id: context.run_id,
       session_key: "agent:entry-points:main",
       prompt: "work",

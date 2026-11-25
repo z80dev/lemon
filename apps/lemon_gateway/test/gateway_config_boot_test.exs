@@ -6,12 +6,14 @@ defmodule LemonGateway.GatewayConfigBootTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Slots
-
   @replacement_key :"Elixir.LemonGateway.Config"
 
   setup do
-    previous_replacement = Application.get_env(:lemon_gateway, @replacement_key)
+    previous_replacement = Application.fetch_env(:lemon_gateway, @replacement_key)
+    previous_ingress = Application.fetch_env(:lemon_gateway, :gateway_ingress_enabled)
+    was_running? = is_pid(Process.whereis(LemonGateway.Supervisor))
+    Application.stop(:lemon_gateway)
+    Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
     previous_home = System.get_env("HOME")
 
     home =
@@ -23,10 +25,21 @@ defmodule LemonGateway.GatewayConfigBootTest do
     LemonCore.ConfigCache.clear()
 
     on_exit(fn ->
-      Application.put_env(:lemon_gateway, @replacement_key, previous_replacement)
+      Application.stop(:lemon_gateway)
+
+      for {key, previous} <- [
+            {@replacement_key, previous_replacement},
+            {:gateway_ingress_enabled, previous_ingress}
+          ] do
+        case previous do
+          {:ok, value} -> Application.put_env(:lemon_gateway, key, value)
+          :error -> Application.delete_env(:lemon_gateway, key)
+        end
+      end
       if previous_home, do: System.put_env("HOME", previous_home), else: System.delete_env("HOME")
       LemonCore.ConfigCache.clear()
       File.rm_rf!(home)
+      if was_running?, do: Application.ensure_all_started(:lemon_gateway)
     end)
 
     %{config_path: Path.join([home, ".lemon", "config.toml"])}
@@ -47,31 +60,24 @@ defmodule LemonGateway.GatewayConfigBootTest do
       """)
 
       LemonCore.ConfigCache.clear()
-      name = :"#{__MODULE__}.Slots.#{mode}.#{drop}"
-      start_supervised!({Slots, name: name}, id: name)
-
-      assert {:ok, %{max: 4}} = Slots.stats(name)
+      assert {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      assert Process.whereis(LemonGateway.IngressSupervisor)
+      assert LemonCore.GatewayConfig.get(:max_concurrent_runs) == 4
       refute Map.has_key?(LemonCore.GatewayConfig.load(), :queue)
-      stop_supervised!(name)
+      assert :ok = Application.stop(:lemon_gateway)
     end
   end
 
   test "an invalid [gateway] section fails boot", %{config_path: path} do
     File.write!(path, """
     [gateway]
-    max_concurrent_runs = "many"
-    enable_telegram = true
+    enable_telegram = "not-a-boolean"
     """)
 
     LemonCore.ConfigCache.clear()
-    previous = Process.flag(:trap_exit, true)
-
-    try do
-      assert {:error, {%LemonCore.Config.ValidationError{}, _stack}} =
-               Slots.start_link(name: :"#{__MODULE__}.Invalid")
-    after
-      Process.flag(:trap_exit, previous)
-    end
+    assert {:error, {:lemon_gateway, reason}} = Application.ensure_all_started(:lemon_gateway)
+    assert inspect(reason) =~ "LemonCore.Config.ValidationError"
+    refute Process.whereis(LemonGateway.IngressSupervisor)
   end
 
   test "a binding with an unregistered transport creates no atom and still matches" do

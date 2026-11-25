@@ -19,28 +19,37 @@ defmodule LemonRouter.AgentMessagingTest do
   # This deterministic execution boundary runs the real router/orchestrator,
   # coordinator, fixed-ID admission and RunProcess. Tests finalize actual queued
   # commands rather than replacing AgentMessaging or echoing tool arguments.
-  defmodule ControlledRuntime do
-    @behaviour LemonCore.EngineRuntime
-    def available?, do: true
-    def run_pid(_), do: nil
-    def cancel_by_run_id(_, _), do: :ok
+  defmodule ControlledExecutor do
+    @behaviour CodingAgent.Executor.Behaviour
 
-    def submit_execution(command) do
+    def cancel(%{runner_pid: pid}), do: (send(pid, :cancel); :ok)
+    def steer(_ctx, _prompt), do: {:error, :unsupported}
+    def redirect(_ctx, _prompt), do: {:error, :unsupported}
+
+    def start_run(%LemonCore.ExecutionCommand{} = command, _opts, sink) do
+      runner = spawn(fn ->
+        monitor = Process.monitor(sink)
+
+        receive do
+          :cancel -> :ok
+          {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+        end
+      end)
       send(Application.fetch_env!(:lemon_router, :named_agent_test_pid), {:execution, command})
-      :ok
+      {:ok, make_ref(), %{runner_pid: runner}}
     end
   end
 
   setup do
     suffix = Integer.to_string(System.unique_integer([:positive]))
     scope = "bot:named-router-#{suffix}:owner"
-    previous_runtime = Application.get_env(:lemon_router, :engine_runtime)
+    previous_runtime = Application.get_env(:lemon_router, :test_executor)
     previous_pid = Application.get_env(:lemon_router, :named_agent_test_pid)
-    Application.put_env(:lemon_router, :engine_runtime, ControlledRuntime)
+    Application.put_env(:lemon_router, :test_executor, ControlledExecutor)
     Application.put_env(:lemon_router, :named_agent_test_pid, self())
 
     on_exit(fn ->
-      restore_env(:engine_runtime, previous_runtime)
+      restore_env(:test_executor, previous_runtime)
       restore_env(:named_agent_test_pid, previous_pid)
 
       case AgentIdentity.list(scope) do

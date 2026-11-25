@@ -474,14 +474,11 @@ exemptions are the reference-only exceptions listed in that policy module
 (currently `lemon_gateway` → `lemon_ai`, `lemon_automation`), which can never
 authorize a `mix.exs` edge.
 
-Apart from those listed exceptions, every cross-package reference in the tree
-is a declared dependency. For a security reviewer, this bounds blast radius and supply-chain reasoning: a published
-package reaches only what its `mix.exs` says it reaches, so auditing one
-package's dependencies is sufficient to know what it can touch. There is no
-hidden runtime reach around the declared graph except the two explicitly
-documented behaviour seams (`LemonCore.RouterBridge`,
-`LemonCore.EngineRuntime`), which cross the boundary through a behaviour with no
-compile-time edge.
+Apart from those exceptions, cross-package references require declared
+dependencies, which bounds the blast radius a reviewer needs to consider.
+Runtime registration seams such as `LemonCore.RouterBridge` let optional ingress
+submit without a compile-time router dependency. The router itself declares a
+direct dependency on `coding_agent` for native execution.
 
 ## What a reviewer should check
 

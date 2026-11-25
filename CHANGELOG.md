@@ -107,6 +107,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- **Breaking:** `LemonRouter.RunProcess` is now the only live run owner. It
+  claims the session, takes a router permit, drives `CodingAgent.Executor`
+  directly, and handles run output and termination. Native runs no longer
+  need a separate gateway process or a bus hop per token. `lemon_gateway`
+  starts only opt-in ingress services; `[gateway].max_concurrent_runs` still
+  controls execution capacity. Use `LemonCore.RouterBridge` to submit runs
+  (#728).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
@@ -663,6 +670,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** removed `LemonGateway.Run`, `LemonGateway.Runtime`,
+  `LemonGateway.RunSupervisor`, `LemonGateway.RunRegistry`,
+  `LemonGateway.submit/1`, `LemonGateway.ProgressStore`, and
+  `LemonGateway.Renderers.Basic`. Permits moved from `LemonGateway.Slots` to
+  `LemonRouter.Slots`. `CodingAgent.Executor.Behaviour` and
+  `CodingAgent.Executor.Event` replace `LemonGateway.Executor` and
+  `LemonGateway.Event`; `LemonGateway.Event.Delta` has no replacement.
+  Executors take `LemonCore.ExecutionCommand` instead of
+  `LemonGateway.ExecutionRequest`. Removed `LemonCore.EngineRuntime`,
+  `LemonRouter.EngineRuntimeConfiguration`, `config :lemon_gateway, :executor`,
+  and `config :lemon_router, :engine_runtime` (#728).
 - **Breaking:** the write-only run-phase pipeline: `LemonRouter.PhasePublisher`, the
   `:run_phase_changed` bus event (`LemonCore.Events.RunPhaseChanged`),
   `LemonCore.RunPhase`, `LemonCore.RunPhaseGraph`, the router's per-submission phase

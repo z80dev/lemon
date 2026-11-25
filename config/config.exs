@@ -48,13 +48,6 @@ config :coding_agent, :lane_caps, background_exec: 8
 
 config :coding_agent, :async_followups, default_queue_mode: :followup
 
-# The native executor is owned by coding_agent. The gateway looks this up
-# dynamically through LemonGateway.Executor, so this wiring creates no gateway
-# dependency on the agent product.
-config :lemon_gateway, :executor, CodingAgent.Executor
-
-config :lemon_router, :engine_runtime, LemonGateway.Runtime
-
 # `lemon-bot` on this machine serves http://127.0.0.1:4100 by default. Trust that one
 # literal-loopback product origin for native follow-up and cron admission callbacks so
 # the same-machine Bot needs no extra configuration. Setting

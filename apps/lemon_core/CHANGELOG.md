@@ -8,6 +8,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Removed
 
+- **Breaking:** removed `LemonCore.EngineRuntime`. The router calls the native
+  executor directly; integrations submit through `LemonCore.RouterBridge`
+  (#728).
 - **Breaking:** the `controller` and `hybrid` ids from
   `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
 - **Breaking:** the `:run_phase_changed` bus event (`LemonCore.Events.RunPhaseChanged`

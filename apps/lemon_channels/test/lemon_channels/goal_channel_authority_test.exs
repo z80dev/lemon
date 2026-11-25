@@ -11,43 +11,37 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
   alias LemonChannels.GoalStatusMessage
   alias LemonCore.ToolPolicy
 
-  defmodule Runtime do
-    def available?, do: true
-    def run_pid(_run_id), do: nil
-    def cancel_by_run_id(_run_id, _reason), do: :ok
+  defmodule Executor do
+    @behaviour CodingAgent.Executor.Behaviour
 
-    def submit_execution(%LemonCore.ExecutionCommand{} = command) do
+    def cancel(%{runner_pid: pid}), do: (send(pid, :cancel); :ok)
+    def steer(_ctx, _prompt), do: {:error, :unsupported}
+    def redirect(_ctx, _prompt), do: {:error, :unsupported}
+
+    def start_run(%LemonCore.ExecutionCommand{} = command, _opts, sink) do
       send(:persistent_term.get({__MODULE__, :test_pid}), {:execution, command})
       judge? = command.meta[:goal_judge] == true
+      ref = make_ref()
 
-      spawn(fn ->
-        Process.sleep(10)
+      runner = spawn(fn ->
+        monitor = Process.monitor(sink)
+          output = if judge?, do: ~s({"action":"continue","reason":"work remains"}), else: "done"
+          send(sink, {:engine_event, ref, CodingAgent.Executor.Event.completed(%{ok: true, answer: output})})
 
-        output =
-          if judge?, do: ~s({"action":"continue","reason":"work remains"}), else: "done"
-
-        topic = LemonCore.Bus.run_topic(command.run_id)
-        meta = %{run_id: command.run_id, session_key: command.session_key}
-
-        LemonCore.Bus.broadcast(
-          topic,
-          LemonCore.Event.new(:run_started, %{run_id: command.run_id, engine: "lemon"}, meta)
-        )
-
-        LemonCore.Bus.broadcast(
-          topic,
-          LemonCore.Event.new(:run_completed, %{completed: %{ok: true, answer: output}}, meta)
-        )
+          receive do
+            :cancel -> :ok
+            {:DOWN, ^monitor, :process, ^sink, _reason} -> :ok
+          end
       end)
 
-      :ok
+      {:ok, ref, %{runner_pid: runner}}
     end
   end
 
   setup do
-    original_runtime = Application.get_env(:lemon_router, :engine_runtime)
+    original_runtime = Application.get_env(:lemon_router, :test_executor)
     original_judge = Application.get_env(:lemon_automation, :goal_judge_runner)
-    Application.put_env(:lemon_router, :engine_runtime, Runtime)
+    Application.put_env(:lemon_router, :test_executor, Executor)
 
     Application.put_env(
       :lemon_automation,
@@ -55,7 +49,7 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
       :"Elixir.LemonAutomation.GoalJudge.RouterRunner"
     )
 
-    :persistent_term.put({Runtime, :test_pid}, self())
+    :persistent_term.put({Executor, :test_pid}, self())
     {:ok, _} = Application.ensure_all_started(:lemon_router)
     {:ok, _} = Application.ensure_all_started(:lemon_automation)
 
@@ -82,9 +76,9 @@ defmodule LemonChannels.GoalChannelAuthorityTest do
       :"Elixir.LemonAutomation.GoalLoopManager".stop_loop(key)
       GoalStore.clear(key)
       File.rm_rf!(workspace)
-      restore(:lemon_router, :engine_runtime, original_runtime)
+      restore(:lemon_router, :test_executor, original_runtime)
       restore(:lemon_automation, :goal_judge_runner, original_judge)
-      :persistent_term.erase({Runtime, :test_pid})
+      :persistent_term.erase({Executor, :test_pid})
     end)
 
     %{key: key, opts: opts, workspace: workspace}

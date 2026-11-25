@@ -8,8 +8,6 @@ defmodule LemonRouter.Application do
 
   @impl true
   def start(_type, _args) do
-    _ = LemonRouter.EngineRuntimeConfiguration.validate_configured()
-
     children =
       [
         # Owns drain admission before any queues or runs can start.
@@ -40,6 +38,10 @@ defmodule LemonRouter.Application do
           {Registry, keys: :unique, name: LemonRouter.RunRegistry},
           {Registry, keys: :unique, name: LemonRouter.SessionRegistry},
           {Registry, keys: :unique, name: LemonRouter.ConversationRegistry},
+          # A lost permit authority or claim registry restarts every later
+          # child, so runs holding permits stop before new work is admitted.
+          {Registry, keys: :unique, name: LemonRouter.EngineSessionRegistry},
+          LemonRouter.Slots,
           {DynamicSupervisor,
            strategy: :one_for_one,
            name: LemonRouter.RunSupervisor,

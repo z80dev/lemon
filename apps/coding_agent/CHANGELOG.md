@@ -10,6 +10,11 @@
   makes it distinct). `PromptJournal.attach/2` is replaced by
   `PromptJournal.append_reply/3`; version 1 inline snapshots are still read (#676).
 
+- Native executor calls now receive `LemonCore.ExecutionCommand` directly.
+  Local runs borrow execution capacity through the run owner's slot lender;
+  named nodes never receive it. SMS tools are registered by the ingress app
+  rather than attached by the native executor (#728).
+
 ### Removed
 
 - **Breaking:** removed `CodingAgent.SessionIndex`, `SessionManager.list_sessions/1`
@@ -29,7 +34,7 @@
 
 ### Fixed
 
-- The `agent` tool lends the calling run's gateway permit while a sync run or
+- The `agent` tool lends the calling run's permit while a sync run or
   join waits, bounds joins by `timeout_ms`, applies `BudgetEnforcer` (refusal,
   child reservation, `meta.delegated_budget` limits enforced by the child
   session via the new `:delegated_budget` session option, usage charged back)

@@ -11,7 +11,7 @@ silent permissions.
 <!-- architecture_policy:start -->
 | App | Actual direct deps from `mix.exs` | Allowed direct deps | Reference-only exceptions |
 | --- | --- | --- | --- |
-| `coding_agent` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_lsp`, `lemon_mcp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_lsp`, `lemon_mcp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | *(none)* |
+| `coding_agent` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_lsp`, `lemon_mcp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_lsp`, `lemon_mcp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | *(none)* |
 | `lemon_agent` | `lemon_ai`, `lemon_core` | `lemon_ai`, `lemon_core` | *(none)* |
 | `lemon_ai` | *(none)* | *(none)* | *(none)* |
 | `lemon_automation` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_mcp`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_mcp`, `lemon_router`, `lemon_skills` | *(none)* |
@@ -30,7 +30,7 @@ silent permissions.
 | `lemon_memory` | `lemon_core` | `lemon_core` | *(none)* |
 | `lemon_omp` | `lemon_agent`, `lemon_ai`, `lemon_core` | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* |
 | `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_memory` | *(none)* |
-| `lemon_router` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_mcp`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_mcp`, `lemon_media`, `lemon_memory` | *(none)* |
+| `lemon_router` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_mcp`, `lemon_media`, `lemon_memory` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_mcp`, `lemon_media`, `lemon_memory` | *(none)* |
 | `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* |
 | `lemon_web` | `lemon_agent`, `lemon_automation`, `lemon_control_plane`, `lemon_core`, `lemon_memory`, `lemon_router` | `lemon_agent`, `lemon_automation`, `lemon_control_plane`, `lemon_core`, `lemon_memory`, `lemon_router` | *(none)* |
 <!-- architecture_policy:end -->
@@ -111,7 +111,7 @@ the dependency policy above, not these source-level rules:
 - `lemon_router` may emit semantic `LemonCore.DeliveryIntent` values, but it may not construct `LemonChannels.OutboundPayload` values or reference Telegram renderer helpers directly.
 - Automation binds supervision targets and submits terminal facts through the registered `LemonCore.ChannelSupervision` capability. Channels owns its implementation, durable admission, rendering and Outbox delivery. No consumer resolves a channels namespace or constructs platform payloads across this boundary.
 - `lemon_channels` owns channel rendering and presentation state. It must not mutate inbound prompts for pending-compaction behavior.
-- `lemon_gateway` owns execution slots and the native execution lifecycle. Router-owned queue semantics, chat-state readback for automatic-resume request mutation, and conversation-key selection must not move back into gateway. Router hands pre-resolved, engine-less `LemonCore.ExecutionCommand` values to `LemonCore.EngineRuntime`; gateway adapts them to its private `LemonGateway.ExecutionRequest` and invokes the fixed native executor. `LemonGateway.Runtime.submit/1` must not be reintroduced as a compatibility path. Default gateway startup is execution-only; gateway-native transport, command, SMS, and voice children require explicit `:gateway_ingress_enabled` configuration. Those surfaces are gateway-owned by design rather than pending migration — SMS, webhook, and voice do not fit `LemonChannels.Plugin`.
+- `lemon_router` owns native run lifecycle and execution permits. Its `RunProcess` starts the fixed native executor directly with an engine-less `LemonCore.ExecutionCommand`. The run event bus is an observer interface, not an executor-to-owner relay. `lemon_gateway` is an optional ingress app, not an execution dependency or an alternate submission path. Webhook, SMS, and voice remain gateway-owned and start only with `:gateway_ingress_enabled`.
 - Gateway-owned transports submit through `LemonCore.RouterBridge` when they need router normalization. They must not take a compile-time dependency on `LemonRouter.RunOrchestrator`.
 - Router-owned active session state is only exposed through `LemonRouter.Router` and `LemonCore.RouterBridge`. External apps must not reference `LemonRouter.SessionRegistry` directly.
 - Top-level requests and execution commands never validate or carry a runner identity. `engine: "lemon"` remains fixed run provenance in events and stores. `ResumeToken.engine` and historical `ChatState.last_engine` remain persisted discriminators; only native tokens may resume a top-level run, while non-native historical values are retained and quarantined from resume. Subagents execute natively in-process (`CodingAgent.Session` via the task lifecycle); there is no external CLI runner registry. `LemonCore.Cwd` is the only default-cwd resolver.
@@ -141,9 +141,8 @@ one retry budget even when more than one provider layer is involved.
 `LemonCore.RuntimeSeam` implements optional-consumer configuration, validation
 and protected dispatch. `AgentRuntime`, `ChannelSupervision`, `AgentMessaging`,
 `RouterBridge`, `EventBridge` and `EngineInfoBridge` retain only their domain
-contracts, acknowledgement checks and failure policies; `EngineRuntime` retains
-its execution behaviour and delegates implementation validation to the same
-seam. These domain APIs are not interchangeable registries. Missing consumers
+contracts, acknowledgement checks and failure policies. These domain APIs are
+not interchangeable registries. Missing consumers
 retain their documented degradation; reached mutation failures remain
 `:outcome_unknown` and queries never masquerade as successful empty state.
 

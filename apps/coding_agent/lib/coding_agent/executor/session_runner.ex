@@ -15,12 +15,7 @@ defmodule CodingAgent.Executor.SessionRunner do
   alias CodingAgent.Session.RunTranslator
   alias CodingAgent.Tools.SendFile
   alias CodingAgent.Tools.Task.InvocationAuthority
-  alias LemonGateway.ExecutionRequest
-  alias LemonGateway.Tools.SmsClaimMessage
-  alias LemonGateway.Tools.SmsGetInboxNumber
-  alias LemonGateway.Tools.SmsListMessages
-  alias LemonGateway.Tools.SmsReleaseInbox
-  alias LemonGateway.Tools.SmsWaitForCode
+  alias LemonCore.ExecutionCommand
 
   require Logger
 
@@ -48,7 +43,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     @behaviour CodingAgent.Session.RunTranslator.Emitter
 
     alias CodingAgent.Session.Presentation
-    alias LemonGateway.Event
+    alias CodingAgent.Executor.Event
 
     defstruct [:sink_pid, :run_ref, :session, :session_id]
 
@@ -132,7 +127,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     GenServer.start_link(__MODULE__, opts)
   end
 
-  # A cast: the gateway Run that requests cancellation never blocks on a busy
+  # A cast: the run owner that requests cancellation never blocks on a busy
   # session; it holds its permit until this runner exits or its drain deadline.
   def cancel(pid, reason \\ :user_requested) do
     GenServer.cast(pid, {:cancel, reason})
@@ -156,7 +151,13 @@ defmodule CodingAgent.Executor.SessionRunner do
 
   defp init_session(opts) do
     request = Keyword.fetch!(opts, :request)
-    request = %{request | meta: RemoteRequestCodec.normalize_meta(request.meta)}
+
+    request = %{
+      request
+      | images: request.images || [],
+        meta: RemoteRequestCodec.normalize_meta(request.meta)
+    }
+
     run_opts = Keyword.get(opts, :opts, %{})
 
     request =
@@ -197,7 +198,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     session_key = request.session_key
     agent_id = request_agent_id(request)
     async_followups = async_followups(request)
-    extra_tools = extra_tools(request, run_opts)
+    extra_tools = send_file_tools(request, run_opts)
 
     # Passed through to CodingAgent.Session, whose Lifecycle.initialize applies
     # CodingAgent.Session.ProviderFallback.maybe_wrap (a no-op when no runtime
@@ -245,6 +246,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         system_prompt: get_in(meta, [:system_prompt]),
         profile_instructions: get_in(meta, [:profile_instructions]),
         project_memory_capture: Map.get(meta, :project_memory_capture, true),
+        slot_lender: get_opt(run_opts, :slot_lender),
         session_mode: Map.get(meta, :session_mode),
         persona: Map.get(meta, :persona),
         stream_fn: stream_fn,
@@ -580,37 +582,15 @@ defmodule CodingAgent.Executor.SessionRunner do
     _, _ -> {:error, :native_source_floor_unavailable}
   end
 
-  defp extra_tools(%ExecutionRequest{} = request, opts) do
-    cwd = request.cwd || get_opt(opts, :cwd) || File.cwd!()
-    send_file_tools(request, opts) ++ sms_tools(cwd, request.session_key)
-  end
-
   # Only an explicit run cwd (or profile workspace) is a send root; the process
   # cwd fallback is never one, so a cwd-less run cannot attach host files.
-  defp send_file_tools(%ExecutionRequest{} = request, opts) do
+  defp send_file_tools(%ExecutionCommand{} = request, opts) do
     if SendFile.channel(request.session_key) do
       [
         SendFile.tool(request.cwd || get_opt(opts, :cwd),
           session_key: request.session_key,
           workspace_dir: profile_workspace(request.meta || %{})
         )
-      ]
-    else
-      []
-    end
-  end
-
-  # SMS tools are offered only when SMS ingress is usable (webhook enabled with
-  # an auth token) and both the inbox and its listener are running; otherwise
-  # their schemas are not offered to the model at all.
-  defp sms_tools(cwd, session_key) do
-    if LemonGateway.Sms.Inbox.available?() do
-      [
-        SmsGetInboxNumber.tool(cwd, session_key: session_key),
-        SmsWaitForCode.tool(cwd, session_key: session_key),
-        SmsListMessages.tool(cwd, session_key: session_key),
-        SmsClaimMessage.tool(cwd, session_key: session_key),
-        SmsReleaseInbox.tool(cwd, session_key: session_key)
       ]
     else
       []

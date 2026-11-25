@@ -83,8 +83,8 @@ Every type in `LemonCore.Events.registry/0` has exactly one delivery class. The
 class says what a consumer may conclude when it did not see the event.
 
 - **durable**: the owner commits the state change before it publishes the event.
-  `LemonRouter.RunCompletion` and `LemonGateway.Run` finalize the `:runs` summary
-  before broadcasting `:run_completed`; `ExecApprovals` writes the approval
+  `LemonRouter.RunCompletion` alone finalizes the `:runs` summary before
+  broadcasting `:run_completed`; `ExecApprovals` writes the approval
   record before `:approval_requested` and `:approval_resolved`; `CronStore` and
   `GoalStore` write before emitting. The event only announces the change. A
   consumer that missed it (overflow, reconnect, a late subscriber) re-reads the
@@ -137,7 +137,7 @@ a failed write can be announced as committed.
 
 `Bus.subscribe/1` remains an unbounded raw subscription. In particular the
 agent-loop → Agent → native Session owner notifications, Session task/approval
-ingress, gateway executor sink, router run-owner ingress, channel adapter
+ingress, executor-to-router run-owner messages, channel adapter
 session/run/approval subscriptions, webhook completion waiters, ACP/SSE streaming,
 and voice/audio bridges do **not** acquire end-to-end mailbox bounds merely
 because operator fanout is bounded. Generic `EventStream.push_async` users also
@@ -239,13 +239,13 @@ The busiest topic and the only one whose subscribers span the umbrella.
 
 | Event type | Publisher | Payload |
 |---|---|---|
-| `:run_started` (typed) | `LemonGateway.Run` | `Events.RunStarted` (`run_id`, `session_key`, `engine: "lemon"`, optional `model`, `provider`, `thinking_level`) |
-| `:delta` (typed) | `LemonGateway.Run` | `Events.Delta` (`run_id`, `seq`, `text`, `ts_ms`, `meta`) |
-| `:run_completed` (typed) | `LemonGateway.Run` (including admission failures); synthetic completions from `LemonRouter.RunProcess`, `RunProcess.Watchdog`, and `SessionCoordinator` | `Events.RunCompleted` wrapping `Events.Completion`; synthetic ones carry `meta.synthetic == true` |
+| `:run_started` (typed) | `LemonRouter.RunProcess` | `Events.RunStarted` (`run_id`, `session_key`, `engine: "lemon"`, optional `model`, `provider`, `thinking_level`) |
+| `:delta` (typed) | `LemonRouter.RunProcess` | `Events.Delta` (`run_id`, `seq`, `text`, `ts_ms`, `meta`) |
+| `:run_completed` (typed) | `LemonRouter.RunCompletion` for owned runs (including synthetic completions from `RunProcess`) and queued drops from `SessionCoordinator` | `Events.RunCompleted` wrapping `Events.Completion`; synthetic ones carry `meta.synthetic == true` |
 | `:run_failed` (typed) | `LemonRouter.RunProcess` (abnormal termination) | `Events.RunFailed` (`run_id`, `session_key`, `reason`) |
-| `:engine_action` (typed) | `LemonGateway.Run`; `CodingAgent.TaskRuntime.Child` (a task's owner) and `Task.Async` for projected child actions; `LemonCore.Event.engine_reasoning/1` | `Events.EngineAction` wrapping `Events.Action` |
-| `:engine_started`, `:engine_completed`, `:engine_event` | `LemonGateway.Run` (native executor events) | plain maps; `:engine_event` is the escape hatch for unrecognised native events (not registered) |
-| `:checkpoint_created` / `_restored` / `_deleted` | `LemonCore.Checkpoint`; remote ones relayed by `LemonGateway.Run` | map (checkpoint id/kind, tool, action, path counts) — also on `session:<key>` (not registered) |
+| `:engine_action` (typed) | `LemonRouter.RunProcess`; `CodingAgent.TaskRuntime.Child` (a task's owner) and `Task.Async` for projected child actions; `LemonCore.Event.engine_reasoning/1` | `Events.EngineAction` wrapping `Events.Action` |
+| `:engine_started`, `:engine_completed`, `:engine_event` | `LemonRouter.RunProcess` (native executor events) | plain maps; `:engine_event` is the escape hatch for unrecognised native events (not registered) |
+| `:checkpoint_created` / `_restored` / `_deleted` | `LemonCore.Checkpoint`; remote ones relayed by `LemonRouter.RunProcess` | map (checkpoint id/kind, tool, action, path counts) — also on `session:<key>` (not registered) |
 | `:task_started` / `_completed` / `_error` / `_timeout` / `_aborted` | `CodingAgent.Tools.Task.Async` | map (`task_id`, `run_id`, `parent_run_id`, `session_key`, `agent_id`, …); published to the child run and the parent run |
 | `:run_graph_changed` | `CodingAgent.RunGraphServer` | map (`run_id`, `parent_run_id`, `session_key`, `status`, …); child and parent run topics |
 | `:parent_question_*` | `CodingAgent.ParentQuestions` | full question record; child and parent run topics (also `parent_question:<id>`, §2.9) |
@@ -274,8 +274,8 @@ Frames call that invocation process directly rather than a singleton broker.
 The authenticated socket owns its unique node-ID Registry entry, which is
 removed automatically on socket death; credential-generation floors are retained.
 `CodingAgent.Executor.RemoteSessionRunner` sends deltas and tool actions through
-the usual gateway sink, so the gateway assigns normal delta sequence numbers and
-the router forwards the unchanged typed events to the session topic. Checkpoints
+the same direct run-owner sink as local execution. `RunProcess` assigns normal
+delta sequence numbers and forwards the unchanged typed events to the session topic. Checkpoints
 use the same sink ordering and existing checkpoint event names. The controller
 emits one started event and the terminal `node.invoke.result` still completes the run.
 
@@ -597,8 +597,7 @@ types; the shim was removed on 2026-08-13 once `EventBridge` and the other consu
 converted to struct patterns. Notable fixes along the way: `:run_failed` now uses the
 `LemonCore.Event` envelope; timer-heartbeat completion output is read from
 `completed.answer`; publishers gate on `Bus.running?/0` instead of `Process.whereis/1`;
-the gateway no longer publishes a duplicate `:run_phase_changed` (the type itself was
-retired in #710: it had no consumer); the bare-tuple
+the unused `:run_phase_changed` event was retired (#710); the bare-tuple
 `DependencyManager.build_event/3` fallback and its receive clauses were deleted;
 `:acp_client_request` left the bus for `LemonCore.ACPClientBridge`; and the `kanban*`
 broadcasts were deleted. `:channel_delivery` (2026-08-16) gave `channels` its first publisher.

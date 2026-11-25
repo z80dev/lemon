@@ -717,6 +717,7 @@ defmodule CodingAgent.Session.Lifecycle do
         budget_scope: Map.get(state.budget_limits, :scope),
         run_id: state.run_id,
         session_key: state.session_key,
+        slot_lender: Keyword.get(state.tool_opts, :slot_lender),
         agent_id: state.agent_id,
         settings_manager: state.settings_manager,
         workspace_dir: state.workspace_dir,

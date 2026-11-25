@@ -61,8 +61,8 @@ blaming the change, and run the final premerge once on the integrated tree.
 | Agent loop, model runtime, shared tools | [lemon_agent](apps/lemon_agent/AGENTS.md) |
 | Native sessions, coding tools, subagents and execution nodes | [coding_agent](apps/coding_agent/AGENTS.md) |
 | Config, secrets, Store, Bus and boundary contracts | [lemon_core](apps/lemon_core/AGENTS.md) |
-| Conversation routing, queues and delivery intents | [lemon_router](apps/lemon_router/AGENTS.md) |
-| Execution slots, lifecycle, SMS/voice/webhook ingress | [lemon_gateway](apps/lemon_gateway/AGENTS.md) |
+| Conversation routing, run execution and delivery intents | [lemon_router](apps/lemon_router/AGENTS.md) |
+| Opt-in SMS/voice/webhook ingress | [lemon_gateway](apps/lemon_gateway/AGENTS.md) |
 | Messaging adapters, rendering and delivery outbox | [lemon_channels](apps/lemon_channels/AGENTS.md) |
 | Authenticated HTTP/WebSocket API and A2A edge | [lemon_control_plane](apps/lemon_control_plane/AGENTS.md) |
 | Setup, runtime commands and source/release dispatch | [lemon_cli](apps/lemon_cli/README.md) |
@@ -85,15 +85,15 @@ blaming the change, and run the final premerge once on the integrated tree.
 ## Runtime seams
 
 1. Channels normalize and authorize inbound traffic, then submit through
-   `LemonCore.RouterBridge`. Router owns conversation keys, policy, queues and
-   compaction. Gateway owns slots, launch locks and executor lifecycle.
-2. Router submits `LemonCore.ExecutionCommand` through `LemonCore.EngineRuntime`;
-   gateway-private requests never cross this boundary. Router emits semantic
-   `LemonCore.DeliveryIntent`; channels own payloads, send/edit, truncation and
-   platform message indices.
-3. Gateway uses the configured native `CodingAgent.Executor`. `task` and `@name`
-   personas spawn in-process child sessions; `agent` delegates via router, locally
-   or to a named execution node. Do not restore vendor CLI execution engines.
+   `LemonCore.RouterBridge`. Gateway is an optional ingress consumer of that
+   seam, not an execution layer.
+2. Router owns conversation keys, policy, queues, compaction and execution.
+   Router emits `LemonCore.DeliveryIntent`; channels own payloads, send/edit,
+   truncation and platform message indices.
+3. Router passes `LemonCore.ExecutionCommand` directly to `CodingAgent.Executor`.
+   `task` and `@name` personas spawn in-process child sessions; `agent`
+   delegates via router, locally or to a named execution node. Do not restore
+   vendor CLI execution engines.
 4. Provider wire protocols belong in `lemon_ai`; Lemon config and credential
    resolution belong in `lemon_agent`. `lemon_ai` and `lemon_core` have no
    umbrella dependencies. Use runtime registries for optional consumers, not

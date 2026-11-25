@@ -6,7 +6,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   alias CodingAgent.ExecutionNode.{TokenStore, Worker}
   alias CodingAgent.Executor.RemoteRequestCodec
   alias LemonCore.{ExecutionContext, ResumeToken, ToolPolicy}
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   defmodule FakeSocket do
     use GenServer
@@ -34,7 +34,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   defmodule FakeExecutor do
-    def start_run(%ExecutionRequest{} = request, opts, sink_pid) do
+    def start_run(%ExecutionCommand{} = request, opts, sink_pid) do
       run_ref = make_ref()
       runner_pid = spawn(fn -> Process.sleep(:infinity) end)
       context = %{runner_pid: runner_pid, marker: request.run_id}
@@ -545,7 +545,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
       {:ok, execution_context} =
         ExecutionContext.new(run_id: "run-#{resume_source}", cwd: tmp_dir)
 
-      request = %ExecutionRequest{
+      request = %ExecutionCommand{
         run_id: "run-#{resume_source}",
         session_key: "session-#{resume_source}",
         prompt: "resume #{resume_source}",
@@ -1358,11 +1358,11 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     send(worker, {
       :engine_event,
       run_ref,
-      LemonGateway.Event.action_event(%{
+      CodingAgent.Executor.Event.action_event(%{
         engine: "lemon",
         phase: :started,
         action:
-          LemonGateway.Event.action(%{
+          CodingAgent.Executor.Event.action(%{
             id: "tool_call-1",
             kind: "file_change",
             title: "Write big.txt",
@@ -1434,10 +1434,10 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
       send(worker, {
         :engine_event,
         run_ref,
-        LemonGateway.Event.action_event(%{
+        CodingAgent.Executor.Event.action_event(%{
           engine: "lemon",
           phase: :started,
-          action: LemonGateway.Event.action(%{id: "a#{i}", kind: "tool", title: "t", detail: %{}})
+          action: CodingAgent.Executor.Event.action(%{id: "a#{i}", kind: "tool", title: "t", detail: %{}})
         })
       })
     end

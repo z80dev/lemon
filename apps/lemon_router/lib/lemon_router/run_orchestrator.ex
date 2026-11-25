@@ -1013,7 +1013,7 @@ defmodule LemonRouter.RunOrchestrator do
       }
     }
 
-    case RunStore.finalize(run_id, summary) do
+    case LemonRouter.RunCompletion.abandon(run_id, summary) do
       :ok ->
         with :ok <- LemonRouter.RunReceiptStore.retain_terminal_evidence(run_id),
              :ok <- CrashRecovery.record(run_id, :abandoned, reason, attempts) do

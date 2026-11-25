@@ -5,9 +5,14 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
   alias CodingAgent.Session.RootLifecycle
   alias LemonAgent.Test.Mocks
   alias LemonCore.ResumeToken
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   @moduletag :tmp_dir
+
+  defmodule SlotLender do
+    def lend(_run_id), do: :none
+    def return(_token, _mode), do: :ok
+  end
 
   setup %{tmp_dir: cwd} do
     observer = self()
@@ -63,8 +68,9 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
   end
 
   test "a second turn reuses the live owner without journal loads or environment captures", ctx do
-    {first, session, id} = start_turn(ctx, "first")
+    {first, session, id} = start_turn(Map.put(ctx, :run_opts, %{slot_lender: SlotLender}), "first")
     assert_receive {:provider, provider, _context, _options}, 5_000
+    assert Session.get_state(session).tool_opts[:slot_lender] == SlotLender
     send(provider, {:respond, "complete prior answer"})
     complete(first)
 
@@ -81,6 +87,7 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
     {second, same_session, ^id} = start_turn(ctx, "second", id)
     assert same_session == session
     assert Session.get_state(session).agent == first_agent
+    refute Keyword.has_key?(Session.get_state(session).tool_opts, :slot_lender)
     assert_receive {:provider, provider, context, _options}, 5_000
     assert Enum.any?(context.messages, &(Map.get(&1, :role) == :assistant))
     send(provider, {:respond, "second answer"})
@@ -372,7 +379,7 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
   end
 
   defp start_turn(ctx, prompt, id \\ nil, source \\ :explicit) do
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "live-root-#{System.unique_integer([:positive, :monotonic])}",
       session_key: "agent:live-root-#{Path.basename(ctx.tmp_dir)}:main",
       prompt: prompt,

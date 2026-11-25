@@ -13,6 +13,7 @@ defmodule LemonRouter.MixProject do
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 69]],
+      elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps()
     ]
   end
@@ -24,6 +25,9 @@ defmodule LemonRouter.MixProject do
     ]
   end
 
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_env), do: ["lib"]
+
   defp deps do
     [
       {:lemon_ai, in_umbrella: true},
@@ -33,6 +37,7 @@ defmodule LemonRouter.MixProject do
       {:lemon_media, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},
       {:lemon_agent, in_umbrella: true},
+      {:coding_agent, in_umbrella: true},
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.16"},
       {:jason, "~> 1.4"},

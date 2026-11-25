@@ -22,6 +22,7 @@ defmodule LemonRouter.Health do
       {"supervisor", fn -> process_alive_check(LemonRouter.Supervisor) end},
       {"run_orchestrator", fn -> process_alive_check(LemonRouter.RunOrchestrator) end},
       {"run_supervisor", fn -> run_supervisor_check() end},
+      {"slots", fn -> LemonRouter.Slots.stats() end},
       {"run_counts", fn -> run_counts_check() end}
     ]
   end

@@ -32,7 +32,6 @@ defmodule CodingAgent.MixProject do
       {:lemon_ai, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
-      {:lemon_gateway, in_umbrella: true},
       {:lemon_memory, in_umbrella: true},
       # MCP is loaded explicitly by the release; consumers own client supervision.
       {:lemon_mcp, in_umbrella: true, runtime: false},

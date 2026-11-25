@@ -1,8 +1,8 @@
 # LemonChannels contributor guide
 
 Channels owns external messaging adapters, authorization/normalization, platform
-rendering and the delivery outbox. Router owns conversation semantics and prompt
-mutation; gateway owns execution slots. See [README](README.md) for adapter setup
+rendering and the delivery outbox. Router owns conversation semantics, prompt
+mutation and execution slots. See [README](README.md) for adapter setup
 and script notifications.
 
 ## App seams

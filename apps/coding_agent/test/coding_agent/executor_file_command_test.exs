@@ -4,7 +4,7 @@ defmodule CodingAgent.ExecutorFileCommandTest do
   alias CodingAgent.Executor
   alias LemonAgent.Test.Mocks
   alias LemonAi.Types.{TextContent, UserMessage}
-  alias LemonGateway.ExecutionRequest
+  alias LemonCore.ExecutionCommand
 
   @moduletag :tmp_dir
 
@@ -52,7 +52,7 @@ defmodule CodingAgent.ExecutorFileCommandTest do
       stream.(model, context, options)
     end
 
-    request = %ExecutionRequest{
+    request = %ExecutionCommand{
       run_id: "run-file-command-#{System.unique_integer([:positive])}",
       session_key: "test:lemon:#{System.unique_integer([:positive])}",
       prompt: prompt,

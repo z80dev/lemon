@@ -1,21 +1,19 @@
 # LemonRouter
 
-`lemon_router` owns request normalization, conversation identity, queue semantics, and semantic output tracking.
-It sits between channel transports and `lemon_gateway`.
+`lemon_router` owns request normalization, conversation ordering, top-level
+run execution, and semantic output tracking.
 
 ## Current Flow
 
 ```text
-Channel transport or gateway-native ingress
-  -> LemonChannels.Runtime.submit_inbound/2 (RunRequestBuilder.from_inbound/1)
+LemonChannels.Runtime.submit_inbound/2 (via RunRequestBuilder), or other product ingress
   -> LemonCore.RouterBridge.submit_run/1
   -> LemonRouter.RunOrchestrator
   -> LemonRouter.SessionCoordinator
-  -> LemonRouter.RunProcess
-  -> configured LemonCore.EngineRuntime.submit_execution/1
-  -> gateway Runtime -> Run -> EngineSessionClaim -> Slots -> executor
-  -> LemonCore.Bus run events
-  -> LemonRouter semantic coalescers / output tracking
+  -> LemonRouter.RunProcess (engine-session claim, terminal fence, then FIFO permit)
+  -> CodingAgent.Executor (LemonCore.ExecutionCommand)
+  -> engine events and deltas directly back to RunProcess
+  -> LemonCore.Bus observers and router semantic output tracking
   -> LemonCore.DeliveryIntent
   -> LemonChannels.Dispatcher
   -> channel-specific renderer / outbox
@@ -39,6 +37,8 @@ LemonRouter.Supervisor (one_for_one)
   +-- RoutingFeedbackStore
   +-- ConversationSupervisor (rest_for_one)
   |     +-- RunRegistry, SessionRegistry, ConversationRegistry
+  |     +-- EngineSessionRegistry
+  |     +-- Slots
   |     +-- RunSupervisor (DynamicSupervisor, run_process_limit)
   |     +-- SessionCoordinatorSupervisor (DynamicSupervisor)
   |     +-- RunCountTracker
@@ -65,11 +65,11 @@ failures are isolated from the conversation subtree and from each other.
   - queue semantics: `collect`, `followup`, `steer`, `steer_backlog`, `interrupt`
   - transactional pending-compaction prompt rewriting
   - semantic stream and tool-status coalescing
+  - engine-session ownership, FIFO execution permits and run lifecycle
 - Router does not own:
   - Telegram or Discord rendering details
   - `OutboundPayload` construction
   - Telegram message-id presentation state
-  - gateway slot scheduling or engine lifecycle
 
 ## Key Modules
 
@@ -81,7 +81,10 @@ failures are isolated from the conversation subtree and from each other.
 | Router internal session read model | Internal read model over coordinator-owned active session state |
 | `LemonRouter.ConversationKey` | Canonical conversation-key selection from structured resume or session key |
 | `LemonRouter.ResumeResolver` | Structured resume resolution before runtime submission |
-| `LemonRouter.RunProcess` | Active-run lifecycle wrapper around one execution |
+| `LemonRouter.RunProcess` | `gen_statem` and sole owner of a live run, its executor, claim, and permit |
+| `LemonRouter.RunCompletion` | Sole terminal writer for `:runs`; commits before terminal notification |
+| `LemonRouter.Slots` | Global FIFO permits, including permit lending for blocked delegation |
+| `LemonRouter.Health` | Router health, including execution-slot counters |
 | `LemonRouter.MediaJobRecorder` | Records generated final-answer files into redacted media job metadata before channel delivery |
 | LemonRouter.ChannelsDelivery (internal) | Narrow bridge from router-adjacent automation delivery requests into `LemonChannels`; must not construct `OutboundPayload` or own channel rendering |
 | `LemonRouter.StreamCoalescer` | Semantic answer coalescing that emits `DeliveryIntent` snapshots/finalization |
@@ -111,11 +114,9 @@ attachment policy.
 
 ## Important Contracts
 
-- Router startup validates the configured `:engine_runtime` through
-  `LemonCore.EngineRuntime.validate/1`. Invalid wiring is logged once and its
-  binding is disabled without changing the router-only degraded mode: the
-  router still boots and runtime operations retain their existing
-  unavailable-runtime handling.
+- Production runs use `CodingAgent.Executor` directly. Tests driving public router
+  submission may set `config :lemon_router, :test_executor, MyExecutor`;
+  a directly started `RunProcess` can take an executor override.
 - Inbound callers should provide structured resume data through `LemonCore.RunRequest.resume` when they already know it.
 - `ResumeResolver.bind/3` also binds each native session to the session key of the run that first binds it (`LemonCore.NativeSessionOwner`, first write wins). Explicit and automatic resumes are admitted only for that session key; requests carrying channel provenance also refuse unbound (pre-binding) native sessions and start a fresh one instead.
 - `RouterBridge.submit_run/1` returns the exact `RunOrchestrator.submit/1` error
@@ -140,7 +141,6 @@ attachment policy.
   command exit code, exception class/name, status, reason, message, and
   validation errors.
 - Cron/channel-origin summary delivery may cross router through the internal LemonRouter.ChannelsDelivery bridge, but the bridge must stay narrow. Router must not construct `LemonChannels.OutboundPayload`; `LemonChannels` remains responsible for enqueue semantics, retries, chunking, and adapter delivery.
-- Runtime input is `LemonCore.ExecutionCommand`; gateway-private adapters may translate it to `LemonGateway.ExecutionRequest`.
 - Telegram-specific state is owned by `lemon_channels` wrappers:
   - `LemonChannels.Telegram.StateStore`
   - `LemonChannels.Telegram.ResumeIndexStore`
@@ -172,8 +172,8 @@ of pending prompt text and 16 MiB of encoded pending image data. A new submissio
 exceeding a bound returns `:session_queue_full` without mutating the queue or
 interrupting the active run;
 replaying an already retained fixed run ID remains an acknowledgement lookup.
-Gateway bounds executing Runs, not its waiter population. Router's run-process
-limit bounds normal routed waiters; direct runtime submissions bypass that cap.
+The router's run-process limit bounds both permit waiters and executing runs;
+`[gateway].max_concurrent_runs` independently limits concurrent execution.
 Coordinators are never stopped on idle and their supervisor is uncapped: one
 process remains per distinct conversation for the VM lifetime. See the canonical
 [admission inventory](../../docs/architecture/admission-gates.md).
@@ -200,23 +200,25 @@ Stale markers and markers with no usable history clear eagerly. Prior run
 summaries are carried as JSONL with escaped envelope characters and are bounded
 by dropping complete oldest run entries rather than slicing through role data.
 
-`RunProcess` retries runtime unavailability and a busy engine session (the
-previous run still draining its cancellation) only, until its pre-start
-deadline; definite gateway rejection terminalizes immediately rather than
-retrying admission. Watchdog expiry and keep-alive cancel go through the same
-abort path as a user abort: the run waits for the gateway's real completion or
-its exit, with `meta.cancel_reason` naming the real reason.
-Persistent unavailability emits one structured synthetic `:run_completed` event
-so the active conversation is released. From acceptance onward, including while
-the gateway run waits for an execution permit, `RunProcess` monitors it: a run
-that exits without a completion is terminalized once after a short grace for a
-late real completion, and the next queued message starts. An unknown submit
-outcome (an exit or malformed acknowledgement) adopts the run under its fixed ID
-and never resubmits it. If a queued child
-cannot start later, `SessionCoordinator` emits the corresponding structured
-start-failure completion before cleaning up its event-bridge subscription and
-continues with the next queued submission. A child already registered after an
-ambiguous supervisor error is adopted to avoid double completion.
+`RunProcess` claims the native session through `EngineSessionClaim` and
+`EngineSessionRegistry`. Session contention (`:session_in_use`) retries within
+the 30-second submission deadline without using a permit. Once claimed, it checks
+the durable `RunStore` terminal fence, waits for a FIFO permit, and rechecks
+terminal/cancellation state before invoking the executor.
+
+Executor `{:engine_event, …}` and `{:engine_delta, …}` messages arrive directly
+at the owner. It persists events and publishes run-topic updates, including
+`run_started`, `delta`, `engine_*`, and `checkpoint_*`. `SessionCoordinator`
+uses `RunProcess.steer/5` for steer or redirect. Cancellation, idle watchdog
+expiry, and restart drain are handled by the owner; cancellation requests the
+executor to stop and allows up to 15 seconds for it to drain.
+
+`RunCompletion.finalize/3` handles owned runs, `publish/2` handles dropped
+submissions without an owner, and `abandon/2` handles crash recovery. An executor
+exit without completion yields the structured error `executor_down` with a
+reason class. An owner crash terminalizes once with `:run_owner_terminated`.
+Registered children are adopted after ambiguous supervisor errors rather than
+started twice.
 
 Fixed run IDs are router idempotency keys, not merely correlation labels. The
 orchestrator writes a durable request-identity claim before queue mutation;

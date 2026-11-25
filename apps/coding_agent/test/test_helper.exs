@@ -71,7 +71,7 @@ exclude_tags =
 ExUnit.configure(exclude: exclude_tags)
 ExUnit.start(capture_log: true)
 
-# Use a test-local store backend so coding_agent tests don't depend on lemon_gateway.
+# Use a test-local store backend for isolated coding_agent tests.
 Code.require_file("support/test_store.ex", __DIR__)
 Application.put_env(:lemon_core, :store_mod, CodingAgent.TestStore)
 

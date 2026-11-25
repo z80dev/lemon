@@ -110,6 +110,7 @@ defmodule CodingAgent.Session.Presentation do
       ])
     )
     |> maybe_add_opt(:run_id, run_id)
+    |> maybe_add_opt(:slot_lender, Keyword.get(opts, :slot_lender))
     |> maybe_add_opt(:session_key, session_key)
     |> maybe_add_opt(:agent_id, agent_id)
     |> maybe_add_opt(:acp_session_id, Keyword.get(opts, :acp_session_id))

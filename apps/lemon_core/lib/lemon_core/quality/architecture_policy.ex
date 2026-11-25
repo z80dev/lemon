@@ -22,7 +22,6 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_ai,
       :lemon_browser,
       :lemon_core,
-      :lemon_gateway,
       :lemon_mcp,
       :lemon_lsp,
       :lemon_memory,
@@ -70,6 +69,8 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     # tools and instructions section register through the platform registries
     # at boot, and nothing in the platform names it.
     lemon_computer_use: [:lemon_agent, :lemon_ai, :lemon_core],
+    # An opt-in ingress satellite (webhook, SMS, voice): it submits through the
+    # router bridge and registers its SMS tools; nothing depends on it.
     lemon_gateway: [:lemon_agent, :lemon_core, :lemon_media],
     # A satellite: it implements platform contracts (a memory provider, a
     # context contributor, agent tools) and registers itself on the way up, so
@@ -94,7 +95,10 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_core,
       :lemon_memory
     ],
+    # The router owns each run end to end and calls the native executor
+    # directly; coding_agent reaches the router only through core bridges.
     lemon_router: [
+      :coding_agent,
       :lemon_agent,
       :lemon_ai,
       :lemon_channels,

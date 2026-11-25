@@ -16,14 +16,10 @@ defmodule LemonRouter.RunProcess.RetryHandlerTest do
     end
   end
 
-  test "formats gateway exception failures without stack traces" do
-    stack = [{CodingAgent.Session.ModelResolver, :resolve_session_model, 2, [line: 29]}]
-
-    error =
-      {:gateway_run_down,
-       {%ArgumentError{message: "unknown model \"definitely-missing-model\""}, stack}}
-
-    assert RetryHandler.format_run_error(error) == "unknown model \"definitely-missing-model\""
-    refute RetryHandler.format_run_error(error) =~ "CodingAgent.Session.ModelResolver"
+  test "formats executor exits without exposing internal terms" do
+    for reason <- [:normal, :killed, :shutdown, :crashed] do
+      assert RetryHandler.format_run_error(%{type: :executor_down, reason: reason}) ==
+               "executor exited: #{reason}"
+    end
   end
 end

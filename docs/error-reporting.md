@@ -87,7 +87,7 @@ this:
    `CodingAgent.Session`, `CodingAgent.Executor.SessionRunner`,
    `CodingAgent.Executor.RemoteSessionRunner`, `CodingAgent.Advisor`,
    `CodingAgent.AsyncFollowups`, `CodingAgent.BackgroundRun.Worker`,
-   `LemonAgent.Agent`, `LemonGateway.Run`, `LemonRouter.RunProcess`,
+   `LemonAgent.Agent`, `LemonRouter.RunProcess`,
    `LemonRouter.StreamCoalescer`, `LemonRouter.SessionCoordinator`,
    `LemonRouter.RestartCarryover`, `LemonOmp.Session`,
    `LemonAutomation.CronManager` and `LemonHoncho.SessionManager`

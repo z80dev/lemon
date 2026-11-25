@@ -1220,15 +1220,16 @@ defmodule LemonRouter.SessionCoordinator do
     end
   end
 
+  # Steer and redirect reach the executor only through the run's owner, the
+  # same process that writes its completion.
   defp dispatch_steer(active_run_id, steer_mode, submission_run_id, prompt)
        when steer_mode in [:steer, :steer_backlog, :redirect] and is_binary(submission_run_id) do
-    case runtime_run_pid(active_run_id) do
+    case LemonRouter.RunProcess.whereis(active_run_id) do
       nil ->
         :error
 
       run_pid ->
-        GenServer.cast(run_pid, {steer_mode, submission_run_id, prompt || "", self()})
-        :ok
+        LemonRouter.RunProcess.steer(run_pid, steer_mode, submission_run_id, prompt || "", self())
     end
   end
 
@@ -1287,36 +1288,6 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp dispatcher do
     Application.get_env(:lemon_router, :dispatcher, LemonChannels.Dispatcher)
-  end
-
-  defp runtime_run_pid(run_id) when is_binary(run_id) do
-    runtime = configured_engine_runtime()
-
-    if Code.ensure_loaded?(runtime) and function_exported?(runtime, :run_pid, 1) do
-      runtime.run_pid(run_id)
-    end
-  rescue
-    error in ArgumentError ->
-      # Registry metadata can disappear or be incomplete during a restart.
-      # ArgumentErrors from the runtime callback itself must still surface.
-      case __STACKTRACE__ do
-        [{Registry, :key_info!, _, _} | _] ->
-          nil
-
-        [{:ets, :lookup_element, [_registry, 0, 2], _}, {Registry, :key_ets!, _, _} | _] ->
-          nil
-
-        stacktrace ->
-          reraise error, stacktrace
-      end
-  catch
-    :exit, {:noproc, {GenServer, :call, _}} -> nil
-  end
-
-  defp runtime_run_pid(_), do: nil
-
-  defp configured_engine_runtime do
-    Application.get_env(:lemon_router, :engine_runtime)
   end
 
   defp coordinator_entries do

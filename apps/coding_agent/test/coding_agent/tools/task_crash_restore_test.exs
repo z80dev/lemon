@@ -152,7 +152,7 @@ defmodule CodingAgent.Tools.TaskCrashRestoreTest do
     assert_receive {:provider_entered, _provider, _}, 5_000
     brutal_restart()
 
-    request = %LemonGateway.ExecutionRequest{
+    request = %LemonCore.ExecutionCommand{
       run_id: opts[:run_id],
       session_key: "agent:default:task-crash-parent:#{opts[:run_id]}",
       cwd: cwd,

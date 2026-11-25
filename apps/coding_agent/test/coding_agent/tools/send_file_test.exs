@@ -6,6 +6,30 @@ defmodule CodingAgent.Tools.SendFileTest do
 
   @moduletag :tmp_dir
 
+  defmodule DiscordConfig do
+    @behaviour LemonCore.Config.Gateway.Channel
+    @impl true
+    def id, do: :discord
+    @impl true
+    def resolve(section), do: section
+    @impl true
+    def enabled?(configured), do: configured
+    @impl true
+    def validate(_section, errors), do: errors
+  end
+
+  defmodule TelegramConfig do
+    @behaviour LemonCore.Config.Gateway.Channel
+    @impl true
+    def id, do: :telegram
+    @impl true
+    defdelegate resolve(section), to: DiscordConfig
+    @impl true
+    defdelegate enabled?(configured), to: DiscordConfig
+    @impl true
+    defdelegate validate(section, errors), to: DiscordConfig
+  end
+
   setup %{tmp_dir: tmp_dir} do
     # root = <tmp>/a/b so "../../" from the root lands on <tmp> itself.
     root = Path.join([tmp_dir, "a", "b"])
@@ -228,7 +252,7 @@ defmodule CodingAgent.Tools.SendFileTest do
       File.mkdir_p!(Path.join(root, "keys"))
       File.write!(Path.join(root, "keys/server.key"), "KEY")
       File.write!(Path.join(root, "notes.txt"), "notes")
-      put_config(:discord, %{files: %{deny_globs: ["**/*.{pem,key}"]}})
+      put_config(root, :discord, ~s(files = {deny_globs = ["**/*.{pem,key}"]}))
 
       assert send("discord", root, %{"path" => "keys/server.key"}).details == %{error: true}
       assert %{auto_send_files: [_]} = send("discord", root, %{"path" => "notes.txt"}).details
@@ -248,7 +272,7 @@ defmodule CodingAgent.Tools.SendFileTest do
     end
 
     test "discord honors channel-level max_upload_bytes", %{root: root} do
-      put_config(:discord, %{max_upload_bytes: 4})
+      put_config(root, :discord, "max_upload_bytes = 4")
       assert_too_large(send("discord", root, %{"path" => "big.png"}), 4)
       assert %{auto_send_files: [_]} = send("discord", root, %{"path" => "small.png"}).details
     end
@@ -256,37 +280,43 @@ defmodule CodingAgent.Tools.SendFileTest do
     test "discord enforces the stricter of max_upload_bytes and files.max_download_bytes", %{
       root: root
     } do
-      put_config(:discord, %{max_upload_bytes: 100, files: %{max_download_bytes: "5"}})
+      put_config(root, :discord, ~s(max_upload_bytes = 100\nfiles = {max_download_bytes = "5"}))
       assert_too_large(send("discord", root, %{"path" => "big.png"}), 5)
 
-      put_config(:discord, %{"max_upload_bytes" => "6", files: %{max_download_bytes: 100}})
+      put_config(root, :discord, ~s(max_upload_bytes = "6"\nfiles = {max_download_bytes = 100}))
       assert_too_large(send("discord", root, %{"path" => "big.png"}), 6)
     end
 
     test "telegram honors string-valued files.max_download_bytes", %{root: root} do
-      put_config(:telegram, %{files: %{"max_download_bytes" => "4"}})
+      put_config(root, :telegram, ~s(files = {max_download_bytes = "4"}))
       assert_too_large(send("telegram", root, %{"path" => "big.png"}), 4)
       assert %{auto_send_files: [_]} = send("telegram", root, %{"path" => "small.png"}).details
     end
 
     test "invalid limits fall back to the channel default", %{root: root} do
-      put_config(:telegram, %{files: %{max_download_bytes: "zero"}, max_upload_bytes: -1})
+      put_config(root, :telegram, ~s(max_upload_bytes = -1\nfiles = {max_download_bytes = "zero"}))
       assert %{auto_send_files: [_]} = send("telegram", root, %{"path" => "big.png"}).details
     end
   end
 
-  # The test-mode full-replacement layer read by `LemonCore.GatewayConfig`.
-  defp put_config(key, value) do
-    env_key = :"Elixir.LemonGateway.Config"
-    previous = Application.get_env(:lemon_gateway, env_key)
-    Application.put_env(:lemon_gateway, env_key, Map.put(Map.new(previous || []), key, value))
+  defp put_config(root, channel, settings) do
+    path = Path.join(root, "global-config.toml")
+    saved_paths = Application.fetch_env(:lemon_core, :paths)
+    saved_channels = Application.fetch_env(:lemon_core, :gateway_channels)
+    previous = Application.get_env(:lemon_core, :paths, [])
+    File.write!(path, "[gateway.#{channel}]\n#{settings}\n")
+    Application.put_env(:lemon_core, :paths, Keyword.put(previous || [], :global_config, path))
+    Application.put_env(:lemon_core, :gateway_channels, [DiscordConfig, TelegramConfig])
+    LemonCore.ConfigCache.invalidate(nil)
 
     on_exit(fn ->
-      if previous,
-        do: Application.put_env(:lemon_gateway, env_key, previous),
-        else: Application.delete_env(:lemon_gateway, env_key)
+      restore_config(:paths, saved_paths)
+      restore_config(:gateway_channels, saved_channels)
     end)
   end
+
+  defp restore_config(key, {:ok, value}), do: Application.put_env(:lemon_core, key, value)
+  defp restore_config(key, :error), do: Application.delete_env(:lemon_core, key)
 
   describe "channel policy" do
     test "telegram accepts images only", %{root: root} do

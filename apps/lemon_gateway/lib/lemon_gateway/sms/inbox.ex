@@ -52,6 +52,16 @@ defmodule LemonGateway.Sms.Inbox do
   alias LemonGateway.Sms.{Config, InboxStore}
 
   @cleanup_interval_ms 10 * 60 * 1000
+
+  # Offered to agent sessions only while this inbox runs: SMS ingress is
+  # usable only then, and the agent does not depend on the gateway.
+  @tools [
+    sms_get_inbox_number: LemonGateway.Tools.SmsGetInboxNumber,
+    sms_wait_for_code: LemonGateway.Tools.SmsWaitForCode,
+    sms_list_messages: LemonGateway.Tools.SmsListMessages,
+    sms_claim_message: LemonGateway.Tools.SmsClaimMessage,
+    sms_release_inbox: LemonGateway.Tools.SmsReleaseInbox
+  ]
   @max_wait_ms 10 * 60 * 1000
   @default_wait_ms 60_000
   @clear_token_ttl_ms 5 * 60 * 1000
@@ -182,8 +192,19 @@ defmodule LemonGateway.Sms.Inbox do
 
   @impl true
   def init(_opts) do
+    Process.flag(:trap_exit, true)
+
+    Enum.each(@tools, fn {name, module} ->
+      LemonAgent.ToolRegistry.register(name, module, native_process_ownership: :managed)
+    end)
+
     schedule_cleanup()
     {:ok, %{waiters: %{}, clear_tokens: %{}}}
+  end
+
+  @impl true
+  def terminate(_reason, _state) do
+    Enum.each(@tools, fn {name, _module} -> LemonAgent.ToolRegistry.unregister(name) end)
   end
 
   @impl true
